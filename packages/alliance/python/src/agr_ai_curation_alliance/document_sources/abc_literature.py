@@ -47,7 +47,8 @@ _OFFICE_SUPPLEMENT_EXTENSIONS = frozenset({"xlsx", "xlsm", "docx", "docm"})
 
 # Converted text classes whose ``show_all`` row carries ``source``, the original
 # it was made from (``referencefile_crud._find_source_for_derived``). Such a row
-# is read only through that original and with its access policy.
+# is linked to that original and keeps its own access rule; both must allow a
+# reader.
 _SOURCE_LINKED_CONVERTED_FILE_CLASSES = frozenset({"converted_merged_supplement"})
 
 _FIGURE_METADATA_FILE_CLASSES = {
@@ -473,13 +474,18 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
                     reference=reference_lookup,
                 )
                 continue
+            # The row keeps its own access rule, as ABC's ``download_file``
+            # applies it to this row (no-MOD grant included); the original's
+            # rule is read from the original through ``parent_artifact_id``.
+            # A reader must check both, separately.
             mapped[index] = self._map_referencefile(
                 file_payload,
+                reference=reference,
                 parent_artifact_id=original.artifact_id,
-                inherited_access_policy=original.access_policy,
                 source_reference_id=original.reference_id,
                 source_reference_curie=original.reference_curie,
                 default_available_when_status_missing=True,
+                null_mod_grants_any_group=True,
             )
         artifacts: list[SourceArtifact] = []
         seen_artifact_ids: set[str] = set()
@@ -659,6 +665,7 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         source_reference_id: str | None = None,
         source_reference_curie: str | None = None,
         default_available_when_status_missing: bool = False,
+        null_mod_grants_any_group: bool | None = None,
     ) -> SourceArtifact:
         artifact_id = _first_string(payload, "referencefile_id", "id")
         if not artifact_id:
@@ -688,7 +695,11 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         access_policy = inherited_access_policy or _map_access_policy(
             payload,
             mod_abbreviations=mod_abbreviations,
-            null_mod_grants_any_group=_is_original_file_class(file_class),
+            null_mod_grants_any_group=(
+                _is_original_file_class(file_class)
+                if null_mod_grants_any_group is None
+                else null_mod_grants_any_group
+            ),
             license_access=_license_access(payload, reference),
         )
         metadata = dict(
@@ -1007,10 +1018,11 @@ def _map_access_policy(
     to a caller with some MOD access when any ``referencefile_mods`` row has
     no MOD, or to a caller whose MOD a row names. The no-MOD grant is honored
     on every original file (main and supplement PDFs, Word and Excel
-    supplements, nXML). Converted text rows linked to their original inherit
-    the original's policy instead of being mapped here, and a no-MOD row on
-    any other derived row (figures, figure metadata, embeddings) alone grants
-    nothing. A file with no usable MOD rows and no open-access signal stays
+    supplements, nXML) and on converted supplement rows linked to their
+    original, which keep their own rule as ABC applies it. Converted rows
+    nested under a ``by_md5`` match still inherit their source's policy, and a
+    no-MOD row on any other derived row (main text, figures, figure metadata,
+    embeddings) alone grants nothing. A file with no usable MOD rows and no open-access signal stays
     ``UNKNOWN`` and is denied.
     """
 

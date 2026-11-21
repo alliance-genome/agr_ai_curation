@@ -98,9 +98,11 @@ Important constraints:
 
 ## Access And Provenance
 
-Converted Markdown inherits access from its source/main PDF. Historical
+Converted main Markdown inherits access from its source/main PDF. Historical
 converted rows can have null/global MOD metadata, so UI and backend code must
-not infer public access from the converted row alone.
+not infer public access from the converted row alone. Converted supplements
+keep their own rule and are allowed only when their original's rule also
+allows the curator (below).
 
 ### File lineage and per-file access (KANBAN-1976 / ALL-1460, P2)
 
@@ -111,10 +113,14 @@ It never nests converted rows under their original; instead each
 resolve it. The adapter reads these fields only:
 
 - A `converted_merged_supplement` row is linked to its original through
-  `source.referencefile_id` (`parent_artifact_id`) and takes the original's
-  access policy, not its own `referencefile_mods`. ABC copies a source's MOD
-  links onto its converted rows, so the two normally agree; when they do not,
-  the original decides.
+  `source.referencefile_id` (`parent_artifact_id`) and keeps its own access
+  rule, exactly as ABC's `download_file` applies it to that row (license, then
+  its own `referencefile_mods`, no-MOD grant included). The original's rule
+  stays on the original. A reader must allow the converted text only when both
+  rules allow the curator, checked separately (P6 does this); one precomputed
+  intersected policy is not the same thing. ABC's sync only adds MOD links to
+  converted rows, so after sync the two usually agree; before sync the
+  converted row can be narrower.
 - A `converted_merged_supplement` row with a `null` source is never listed: no
   original means no access rule to apply. A row whose `source` names a file
   missing from the same listing (an inconsistent ABC answer, since ABC builds
@@ -122,17 +128,6 @@ resolve it. The adapter reads these fields only:
   listed, a WARNING log names the raw file ids and the reference, and one
   Sentry warning (`document_source` / `converted_source_not_listed`) carries
   only hashed ids.
-- Open for P6: ABC's `download_file` checks a converted row's own
-  `referencefile_mods`. ABC's sync only adds MOD links to converted rows, so
-  after sync the inherited policy is never wider than ABC's; before sync it can
-  be. Nothing reads converted supplement policy yet, and curator downloads use
-  the curator's token. P6 should authorize with the intersection of the
-  original's policy and the converted row's own rule.
-- `converted_merged_main` rows are not linked yet and keep today's
-  reference-level main-text selection. ABC sets their `source` to the first
-  `main` or `nXML` row whose display name matches, so an `_nxml` text may name
-  the nXML file rather than the PDF, while `by_md5` attributes the same text
-  to the PDF. Linking main text is an open design question.
 - Every row whose class is not `converted_*` or `embedding` (the originals,
   plus a few classes ABC derives without that prefix: `tei`, `figure`,
   `thumbnail`, `inline_image`, `bw_duplicate`) gets ABC's own `download_file`

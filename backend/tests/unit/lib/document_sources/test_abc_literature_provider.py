@@ -2120,15 +2120,21 @@ async def test_license_with_unset_open_access_refuses_a_no_mod_supplement() -> N
 
 
 @pytest.mark.asyncio
-async def test_converted_supplement_takes_its_originals_policy_not_its_own_mod_rows() -> None:
-    _original, converted = await _list_with_reference(
+async def test_converted_supplement_reports_its_own_rule_and_its_originals_id() -> None:
+    # Original restricted to WB; the converted row has a no-MOD row of its own.
+    # The row reports ABC's rule for itself; the original's stricter rule stays
+    # on the original, which the link names. A reader checks both separately.
+    original, converted = await _list_with_reference(
         _office_supplement_pair(8001, "WB", converted_mods=(None,))
     )
 
-    assert converted.access_policy == SourceAccessPolicy(
+    assert converted.parent_artifact_id == original.artifact_id == "8001"
+    assert converted.access_policy == SourceAccessPolicy(scope=SourceAccessScope.ANY_GROUP)
+    assert original.access_policy == SourceAccessPolicy(
         scope=SourceAccessScope.RESTRICTED, group_ids=("WB",)
     )
-    assert not source_artifact_is_authorized(converted, authorized_group_ids=("FB",))
+    assert source_artifact_is_authorized(converted, authorized_group_ids=("FB",))
+    assert not source_artifact_is_authorized(original, authorized_group_ids=("FB",))
 
 
 @pytest.mark.asyncio
@@ -2182,13 +2188,11 @@ async def test_converted_supplement_naming_an_unlisted_source_is_left_out_and_re
 
 
 @pytest.mark.asyncio
-async def test_supplement_pdf_converted_text_is_linked_to_the_pdf_and_carries_its_policy() -> None:
-    # The converted row here names only WB while its PDF has a no-MOD row: the
-    # state before ABC syncs a converted row's MOD links from its source. ABC's
-    # own download check would use the converted row's WB row, so the inherited
-    # ANY_GROUP is wider than ABC for this row. Nothing reads converted
-    # supplement policy in P2; P6 authorizes with the intersection of the
-    # original's policy and the converted row's own rule.
+async def test_pre_sync_converted_supplement_reports_its_own_narrower_rule() -> None:
+    # Before ABC syncs a converted row's MOD links from its source, the row can
+    # name only WB while its PDF has a no-MOD row. ABC's download check uses
+    # the row's own WB rule, so that is what the row reports; the PDF keeps its
+    # own wider rule and is named by the link.
     pdf = _abc_show_all_row(
         8101, None, file_class="supplement", file_extension="pdf", display_name="Data_S2"
     )
@@ -2204,8 +2208,24 @@ async def test_supplement_pdf_converted_text_is_linked_to_the_pdf_and_carries_it
     source, text = await _list_with_reference([pdf, converted])
 
     assert source.role is SourceArtifactRole.SOURCE_PDF
+    assert source.access_policy == SourceAccessPolicy(scope=SourceAccessScope.ANY_GROUP)
     assert text.parent_artifact_id == "8101"
-    assert text.access_policy == SourceAccessPolicy(scope=SourceAccessScope.ANY_GROUP)
+    assert text.access_policy == SourceAccessPolicy(
+        scope=SourceAccessScope.RESTRICTED, group_ids=("WB",)
+    )
+    assert not source_artifact_is_authorized(text, authorized_group_ids=("FB",))
+
+
+@pytest.mark.asyncio
+async def test_converted_supplement_follows_the_reference_license_like_its_original() -> None:
+    original, converted = await _list_with_reference(
+        _office_supplement_pair(8001, "WB", converted_mods=("WB",)),
+        copyright_license_name="Named license",
+        copyright_license_open_access=None,
+    )
+
+    assert original.access_policy.scope is SourceAccessScope.UNKNOWN
+    assert converted.access_policy.scope is SourceAccessScope.UNKNOWN
 
 
 @pytest.mark.asyncio
