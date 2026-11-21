@@ -20,10 +20,25 @@ def _client(version: str) -> MagicMock:
     return client
 
 
-def test_matching_engine_version_passes(monkeypatch):
+def test_matching_engine_version_passes_and_is_recorded_once(monkeypatch):
+    from src.lib.weaviate_client import engine_version
+
     monkeypatch.setenv("WEAVIATE_EXPECTED_VERSION", "1.31.18")
+    monkeypatch.setattr(engine_version, "_recorded_version", None)
 
     assert require_expected_engine_version(_client("1.31.18")) == "1.31.18"
+    assert engine_version.recorded_engine_version() == "1.31.18"
+
+
+def test_mismatch_records_nothing(monkeypatch):
+    from src.lib.weaviate_client import engine_version
+
+    monkeypatch.setenv("WEAVIATE_EXPECTED_VERSION", "1.31.18")
+    monkeypatch.setattr(engine_version, "_recorded_version", None)
+
+    with pytest.raises(WeaviateEngineVersionMismatch):
+        require_expected_engine_version(_client("1.40.7"))
+    assert engine_version.recorded_engine_version() is None
 
 
 def test_mismatched_engine_version_raises_named_error(monkeypatch):

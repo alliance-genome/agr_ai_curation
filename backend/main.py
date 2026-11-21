@@ -43,7 +43,10 @@ from src.lib.openai_agents.model_request_measurement import install_model_reques
 from src.lib.runtime_entrypoint import maybe_prepare_package_tool_environments_on_start
 from src.lib.storage_permissions import ensure_writable_directory
 from src.lib.weaviate_client.connection import WeaviateConnection, set_connection
-from src.lib.weaviate_client.engine_version import require_expected_engine_version
+from src.lib.weaviate_client.engine_version import (
+    WeaviateEngineVersionMismatch,
+    require_expected_engine_version,
+)
 from src.models.sql.database import SessionLocal
 
 configure_logging()
@@ -509,6 +512,10 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("Langfuse initialization failed (non-fatal): %s", e)
 
+    except WeaviateEngineVersionMismatch as e:
+        # One line, the named mismatch, so it is the last error an operator sees.
+        logger.error("CRITICAL: %s", e)
+        raise
     except Exception as e:
         logger.error("CRITICAL: Failed to initialize Weaviate: %s", e)
         logger.error("The application cannot start without Weaviate database connection!")

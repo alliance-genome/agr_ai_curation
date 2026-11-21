@@ -180,12 +180,12 @@ async def test_async_health_check_paths(monkeypatch):
         is_ready=lambda: True,
         cluster=SimpleNamespace(nodes=lambda: ["n1", "n2"]),
         collections=SimpleNamespace(list_all=lambda: ["c1"]),
-        get_meta=lambda: {"version": "1.31.18"},
+        get_meta=lambda: (_ for _ in ()).throw(AssertionError("no /v1/meta per health check")),
     )
     healthy = await conn.health_check()
     assert healthy["status"] == "healthy"
     assert healthy["nodes"] == 2
-    assert healthy["version"] == "1.31.18"
+    assert "version" not in healthy
     assert healthy["collections"] == 1
 
     conn._client = SimpleNamespace(is_ready=lambda: False)
@@ -242,10 +242,21 @@ def test_set_connect_and_close_connection_helpers(monkeypatch):
             self.api_key = api_key
 
         def connect(self):
-            return "client"
+            return client
 
+    client = SimpleNamespace(get_meta=lambda: {"version": "1.31.18"})
+    monkeypatch.setenv("WEAVIATE_EXPECTED_VERSION", "1.31.18")
     monkeypatch.setattr(wc, "WeaviateConnection", _FactoryConnection)
-    assert wc.connect_to_weaviate("http://localhost:8080", api_key="k") == "client"
+    assert wc.connect_to_weaviate("http://localhost:8080", api_key="k") is client
+
+    # The admin CLI path refuses a different engine before publishing the connection.
+    from src.lib.weaviate_client.engine_version import WeaviateEngineVersionMismatch
+
+    wc._connection = None
+    client = SimpleNamespace(get_meta=lambda: {"version": "1.40.7"})
+    with pytest.raises(WeaviateEngineVersionMismatch):
+        wc.connect_to_weaviate("http://localhost:8080", api_key="k")
+    assert wc._connection is None
 
     wc._connection = conn
     wc.close_connection()
@@ -290,7 +301,7 @@ def test_module_health_check_handles_status_and_errors():
     healthy = wc.health_check()
     assert healthy["healthy"] is True
     assert healthy["nodes"] == [{"name": "node-a"}]
-    assert healthy["version"] == "1.31.18"
+    assert healthy["version"] == wc.recorded_engine_version()
 
     wc._connection = _Conn(_Client(ready=True, fail=True))
     failed = wc.health_check()

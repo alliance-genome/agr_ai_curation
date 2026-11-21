@@ -14,7 +14,7 @@ from weaviate.auth import Auth
 from weaviate.classes.init import AdditionalConfig, Timeout
 
 from ..openai_agents.config import get_weaviate_query_timeout_seconds
-from .engine_version import require_expected_engine_version, server_engine_version
+from .engine_version import recorded_engine_version, require_expected_engine_version
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +192,6 @@ class WeaviateConnection:
                 return {
                     "status": "healthy",
                     "nodes": len(cluster_info) if cluster_info else 1,
-                    "version": server_engine_version(client),
                     "collections": len(collections) if collections else 0
                 }
             except Exception as e:
@@ -263,8 +262,10 @@ def connect_to_weaviate(url: str = "http://localhost:8080",
         Weaviate client instance
     """
     connection = WeaviateConnection(url, api_key)
+    client = connection.connect()
+    require_expected_engine_version(client)
     set_connection(connection)
-    return connection.connect()
+    return client
 
 
 def close_connection() -> None:
@@ -305,7 +306,9 @@ def health_check() -> Dict[str, Any]:
             return {
                 "healthy": True,
                 "nodes": nodes if nodes else [],
-                "version": server_engine_version(client),
+                # Recorded once when the engine version was checked; no extra
+                # /v1/meta call per health check. Internal (CLI) payload only.
+                "version": recorded_engine_version(),
                 "modules": {}  # Module info would need separate queries in v4
             }
         except Exception as e:

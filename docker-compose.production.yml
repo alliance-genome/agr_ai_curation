@@ -565,10 +565,20 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # The worker checks the search index engine version at start.
+      weaviate:
+        condition: service_healthy
     environment:
       PYTHONUNBUFFERED: "1"
-      # Must equal the weaviate image tag; the worker refuses any other engine version.
+      # Must equal the weaviate image tag; the worker refuses any other engine version at start.
       WEAVIATE_EXPECTED_VERSION: "1.31.18"
+      WEAVIATE_HOST: "${WEAVIATE_HOST:-weaviate}"
+      WEAVIATE_PORT: "${WEAVIATE_PORT:-8080}"
+      WEAVIATE_SCHEME: "${WEAVIATE_SCHEME:-http}"
+      WEAVIATE_GRPC_HOST: "${WEAVIATE_GRPC_HOST:-weaviate}"
+      WEAVIATE_GRPC_PORT: "${WEAVIATE_GRPC_PORT:-50051}"
+      WEAVIATE_GRPC_SECURE: "${WEAVIATE_GRPC_SECURE:-false}"
+      WEAVIATE_API_KEY: "${WEAVIATE_API_KEY:?set in production env}"
       OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES: "${OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES:-1}"
       VALIDATION_REVIEW_ATTEMPTS_PER_TARGET: ${VALIDATION_REVIEW_ATTEMPTS_PER_TARGET:-2}
       VALIDATION_REVIEW_EXTRACTION_ATTEMPTS_PER_ENTRY: ${VALIDATION_REVIEW_EXTRACTION_ATTEMPTS_PER_ENTRY:-2}

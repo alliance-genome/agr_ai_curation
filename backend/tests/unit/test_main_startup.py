@@ -390,7 +390,7 @@ class TestLifespan:
     @pytest.mark.asyncio
     @patch("main.WeaviateConnection")
     @patch("main.initialize_weaviate_collections")
-    async def test_refuses_to_start_on_a_different_engine_version(self, mock_init, mock_conn_cls, mock_subsystems):
+    async def test_refuses_to_start_on_a_different_engine_version(self, mock_init, mock_conn_cls, mock_subsystems, caplog):
         from src.lib.weaviate_client.engine_version import WeaviateEngineVersionMismatch
 
         connection, client = make_connection()
@@ -401,6 +401,9 @@ class TestLifespan:
             async with _main_module().lifespan(FastAPI()):
                 pass
         mock_init.assert_not_called()
+        # The named mismatch is the last error; no misleading "no connection" line.
+        assert "engine version mismatch" in caplog.text
+        assert "cannot start without Weaviate database connection" not in caplog.text
 
     @pytest.mark.asyncio
     @patch("main.WeaviateConnection")

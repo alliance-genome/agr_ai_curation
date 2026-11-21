@@ -36,6 +36,12 @@ services:
       - ./packages:/runtime/packages:ro
     environment:
       WEAVIATE_EXPECTED_VERSION: "1.31.18"  # must equal the weaviate-test image tag
+      WEAVIATE_HOST: weaviate-test
+      WEAVIATE_PORT: "8080"
+      WEAVIATE_SCHEME: http
+      WEAVIATE_GRPC_HOST: weaviate-test
+      WEAVIATE_GRPC_PORT: "50051"
+      WEAVIATE_GRPC_SECURE: "false"
       VALIDATION_HISTORY_PAGE_SIZE: ${VALIDATION_HISTORY_PAGE_SIZE:-5}
       VALIDATION_REVIEW_ATTEMPTS_PER_TARGET: ${VALIDATION_REVIEW_ATTEMPTS_PER_TARGET:-2}
       VALIDATION_REVIEW_EXTRACTION_ATTEMPTS_PER_ENTRY: ${VALIDATION_REVIEW_EXTRACTION_ATTEMPTS_PER_ENTRY:-2}
@@ -74,6 +80,8 @@ services:
       BENCHMARK_SNAPSHOT_STORE_PATH: /tmp/benchmark-snapshots
     depends_on:
       postgres-test:
+        condition: service_healthy
+      weaviate-test:
         condition: service_healthy
     networks:
       - test-network

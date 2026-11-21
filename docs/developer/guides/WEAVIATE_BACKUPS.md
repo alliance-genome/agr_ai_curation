@@ -157,6 +157,21 @@ requests only), run inside the backend container:
 docker compose exec -T backend python -m src.lib.weaviate_client.settings_report
 ```
 
+The repository pins the engine the Alliance production service runs. Another
+install can keep a different engine with its own override that sets the
+`weaviate` image and `WEAVIATE_EXPECTED_VERSION` together (the preflight checks
+that they are equal). Opening an existing data directory with an OLDER engine is
+a downgrade whose safety is not established, and the version check cannot see
+it (the server then reports the pinned version). Data written by a newer engine,
+for example by the earlier 1.32.10 pin in `docker-compose.production.yml` or by
+a local `latest`, should be restored into a fresh server of the pinned version,
+or kept on its engine by an override; a developer's local data should simply be
+recreated. See `docs/deployment/independent-deployment.md`.
+
+The report also lists properties that the server's auto-schema created
+(`properties_auto_created_on_server`), recognised by the fixed description the
+server writes on them, even when code declares the same name.
+
 Collections created by older code can differ from a fresh environment (for
 example vectorizer skip flags, properties the server created on its own, and the
 stored filter and deletion strategies). The report lists those differences; it

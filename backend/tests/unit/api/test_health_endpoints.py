@@ -58,7 +58,8 @@ async def test_health_check_endpoint_healthy(monkeypatch):
         "enabled": False,
         "message": "Using local PDF upload flow",
     }
-    assert result["details"]["weaviate"]["version"] == "1.0"
+    # The unauthenticated route does not publish the search index engine version.
+    assert "version" not in result["details"]["weaviate"]
     assert result["cognito_configured"] is True
 
 

@@ -205,9 +205,16 @@ def startup_runtime(monkeypatch):
     monkeypatch.setattr(worker, "get_benchmark_worker_enabled", lambda: True)
     monkeypatch.setattr(worker, "get_benchmark_execution_enabled", lambda: True)
     monkeypatch.setattr(worker, "get_benchmark_worker_concurrency", lambda: 2)
+    from src.lib.weaviate_client import connection as weaviate_connection
+
+    monkeypatch.setenv("WEAVIATE_EXPECTED_VERSION", "1.31.18")
+    real_get_connection = weaviate_connection.get_connection
+    search_index = MagicMock(side_effect=lambda: calls.append("search_index"))
+    monkeypatch.setattr(weaviate_connection, "get_connection", search_index)
     return SimpleNamespace(
         worker=worker, calls=calls, factory=factory, session=session, sentry_init=sentry_init,
         prompts=prompts, groups=groups, tracing=tracing, flush=flush, real_initialize=real_initialize,
+        search_index=search_index, real_get_connection=real_get_connection,
     )
 
 
@@ -232,12 +239,12 @@ async def test_main_initializes_once_before_all_claim_loops(monkeypatch, startup
     state = startup_runtime
 
     async def run(_self):
-        assert state.calls[:6] == ["sentry", "open", "prompts", "close", "groups", "tracing"]
+        assert state.calls[:7] == ["sentry", "open", "prompts", "close", "groups", "search_index", "tracing"]
         state.calls.append("claim")
 
     monkeypatch.setattr(BenchmarkWorker, "run_forever", run)
     await state.worker._main()
-    assert state.calls == ["sentry", "open", "prompts", "close", "groups", "tracing", "claim", "claim", "flush"]
+    assert state.calls == ["sentry", "open", "prompts", "close", "groups", "search_index", "tracing", "claim", "claim", "flush"]
     state.prompts.assert_called_once_with(state.session)
     state.session.commit.assert_not_called()
 
@@ -259,6 +266,41 @@ async def test_required_startup_failure_closes_session_and_claims_nothing(
     state.session.__exit__.assert_called_once()
     state.tracing.assert_not_called()
     state.flush.assert_not_called()
+    constructor.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_worker_refuses_a_different_search_index_engine_at_start(monkeypatch, startup_runtime):
+    from src.lib.weaviate_client import connection as weaviate_connection
+    from src.lib.weaviate_client.engine_version import WeaviateEngineVersionMismatch
+
+    state = startup_runtime
+    client = MagicMock()
+    client.get_meta.return_value = {"version": "1.40.7"}
+    fake = MagicMock()
+    fake.connect.return_value = client
+    monkeypatch.setattr(weaviate_connection, "get_connection", state.real_get_connection)
+    monkeypatch.setattr(weaviate_connection, "_connection", None)
+    monkeypatch.setattr(weaviate_connection, "WeaviateConnection", lambda **_kwargs: fake)
+    constructor = MagicMock()
+    monkeypatch.setattr(state.worker, "BenchmarkWorker", constructor)
+
+    with pytest.raises(WeaviateEngineVersionMismatch, match="the server reports 1.40.7"):
+        await state.worker._main()
+    constructor.assert_not_called()
+    state.tracing.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_worker_without_expected_version_stops_at_start(monkeypatch, startup_runtime):
+    state = startup_runtime
+    monkeypatch.delenv("WEAVIATE_EXPECTED_VERSION", raising=False)
+    constructor = MagicMock()
+    monkeypatch.setattr(state.worker, "BenchmarkWorker", constructor)
+
+    with pytest.raises(RuntimeError, match="WEAVIATE_EXPECTED_VERSION is not set"):
+        await state.worker._main()
+    state.search_index.assert_not_called()
     constructor.assert_not_called()
 
 
