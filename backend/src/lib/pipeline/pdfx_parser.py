@@ -33,9 +33,10 @@ from ..observability.sentry import (
 from ...schemas.pdfx_schema import (  # noqa: F401 - re-exported for fixture tooling
     PDFXResponse,
     build_pipeline_elements,
-    normalize_section_path,
-    normalize_text,
+    normalize_code_block_text,
     normalize_elements,
+    normalize_table_text,
+    normalize_text,
 )
 from .pdfx_page_provenance import (
     MergedPageProvenance,
@@ -1083,7 +1084,12 @@ def markdown_to_pipeline_elements(
     *,
     page_provenance: Optional[MergedPageProvenance] = None,
 ) -> List[Dict[str, Any]]:
-    """Convert merged markdown output into pipeline element dictionaries."""
+    """Convert merged markdown output into pipeline element dictionaries.
+
+    Each element's raw text is cleaned exactly once, by the normalizer for its
+    kind, before it is added; section paths hold heading titles that were
+    already cleaned.
+    """
     lines, line_byte_starts = _markdown_lines_with_byte_starts(markdown)
     elements: List[Dict[str, Any]] = []
     section_path: List[str] = []
@@ -1100,16 +1106,15 @@ def markdown_to_pipeline_elements(
 
     def add_element(
         element_type: str,
-        text: str,
+        clean_text: str,
         content_type: str,
         original_type: str,
         line_index: int,
     ) -> None:
         nonlocal index
-        clean_text = normalize_text(text.strip())
         if not clean_text:
             return
-        normalized_section_path = normalize_section_path(section_path)
+        normalized_section_path = list(section_path)
         active_section = normalized_section_path[-1] if normalized_section_path else None
         doc_item_label = {
             "Title": "section_header",
@@ -1182,7 +1187,7 @@ def markdown_to_pipeline_elements(
                 i += 1
             add_element(
                 "Table",
-                "\n".join(table_lines),
+                normalize_table_text("\n".join(table_lines)),
                 "table",
                 "markdown_table",
                 element_start,
@@ -1201,7 +1206,7 @@ def markdown_to_pipeline_elements(
                 i += 1
             add_element(
                 "NarrativeText",
-                "\n".join(code_lines),
+                normalize_code_block_text("\n".join(code_lines)),
                 "code_block",
                 "markdown_code_block",
                 element_start,
@@ -1210,7 +1215,7 @@ def markdown_to_pipeline_elements(
 
         list_match = list_re.match(raw_line)
         if list_match:
-            add_element("ListItem", stripped, "list_item", "markdown_list_item", i)
+            add_element("ListItem", normalize_text(stripped), "list_item", "markdown_list_item", i)
             i += 1
             continue
 
@@ -1228,7 +1233,7 @@ def markdown_to_pipeline_elements(
             i += 1
         add_element(
             "NarrativeText",
-            " ".join(paragraph_lines),
+            normalize_text(" ".join(paragraph_lines)),
             "paragraph",
             "markdown_paragraph",
             element_start,

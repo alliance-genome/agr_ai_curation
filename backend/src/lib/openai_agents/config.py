@@ -2154,6 +2154,22 @@ def get_weaviate_query_timeout_seconds() -> float:
     return value
 
 
+def get_weaviate_expected_version() -> str:
+    """Search index engine version this deployment pins (required, no default).
+
+    Each compose file sets it next to the Weaviate image tag, and a contract test
+    keeps the two equal. Startup refuses to run against any other engine version.
+    """
+
+    value = os.getenv("WEAVIATE_EXPECTED_VERSION", "").strip()
+    if not value:
+        raise RuntimeError(
+            "WEAVIATE_EXPECTED_VERSION is not set. Set it to the search index "
+            "(Weaviate) engine version pinned in the compose file, for example 1.31.18."
+        )
+    return value
+
+
 def get_weaviate_search_transient_retry_count() -> int:
     """Transient query retries shared across one logical search; zero disables retries."""
     return max(0, _get_env_int_with_fallback("WEAVIATE_SEARCH_TRANSIENT_RETRY_COUNT", 1))

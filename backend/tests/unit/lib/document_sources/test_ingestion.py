@@ -579,6 +579,52 @@ async def test_provider_figure_chunk_does_not_invent_absent_or_malformed_page(
     assert provider_chunk.page_number is None
 
 
+@pytest.mark.parametrize(
+    "figure_label",
+    ["Figure 2 _left_", "Figure 2 A&amp;B", "Figure 2 **bold**", "Figure 2 \\*star\\*"],
+)
+def test_provider_figure_page_survives_a_label_the_clean_up_changes(figure_label) -> None:
+    entry = normalize_provider_figure_metadata_sidecar(
+        json.dumps(
+            {"figure_label": figure_label, "caption_text": "Provider legend.", "page_index": 4}
+        ).encode(),
+        metadata_artifact_id="figure-meta-cleaned-label",
+    )
+    markdown = append_provider_figure_metadata_markdown("# Results\n\nText.", [entry])
+    elements = markdown_to_pipeline_elements(markdown)
+
+    apply_provider_figure_page_provenance(elements, [entry])
+
+    legend = next(element for element in elements if element["text"].endswith("Provider legend."))
+    assert legend["metadata"]["page_number"] == 5
+
+
+@pytest.mark.asyncio
+async def test_literal_asterisks_survive_from_markdown_to_quotable_lines() -> None:
+    markdown = (
+        "# Results\n\n"
+        "The \\*escaped\\* allele carries p.Tyr318*/c.954C>G.\n\n"
+        "| Variant | Mark |\n| --- | --- |\n| p.Gln12* | **** |\n"
+    )
+    elements = markdown_to_pipeline_elements(markdown)
+
+    chunks = await chunk_parsed_document(
+        elements,
+        ChunkingStrategy.get_research_strategy(),
+        "doc-literal-asterisks",
+    )
+    stored_text = "\n".join(chunk.content for chunk in chunks)
+    quotable_lines = [
+        span.text
+        for chunk in chunks
+        for span in build_evidence_spans(chunk_id=f"chunk-{chunk.chunk_index}", chunk_text=chunk.content)
+    ]
+
+    assert "The *escaped* allele carries p.Tyr318*/c.954C>G." in stored_text
+    assert "| p.Gln12* | **** |" in stored_text
+    assert "The *escaped* allele carries p.Tyr318*/c.954C>G." in quotable_lines
+
+
 @pytest.mark.asyncio
 async def test_ingest_provider_markdown_document_indexes_provider_figure_metadata(
     monkeypatch,

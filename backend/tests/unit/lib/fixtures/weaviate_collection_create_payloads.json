@@ -1,0 +1,270 @@
+{
+ "DocumentChunk": {
+  "class": "DocumentChunk",
+  "moduleConfig": {
+   "text2vec-openai": {
+    "isAzure": false,
+    "model": "text-embedding-3-small",
+    "vectorizeClassName": false
+   }
+  },
+  "multiTenancyConfig": {
+   "enabled": true
+  },
+  "properties": [
+   {
+    "dataType": [
+     "text"
+    ],
+    "moduleConfig": {
+     "text2vec-openai": {
+      "skip": true,
+      "vectorizePropertyName": true
+     }
+    },
+    "name": "documentId"
+   },
+   {
+    "dataType": [
+     "int"
+    ],
+    "moduleConfig": {
+     "text2vec-openai": {
+      "skip": true,
+      "vectorizePropertyName": true
+     }
+    },
+    "name": "chunkIndex"
+   },
+   {
+    "dataType": [
+     "text"
+    ],
+    "moduleConfig": {
+     "text2vec-openai": {
+      "skip": false,
+      "vectorizePropertyName": false
+     }
+    },
+    "name": "content"
+   },
+   {
+    "dataType": [
+     "text"
+    ],
+    "moduleConfig": {
+     "text2vec-openai": {
+      "skip": true,
+      "vectorizePropertyName": false
+     }
+    },
+    "name": "contentPreview"
+   },
+   {
+    "dataType": [
+     "text"
+    ],
+    "moduleConfig": {
+     "text2vec-openai": {
+      "skip": true,
+      "vectorizePropertyName": true
+     }
+    },
+    "name": "elementType"
+   },
+   {
+    "dataType": [
+     "int"
+    ],
+    "moduleConfig": {
+     "text2vec-openai": {
+      "skip": true,
+      "vectorizePropertyName": true
+     }
+    },
+    "name": "pageNumber"
+   },
+   {
+    "dataType": [
+     "text"
+    ],
+    "moduleConfig": {
+     "text2vec-openai": {
+      "skip": true,
+      "vectorizePropertyName": true
+     }
+    },
+    "name": "sectionTitle"
+   },
+   {
+    "dataType": [
+     "text[]"
+    ],
+    "moduleConfig": {
+     "text2vec-openai": {
+      "skip": true,
+      "vectorizePropertyName": true
+     }
+    },
+    "name": "sectionPath"
+   },
+   {
+    "dataType": [
+     "text"
+    ],
+    "moduleConfig": {
+     "text2vec-openai": {
+      "skip": true,
+      "vectorizePropertyName": true
+     }
+    },
+    "name": "parentSection"
+   },
+   {
+    "dataType": [
+     "text"
+    ],
+    "moduleConfig": {
+     "text2vec-openai": {
+      "skip": true,
+      "vectorizePropertyName": true
+     }
+    },
+    "name": "subsection"
+   },
+   {
+    "dataType": [
+     "text"
+    ],
+    "moduleConfig": {
+     "text2vec-openai": {
+      "skip": true,
+      "vectorizePropertyName": true
+     }
+    },
+    "name": "isTopLevel"
+   },
+   {
+    "dataType": [
+     "text"
+    ],
+    "moduleConfig": {
+     "text2vec-openai": {
+      "skip": true,
+      "vectorizePropertyName": true
+     }
+    },
+    "name": "contentType"
+   },
+   {
+    "dataType": [
+     "text"
+    ],
+    "moduleConfig": {
+     "text2vec-openai": {
+      "skip": true,
+      "vectorizePropertyName": true
+     }
+    },
+    "name": "metadata"
+   },
+   {
+    "dataType": [
+     "date"
+    ],
+    "moduleConfig": {
+     "text2vec-openai": {
+      "skip": true,
+      "vectorizePropertyName": true
+     }
+    },
+    "name": "embeddingTimestamp"
+   },
+   {
+    "dataType": [
+     "text"
+    ],
+    "moduleConfig": {
+     "text2vec-openai": {
+      "skip": true,
+      "vectorizePropertyName": true
+     }
+    },
+    "name": "docItemProvenance"
+   }
+  ],
+  "vectorIndexConfig": {},
+  "vectorIndexType": "hnsw",
+  "vectorizer": "text2vec-openai"
+ },
+ "PDFDocument": {
+  "class": "PDFDocument",
+  "multiTenancyConfig": {
+   "enabled": true
+  },
+  "properties": [
+   {
+    "dataType": [
+     "text"
+    ],
+    "name": "filename"
+   },
+   {
+    "dataType": [
+     "int"
+    ],
+    "name": "fileSize"
+   },
+   {
+    "dataType": [
+     "date"
+    ],
+    "name": "uploadDate"
+   },
+   {
+    "dataType": [
+     "date"
+    ],
+    "name": "creationDate"
+   },
+   {
+    "dataType": [
+     "date"
+    ],
+    "name": "lastAccessedDate"
+   },
+   {
+    "dataType": [
+     "text"
+    ],
+    "name": "processingStatus"
+   },
+   {
+    "dataType": [
+     "text"
+    ],
+    "name": "embeddingStatus"
+   },
+   {
+    "dataType": [
+     "int"
+    ],
+    "name": "chunkCount"
+   },
+   {
+    "dataType": [
+     "int"
+    ],
+    "name": "vectorCount"
+   },
+   {
+    "dataType": [
+     "text"
+    ],
+    "name": "metadata"
+   }
+  ],
+  "vectorIndexType": "hnsw",
+  "vectorizer": "none"
+ }
+}

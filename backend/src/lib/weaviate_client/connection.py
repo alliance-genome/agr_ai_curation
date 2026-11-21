@@ -14,6 +14,7 @@ from weaviate.auth import Auth
 from weaviate.classes.init import AdditionalConfig, Timeout
 
 from ..openai_agents.config import get_weaviate_query_timeout_seconds
+from .engine_version import recorded_engine_version, require_expected_engine_version
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +192,6 @@ class WeaviateConnection:
                 return {
                     "status": "healthy",
                     "nodes": len(cluster_info) if cluster_info else 1,
-                    "version": "v4",  # Version info not directly available in v4
                     "collections": len(collections) if collections else 0
                 }
             except Exception as e:
@@ -230,8 +230,10 @@ def get_connection() -> WeaviateConnection:
             weaviate_url = f"{weaviate_scheme}://{weaviate_host}:{weaviate_port}"
 
             connection = WeaviateConnection(url=weaviate_url, api_key=weaviate_api_key)
-            # Actually connect to Weaviate
-            connection.connect()
+            # Actually connect to Weaviate, and refuse an engine other than the
+            # pinned one (processes without the API startup, such as the benchmark
+            # worker, connect here).
+            require_expected_engine_version(connection.connect())
             _connection = connection
         return _connection
 
@@ -260,8 +262,10 @@ def connect_to_weaviate(url: str = "http://localhost:8080",
         Weaviate client instance
     """
     connection = WeaviateConnection(url, api_key)
+    client = connection.connect()
+    require_expected_engine_version(client)
     set_connection(connection)
-    return connection.connect()
+    return client
 
 
 def close_connection() -> None:
@@ -302,7 +306,9 @@ def health_check() -> Dict[str, Any]:
             return {
                 "healthy": True,
                 "nodes": nodes if nodes else [],
-                "version": "v4",  # Version info not directly available in v4
+                # Recorded once when the engine version was checked; no extra
+                # /v1/meta call per health check. Internal (CLI) payload only.
+                "version": recorded_engine_version(),
                 "modules": {}  # Module info would need separate queries in v4
             }
         except Exception as e:
