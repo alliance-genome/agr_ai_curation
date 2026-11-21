@@ -37,6 +37,7 @@ from ...schemas.pdfx_schema import (  # noqa: F401 - re-exported for fixture too
     normalize_text,
     normalize_elements,
 )
+from .text_cleanup import run_text_cleanup
 from .pdfx_page_provenance import (
     MergedPageProvenance,
     parse_merged_page_provenance,
@@ -464,9 +465,11 @@ class PDFXParser:
                         extra={"sentry_skip_event": True},
                     )
 
-        cleaned_elements = markdown_to_pipeline_elements(
+        cleaned_elements = await run_text_cleanup(
+            markdown_to_pipeline_elements,
             merged_markdown,
             page_provenance=page_provenance,
+            log_id=document_id,
         )
         if not cleaned_elements:
             raise PDFParsingError("PDF extraction produced no usable elements")

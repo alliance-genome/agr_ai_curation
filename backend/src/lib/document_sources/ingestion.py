@@ -25,6 +25,7 @@ from src.lib.openai_agents.config import get_pdf_document_error_message_max_char
 from src.lib.observability.runtime import report_runtime_exception
 from src.lib.observability.cost_context import costed_document_processing
 from src.lib.pipeline.orchestrator import ProcessingResult
+from src.lib.pipeline.text_cleanup import run_text_cleanup
 from src.lib.storage_permissions import ensure_writable_directory
 from src.models.pipeline import ProcessingStage
 from src.models.strategy import ChunkingStrategy
@@ -178,9 +179,11 @@ async def ingest_provider_markdown_document(
             status="processing",
         )
         await asyncio.to_thread(mark_file_pending, file_id)
-        elements, warnings = provider_markdown_to_pipeline_elements(
+        elements, warnings = await run_text_cleanup(
+            provider_markdown_to_pipeline_elements,
             markdown,
             request.provider_figure_metadata,
+            log_id=document_id,
         )
         stages_completed.append(ProcessingStage.PARSING)
 
