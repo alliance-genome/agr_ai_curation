@@ -645,6 +645,7 @@ async def test_cold_connection_and_query_yield_and_worker_closes(monkeypatch, na
     main_thread = get_ident()
     lifecycle = []
     monkeypatch.setattr(wc, "_connection", None)
+    monkeypatch.setenv("WEAVIATE_EXPECTED_VERSION", "1.31.18")
 
     class Connection:
         def __init__(self, **kwargs):
@@ -656,6 +657,9 @@ async def test_cold_connection_and_query_yield_and_worker_closes(monkeypatch, na
             lifecycle.append("connect")
             loop.call_soon_threadsafe(entered.set)
             assert release.wait(5), "observer failed to release connection"
+            client = MagicMock()
+            client.get_meta.return_value = {"version": "1.31.18"}
+            return client
 
         @contextmanager
         def session(self):
