@@ -2133,7 +2133,7 @@ def get_document_table_header_min_filled_fraction() -> float:
 
 
 def get_document_context_stage_timeout_seconds() -> float:
-    """Await deadline for each optional hierarchy/abstract stage (default 10s)."""
+    """Await deadline for the optional document hierarchy fetch (default 10s)."""
     value = _get_env_float_with_fallback("DOCUMENT_CONTEXT_STAGE_TIMEOUT_SECONDS", 10.0)
     return value if math.isfinite(value) and value > 0 else 10.0
 
@@ -2161,6 +2161,22 @@ def get_weaviate_query_timeout_seconds() -> float:
             default,
         )
         return default
+    return value
+
+
+def get_weaviate_expected_version() -> str:
+    """Search index engine version this deployment pins (required, no default).
+
+    Each compose file sets it next to the Weaviate image tag, and a contract test
+    keeps the two equal. Startup refuses to run against any other engine version.
+    """
+
+    value = os.getenv("WEAVIATE_EXPECTED_VERSION", "").strip()
+    if not value:
+        raise RuntimeError(
+            "WEAVIATE_EXPECTED_VERSION is not set. Set it to the search index "
+            "(Weaviate) engine version pinned in the compose file, for example 1.31.18."
+        )
     return value
 
 
@@ -2523,15 +2539,6 @@ def get_list_recorded_evidence_limit() -> int:
 
 
 # --- Display / truncation ---
-
-def get_abstract_extraction_input_max_chars() -> int:
-    """Maximum source-text characters sent to the abstract-extraction LLM.
-
-    Environment variable: ABSTRACT_EXTRACTION_INPUT_MAX_CHARS. Default 4000,
-    minimum 1. Raise for more context or lower to reduce input cost and latency.
-    """
-    return max(1, _get_env_int_with_fallback("ABSTRACT_EXTRACTION_INPUT_MAX_CHARS", 4000))
-
 
 def get_supervisor_text_preview_limit() -> int:
     """Char limit for short text previews in supervisor context tools (SUPERVISOR_TEXT_PREVIEW_LIMIT).

@@ -1996,7 +1996,6 @@ def _build_runtime_context(
         context_text, _structure_info = format_document_context_for_prompt(
             hierarchy=runtime_kwargs.get("hierarchy"),
             sections=runtime_kwargs.get("sections"),
-            abstract=runtime_kwargs.get("abstract"),
         )
         if context_text:
             parts.append(context_text)

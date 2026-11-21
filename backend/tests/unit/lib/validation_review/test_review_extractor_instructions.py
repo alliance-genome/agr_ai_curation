@@ -114,3 +114,13 @@ def test_paper_text_cannot_close_the_rules_block(phase, closing):
 
 def test_curator_request_can_change_the_saved_scope(phase):
     assert "explicit curator request" in phase(receipt("reagents", "Rules.")).instructions
+
+
+def test_rules_saved_before_the_abstract_removal_still_display(phase):
+    """Reviews started before the release keep instructions that carry the old abstract block."""
+    saved = ("Keep only reagents used in this study.\n\n## Paper Abstract\n\n"
+             "A synthetic summary of a synthetic study.")
+    block = phase(receipt("reagents", saved)).instructions.split("<saved_extractor_instructions")[1]
+    assert "Keep only reagents used in this study." in block
+    assert "A synthetic summary of a synthetic study." in block
+    assert "section list or abstract" in block

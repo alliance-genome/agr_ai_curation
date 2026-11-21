@@ -329,7 +329,8 @@ def test_saved_match_round_trip_and_agent_substitution_refused(planned):
     job = planned.plan.initial_jobs[0]
     envelope = job.match.envelope.model_dump(mode="json")
     saved = saved_matches.encode({"target": job.match}, plan_envelope=envelope)
-    assert saved_matches.decode({**saved, "envelope": envelope}) == {"target": job.match}
+    assert saved_matches.decode({**saved, "envelope": envelope},
+                                registry=planned.plan.registry) == {"target": job.match}
     frozen = runtime.frozen_job_requests(planned.plan.history_binding, [job])[0]
     frozen["request"]["validator_binding_id"] = "unconfigured"
     with pytest.raises(store.HistoryAccessError):

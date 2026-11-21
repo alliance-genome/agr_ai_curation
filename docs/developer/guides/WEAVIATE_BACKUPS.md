@@ -137,3 +137,42 @@ separate durable system with a documented retention policy, or configure
 Weaviate's `backup-s3` module for disaster recovery. Do not place backups under
 the live data directory, and do not recursively include native backups in a
 filesystem archive of that directory.
+
+## Engine version pin and stored settings
+
+Every compose file pins the Weaviate image to one engine version by tag and
+digest (`semitechnologies/weaviate:1.31.18@sha256:9b903ac1…`), and sets
+`WEAVIATE_EXPECTED_VERSION` to the same version on the backend and the benchmark
+worker. `backend/tests/unit/test_docker_compose_production.py` and
+`scripts/testing/production_compose_preflight.py` keep them equal. The backend
+refuses to start when the server reports another version, so an engine upgrade
+is always a planned change: move the image pin and `WEAVIATE_EXPECTED_VERSION`
+together, with a backup and a restore check first.
+
+To see a server's engine version and how its stored collections differ from what
+current code creates (setting and property names and counts only; it sends GET
+requests only), run inside the backend container:
+
+```bash
+docker compose exec -T backend python -m src.lib.weaviate_client.settings_report
+```
+
+The repository pins the engine the Alliance production service runs. Another
+install can keep a different engine with its own override that sets the
+`weaviate` image and `WEAVIATE_EXPECTED_VERSION` together (the preflight checks
+that they are equal). Opening an existing data directory with an OLDER engine is
+a downgrade whose safety is not established, and the version check cannot see
+it (the server then reports the pinned version). Data written by a newer engine,
+for example by the earlier 1.32.10 pin in `docker-compose.production.yml` or by
+a local `latest`, should be restored into a fresh server of the pinned version,
+or kept on its engine by an override; a developer's local data should simply be
+recreated. See `docs/deployment/independent-deployment.md`.
+
+The report also lists properties that the server's auto-schema created
+(`properties_auto_created_on_server`), recognised by the fixed description the
+server writes on them, even when code declares the same name.
+
+Collections created by older code can differ from a fresh environment (for
+example vectorizer skip flags, properties the server created on its own, and the
+stored filter and deletion strategies). The report lists those differences; it
+never changes anything.

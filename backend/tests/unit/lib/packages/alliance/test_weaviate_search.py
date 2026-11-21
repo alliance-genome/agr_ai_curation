@@ -1192,3 +1192,29 @@ async def test_section_source_metadata_fault_is_not_empty_success_or_cursor_erro
         await tool.on_invoke_tool(_build_tool_context(tool.name, payload), json.dumps(payload))
     assert isinstance(caught.value.__cause__, RuntimeError)
     assert "Stored section chunk" in str(caught.value.__cause__)
+
+
+@pytest.mark.asyncio
+async def test_read_section_reads_a_section_named_abstract(monkeypatch):
+    """Agents no longer get the abstract in their prompt; they read it like any section."""
+    requested = []
+
+    async def _chunks(**kwargs):
+        requested.append(kwargs["parent_section"])
+        return [{
+            "chunk_index": 0, "id": "chunk-abstract-1",
+            "text": "A synthetic summary sentence. A second synthetic sentence.",
+            "page_number": 1, "parent_section": "Abstract",
+        }]
+
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _chunks)
+    tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
+    result = await tool("Abstract")
+
+    section = result.section
+    assert requested == ["Abstract"]
+    assert section is not None and section.matched_sections == ["Abstract"]
+    assert [p.chunk_index for p in section.passages] == [0]
+    assert [s.text for s in section.passages[0].evidence_spans] == [
+        "A synthetic summary sentence.", "A second synthetic sentence.",
+    ]

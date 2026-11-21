@@ -172,7 +172,6 @@ async def test_resolved_agent_uses_same_document_context_for_tools_and_runner(mo
         user_id="benchmark-owner",
         document_name="Frozen paper",
         hierarchy={"sections": [{"name": "Results"}]},
-        abstract="Frozen abstract",
         sections=["Results"],
     )
     captured = {}

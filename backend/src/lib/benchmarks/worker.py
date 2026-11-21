@@ -628,6 +628,15 @@ def initialize_worker_runtime() -> None:
             f"Benchmark worker startup failed ({failure_type})"
         )
 
+    # Refuse a search index engine other than the pinned one at start, not per
+    # job: a missing WEAVIATE_EXPECTED_VERSION raises RuntimeError and a different
+    # engine raises WeaviateEngineVersionMismatch, so the worker exits.
+    from src.lib.openai_agents.config import get_weaviate_expected_version
+    from src.lib.weaviate_client.connection import get_connection
+
+    get_weaviate_expected_version()
+    get_connection()
+
     try:
         from src.lib.openai_agents.langfuse_client import (
             initialize_langfuse,

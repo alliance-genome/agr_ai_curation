@@ -6069,7 +6069,6 @@ class TestExecuteFlowTermination:
             "src.lib.flows.executor.DocumentContext.fetch",
             AsyncMock(return_value=SimpleNamespace(
                 hierarchy=None,
-                abstract=None,
                 section_count=lambda: 0,
             )),
         )
@@ -6572,7 +6571,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_idempotent_extraction_results",
@@ -6684,7 +6683,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0)),
         )
 
         def _persist_first_only(requests):
@@ -6794,7 +6793,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_idempotent_extraction_results",
@@ -6913,7 +6912,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_idempotent_extraction_results",
@@ -7024,7 +7023,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_idempotent_extraction_results",
@@ -7149,7 +7148,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0)),
         )
 
         def _raise_persistence_error(_requests):
@@ -7276,7 +7275,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_idempotent_extraction_results",
@@ -7371,7 +7370,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_idempotent_extraction_results",
@@ -7436,7 +7435,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.build_flow_prompt",
@@ -7526,7 +7525,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.build_flow_prompt",
@@ -7637,7 +7636,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.build_flow_prompt",
@@ -7705,7 +7704,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.build_flow_prompt",

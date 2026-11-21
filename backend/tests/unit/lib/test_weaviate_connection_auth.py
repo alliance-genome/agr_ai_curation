@@ -38,7 +38,9 @@ def test_default_connection_reads_weaviate_api_key_from_environment(monkeypatch)
     monkeypatch.setenv("WEAVIATE_PORT", "8080")
     monkeypatch.setenv("WEAVIATE_SCHEME", "http")
     monkeypatch.setenv("WEAVIATE_API_KEY", "production-key")
+    monkeypatch.setenv("WEAVIATE_EXPECTED_VERSION", "1.31.18")
     monkeypatch.setattr(connection_module, "_connection", None)
+    created.connect.return_value.get_meta.return_value = {"version": "1.31.18"}
 
     with patch.object(connection_module, "WeaviateConnection", return_value=created) as constructor:
         assert connection_module.get_connection() is created
