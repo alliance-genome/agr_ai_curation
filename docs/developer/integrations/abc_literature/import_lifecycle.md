@@ -137,6 +137,29 @@ Once a converted Markdown artifact is selected:
 `download_file` authorization failures are terminal for the curator. They must
 not be retried with a service-token bypass.
 
+Download failures reach core as provider-neutral errors (all subclasses of
+`DocumentSourceError`, so existing handlers still catch them):
+
+| ABC answer | Core error | Meaning |
+| --- | --- | --- |
+| 403 | `DocumentSourceAccessDenied` | The caller may not read the file. |
+| 404 | `DocumentSourceArtifactNotFound` | ABC lists the file but its stored copy is missing; permanent. |
+| 502, 503, 504, or a client timeout or transport failure | `DocumentSourceUnavailable` | ABC or its storage could not be reached; may succeed later. |
+| Stream longer than the caller's `max_bytes` | `DocumentSourceArtifactTooLarge` (carries the limit) | The download was stopped part way. |
+| Any other answer, including 500 | `DocumentSourceError` | Generic download failure. |
+
+The 404 and 502 answers for a missing or unreachable stored file come from ABC
+PR 1392 (merged 13 Nov 2026). An ABC deployment without it answers a missing
+stored file with an unhandled 500, which stays the generic failure.
+
+`download_artifact(..., max_bytes=N)` streams the raw (identity-encoded) body and
+stops once more than `N` bytes have arrived, so an oversized file is never held
+in memory. ABC's `download_file` gunzips the stored object before serving it,
+so the count is the converted text's own size. The per-file limit for converted
+text is `DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES` (default 1,000,000). Today's
+main-paper imports do not pass a limit; file listing and supplement import
+(KANBAN-1976) apply it.
+
 ## Timeouts, Polling, Retry, And Staleness
 
 Configured knobs:
@@ -146,6 +169,8 @@ Configured knobs:
   conversion/import job (default 600 seconds), including downloads, hierarchy
   and figure classification, and vector storage.
 - `DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS`: individual provider HTTP timeout.
+- `DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES`: largest converted text, in
+  downloaded bytes, read for one provider file (default 1,000,000).
 - `PDF_JOB_STALE_TIMEOUT_SECONDS`: stale durable-job reconciliation timeout
   when set; otherwise PDF extraction timeout-derived fallback applies.
 

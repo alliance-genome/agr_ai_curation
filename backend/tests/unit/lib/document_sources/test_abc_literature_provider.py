@@ -164,16 +164,15 @@ class FakeABCLiteratureClient:
         artifact_id: str,
         *,
         request_bearer_token: str | None = None,
+        max_bytes: int | None = None,
     ) -> bytes:
-        self.calls.append(
-            (
-                "download_referencefile",
-                {
-                    "artifact_id": artifact_id,
-                    "request_bearer_token": request_bearer_token,
-                },
-            )
-        )
+        call_kwargs: dict[str, Any] = {
+            "artifact_id": artifact_id,
+            "request_bearer_token": request_bearer_token,
+        }
+        if max_bytes is not None:
+            call_kwargs["max_bytes"] = max_bytes
+        self.calls.append(("download_referencefile", call_kwargs))
         if self.download_error:
             raise self.download_error
         return self.download_payload
@@ -782,46 +781,6 @@ async def test_list_artifacts_maps_converted_markdown_access() -> None:
     assert artifact.artifact_format is SourceArtifactFormat.MARKDOWN
     assert artifact.status is SourceArtifactStatus.AVAILABLE
     assert artifact.access_policy.scope is SourceAccessScope.UNKNOWN
-
-
-@pytest.mark.asyncio
-async def test_list_artifacts_expands_converted_referencefile_children() -> None:
-    fake_client = FakeABCLiteratureClient()
-    fake_client.show_referencefiles_payload = {
-        "referencefiles": [
-            {
-                "referencefile_id": 55,
-                "reference_id": 101,
-                "reference_curie": "AGRKB:101",
-                "display_name": "source.pdf",
-                "file_class": "main",
-                "file_extension": "pdf",
-                "referencefile_mods": [{"mod_abbreviation": "FB"}],
-                "converted_referencefiles": [
-                    {
-                        "referencefile_id": 56,
-                        "display_name": "source_nxml.md",
-                        "file_class": "converted_merged_main",
-                        "file_extension": "md",
-                    }
-                ],
-            }
-        ]
-    }
-    provider = provider_from_fake(fake_client)
-
-    artifacts = await provider.list_artifacts("AGRKB:101")
-
-    assert [artifact.artifact_id for artifact in artifacts] == ["55", "56"]
-    source_artifact, converted_artifact = artifacts
-    assert source_artifact.role is SourceArtifactRole.SOURCE_PDF
-    assert converted_artifact.role is SourceArtifactRole.CONVERTED_TEXT
-    assert converted_artifact.parent_artifact_id == "55"
-    assert converted_artifact.reference_id == "101"
-    assert converted_artifact.reference_curie == "AGRKB:101"
-    assert converted_artifact.access_policy.scope is SourceAccessScope.RESTRICTED
-    assert converted_artifact.access_policy.group_ids == ("FB",)
-    assert converted_artifact.status is SourceArtifactStatus.AVAILABLE
 
 
 @pytest.mark.asyncio
@@ -2002,3 +1961,525 @@ async def test_standard_no_mod_pdf_beats_the_curators_mod_ocr_main() -> None:
     assert decision.status is ReferenceImportDecisionStatus.READY
     assert decision.selected is not None
     assert decision.selected.source_artifact.artifact_id == "5002"
+
+
+# KANBAN-1976 / ALL-1460 P2: rows below follow ABC's flat ``show_all`` shape
+# (``ReferencefileSchemaRelated``): one row per file, and a converted text row
+# names its original in ``source`` (null when ABC cannot resolve it).
+
+
+def _abc_show_all_row(
+    referencefile_id: int,
+    *mods: str | None,
+    file_class: str,
+    file_extension: str,
+    display_name: str,
+    source: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "referencefile_id": referencefile_id,
+        "reference_id": 101,
+        "display_name": display_name,
+        "file_class": file_class,
+        "file_publication_status": "final",
+        "file_extension": file_extension,
+        "pdf_type": None,
+        "md5sum": f"md5-{referencefile_id}",
+        "is_annotation": False,
+        "referencefile_mods": _abc_mod_rows(*mods),
+        "source": source,
+    }
+
+
+def _abc_source(row: dict[str, Any]) -> dict[str, Any]:
+    """ABC ``_source_dict`` of an original row."""
+
+    return {
+        key: row[key]
+        for key in ("referencefile_id", "display_name", "file_class", "file_extension", "md5sum")
+    }
+
+
+def _office_supplement_pair(
+    original_id: int,
+    *mods: str | None,
+    extension: str = "xlsx",
+    converted_mods: tuple[str | None, ...] | None = None,
+) -> list[dict[str, Any]]:
+    original = _abc_show_all_row(
+        original_id,
+        *mods,
+        file_class="supplement",
+        file_extension=extension,
+        display_name="Table_S1",
+    )
+    converted = _abc_show_all_row(
+        original_id + 1,
+        *(mods if converted_mods is None else converted_mods),
+        file_class="converted_merged_supplement",
+        file_extension="md",
+        display_name=f"Table_S1_{extension}",
+        source=_abc_source(original),
+    )
+    return [original, converted]
+
+
+async def _list_with_reference(
+    rows: list[dict[str, Any]],
+    *,
+    copyright_license_open_access: bool | None = None,
+    copyright_license_name: str | None = None,
+) -> list[SourceArtifact]:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.show_reference_payload = _abc_reference_record(
+        copyright_license_open_access=copyright_license_open_access,
+        copyright_license_name=copyright_license_name,
+    )
+    fake_client.show_referencefiles_payload = rows  # type: ignore[assignment]
+    provider = provider_from_fake(fake_client)
+    reference = await provider.resolve_reference("AGRKB:101")
+    return await provider.list_artifacts(reference)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extension", ["xlsx", "xlsm", "docx", "docm"])
+async def test_office_supplement_maps_to_supplement_role_and_links_its_converted_text(
+    extension: str,
+) -> None:
+    original, converted = await _list_with_reference(
+        _office_supplement_pair(8001, None, extension=extension)
+    )
+
+    assert original.role is SourceArtifactRole.SOURCE_SUPPLEMENT
+    assert original.parent_artifact_id is None
+    assert converted.role is SourceArtifactRole.CONVERTED_TEXT
+    assert converted.artifact_format is SourceArtifactFormat.MARKDOWN
+    assert converted.parent_artifact_id == "8001"
+    assert converted.reference_id == "101"
+
+
+@pytest.mark.asyncio
+async def test_no_mod_xlsx_and_its_converted_row_are_readable_by_any_group() -> None:
+    original, converted = await _list_with_reference(_office_supplement_pair(8001, None))
+
+    assert original.access_policy == SourceAccessPolicy(scope=SourceAccessScope.ANY_GROUP)
+    assert converted.access_policy == original.access_policy
+    for group in ("FB", "MGI", "WB"):
+        assert source_artifact_is_authorized(converted, authorized_group_ids=(group,))
+    # ABC's no-MOD grant needs some MOD access; a caller with none is refused.
+    assert not source_artifact_is_authorized(converted, authorized_group_ids=())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("license_name", "open_access"), [(None, None), ("Closed license", False)]
+)
+async def test_mod_restricted_docx_on_a_not_open_access_reference_is_denied_to_another_mod(
+    license_name: str | None, open_access: bool | None
+) -> None:
+    main_pdf = _abc_show_all_main_pdf(5001, None, display_name="paper_main")
+    artifacts = await _list_with_reference(
+        [main_pdf, *_office_supplement_pair(8001, "WB", extension="docx")],
+        copyright_license_name=license_name,
+        copyright_license_open_access=open_access,
+    )
+    main, docx, converted = artifacts
+
+    assert source_artifact_is_authorized(main, authorized_group_ids=("FB",))
+    assert docx.access_policy == SourceAccessPolicy(
+        scope=SourceAccessScope.RESTRICTED, group_ids=("WB",)
+    )
+    assert not source_artifact_is_authorized(docx, authorized_group_ids=("FB",))
+    assert not source_artifact_is_authorized(converted, authorized_group_ids=("FB",))
+    assert source_artifact_is_authorized(converted, authorized_group_ids=("WB",))
+
+
+@pytest.mark.asyncio
+async def test_mod_restricted_docx_on_an_open_access_reference_is_readable_by_any_caller() -> None:
+    _docx, converted = await _list_with_reference(
+        _office_supplement_pair(8001, "WB", extension="docx"),
+        copyright_license_name="Open license",
+        copyright_license_open_access=True,
+    )
+
+    assert converted.access_policy == SourceAccessPolicy(scope=SourceAccessScope.GLOBAL)
+    assert source_artifact_is_authorized(converted, authorized_group_ids=("FB",))
+    assert source_artifact_is_authorized(converted, authorized_group_ids=())
+
+
+@pytest.mark.asyncio
+async def test_license_with_unset_open_access_refuses_a_no_mod_supplement() -> None:
+    original, converted = await _list_with_reference(
+        _office_supplement_pair(8001, None),
+        copyright_license_name="Named license",
+        copyright_license_open_access=None,
+    )
+
+    assert original.access_policy.scope is SourceAccessScope.UNKNOWN
+    assert not source_artifact_is_authorized(converted, authorized_group_ids=("WB",))
+
+
+@pytest.mark.asyncio
+async def test_converted_supplement_takes_its_originals_policy_not_its_own_mod_rows() -> None:
+    _original, converted = await _list_with_reference(
+        _office_supplement_pair(8001, "WB", converted_mods=(None,))
+    )
+
+    assert converted.access_policy == SourceAccessPolicy(
+        scope=SourceAccessScope.RESTRICTED, group_ids=("WB",)
+    )
+    assert not source_artifact_is_authorized(converted, authorized_group_ids=("FB",))
+
+
+@pytest.mark.asyncio
+async def test_converted_supplement_with_null_source_is_never_offered() -> None:
+    original, converted = _office_supplement_pair(8001, None)
+    converted["source"] = None
+
+    artifacts = await _list_with_reference([original, converted])
+
+    assert [artifact.artifact_id for artifact in artifacts] == ["8001"]
+
+
+@pytest.mark.asyncio
+async def test_converted_supplement_naming_an_unlisted_source_is_left_out_and_reported(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from agr_ai_curation_alliance.document_sources import abc_literature
+
+    reports: list[dict[str, Any]] = []
+
+    def _report(exc: BaseException, **kwargs: Any) -> bool:
+        reports.append({"message": str(exc), **kwargs})
+        return True
+
+    monkeypatch.setattr(abc_literature, "report_runtime_exception", _report)
+    main_pdf = _abc_show_all_main_pdf(5001, None, display_name="paper_main")
+    _original, orphan = _office_supplement_pair(8001, None)
+    orphan["display_name"] = "Secret_Title_S1_xlsx"
+    kept_original, kept_converted = _office_supplement_pair(8101, None)
+
+    with caplog.at_level("WARNING", logger=abc_literature.__name__):
+        artifacts = await _list_with_reference(
+            [main_pdf, orphan, kept_original, kept_converted]
+        )
+
+    assert [artifact.artifact_id for artifact in artifacts] == ["5001", "8101", "8102"]
+    warning = next(record for record in caplog.records if "left out" in record.getMessage())
+    assert "8002" in warning.getMessage() and "8001" in warning.getMessage()
+    assert getattr(warning, "sentry_skip_event", False) is True
+    (report,) = reports
+    assert report["component"] == "document_source"
+    assert report["operation"] == "converted_source_not_listed"
+    assert report["level"] == "warning"
+    assert report["fingerprint"] == ("document_source", "converted_source_not_listed")
+    # Only hashed ids reach Sentry: no raw ids, file names or reference.
+    flattened = repr(report)
+    for raw in ("8002", "8001", "Secret_Title", "AGRKB:101"):
+        assert raw not in flattened
+    assert set(report["context"]) == {"artifact_id_hash", "source_artifact_id_hash"}
+    assert all(report["context"].values())
+
+
+@pytest.mark.asyncio
+async def test_supplement_pdf_converted_text_is_linked_to_the_pdf_and_carries_its_policy() -> None:
+    # The converted row here names only WB while its PDF has a no-MOD row: the
+    # state before ABC syncs a converted row's MOD links from its source. ABC's
+    # own download check would use the converted row's WB row, so the inherited
+    # ANY_GROUP is wider than ABC for this row. Nothing reads converted
+    # supplement policy in P2; P6 authorizes with the intersection of the
+    # original's policy and the converted row's own rule.
+    pdf = _abc_show_all_row(
+        8101, None, file_class="supplement", file_extension="pdf", display_name="Data_S2"
+    )
+    converted = _abc_show_all_row(
+        8102,
+        "WB",
+        file_class="converted_merged_supplement",
+        file_extension="md",
+        display_name="Data_S2_merged",
+        source=_abc_source(pdf),
+    )
+
+    source, text = await _list_with_reference([pdf, converted])
+
+    assert source.role is SourceArtifactRole.SOURCE_PDF
+    assert text.parent_artifact_id == "8101"
+    assert text.access_policy == SourceAccessPolicy(scope=SourceAccessScope.ANY_GROUP)
+
+
+@pytest.mark.asyncio
+async def test_large_data_file_and_unconverted_supplements_keep_their_roles() -> None:
+    htp = _abc_show_all_row(
+        8201, None, file_class="htp_supplement", file_extension="xlsx", display_name="Data_S3"
+    )
+    csv = _abc_show_all_row(
+        8202, None, file_class="supplement", file_extension="csv", display_name="Data_S4"
+    )
+
+    htp_artifact, csv_artifact = await _list_with_reference([htp, csv])
+
+    assert htp_artifact.role is SourceArtifactRole.UNKNOWN
+    assert csv_artifact.role is SourceArtifactRole.UNKNOWN
+    # Originals carry ABC's no-MOD grant whatever their class.
+    assert htp_artifact.access_policy.scope is SourceAccessScope.ANY_GROUP
+
+
+@pytest.mark.asyncio
+async def test_main_paper_import_is_unchanged_for_a_one_pdf_paper_with_supplements() -> None:
+    main_pdf = {**_abc_show_all_main_pdf(5001, None, display_name="paper_main"), "source": None}
+    main_text = _abc_show_all_row(
+        5002,
+        None,
+        file_class="converted_merged_main",
+        file_extension="md",
+        display_name="paper_main_merged",
+        source=_abc_source(main_pdf),
+    )
+    fake_client = FakeABCLiteratureClient()
+    fake_client.external_lookup_payload = _abc_external_lookup(
+        "PMID:41000001", reference_curie="AGRKB:101", title="A paper"
+    )
+    fake_client.show_reference_payload = _abc_reference_record()
+    fake_client.show_referencefiles_payload = [  # type: ignore[assignment]
+        main_pdf, main_text, *_office_supplement_pair(8001, None),
+    ]
+
+    decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
+        provider=provider_from_fake(fake_client),
+        identifier="PMID:41000001",
+        authorized_group_ids=("FB",),
+        allow_conversion_request=False,
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.READY
+    assert decision.selected is not None
+    assert decision.selected.source_artifact.artifact_id == "5001"
+    assert decision.selected.converted_artifact is not None
+    assert decision.selected.converted_artifact.artifact_id == "5002"
+    assert decision.selected.provider_metadata_artifacts == ()
+
+
+def _figure_metadata_row(referencefile_id: int, file_class: str, display_name: str) -> dict[str, Any]:
+    return _abc_show_all_row(
+        referencefile_id,
+        None,
+        file_class=file_class,
+        file_extension="json",
+        display_name=display_name,
+    )
+
+
+@pytest.mark.asyncio
+async def test_main_paper_without_its_own_figure_metadata_gets_no_supplement_sidecars() -> None:
+    main_pdf = _abc_show_all_main_pdf(5001, None, display_name="paper_main")
+    artifacts = await _list_with_reference(
+        [
+            main_pdf,
+            _figure_metadata_row(9001, "converted_supplement_figure_metadata", "Data_S2_image_1"),
+        ]
+    )
+    provider = provider_from_fake(FakeABCLiteratureClient())
+
+    assert provider.provider_metadata_artifacts_for_source(artifacts[0], artifacts) == ()
+
+
+@pytest.mark.asyncio
+async def test_main_paper_gets_no_sidecars_named_for_another_file() -> None:
+    main_pdf = _abc_show_all_main_pdf(5001, None, display_name="paper_main")
+    artifacts = await _list_with_reference(
+        [
+            main_pdf,
+            _figure_metadata_row(9001, "converted_main_figure_metadata", "other_main_image_1"),
+            _figure_metadata_row(9002, "converted_main_figure_metadata", "paper_main_image_1"),
+        ]
+    )
+    provider = provider_from_fake(FakeABCLiteratureClient())
+
+    sidecars = provider.provider_metadata_artifacts_for_source(artifacts[0], artifacts)
+
+    assert [artifact.artifact_id for artifact in sidecars] == ["9002"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "error_type"),
+    [
+        (404, "DocumentSourceArtifactNotFound"),
+        (502, "DocumentSourceUnavailable"),
+        (503, "DocumentSourceUnavailable"),
+        (504, "DocumentSourceUnavailable"),
+    ],
+)
+async def test_download_maps_missing_file_and_unreachable_abc_to_their_own_errors(
+    status: int, error_type: str
+) -> None:
+    from src.lib.document_sources import models
+
+    fake_client = FakeABCLiteratureClient()
+    fake_client.download_error = ABCLiteratureHTTPError(
+        f"ABC Literature returned HTTP {status}",
+        status_code=status,
+        endpoint="/reference/referencefile/download_file/55",
+    )
+
+    with pytest.raises(getattr(models, error_type)) as caught:
+        await provider_from_fake(fake_client).download_artifact("55")
+
+    assert not isinstance(caught.value, DocumentSourceAccessDenied)
+
+
+@pytest.mark.asyncio
+async def test_download_before_abc_reports_missing_files_stays_a_generic_failure() -> None:
+    from src.lib.document_sources.models import (
+        DocumentSourceArtifactNotFound,
+        DocumentSourceUnavailable,
+    )
+
+    fake_client = FakeABCLiteratureClient()
+    fake_client.download_error = ABCLiteratureHTTPError(
+        "ABC Literature returned HTTP 500",
+        status_code=500,
+        endpoint="/reference/referencefile/download_file/55",
+    )
+
+    with pytest.raises(DocumentSourceError) as caught:
+        await provider_from_fake(fake_client).download_artifact("55")
+
+    assert type(caught.value) is DocumentSourceError
+    assert not isinstance(caught.value, (DocumentSourceArtifactNotFound, DocumentSourceUnavailable))
+
+
+@pytest.mark.asyncio
+async def test_download_passes_the_cap_to_the_client() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.download_referencefile = AsyncMock(return_value=b"text")  # type: ignore[method-assign]
+
+    await provider_from_fake(fake_client).download_artifact(
+        "55", request_bearer_token="curator-token", max_bytes=1000
+    )
+
+    fake_client.download_referencefile.assert_awaited_once_with(
+        "55", request_bearer_token="curator-token", max_bytes=1000
+    )
+
+
+@pytest.mark.asyncio
+async def test_oversized_download_stops_mid_stream_with_its_own_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    from src.lib.openai_agents.config import get_document_file_max_converted_text_bytes
+
+    monkeypatch.setenv("DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES", "15")
+
+    from agr_ai_curation_alliance.literature.client import (
+        ABCLiteratureClient,
+        ABCLiteratureClientConfig,
+    )
+    from src.lib.document_sources.models import DocumentSourceArtifactTooLarge
+
+    class _Stream(httpx.AsyncByteStream):
+        def __init__(self) -> None:
+            self.reads = 0
+            self.closed = False
+
+        async def __aiter__(self):
+            for chunk in (b"| a | b |\n", b"| 1 | 2 |\n", b"never read"):
+                self.reads += 1
+                yield chunk
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    stream = _Stream()
+    transport = httpx.MockTransport(lambda _request: httpx.Response(200, stream=stream))
+    async with httpx.AsyncClient(transport=transport) as http:
+        client = ABCLiteratureClient(
+            ABCLiteratureClientConfig(base_url="https://literature.test"), http_client=http
+        )
+        provider = ABCLiteratureDocumentSourceProvider(client)
+
+        with pytest.raises(DocumentSourceArtifactTooLarge) as caught:
+            await provider.download_artifact(
+                "55", max_bytes=get_document_file_max_converted_text_bytes()
+            )
+
+    assert caught.value.max_bytes == 15
+    # The second chunk crosses the limit; the stream is closed before the third.
+    assert stream.reads == 2
+    assert stream.closed
+
+
+@pytest.mark.asyncio
+async def test_curator_import_keeps_todays_main_text_choice_with_nxml_and_merged_main_text() -> None:
+    # P2 links only supplement text. Main-text rows stay unlinked, so a curator
+    # import still takes the nXML-derived main text even though ABC names the
+    # nXML row, not the PDF, as its ``source``.
+    main_pdf = {**_abc_show_all_main_pdf(5001, None, display_name="paper_main"), "source": None}
+    nxml = _abc_show_all_row(
+        5002, None, file_class="nXML", file_extension="xml", display_name="paper_main"
+    )
+    nxml_text = _abc_show_all_row(
+        5003,
+        None,
+        file_class="converted_merged_main",
+        file_extension="md",
+        display_name="paper_main_nxml",
+        source=_abc_source(nxml),
+    )
+    merged_text = _abc_show_all_row(
+        5004,
+        None,
+        file_class="converted_merged_main",
+        file_extension="md",
+        display_name="paper_main_merged",
+        source=_abc_source(main_pdf),
+    )
+    fake_client = FakeABCLiteratureClient()
+    fake_client.external_lookup_payload = _abc_external_lookup(
+        "PMID:41000001", reference_curie="AGRKB:101", title="A paper"
+    )
+    fake_client.show_reference_payload = _abc_reference_record()
+    fake_client.show_referencefiles_payload = [  # type: ignore[assignment]
+        main_pdf, nxml, nxml_text, merged_text,
+    ]
+
+    decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
+        provider=provider_from_fake(fake_client),
+        identifier="PMID:41000001",
+        authorized_group_ids=("FB",),
+        allow_conversion_request=False,
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.READY
+    assert decision.selected is not None
+    assert decision.selected.source_artifact.artifact_id == "5001"
+    assert decision.selected.converted_artifact is not None
+    assert decision.selected.converted_artifact.artifact_id == "5003"
+    assert decision.selected.converted_artifact.parent_artifact_id is None
+
+
+@pytest.mark.asyncio
+async def test_two_main_pdf_paper_keeps_the_main_sidecars_of_the_text_it_imports() -> None:
+    # The curator's chosen PDF was never converted; the reference-level main
+    # text (and its figure metadata) comes from the other main PDF. Today's
+    # behaviour keeps those main sidecars; supplement sidecars stay out.
+    chosen = _abc_show_all_main_pdf(5001, None, display_name="shared_copy")
+    other = _abc_show_all_main_pdf(5002, "FB", display_name="mod_copy")
+    artifacts = await _list_with_reference(
+        [
+            chosen,
+            other,
+            _figure_metadata_row(9001, "converted_main_figure_metadata", "mod_copy_image_1"),
+            _figure_metadata_row(9002, "converted_supplement_figure_metadata", "Data_S2_image_1"),
+        ]
+    )
+    provider = provider_from_fake(FakeABCLiteratureClient())
+
+    sidecars = provider.provider_metadata_artifacts_for_source(artifacts[0], artifacts)
+
+    assert [artifact.artifact_id for artifact in sidecars] == ["9001"]
