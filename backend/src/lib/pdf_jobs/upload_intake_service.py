@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import BackgroundTasks, UploadFile
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from src.config import get_pdf_storage_path
@@ -78,7 +78,14 @@ from src.lib.weaviate_client.documents import (
 )
 from src.lib.weaviate_helpers import get_tenant_name
 from src.models.sql.database import SessionLocal
-from src.models.sql.pdf_document import PDFDocument as ViewerPDFDocument
+from src.lib.document_files.service import owned_paper_by_main_file_hash
+from src.models.sql.pdf_document import (
+    DOCUMENT_KIND_LIBRARY,
+    FILE_ROLE_MAIN,
+    FILE_STATUS_PENDING,
+    PDFDocument as ViewerPDFDocument,
+    PDFDocumentFile,
+)
 from src.services.user_service import principal_from_claims, provision_user_async, ProvisionedUser
 
 from . import service as pdf_job_service
@@ -87,8 +94,8 @@ logger = logging.getLogger(__name__)
 
 _PDF_DOCUMENT_DUPLICATE_CONSTRAINTS = frozenset(
     {
-        "uq_pdf_documents_file_hash",
-        "uq_pdf_documents_file_path",
+        "uq_pdf_document_files_main_file_hash",
+        "uq_pdf_document_files_file_path",
     }
 )
 
@@ -328,13 +335,7 @@ class UploadIntakeService:
         try:
             existing = (
                 session.execute(
-                    select(ViewerPDFDocument).where(
-                        ViewerPDFDocument.user_id == db_user.id,
-                        or_(
-                            ViewerPDFDocument.file_hash == scoped_file_hash,
-                            ViewerPDFDocument.file_hash == raw_checksum,
-                        ),
-                    )
+                    owned_paper_by_main_file_hash(db_user.id, (scoped_file_hash, raw_checksum))
                 )
                 .scalars()
                 .first()
@@ -367,35 +368,41 @@ class UploadIntakeService:
             await self._create_document(user_sub, document)
             weaviate_document_created = True
 
-            if provider_import_plan is not None:
-                relative_path = saved_path.relative_to(base_storage)
-                relative_path_string = str(relative_path).replace("\\", "/")
-                viewer_mode = ViewerMode.LOCAL_PDF.value
-                source_provenance = provider_import_plan.source_provenance
-            else:
-                relative_path = saved_path.relative_to(base_storage)
-                relative_path_string = str(relative_path).replace("\\", "/")
-                viewer_mode = None
-                source_provenance = {}
+            relative_path = saved_path.relative_to(base_storage)
+            relative_path_string = str(relative_path).replace("\\", "/")
+            source_provenance = (
+                provider_import_plan.source_provenance
+                if provider_import_plan is not None
+                else {}
+            )
 
             record = ViewerPDFDocument(
                 id=uuid.UUID(str(document.id)),
                 filename=document.filename,
+                user_id=db_user.id,
+                document_kind=DOCUMENT_KIND_LIBRARY,
+                next_chunk_index=0,
+                source_provider=source_provenance.get("provider"),
+                source_provider_reference_id=source_provenance.get("reference_id"),
+                source_provider_reference_curie=source_provenance.get("reference_curie"),
+                source_external_ids=source_provenance.get("external_ids"),
+            )
+            # Every upload is a stored local PDF and becomes the paper's main file.
+            record.files.append(PDFDocumentFile(
+                role=FILE_ROLE_MAIN,
+                display_name=document.filename,
+                status=FILE_STATUS_PENDING,
+                tab_order=0,
+                display_mode=ViewerMode.LOCAL_PDF.value,
                 file_path=relative_path_string,
                 file_hash=scoped_file_hash,
                 file_size=file_size_bytes,
                 page_count=page_count,
-                user_id=db_user.id,
-                viewer_mode=viewer_mode,
-                source_provider=source_provenance.get("provider"),
-                source_provider_reference_id=source_provenance.get("reference_id"),
-                source_provider_reference_curie=source_provenance.get("reference_curie"),
                 source_provider_source_file_id=source_provenance.get("source_file_id"),
                 source_provider_pdf_artifact_id=source_provenance.get("pdf_artifact_id"),
                 source_provider_converted_artifact_id=source_provenance.get(
                     "converted_artifact_id"
                 ),
-                source_external_ids=source_provenance.get("external_ids"),
                 source_md5=source_provenance.get("source_md5"),
                 source_file_class=source_provenance.get("file_class"),
                 source_file_extension=source_provenance.get("file_extension"),
@@ -405,7 +412,7 @@ class UploadIntakeService:
                 ),
                 source_access_scope=source_provenance.get("access_scope"),
                 source_access_group_ids=source_provenance.get("access_group_ids"),
-            )
+            ))
             session.add(record)
             session.commit()
 
@@ -431,12 +438,8 @@ class UploadIntakeService:
             if self._is_duplicate_integrity_error(integrity_error, constraint_name):
                 existing_after_conflict = (
                     session.execute(
-                        select(ViewerPDFDocument).where(
-                            ViewerPDFDocument.user_id == db_user.id,
-                            or_(
-                                ViewerPDFDocument.file_hash == scoped_file_hash,
-                                ViewerPDFDocument.file_hash == raw_checksum,
-                            ),
+                        owned_paper_by_main_file_hash(
+                            db_user.id, (scoped_file_hash, raw_checksum)
                         )
                     )
                     .scalars()

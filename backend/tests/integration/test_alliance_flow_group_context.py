@@ -9,6 +9,7 @@ from tests.integration.test_flow_lifecycle_execute_flow_sse import (
     _patched_flow_runner,
     _sse_events,
 )
+from tests.pdf_document_test_support import new_paper
 
 
 def test_group_restricted_saved_flow_keeps_authenticated_context(
@@ -18,7 +19,6 @@ def test_group_restricted_saved_flow_keeps_authenticated_context(
     import asyncio
     from src.lib.flows import executor
     from src.lib.document_context import DocumentContext
-    from src.models.sql.pdf_document import PDFDocument
     from src.models.sql.user import User
 
     principal = asyncio.run(get_auth_mock.get_user())
@@ -38,7 +38,7 @@ def test_group_restricted_saved_flow_keeps_authenticated_context(
 
     owner = test_db.query(User).filter_by(auth_sub=principal.uid).one()
     document_id = uuid4()
-    test_db.add(PDFDocument(id=document_id, user_id=owner.id, filename="test_groups.pdf",
+    test_db.add(new_paper(id=document_id, user_id=owner.id, filename="test_groups.pdf",
                             file_path="/tmp/test_groups.pdf", file_hash="a" * 64, file_size=1, page_count=1))
     test_db.commit()
     monkeypatch.setattr(executor.DocumentContext, "fetch", AsyncMock(return_value=DocumentContext(

@@ -456,6 +456,7 @@ async def test_get_document_handles_no_chunks_after_uuid_filter_failure():
     db_lookup.scalar_one_or_none.return_value = db_user
     db_session = MagicMock()
     db_session.execute.return_value = db_lookup
+    db_session.scalar.return_value = "library"
     db_session.close = MagicMock()
 
     def _mock_get_db():
@@ -536,6 +537,7 @@ async def test_get_document_parses_chunk_metadata_without_retired_detail_fields(
     db_lookup.scalar_one_or_none.return_value = db_user
     db_session = MagicMock()
     db_session.execute.return_value = db_lookup
+    db_session.scalar.return_value = "library"
     db_session.close = MagicMock()
 
     def _mock_get_db():

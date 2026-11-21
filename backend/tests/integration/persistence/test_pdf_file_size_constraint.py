@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
 from tests.pdf_document_test_support import ensure_test_pdf_owner
+from tests.pdf_document_test_support import new_paper
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -44,7 +45,7 @@ def db_session():
 
 def _document(file_size: int, *, user_id: int) -> PDFDocument:
     document_id = uuid4()
-    return PDFDocument(
+    return new_paper(
         id=document_id,
         user_id=user_id,
         filename=f"file_size_constraint_{document_id}.pdf",
@@ -84,9 +85,9 @@ def test_upgrade_from_prior_head_relaxes_former_ceiling(historical_migration_dat
                     """),
                     {
                         "id": document.id, "user_id": owner_id,
-                        "filename": document.filename, "file_path": document.file_path,
-                        "file_hash": document.file_hash, "file_size": document.file_size,
-                        "page_count": document.page_count,
+                        "filename": document.filename, "file_path": document.main_file.file_path,
+                        "file_hash": document.main_file.file_hash, "file_size": document.main_file.file_size,
+                        "page_count": document.main_file.page_count,
                         "upload_timestamp": document.upload_timestamp,
                     },
                 )
@@ -101,7 +102,7 @@ def test_upgrade_from_prior_head_relaxes_former_ceiling(historical_migration_dat
     try:
         upgraded_session.add(document)
         upgraded_session.commit()
-        assert upgraded_session.get(PDFDocument, document.id).file_size == (
+        assert upgraded_session.get(PDFDocument, document.id).main_file.file_size == (
             550 * 1024 * 1024
         )
     finally:
@@ -122,7 +123,7 @@ def test_database_accepts_positive_size_above_former_ceiling(db_session):
     db_session.add(document)
     db_session.commit()
 
-    assert db_session.get(PDFDocument, document.id).file_size == 550 * 1024 * 1024
+    assert db_session.get(PDFDocument, document.id).main_file.file_size == 550 * 1024 * 1024
 
 
 @pytest.mark.parametrize("file_size", [0, -1])

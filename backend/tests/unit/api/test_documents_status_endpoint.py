@@ -88,7 +88,7 @@ async def test_status_endpoint_maps_upload_stage_to_processing(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_status_endpoint_does_not_let_completed_job_hide_active_reprocess(monkeypatch):
+async def test_status_endpoint_does_not_let_completed_job_hide_active_reembed(monkeypatch):
     document_id = "33333333-3333-3333-3333-333333333333"
 
     async def fake_get_document(_user_sub, _document_id):

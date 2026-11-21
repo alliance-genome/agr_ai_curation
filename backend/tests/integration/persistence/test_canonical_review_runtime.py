@@ -20,6 +20,7 @@ from tests.integration.persistence.test_chat_review_adapter import (
     planned as planned, scope as scope, migrated as migrated, checkpoint_provider,
 )
 from tests.validation_review_runtime_support import CanonicalReviewer, CanonicalValidator
+from tests.pdf_document_test_support import new_paper
 
 
 @pytest.fixture
@@ -657,7 +658,7 @@ async def test_canonical_batch_processes_two_documents_serially_without_replay(
         first = db.get(PDFDocument, UUID(document_ids[0]))
         owner_id = first.user_id
         second_id = UUID(document_ids[1])
-        db.add(PDFDocument(id=second_id, user_id=owner_id, filename="batch-second.pdf",
+        db.add(new_paper(id=second_id, user_id=owner_id, filename="batch-second.pdf",
             file_path=f"{second_id}/batch-second.pdf", file_hash=second_id.hex * 2,
             file_size=1024, page_count=1, status="completed"))
 

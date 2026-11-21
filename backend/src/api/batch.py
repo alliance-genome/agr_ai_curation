@@ -26,6 +26,7 @@ from ..lib.batch.validation import validate_flow_for_batch
 from ..lib.batch.processor import process_batch_task
 from ..lib.batch.streaming import BatchProgressResponse, verify_batch_owner
 from ..models.sql import get_db, CurationFlow, PDFDocument
+from ..models.sql.pdf_document import DOCUMENT_KIND_LIBRARY
 from ..lib.observability.background_tasks import add_observed_background_task
 from ..lib.group_rules import get_groups_from_provider_groups
 from ..lib.agent_studio.agent_service import inaccessible_flow_agent_keys
@@ -130,7 +131,7 @@ async def create_batch(
     found_docs = db.query(PDFDocument).filter(
         PDFDocument.id.in_(request.document_ids),
         PDFDocument.user_id == db_user.id,
-        PDFDocument.viewer_mode.is_distinct_from("benchmark_frozen"),
+        PDFDocument.document_kind == DOCUMENT_KIND_LIBRARY,
     ).all()
 
     found_ids = {doc.id for doc in found_docs}

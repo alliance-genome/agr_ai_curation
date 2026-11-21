@@ -206,7 +206,7 @@ async def test_create_batch_success(monkeypatch):
     assert background_tasks.tasks[0].args == (batch_id,)
     assert create_kwargs["active_group_ids"] == ["group-a"]
     assert any(condition.compare(
-        batch_api.PDFDocument.viewer_mode.is_distinct_from("benchmark_frozen")
+        batch_api.PDFDocument.document_kind == "library"
     ) for condition in document_filters)
 
 

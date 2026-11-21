@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 
 from src.models.sql.user import User
 from src.models.sql.pdf_document import PDFDocument
+from tests.pdf_document_test_support import new_paper
 
 # Note: cleanup_db, test_db, and mock_weaviate fixtures are now in conftest.py
 # Note: curator_user is pre-registered as "data_user" in conftest.py
@@ -71,7 +72,7 @@ class TestDataPersistence:
         # Session 1: Upload document
         import uuid
         doc_id = uuid.uuid4()
-        document = PDFDocument(
+        document = new_paper(
             id=doc_id,
             user_id=user.id,
             filename="test_persistent_doc.pdf",
@@ -88,8 +89,8 @@ class TestDataPersistence:
         persisted = test_db.query(PDFDocument).filter_by(id=doc_id, user_id=user.id).one_or_none()
         assert persisted is not None, "Document should persist across sessions"
         assert persisted.filename == "test_persistent_doc.pdf"
-        assert persisted.file_size == 2048
-        assert persisted.page_count == 10
+        assert persisted.main_file.file_size == 2048
+        assert persisted.main_file.page_count == 10
 
     def test_multiple_documents_persist_across_sessions(
         self, test_db, get_auth_mock, mock_weaviate, curator_user
@@ -117,7 +118,7 @@ class TestDataPersistence:
         for i in range(3):
             doc_id = uuid.uuid4()
             doc_ids.append(doc_id)
-            document = PDFDocument(
+            document = new_paper(
                 id=doc_id,
                 user_id=user.id,
                 filename=f"test_doc_{i+1}.pdf",
@@ -162,7 +163,7 @@ class TestDataPersistence:
         import uuid
         doc_id = uuid.uuid4()
         original_timestamp = datetime.now(timezone.utc)
-        document = PDFDocument(
+        document = new_paper(
             id=doc_id,
             user_id=user.id,
             filename="test_metadata_doc.pdf",
@@ -179,8 +180,8 @@ class TestDataPersistence:
         persisted = test_db.query(PDFDocument).filter_by(id=doc_id, user_id=user.id).one_or_none()
         assert persisted is not None
         assert persisted.filename == "test_metadata_doc.pdf"
-        assert persisted.file_size == 4096
-        assert persisted.page_count == 15
+        assert persisted.main_file.file_size == 4096
+        assert persisted.main_file.page_count == 15
 
         returned_timestamp = persisted.upload_timestamp
         # Allow small time difference due to serialization
@@ -239,7 +240,7 @@ class TestDataPersistence:
         # Session 1: Upload document
         import uuid
         doc_id = uuid.uuid4()
-        document = PDFDocument(
+        document = new_paper(
             id=doc_id,
             user_id=user.id,
             filename="test_crud_doc.pdf",
@@ -262,7 +263,7 @@ class TestDataPersistence:
 
         # Session 2: Upload new document with same filename
         new_doc_id = uuid.uuid4()
-        new_document = PDFDocument(
+        new_document = new_paper(
             id=new_doc_id,
             user_id=user.id,
             filename="test_crud_doc.pdf",  # Same filename as deleted
@@ -278,7 +279,7 @@ class TestDataPersistence:
         recreated = test_db.query(PDFDocument).filter_by(id=new_doc_id, user_id=user.id).one_or_none()
         assert recreated is not None
         assert recreated.filename == "test_crud_doc.pdf"
-        assert recreated.file_size == 2048  # New document's size
+        assert recreated.main_file.file_size == 2048  # New document's size
 
     def test_empty_document_list_persists_for_new_user(
         self, test_db, get_auth_mock, mock_weaviate, curator_user

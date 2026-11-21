@@ -312,8 +312,8 @@ SHA-256 recorded in the receipt. Missing files, altered bytes and replacement
 symlinks fail closed without re-indexing. This verifies file integrity, not
 immutability of the separate vector collection. The canonical curator document
 access guard now returns 404 for benchmark copies, including the shared guard
-used by rename/delete/reprocess/re-embed and viewer routes. Its SQL-owned listing
-also excludes them while retaining normal NULL viewer-mode rows. Internal
+used by rename/delete/re-embed and viewer routes. Its SQL-owned listing keeps
+only papers whose `document_kind` is `library`. Internal
 ingestion and document-tool ownership paths are separate and remain available.
 Phantom cleanup excludes benchmark SQL rows from its missing-vector deletion
 pass, because preparation creates SQL before vectors. Weaviate-backed library

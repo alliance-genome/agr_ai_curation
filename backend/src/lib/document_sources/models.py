@@ -120,8 +120,10 @@ class ProviderBearerKind(str, Enum):
 
 
 class ViewerMode(str, Enum):
+    """How a file is shown; the values are ``pdf_document_files.display_mode``."""
+
     LOCAL_PDF = "local_pdf"
-    TEXT_ONLY = "text_only"
+    TEXT = "text"
     PROVIDER_PDF_PROXY = "provider_pdf_proxy"
 
 

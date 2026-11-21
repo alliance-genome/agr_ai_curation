@@ -27,6 +27,20 @@ The local document `processing_status` follows the same terminal semantics:
 successful provider import completes the local document; conversion, download,
 or ingestion failure marks it failed.
 
+## Papers and Files
+
+Every import or upload creates one paper (`pdf_documents`) and its main file
+(`pdf_document_files`, role `main`). Per-file provenance from the provider
+(source file, PDF and converted artifact ids, MD5, converted-artifact SHA-256,
+file class and extension, artifact and import status, access scope and groups)
+is stored on the file; the reference id, CURIE and external ids stay on the
+paper. Ingestion is split into a per-file part (the file's status, its piece
+range reserved from the paper's `next_chunk_index`, its stored and verified
+pieces, and its `text_bytes`) and a paper part that runs once when a new
+paper's files have all succeeded (the paper's status and completion time, and
+the search-index document's status and summed piece count). See
+`docs/developer/guides/PAPER_FILES_MIGRATION.md`.
+
 ## Upload Checksum Preflight
 
 When `DOCUMENT_SOURCE_PROVIDER=abc_literature` and
@@ -166,7 +180,7 @@ by cancelling their await. Successfully written chunks retain their verified cou
 the cancelled operation marks both Weaviate processing and embedding status failed,
 and the provider execution service then marks the SQL document and durable job
 failed. The job remains active while writes drain, so the normal active-job guards
-continue to block deletion/reprocessing. This drain can extend elapsed time past
+continue to block deletion and re-embedding. This drain can extend elapsed time past
 the configured deadline; it does not convert a timeout into a successful import.
 
 Existing deployment overrides remain authoritative: a deployment explicitly set to

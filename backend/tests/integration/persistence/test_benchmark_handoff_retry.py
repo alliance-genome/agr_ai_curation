@@ -20,6 +20,7 @@ from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
 from src.schemas.domain_envelope import DomainEnvelopeStatus
 from tests.pdf_document_test_support import ensure_test_pdf_owner
+from tests.pdf_document_test_support import new_paper
 
 IDENTITY = {
     "sender_issuer": "https://identity.example/pool",
@@ -42,7 +43,7 @@ def snapshot(monkeypatch):
     with SessionLocal() as db:
         owner = ensure_test_pdf_owner(db, auth_sub=IDENTITY["sender_subject"])
         db.add(
-            PDFDocument(
+            new_paper(
                 id=document_id,
                 user_id=owner,
                 filename="retry.pdf",

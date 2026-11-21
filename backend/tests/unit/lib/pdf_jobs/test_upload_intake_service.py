@@ -518,7 +518,7 @@ async def test_intake_upload_accepts_page_counts_through_default_limit(
         user={"sub": "user-1"},
     )
 
-    assert session.added[0].page_count == page_count
+    assert session.added[0].main_file.page_count == page_count
     assert session.commit_calls == 1
     assert len(dispatch.calls) == 1
 
@@ -605,7 +605,7 @@ async def test_intake_upload_accepts_301_pages_with_350_page_override(
         user={"sub": "user-1"},
     )
 
-    assert session.added[0].page_count == 301
+    assert session.added[0].main_file.page_count == 301
     assert session.commit_calls == 1
 
 
@@ -765,7 +765,7 @@ async def test_intake_upload_enabled_provider_no_match_falls_back_to_local_pdf_p
     assert dispatch.provider_markdown_calls == []
     assert len(session.added) == 1
     record = session.added[0]
-    assert record.viewer_mode is None
+    assert record.main_file.display_mode == "local_pdf"
     assert record.source_provider is None
     assert session.commit_calls == 1
 
@@ -908,7 +908,7 @@ async def test_intake_checksum_matched_supplement_processes_exact_uploaded_pdf(t
     assert len(session.added) == 1
     record = session.added[0]
     assert record.source_provider is None
-    assert record.viewer_mode is None
+    assert record.main_file.display_mode == "local_pdf"
     assert session.commit_calls == 1
 
 
@@ -1000,24 +1000,27 @@ async def test_intake_upload_enabled_provider_ready_dispatches_markdown_import(t
     assert create_document_calls[0][1].source_provenance["converted_artifact_id"] == "markdown-1"
     assert len(session.added) == 1
     record = session.added[0]
-    assert record.viewer_mode == "local_pdf"
-    assert record.file_path.endswith("/paper.pdf")
+    assert record.document_kind == "library" and record.next_chunk_index == 0
+    assert [file_row.role for file_row in record.files] == ["main"]
+    main_file = record.main_file
+    assert main_file.display_mode == "local_pdf"
+    assert main_file.file_path.endswith("/paper.pdf")
     assert record.source_provider == "fake_provider"
-    assert record.source_provider_converted_artifact_id == "markdown-1"
-    assert record.source_import_status == "pending"
-    assert record.source_access_scope == "restricted"
-    assert record.source_access_group_ids == ["MGI"]
+    assert main_file.source_provider_converted_artifact_id == "markdown-1"
+    assert main_file.source_import_status == "pending"
+    assert main_file.source_access_scope == "restricted"
+    assert main_file.source_access_group_ids == ["MGI"]
     assert dispatch.calls == []
     assert len(dispatch.provider_markdown_calls) == 1
     provider_request = dispatch.provider_markdown_calls[0]["request"]
     assert provider_request.converted_artifact_id == "markdown-1"
     assert provider_request.curator_token == "curator-token"
     assert provider_request.source_provenance["source_md5"] == FAKE_UPLOAD_MD5
-    assert provider_request.file_path == tmp_path / record.file_path
+    assert provider_request.file_path == tmp_path / record.main_file.file_path
     assert provider.closed is True
     user_dir = tmp_path / "user-1"
     assert user_dir.exists()
-    assert (tmp_path / record.file_path).exists()
+    assert (tmp_path / record.main_file.file_path).exists()
 
 
 @pytest.mark.asyncio
@@ -1095,9 +1098,9 @@ async def test_intake_upload_provider_match_with_pending_conversion_does_not_dis
     assert create_document_calls[0][1].source_provenance["provider"] == "fake_provider"
     assert len(session.added) == 1
     record = session.added[0]
-    assert record.viewer_mode == "local_pdf"
+    assert record.main_file.display_mode == "local_pdf"
     assert record.source_provider == "fake_provider"
-    assert record.source_import_status == "pending"
+    assert record.main_file.source_import_status == "pending"
     assert dispatch.provider_markdown_calls == []
     assert dispatch.calls == []
     assert len(dispatch.provider_conversion_calls) == 1
@@ -1105,11 +1108,11 @@ async def test_intake_upload_provider_match_with_pending_conversion_does_not_dis
     assert conversion_request.reference == "AGRKB:101"
     assert conversion_request.source_artifact_id == "source-pdf-1"
     assert conversion_request.curator_token == "curator-token"
-    assert conversion_request.file_path == tmp_path / record.file_path
+    assert conversion_request.file_path == tmp_path / record.main_file.file_path
     assert provider.closed is True
     user_dir = tmp_path / "user-1"
     assert user_dir.exists()
-    assert (tmp_path / record.file_path).exists()
+    assert (tmp_path / record.main_file.file_path).exists()
 
 
 @pytest.mark.asyncio

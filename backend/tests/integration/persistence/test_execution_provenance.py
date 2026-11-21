@@ -32,11 +32,11 @@ from src.lib.domain_envelopes.persistence import (
     write_domain_envelope_checkpoint,
 )
 from src.models.sql.database import SessionLocal, engine
-from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_workspace import CurationExtractionPersistenceRequest, CurationExtractionSourceKind
 from src.schemas.domain_envelope import DomainEnvelope, HistoryActorType, HistoryEvent, HistoryEventKind
 from src.schemas.execution_provenance import ExtractionExecutionContext
 from tests.pdf_document_test_support import ensure_test_pdf_owner
+from tests.pdf_document_test_support import new_paper
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -58,7 +58,7 @@ def db_session():
 def _document(db):
     subject = f"execution-provenance-{uuid4()}"
     owner_id = ensure_test_pdf_owner(db, auth_sub=subject)
-    document = PDFDocument(
+    document = new_paper(
         id=uuid4(), user_id=owner_id, filename="execution-provenance.pdf",
         file_path=f"execution-provenance/{uuid4()}.pdf", file_hash=uuid4().hex * 2,
         file_size=100, page_count=1, status="completed",
@@ -149,8 +149,8 @@ def test_extraction_checkpoint_revisions_and_export_keep_original_context(db_ses
 
     # Mutable source metadata must not alter the context already captured for this extraction.
     document.source_provider_reference_curie = "PMID:99999"
-    document.source_provider_converted_artifact_id = "artifact-replaced"
-    document.source_converted_artifact_sha256 = "f" * 64
+    document.main_file.source_provider_converted_artifact_id = "artifact-replaced"
+    document.main_file.source_converted_artifact_sha256 = "f" * 64
     db.flush()
     validator_envelope = DomainEnvelope.model_validate(row.envelope_json).model_copy(
         update={"execution_context": forged},
@@ -199,7 +199,7 @@ def test_source_lookup_is_owner_scoped_and_custom_upload_stays_unbound(db_sessio
     document.source_provider = None
     document.source_provider_reference_curie = None
     document.source_provider_converted_artifact_id = None
-    document.source_converted_artifact_sha256 = None
+    document.main_file.source_converted_artifact_sha256 = None
     db_session.flush()
     captured = capture_source_document(str(document.id), subject)
     assert captured is not None and captured.document_id == document.id
@@ -207,10 +207,10 @@ def test_source_lookup_is_owner_scoped_and_custom_upload_stays_unbound(db_sessio
 
 
 def test_converted_artifact_migration_nullable_column_and_digest_constraint(db_session):
-    column = next(item for item in inspect(engine).get_columns("pdf_documents") if item["name"] == "source_converted_artifact_sha256")
+    column = next(item for item in inspect(engine).get_columns("pdf_document_files") if item["name"] == "source_converted_artifact_sha256")
     assert column["nullable"] is True and column["default"] is None
     document, _ = _document(db_session)
     with pytest.raises(IntegrityError):
         with db_session.begin_nested():
-            document.source_converted_artifact_sha256 = "not-a-digest"
+            document.main_file.source_converted_artifact_sha256 = "not-a-digest"
             db_session.flush()

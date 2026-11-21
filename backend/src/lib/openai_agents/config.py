@@ -2082,6 +2082,43 @@ def get_document_file_max_converted_text_bytes() -> int:
     )
 
 
+def get_document_table_header_max_rows() -> int:
+    """Most rows the table header rule may take as a table's header (at least 1).
+
+    An invalid value fails loudly: the header rule decides how every new table
+    is cut, so a typo must not silently become another rule.
+    """
+    raw = os.getenv("DOCUMENT_TABLE_HEADER_MAX_ROWS")
+    if raw is None:
+        return 5
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value < 1:
+        raise ValueError("DOCUMENT_TABLE_HEADER_MAX_ROWS must be a whole number of at least 1")
+    return value
+
+
+def get_document_table_header_min_filled_fraction() -> float:
+    """Filled share of cells at which a row ends a table's header block.
+
+    An invalid value fails loudly, the same way as DOCUMENT_TABLE_HEADER_MAX_ROWS.
+    """
+    raw = os.getenv("DOCUMENT_TABLE_HEADER_MIN_FILLED_FRACTION")
+    if raw is None:
+        return 0.5
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 0.0
+    if not 0.0 < value <= 1.0:
+        raise ValueError(
+            "DOCUMENT_TABLE_HEADER_MIN_FILLED_FRACTION must be a number greater than 0 and at most 1"
+        )
+    return value
+
+
 # --- Document retrieval ---
 
 

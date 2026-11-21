@@ -51,19 +51,22 @@ class _Db:
         return None
 
 
-def _record(*, owner_id=7, viewer_mode="local_pdf", file_path="owner/pdf/paper.pdf"):
+def _record(*, owner_id=7, display_mode="local_pdf", file_path="owner/pdf/paper.pdf"):
     timestamp = datetime(2026, 7, 11, tzinfo=timezone.utc)
     return SimpleNamespace(
         id=DOCUMENT_ID,
         filename="paper.pdf",
-        page_count=3,
-        file_size=512,
         upload_timestamp=timestamp,
         last_accessed=timestamp,
-        file_hash="a" * 64,
-        file_path=file_path,
-        viewer_mode=viewer_mode,
         user_id=owner_id,
+        document_kind="library",
+        main_file=SimpleNamespace(
+            page_count=None if display_mode == "text" else 3,
+            file_size=512,
+            file_hash="a" * 64,
+            file_path=file_path,
+            display_mode=display_mode,
+        ),
     )
 
 
@@ -217,8 +220,8 @@ def test_owned_pdf_content_uses_canonical_provisioned_storage_identity(
     assert response.path == pdf_path
 
 
-def test_text_only_document_never_exposes_pdf_bytes():
-    db = _Db(_Result(record=_record(viewer_mode="text_only")))
+def test_text_document_never_exposes_pdf_bytes():
+    db = _Db(_Result(record=_record(display_mode="text")))
 
     with pytest.raises(HTTPException) as exc_info:
         pdf_viewer.get_document_pdf_content(

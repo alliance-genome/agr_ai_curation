@@ -144,16 +144,23 @@ def generate_deterministic_uuid(document_id: str, chunk_index: int, content: str
 async def store_to_weaviate(
     chunks: Sequence[Union[DocumentChunk, Dict[str, Any]]],
     document_id: str,
-    weaviate_client: Optional[Any] = None,
-    user_id: str = None
+    weaviate_client: Optional[Any],
+    user_id: str,
+    *,
+    chunk_range: tuple[int, int],
 ) -> Dict[str, Any]:
-    """Store chunks with embeddings to Weaviate.
+    """Store one file's chunks with embeddings to Weaviate and verify that file's range.
+
+    The paper's document object (status and summed chunk count) is updated
+    separately, once all of a new paper's files are stored
+    (``update_document_metadata``).
 
     Args:
         chunks: Sequence of chunks containing text and metadata
         document_id: Document UUID
         weaviate_client: WeaviateConnection instance
         user_id: User identifier for tenant scoping (required, FR-011, FR-014)
+        chunk_range: The file's reserved ``chunkIndex`` range, first and last inclusive
 
     Returns:
         Storage statistics dictionary
@@ -166,7 +173,7 @@ async def store_to_weaviate(
     # Keep ownership through chunk verification and metadata finalization so the
     # caller cannot expose a terminal job (and permit retry/delete) too early.
     storage = asyncio.create_task(
-        _store_to_weaviate(chunks, document_id, weaviate_client, user_id)
+        _store_to_weaviate(chunks, document_id, weaviate_client, user_id, chunk_range)
     )
     try:
         return await asyncio.shield(storage)
@@ -178,8 +185,9 @@ async def store_to_weaviate(
                 # The storage path already reports failures. Preserve cancellation
                 # while still waiting for its writes and failure handling to end.
                 logger.warning("Storage failed while draining cancelled document %s", document_id)
-            # Keep the verified chunk counts, but do not advertise a cancelled
-            # import as completed. The caller owns SQL/job terminal status.
+            # Do not advertise a cancelled import as completed. The paper's
+            # summed chunk count is written only when a new paper finishes;
+            # the caller owns SQL/job terminal status.
             await update_document_status_detailed(
                 document_id, user_id,
                 processing_status="failed", embedding_status="failed",
@@ -201,8 +209,9 @@ async def _store_to_weaviate(
     document_id: str,
     weaviate_client: Optional[Any],
     user_id: str,
+    chunk_range: tuple[int, int],
 ) -> Dict[str, Any]:
-    """Own the complete chunk and metadata write, including failure handling."""
+    """Own the complete chunk write for one file, including failure handling."""
     if not chunks:
         raise StorageError("No chunks to store")
 
@@ -265,7 +274,8 @@ async def _store_to_weaviate(
             prepared_chunks,
             document_id,
             weaviate_client,
-            user_id
+            user_id,
+            chunk_range=chunk_range,
         )
 
         if results["failed_count"] > 0:
@@ -274,16 +284,12 @@ async def _store_to_weaviate(
                 failed_objects=results.get("failed_ids", []),
             )
 
-        # Update document metadata
         stats = {
             "total_chunks": len(prepared_chunks),
             "stored_chunks": results["stored_count"],
             "failed_chunks": results["failed_count"],
             "storage_timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
-
-        # Update document status
-        await update_document_metadata(document_id, stats, weaviate_client, user_id)
 
         logger.info('Successfully stored %s chunks to Weaviate', results['stored_count'])
         return stats
@@ -302,15 +308,18 @@ async def store_chunks_to_weaviate(
     chunks: Sequence[Dict[str, Any]],
     document_id: str,
     weaviate_client: Any,
-    user_id: str
+    user_id: str,
+    *,
+    chunk_range: tuple[int, int],
 ) -> Dict[str, Any]:
-    """Store chunks to Weaviate using the v4 client.
+    """Store one file's chunks to Weaviate using the v4 client.
 
     Args:
         chunks: Prepared chunk dictionaries ready for storage
         document_id: Document UUID
         weaviate_client: WeaviateConnection instance
         user_id: User identifier for tenant scoping (required, FR-011, FR-014)
+        chunk_range: The file's reserved ``chunkIndex`` range, first and last inclusive
 
     Returns:
         Storage result statistics
@@ -407,15 +416,32 @@ async def store_chunks_to_weaviate(
         chunk_uuid = generate_deterministic_uuid(document_id, chunk_index, content)
         return chunk_index, chunk_uuid, properties
 
+    range_start, range_end = chunk_range
+    if range_start < 0 or range_end < range_start or range_end - range_start + 1 != len(chunks):
+        raise StorageError("The file's chunk range does not match its chunk count")
+    for chunk in chunks:
+        chunk_index = chunk.get("chunk_index")
+        if type(chunk_index) is not int or not range_start <= chunk_index <= range_end:
+            raise StorageError("A chunk lies outside its file's reserved range")
+
     def _verify_document_chunks(collection: Any, expected_count: int) -> int:
-        """Strictly verify persisted chunk count for this document."""
+        """Strictly verify the persisted chunk count inside this file's range."""
         # Weaviate can be eventually consistent right after batch flush.
         time.sleep(2)
-        result = collection.query.fetch_objects(
-            filters=Filter.by_property("documentId").equal(document_id),
-            limit=10000,
+        result = collection.aggregate.over_all(
+            filters=(
+                Filter.by_property("documentId").equal(document_id)
+                & Filter.by_property("chunkIndex").greater_or_equal(range_start)
+                & Filter.by_property("chunkIndex").less_or_equal(range_end)
+            ),
+            total_count=True,
         )
-        persisted_count = len(result.objects)
+        persisted_count = result.total_count
+        if type(persisted_count) is not int:
+            raise BatchInsertError(
+                f"Chunk verification for document {document_id} returned no count",
+                failed_objects=[{"expected": expected_count}],
+            )
         logger.info(
             "Chunk verification for document %s: expected=%d, persisted=%d",
             document_id,
@@ -558,7 +584,9 @@ async def update_document_metadata(
     weaviate_client: Any,
     user_id: str
 ) -> None:
-    """Update document metadata with processing statistics.
+    """Update the paper's document object with its summed chunk count and status.
+
+    Called once, after every file of a new paper is stored.
 
     Args:
         document_id: Document UUID

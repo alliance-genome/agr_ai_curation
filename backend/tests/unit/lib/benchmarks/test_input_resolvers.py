@@ -873,7 +873,7 @@ def test_local_document_loader_classifies_unprocessed_document_as_expected_404(
         "require_owned_document",
         lambda *_args: SimpleNamespace(
             processing_completed_at=None,
-            processed_json_path=None,
+            main_file=SimpleNamespace(processed_json_path=None),
         ),
     )
 
