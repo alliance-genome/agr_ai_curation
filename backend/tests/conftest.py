@@ -112,9 +112,11 @@ def _ensure_required_model_env(monkeypatch):
 def _stop_text_cleanup_worker():
     """Leave no text clean-up thread running after a test that imported text."""
     yield
-    from src.lib.pipeline.text_cleanup import shutdown_text_cleanup
-
-    shutdown_text_cleanup()
+    # Only a test that loaded the clean-up module can have started its worker;
+    # importing it here would import the whole pipeline package.
+    text_cleanup = sys.modules.get("src.lib.pipeline.text_cleanup")
+    if text_cleanup is not None:
+        text_cleanup.shutdown_text_cleanup()
 
 
 @pytest.fixture(autouse=True)
