@@ -2142,15 +2142,53 @@ async def test_converted_supplement_with_null_source_is_never_offered() -> None:
 
 
 @pytest.mark.asyncio
-async def test_converted_supplement_naming_an_unlisted_source_fails_the_listing() -> None:
-    _original, converted = _office_supplement_pair(8001, None)
+async def test_converted_supplement_naming_an_unlisted_source_is_left_out_and_reported(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from agr_ai_curation_alliance.document_sources import abc_literature
 
-    with pytest.raises(DocumentSourceError, match="source file missing"):
-        await _list_with_reference([converted])
+    reports: list[dict[str, Any]] = []
+
+    def _report(exc: BaseException, **kwargs: Any) -> bool:
+        reports.append({"message": str(exc), **kwargs})
+        return True
+
+    monkeypatch.setattr(abc_literature, "report_runtime_exception", _report)
+    main_pdf = _abc_show_all_main_pdf(5001, None, display_name="paper_main")
+    _original, orphan = _office_supplement_pair(8001, None)
+    orphan["display_name"] = "Secret_Title_S1_xlsx"
+    kept_original, kept_converted = _office_supplement_pair(8101, None)
+
+    with caplog.at_level("WARNING", logger=abc_literature.__name__):
+        artifacts = await _list_with_reference(
+            [main_pdf, orphan, kept_original, kept_converted]
+        )
+
+    assert [artifact.artifact_id for artifact in artifacts] == ["5001", "8101", "8102"]
+    warning = next(record for record in caplog.records if "left out" in record.getMessage())
+    assert "8002" in warning.getMessage() and "8001" in warning.getMessage()
+    assert getattr(warning, "sentry_skip_event", False) is True
+    (report,) = reports
+    assert report["component"] == "document_source"
+    assert report["operation"] == "converted_source_not_listed"
+    assert report["level"] == "warning"
+    assert report["fingerprint"] == ("document_source", "converted_source_not_listed")
+    # Only hashed ids reach Sentry: no raw ids, file names or reference.
+    flattened = repr(report)
+    for raw in ("8002", "8001", "Secret_Title", "AGRKB:101"):
+        assert raw not in flattened
+    assert set(report["context"]) == {"artifact_id_hash", "source_artifact_id_hash"}
+    assert all(report["context"].values())
 
 
 @pytest.mark.asyncio
-async def test_supplement_pdf_converted_text_inherits_the_pdfs_policy() -> None:
+async def test_supplement_pdf_converted_text_is_linked_to_the_pdf_and_carries_its_policy() -> None:
+    # The converted row here names only WB while its PDF has a no-MOD row: the
+    # state before ABC syncs a converted row's MOD links from its source. ABC's
+    # own download check would use the converted row's WB row, so the inherited
+    # ANY_GROUP is wider than ABC for this row. Nothing reads converted
+    # supplement policy in P2; P6 authorizes with the intersection of the
+    # original's policy and the converted row's own rule.
     pdf = _abc_show_all_row(
         8101, None, file_class="supplement", file_extension="pdf", display_name="Data_S2"
     )
@@ -2423,3 +2461,25 @@ async def test_curator_import_keeps_todays_main_text_choice_with_nxml_and_merged
     assert decision.selected.converted_artifact is not None
     assert decision.selected.converted_artifact.artifact_id == "5003"
     assert decision.selected.converted_artifact.parent_artifact_id is None
+
+
+@pytest.mark.asyncio
+async def test_two_main_pdf_paper_keeps_the_main_sidecars_of_the_text_it_imports() -> None:
+    # The curator's chosen PDF was never converted; the reference-level main
+    # text (and its figure metadata) comes from the other main PDF. Today's
+    # behaviour keeps those main sidecars; supplement sidecars stay out.
+    chosen = _abc_show_all_main_pdf(5001, None, display_name="shared_copy")
+    other = _abc_show_all_main_pdf(5002, "FB", display_name="mod_copy")
+    artifacts = await _list_with_reference(
+        [
+            chosen,
+            other,
+            _figure_metadata_row(9001, "converted_main_figure_metadata", "mod_copy_image_1"),
+            _figure_metadata_row(9002, "converted_supplement_figure_metadata", "Data_S2_image_1"),
+        ]
+    )
+    provider = provider_from_fake(FakeABCLiteratureClient())
+
+    sidecars = provider.provider_metadata_artifacts_for_source(artifacts[0], artifacts)
+
+    assert [artifact.artifact_id for artifact in sidecars] == ["9001"]

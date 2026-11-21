@@ -397,8 +397,7 @@ async def test_curator_bearer_keeps_reference_level_artifact_selection():
     assert decision.status is ReferenceImportDecisionStatus.READY
     assert decision.selected.source_artifact.artifact_id == "40"
     assert decision.selected.converted_artifact.artifact_id == "30"
-    # Figure metadata named for another PDF is never used for this one.
-    assert decision.selected.provider_metadata_artifacts == ()
+    assert [artifact.artifact_id for artifact in decision.selected.provider_metadata_artifacts] == ["31"]
 
 
 class _MixedChecksumABC(_AllAccessABC):

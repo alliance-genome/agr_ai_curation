@@ -28,6 +28,11 @@ from src.lib.document_sources.models import (
     SourceConversionStatus,
     SourceReference,
 )
+from src.lib.observability.runtime import (
+    report_runtime_exception,
+    sanitized_runtime_error,
+)
+from src.lib.observability.sentry import hash_sentry_identifier
 from agr_ai_curation_alliance.literature.client import (
     ABCLiteratureClient,
     ABCLiteratureClientError,
@@ -351,18 +356,17 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         source_artifact: SourceArtifact,
         artifacts: list[SourceArtifact] | tuple[SourceArtifact, ...],
     ) -> tuple[SourceArtifact, ...]:
-        """Return ABC figure-metadata JSON sidecars of this source PDF only.
+        """Return ABC figure-metadata JSON sidecars for a source PDF.
 
-        A sidecar must have the metadata class of the source's own file class
-        (``converted_main_figure_metadata`` for a main PDF) and be named after
-        one of the source's figures, or start with ``{source}_image_`` when ABC
-        lists no figure rows. A source without such sidecars gets none; another
-        file's sidecars are never used in their place.
+        Sidecars of the source's own class are kept (``converted_main_figure_metadata``
+        for a main PDF), preferring those named after its figures or starting
+        with ``{source}_image_``; when no name matches, every sidecar of that
+        class is kept, so a main paper whose main text came from another main
+        PDF keeps that text's sidecars. Sidecars of the other class are never
+        used in place of the source's own: a main paper without main-figure
+        metadata gets no supplement sidecars.
         """
 
-        expected_class = _expected_figure_metadata_file_class(source_artifact)
-        if expected_class is None:
-            return ()
         metadata_candidates = [
             artifact
             for artifact in artifacts
@@ -373,8 +377,14 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
                 SourceArtifactStatus.UNKNOWN,
             }
             and _same_reference(source_artifact, artifact)
-            and _artifact_file_class(artifact) == expected_class
         ]
+        expected_class = _expected_figure_metadata_file_class(source_artifact)
+        if expected_class:
+            metadata_candidates = [
+                artifact
+                for artifact in metadata_candidates
+                if _artifact_file_class(artifact) == expected_class
+            ]
         if not metadata_candidates:
             return ()
 
@@ -390,11 +400,14 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
             ]
         else:
             display_prefixes = _source_display_prefixes(source_artifact)
-            metadata_candidates = [
-                artifact
-                for artifact in metadata_candidates
-                if _artifact_display_name_matches_prefix(artifact, display_prefixes)
-            ]
+            if display_prefixes:
+                display_matched = [
+                    artifact
+                    for artifact in metadata_candidates
+                    if _artifact_display_name_matches_prefix(artifact, display_prefixes)
+                ]
+                if display_matched:
+                    metadata_candidates = display_matched
 
         return tuple(
             sorted(
@@ -449,10 +462,17 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
                 continue
             original = artifacts_by_id.get(source_id)
             if original is None:
-                raise DocumentSourceError(
-                    "ABC Literature converted file names a source file missing "
-                    "from the reference listing"
+                # ABC builds ``source`` from the same listing, so this means an
+                # inconsistent ABC answer. Leave this one file out, report it,
+                # and keep listing the paper's other files.
+                _report_converted_row_with_unlisted_source(
+                    converted_artifact_id=_first_string(
+                        file_payload, "referencefile_id", "id"
+                    ),
+                    source_artifact_id=source_id,
+                    reference=reference_lookup,
                 )
+                continue
             mapped[index] = self._map_referencefile(
                 file_payload,
                 parent_artifact_id=original.artifact_id,
@@ -817,6 +837,36 @@ def _extract_converted_referencefiles(
     return [item for item in value if isinstance(item, Mapping)]
 
 
+def _report_converted_row_with_unlisted_source(
+    *,
+    converted_artifact_id: str | None,
+    source_artifact_id: str,
+    reference: str,
+) -> None:
+    """Log and report a converted row whose ``source`` is not in the listing."""
+
+    logger.warning(
+        "ABC Literature converted file %s names source file %s, which is not "
+        "in the listing of %s; the converted file is left out",
+        converted_artifact_id,
+        source_artifact_id,
+        reference,
+        extra={"sentry_skip_event": True},
+    )
+    report_runtime_exception(
+        sanitized_runtime_error("ABC converted file names a source missing from the listing"),
+        component="document_source",
+        operation="converted_source_not_listed",
+        tags={"provider": ABC_LITERATURE_PROVIDER_ID},
+        context={
+            "artifact_id_hash": hash_sentry_identifier(converted_artifact_id),
+            "source_artifact_id_hash": hash_sentry_identifier(source_artifact_id),
+        },
+        level="warning",
+        fingerprint=("document_source", "converted_source_not_listed"),
+    )
+
+
 def _is_source_linked_converted_payload(payload: Mapping[str, Any]) -> bool:
     """Whether a ``show_all`` row is converted text that ABC links to its original."""
 
@@ -1009,12 +1059,15 @@ def _has_null_mod_entry(payload: Mapping[str, Any]) -> bool:
 
 
 def _is_original_file_class(file_class: str) -> bool:
-    """Whether an ABC row is an uploaded original rather than one ABC derived.
+    """Whether an ABC row gets the no-MOD grant as an original file.
 
-    ABC derives the ``converted_*`` classes (Markdown, figures, figure
-    metadata) and ``embedding`` parquets from other rows; every other class
-    (``main``, ``supplement``, ``nXML``, ``htp_supplement`` and the rest) is a
-    file someone uploaded.
+    Every class except the ``converted_*`` classes (Markdown, figures, figure
+    metadata) and ``embedding`` parquets counts: ``main``, ``supplement``,
+    ``nXML``, ``htp_supplement`` and the rest, but also some classes ABC
+    derives without the ``converted_`` prefix (``tei``, ``figure``,
+    ``thumbnail``, ``inline_image``, ``bw_duplicate``). That is never wider
+    than ABC, whose ``download_file`` gives the no-MOD grant to a row of any
+    class.
     """
 
     normalized = file_class.strip().lower()

@@ -25,10 +25,10 @@ class DocumentSourceAccessDenied(DocumentSourceError):
 
 
 class DocumentSourceArtifactNotFound(DocumentSourceError):
-    """The provider lists the artifact but cannot serve its stored file.
+    """The provider has no such artifact, or cannot find its stored file.
 
-    Permanent: asking again returns the same answer until the provider's own
-    storage is fixed.
+    Covers an unknown or deleted artifact id as well as a listed artifact whose
+    stored copy is missing. Permanent: asking again returns the same answer.
     """
 
 
