@@ -96,7 +96,9 @@ describe('chatDocumentRehydration', () => {
       pageCount: 4,
     }))
     const documentChanged = vi.fn()
+    const documentCleared = vi.fn()
     window.addEventListener('pdf-viewer-document-changed', documentChanged)
+    window.addEventListener('pdf-viewer-document-cleared', documentCleared)
 
     await expect(rehydrateChatDocument({
       document: {
@@ -112,10 +114,13 @@ describe('chatDocumentRehydration', () => {
     })
 
     expect(documentChanged).not.toHaveBeenCalled()
+    expect(documentCleared).toHaveBeenCalledTimes(1)
+    expect((documentCleared.mock.calls[0][0] as CustomEvent).detail).toEqual({ ownerToken: 'home' })
     expect(localStorage.getItem(storageKeys.activeDocument)).toContain('doc-text-only')
     expect(localStorage.getItem(storageKeys.pdfViewerSession)).toBeNull()
 
     window.removeEventListener('pdf-viewer-document-changed', documentChanged)
+    window.removeEventListener('pdf-viewer-document-cleared', documentCleared)
   })
 
   function stubViewerApi(urlPayload: unknown, detailPayload: unknown) {
