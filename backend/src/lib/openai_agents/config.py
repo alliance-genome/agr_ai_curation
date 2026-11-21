@@ -4179,10 +4179,10 @@ def get_pdf_job_recovery_timeout_seconds() -> int:
 
 
 def get_connections_health_snapshot_ttl_seconds() -> float:
-    """Maximum aggregate observation age; default matches dashboard stale time."""
+    """Maximum observation age; the default outlasts the slowest service probe."""
     import math
 
-    value = float(_get_env("CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS", "30"))
+    value = float(_get_env("CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS", "45"))
     if value is None or not math.isfinite(value) or value <= 0:
         raise ValueError("CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS must be finite and positive")
     return value

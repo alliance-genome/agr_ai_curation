@@ -9,8 +9,9 @@ require login. There is no
 cross-worker coordination or background polling scheduler. Frontend polling
 defaults are unchanged.
 
-`CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS` defaults to 30 seconds, matching the
-dashboard's existing React Query stale interval. The monotonic expiry and the
+`CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS` defaults to 45 seconds, longer than the
+slowest configured probe timeout (weaviate, 30 seconds), so the public summary
+can be up to 45 seconds old. The monotonic expiry and the
 UTC `observed_at` response field both refer to **sweep start**, not response time.
 Cache hits retain that timestamp. A sweep that consumes the whole freshness
 window may return its completed observation to its waiting callers but is
@@ -73,14 +74,16 @@ with a short request timeout (for example `curl -m 5`) can time out on a cold
 or expired observation; the sweep keeps running and a retry after it finishes
 gets the cached answer. A caller that retries only once or twice in a few
 seconds may therefore get no answer at all. Once answered, the result can be up
-to `CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS` (30 seconds by default) old.
+to `CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS` (45 seconds by default) old.
 
-Known edge case: expiry is counted from sweep **start**, which is what keeps
-every published observation's age within the TTL. A sweep that takes as long
-as the TTL (with the defaults, a probe that hangs for weaviate's full 30-second
-timeout) is already expired when it is published. Its own waiters get it, but
-the next request starts a new sweep, so callers with short timeouts keep
-timing out until the slow service answers or fails quickly again. With the
-defaults (TTL 30 seconds, weaviate probe timeout 30 seconds) this happens
-whenever weaviate hangs instead of refusing connections. Setting the TTL above
-the slowest probe timeout avoids it.
+Expiry is counted from sweep **start**, which is what keeps every published
+observation's age within the TTL. A sweep that lasted as long as the TTL would
+be already expired when published: its own waiters would get it, but every
+new request would start another sweep, so callers with short timeouts would
+keep timing out. The default TTL (45 seconds) is therefore longer than the
+slowest configured probe timeout (weaviate, 30 seconds), and a unit test fails
+if a configuration change breaks that. One case remains: after a probe reaches
+its deadline, closing its client may take up to one more timeout, so a probe
+whose close also hangs can stretch a sweep past 45 seconds. A deployment that
+sets its own TTL, or raises a service's `timeout_seconds`, should keep the TTL
+above the slowest probe timeout.
