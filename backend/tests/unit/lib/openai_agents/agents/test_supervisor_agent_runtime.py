@@ -855,7 +855,6 @@ def test_create_dynamic_specialist_tools_passes_groups_without_prompt_rules(monk
         document_name="paper.pdf",
         sections=["Introduction"],
         hierarchy={"sections": [{"name": "Introduction"}]},
-        abstract="abstract text",
         active_groups=["WB"],
     )
 
@@ -865,7 +864,7 @@ def test_create_dynamic_specialist_tools_passes_groups_without_prompt_rules(monk
     assert captured["kwargs"]["document_name"] == "paper.pdf"
     assert captured["kwargs"]["sections"] == ["Introduction"]
     assert captured["kwargs"]["hierarchy"] == {"sections": [{"name": "Introduction"}]}
-    assert captured["kwargs"]["abstract"] == "abstract text"
+    assert "abstract" not in captured["kwargs"]
     assert captured["kwargs"]["active_groups"] == ["WB"]
     assert captured["kwargs"]["authenticated_groups"] == ["WB"]
     assert tools == ["wrapped::ask_gene_expression_specialist::Gene Expression"]

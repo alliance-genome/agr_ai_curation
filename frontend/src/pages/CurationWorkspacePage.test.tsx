@@ -27,6 +27,7 @@ const serviceMocks = vi.hoisted(() => ({
   patchCurationEnvelopeField: vi.fn(),
   handoffCurationBenchmarkSnapshot: vi.fn(),
   dispatchPDFDocumentChanged: vi.fn(),
+  dispatchPDFViewerDocumentCleared: vi.fn(),
   renderPdfViewer: vi.fn(),
   submitCurationCandidateDecision: vi.fn(),
   updateCurationSession: vi.fn(),
@@ -94,6 +95,7 @@ vi.mock('@/components/pdfViewer/pdfEvents', async () => {
   return {
     ...actual,
     dispatchPDFDocumentChanged: serviceMocks.dispatchPDFDocumentChanged,
+    dispatchPDFViewerDocumentCleared: serviceMocks.dispatchPDFViewerDocumentCleared,
   }
 })
 
@@ -586,6 +588,7 @@ describe('CurationWorkspacePage', () => {
     serviceMocks.patchCurationEnvelopeField.mockReset()
     serviceMocks.handoffCurationBenchmarkSnapshot.mockReset()
     serviceMocks.dispatchPDFDocumentChanged.mockReset()
+    serviceMocks.dispatchPDFViewerDocumentCleared.mockReset()
     serviceMocks.renderPdfViewer.mockReset()
     serviceMocks.submitCurationCandidateDecision.mockReset()
     serviceMocks.updateCurationSession.mockReset()
@@ -1111,6 +1114,61 @@ describe('CurationWorkspacePage', () => {
         { ownerToken: 'curation:session-1' },
       )
     })
+  })
+
+  function buildTextPaperWorkspace(): CurationWorkspace {
+    const workspace = buildWorkspace()
+    return {
+      ...workspace,
+      session: {
+        ...workspace.session,
+        // What the session serializer sends for a text paper: no PDF and no pages.
+        document: { ...workspace.session.document, pdf_url: null, viewer_url: null, page_count: null },
+      },
+    }
+  }
+
+  it('clears the shared viewer for a text paper instead of leaving the previous paper in it', async () => {
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildTextPaperWorkspace())
+
+    renderPage('/curation/session-1/candidate-accepted')
+
+    await waitFor(() => {
+      expect(serviceMocks.dispatchPDFViewerDocumentCleared).toHaveBeenCalledWith('curation:session-1')
+    })
+    expect(serviceMocks.dispatchPDFDocumentChanged).not.toHaveBeenCalled()
+  })
+
+  it('loads a PDF paper normally after a text paper session', async () => {
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildTextPaperWorkspace())
+    const textView = renderPage('/curation/session-1/candidate-accepted')
+    await waitFor(() => expect(serviceMocks.dispatchPDFViewerDocumentCleared).toHaveBeenCalled())
+    textView.unmount()
+
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
+    renderPage('/curation/session-1/candidate-accepted')
+
+    await waitFor(() => {
+      expect(serviceMocks.dispatchPDFDocumentChanged).toHaveBeenCalledWith(
+        'document-1',
+        '/api/documents/document-1.pdf',
+        'Workspace Document',
+        5,
+        { ownerToken: 'curation:session-1' },
+      )
+    })
+  })
+
+  it('opening the same text paper twice only ever clears the viewer', async () => {
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildTextPaperWorkspace())
+    renderPage('/curation/session-1/candidate-accepted').unmount()
+    renderPage('/curation/session-1/candidate-accepted')
+
+    await waitFor(() => expect(serviceMocks.dispatchPDFViewerDocumentCleared).toHaveBeenCalled())
+    expect(serviceMocks.dispatchPDFViewerDocumentCleared.mock.calls.every(
+      ([owner]) => owner === 'curation:session-1',
+    )).toBe(true)
+    expect(serviceMocks.dispatchPDFDocumentChanged).not.toHaveBeenCalled()
   })
 
   it('restores the route-selected candidate into the horizontal grid', async () => {

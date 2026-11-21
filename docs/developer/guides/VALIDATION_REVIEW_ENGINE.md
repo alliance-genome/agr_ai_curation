@@ -704,6 +704,13 @@ or revised child moving under a new immutable parent receives a successor identi
 its original identity and consumed validation attempts remain in that ancestry. Original
 items and earlier validator answers remain auditable; retired items are not deleted.
 Affected validator inputs receive new version pins; unchanged siblings remain current.
+A binding's input is its selected values, selectors, guidance and the evidence that
+belongs to it (`docs/developer/supporting-evidence-contract.md`, "Which request
+evidence a binding receives"). Selected evidence tagged to the corrected fields
+therefore changes only the bindings that read those fields; untagged or unclaimed
+evidence reaches every binding on the record and so changes all of them. A binding
+that declares a record-wide evidence selector changes whenever the record's
+evidence grows. Each re-validated binding costs one extra attempt.
 Curator edits have authority and cannot be silently overwritten by source selection.
 
 A compound identity can live at the object root or inside a nested value. Its

@@ -16,7 +16,6 @@ from src.lib.openai_agents.config import (
     PromptCacheIdentity,
     build_default_model_retry,
     build_model_settings,
-    get_abstract_extraction_input_max_chars,
     get_agent_config,
     get_agent_studio_chat_recall_page_size,
     get_agent_studio_capability_catalog_max_records,
@@ -81,22 +80,6 @@ from src.lib.openai_agents.config import (
 )
 
 _PROMPT_CACHE = PromptCacheIdentity(agent_key="test_agent", static_prompt="Static test prompt.")
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [(None, 4000), ("128", 128), ("6000", 6000), ("0", 1), ("-7", 1),
-     ("invalid", 4000), ("", 4000)],
-)
-def test_abstract_extraction_input_character_limit_is_env_backed_and_positive(
-    monkeypatch, raw, expected
-):
-    if raw is None:
-        monkeypatch.delenv("ABSTRACT_EXTRACTION_INPUT_MAX_CHARS", raising=False)
-    else:
-        monkeypatch.setenv("ABSTRACT_EXTRACTION_INPUT_MAX_CHARS", raw)
-
-    assert get_abstract_extraction_input_max_chars() == expected
 
 
 def test_sentry_log_event_level_is_bounded_and_environment_configurable(
@@ -2197,6 +2180,15 @@ def test_provider_import_deadline_default_and_override(monkeypatch):
     assert get_document_source_import_timeout_seconds() == 600.0
     monkeypatch.setenv("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", "900")
     assert get_document_source_import_timeout_seconds() == 900.0
+
+
+def test_document_file_converted_text_cap_default_and_override(monkeypatch):
+    from src.lib.openai_agents.config import get_document_file_max_converted_text_bytes
+
+    monkeypatch.delenv("DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES", raising=False)
+    assert get_document_file_max_converted_text_bytes() == 1_000_000
+    monkeypatch.setenv("DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES", "250000")
+    assert get_document_file_max_converted_text_bytes() == 250_000
 
 
 def test_inspect_results_object_pages_are_env_configured(monkeypatch):

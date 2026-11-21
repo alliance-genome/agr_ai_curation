@@ -253,7 +253,7 @@ def _assert_published_source_is_valid(item):
         body = store._content(db, fact)
     DomainEnvelope.model_validate(body["envelope"])
     assert body["matches"], "the accepted record's binding is still published"
-    saved_matches.decode(body)
+    saved_matches.decode(body, registry=item.plan.registry)
 
 
 @pytest.mark.asyncio

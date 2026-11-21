@@ -24,7 +24,7 @@ from src.lib.domain_packs.resolvable_values import (
     VALIDATOR_CURATOR_MESSAGE_KEY, VALIDATOR_EXPLANATION_KEY, ResolvableSpec,
 )
 from src.lib.domain_packs.validation_registry import (
-    DomainPackValidationRegistry, ValidatorBinding, ValidationAttachmentOption, ValidationBindingState,
+    DomainPackValidationRegistry, PROFILE_OWNED_FIELD_PATHS, ValidatorBinding, ValidationAttachmentOption, ValidationBindingState,
     _build_field_policies, _validation_attachment_id,
 )
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
@@ -170,7 +170,7 @@ def compile_profile_validation(
     except ProfileMappingError as exc:
         problems = exc.issues
     by_key = {cap.key(): cap for cap in catalog}
-    bindings, selected, unavailable = [], [], []
+    bindings, selected, unavailable, owners = [], [], [], []
     fanout_paths: set[str] = set()
     for index, mapping in enumerate(contract.validator_mappings):
         reasons = [issue["message"] for issue in problems
@@ -186,6 +186,10 @@ def compile_profile_validation(
         capability = by_key.get(canonical_json(mapping.capability_ref.model_dump(mode="json")))
         if reasons or capability is None:
             unavailable.append(UnavailableProfileMapping(mapping, tuple(reasons or ["Exact capability is unavailable"])))
+            if capability is not None and _claims_its_fields(mapping, capability):
+                # It still owns its fields' evidence for every user (ALL-1584 decision 5);
+                # the generated pack lists its paths, so a saved plan keeps them.
+                owners.append(_compile_binding(profile, mapping, capability)[0])
             continue
         binding, array_path = _compile_binding(profile, mapping, capability)
         if array_path is not None:
@@ -207,7 +211,8 @@ def compile_profile_validation(
         )],
         "enum_definitions": enums,
         "model_definitions": [], "schema_refs": [], "fixture_packs": [],
-        "metadata": {"generic_profile_ref": profile.receipt},
+        "metadata": {"generic_profile_ref": profile.receipt,
+                     PROFILE_OWNED_FIELD_PATHS: {"generic_object": _owned_field_paths([*bindings, *owners])}},
     })
     pack = replace(generic_pack, metadata=metadata)
     registry = DomainPackValidationRegistry(
@@ -215,6 +220,32 @@ def compile_profile_validation(
         field_policies=_build_field_policies(pack, tuple(bindings)),
     )
     return ProfileValidationContext(receipt, profile, registry, tuple(selected), tuple(unavailable))
+
+
+def _owned_field_paths(bindings) -> list[str]:
+    """Field paths every mapping of the profile validates or reads, runnable or not."""
+    paths = [path for binding in bindings
+             if binding.state is ValidationBindingState.ACTIVE and binding.validator_agents()
+             for path in (*binding.field_paths, *binding.declared_input_field_paths())]
+    return list(dict.fromkeys(paths))
+
+
+def _claims_its_fields(mapping, capability) -> bool:
+    """An unavailable mapping whose exact capability still declares its slots.
+
+    Such a mapping is unavailable only to this caller (for example its group
+    access), so its fields stay owned. One whose slots no longer exist on the
+    capability declares no reads and owns nothing.
+    """
+    reuse = capability.binding.custom_profile_reuse
+    if reuse is None:
+        return False
+    if not set(mapping.inputs) <= set(reuse.inputs) or not set(mapping.outputs) <= set(reuse.outputs):
+        return False
+    if not set(reuse.provider_input_slots.values()) <= set(mapping.inputs):
+        return False
+    return all(reuse.inputs[name].context_selector is not None
+               for name, mapped in mapping.inputs.items() if mapped.source == "context")
 
 
 def _compile_binding(profile, mapping, capability) -> tuple[ValidatorBinding, str | None]:

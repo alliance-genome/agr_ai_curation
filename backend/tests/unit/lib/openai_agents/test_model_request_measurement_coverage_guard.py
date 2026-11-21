@@ -46,7 +46,6 @@ RAW_RESPONSE_WRAPPERS = {"with_raw_response", "with_streaming_response"}
 CLIENT_CONSTRUCTION_SITES = {
     "src/lib/openai_agents/runner.py": "SafeAsyncOpenAI: SDK models measured at resolution; compact wrapped",
     "src/lib/openai_agents/config.py": "compatible-provider SDK models measured at resolution",
-    "src/lib/openai_agents/prompt_utils.py": "call_measured_direct_request",
     "src/lib/validation_review/quick_check.py": "Decisions API shadow check; not a model-context request",
 }
 

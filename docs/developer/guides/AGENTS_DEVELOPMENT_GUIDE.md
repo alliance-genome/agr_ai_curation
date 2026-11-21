@@ -642,13 +642,11 @@ Chat, flow execution, and direct benchmark execution await `DocumentContext.fetc
 before constructing document-aware agents. Synchronous flow builders require a
 prepared `doc_context` when given a document ID; they perform no metadata retrieval.
 Supplied context and warm tenant-scoped cache entries avoid additional retrieval.
-Hierarchy precedes abstract discovery so its `abstract_section_title` remains the
-first search target. Existing section, keyword, and first-chunk strategies remain.
-The LLM's abstract is preserved without a minimum-length semantic veto.
 
-`DOCUMENT_CONTEXT_STAGE_TIMEOUT_SECONDS` defaults to 10 seconds **per stage**.
-A failed/timed-out hierarchy permits abstract discovery without hierarchy; an
-abstract failure/timeout preserves any hierarchy already retrieved. This replaces
+`DOCUMENT_CONTEXT_STAGE_TIMEOUT_SECONDS` (default 10 seconds) bounds the hierarchy
+fetch. A failed or timed-out fetch leaves the agent without a section list; it does
+not fail the run. Agents are not given the paper's abstract; they read the Abstract
+section with the reading tools like any other section. This replaces
 the old executor `future.result(timeout=10)` wait, whose executor shutdown could
 block beyond that value. The new timeout stops awaiting work; it does not kill
 synchronous database/client operations already running in a worker. Cancellation
