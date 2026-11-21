@@ -1341,7 +1341,6 @@ def _create_dynamic_specialist_tools(
     document_name: Optional[str] = None,
     sections: Optional[List[str]] = None,
     hierarchy: Optional[Dict[str, Any]] = None,
-    abstract: Optional[str] = None,
     active_groups: Optional[List[str]] = None,
     tool_specs: Optional[List[Dict[str, Any]]] = None,
     specialist_model_override: Optional[str] = None,
@@ -1361,7 +1360,6 @@ def _create_dynamic_specialist_tools(
         document_name: Name of the document for context
         sections: Flat list of section names from document
         hierarchy: Hierarchical document structure
-        abstract: Paper abstract for context injection
         active_groups: Group IDs for rule injection (e.g., ["MGI", "FB"])
 
     Returns:
@@ -1422,7 +1420,6 @@ def _create_dynamic_specialist_tools(
                 "document_name": document_name,
                 "sections": sections,
                 "hierarchy": hierarchy,
-                "abstract": abstract,
             })
         # Authenticated groups control both prompt overlays and package-owned
         # tool exposure; tool policy does not depend on prompt-rule enablement.
@@ -1478,7 +1475,6 @@ def create_supervisor_agent(
     user_id: Optional[str] = None,
     document_name: Optional[str] = None,
     hierarchy: Optional[Dict[str, Any]] = None,
-    abstract: Optional[str] = None,
     enable_guardrails: bool = False,  # Enable input guardrails (PII detection, topic check)
     active_groups: Optional[List[str]] = None,  # Group-specific rules to inject (e.g., ["MGI", "FB"])
     model_override: Optional[str] = None,
@@ -1509,7 +1505,6 @@ def create_supervisor_agent(
         user_id: The user's user ID for tenant isolation (for document-dependent specialists)
         document_name: Optional name of the document for context
         hierarchy: Optional pre-fetched document hierarchy (avoids duplicate fetch)
-        abstract: Optional pre-fetched paper abstract (injected into specialist prompts)
         enable_guardrails: Enable input guardrails for safety (default: False)
         active_groups: Optional authenticated group IDs passed to every specialist for
                        prompt overlays and package-owned tool exposure.
@@ -1603,7 +1598,6 @@ def create_supervisor_agent(
         document_name=document_name,
         sections=sections,
         hierarchy=hierarchy,
-        abstract=abstract,
         active_groups=active_groups,
         tool_specs=tool_specs,
         specialist_model_override=specialist_model_override,

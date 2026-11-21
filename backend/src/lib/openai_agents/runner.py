@@ -2833,11 +2833,9 @@ async def run_agent_streamed(
     # Use pre-fetched document context if provided, otherwise fetch
     # This optimization avoids redundant Weaviate queries when called from flow executor
     hierarchy = None
-    abstract = None
     if doc_context is not None:
         # Use pre-fetched context (optimization path from flow executor)
         hierarchy = doc_context.hierarchy
-        abstract = doc_context.abstract
         logger.debug(
             "Using pre-fetched document context: %s sections",
             doc_context.section_count(),
@@ -2849,7 +2847,6 @@ async def run_agent_streamed(
 
         doc_context = await DocumentContext.fetch(document_id, user_id, document_name)
         hierarchy = doc_context.hierarchy
-        abstract = doc_context.abstract
 
     provided_runtime_agent = agent is not None
     direct_chat_context = (
@@ -2865,7 +2862,6 @@ async def run_agent_streamed(
             user_id=user_id,
             document_name=document_name,
             hierarchy=hierarchy,
-            abstract=abstract,
             active_groups=active_groups,
             model_override=supervisor_model,
             temperature_override=supervisor_temperature,
@@ -2986,12 +2982,6 @@ async def run_agent_streamed(
                     "top_level_sections": hierarchy.get("top_level_sections", []),
                     "sections": hierarchy.get("sections", []),
                     "section_count": len(hierarchy.get("sections", [])),
-                }
-            if abstract:
-                # Add abstract info to metadata (length only, not full text)
-                resolved_trace_metadata["document_abstract"] = {
-                    "has_abstract": True,
-                    "abstract_length": len(abstract),
                 }
 
             # Use start_as_current_observation() to set OTEL context for the

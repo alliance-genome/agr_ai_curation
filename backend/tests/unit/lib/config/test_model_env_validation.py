@@ -20,8 +20,6 @@ def test_current_catalog_models_and_levels_pass():
         "HIERARCHY_LLM_REASONING": "low",
         "FIGURE_LOCATOR_LLM_MODEL": "gpt-6.1-sol",
         "FIGURE_LOCATOR_LLM_REASONING": "LOW",
-        "ABSTRACT_EXTRACTION_MODEL": "gpt-6-astra",
-        "ABSTRACT_EXTRACTION_REASONING": "low",
         "AGENT_STUDIO_OPENAI_MODEL": "gpt-6-astra",
         "AGENT_STUDIO_REASONING_EFFORT": "medium",
         "BENCHMARK_ADJUDICATION_MODEL": "gpt-6.1-sol",
