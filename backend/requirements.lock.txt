@@ -1,6 +1,8 @@
 # Auto-generated lockfile — DO NOT EDIT MANUALLY
 # Updated: 2026-11-20 from backend/requirements.txt in a clean python:3.11-slim container.
-# Existing dependency versions constrained. Moves: openai-agents 0.25.0 with openai 3.48.0
+# Existing dependency versions constrained; only adds markdown-it-py 4.3.0 and its
+# dependency mdurl 0.1.2 (CommonMark parser for the stored-text Markdown clean-up).
+# Previous refresh (2026-11-20): openai-agents 0.25.0 with openai 3.48.0
 # (HTTPX2 stack httpx2/httpcore2 2.14.0, jiter 0.17.0, truststore 0.10.4, mcp 1.30.0 as in
 # the SDK's own v0.25.0 uv.lock), agr-curation-api-client 0.16.0 (opensearch-py replaces
 # elasticsearch 7.13), and the floors those raise (urllib3 2.8.0, starlette 1.10.0, certifi).
@@ -85,9 +87,11 @@ linkml==1.11.1
 linkml-runtime==1.11.1
 lxml==6.1.1
 Mako==1.3.12
+markdown-it-py==4.3.0
 MarkupSafe==3.0.3
 mccabe==0.7.0
 mcp==1.30.0
+mdurl==0.1.2
 multidict==6.7.1
 mypy==2.1.0
 mypy_extensions==1.1.0

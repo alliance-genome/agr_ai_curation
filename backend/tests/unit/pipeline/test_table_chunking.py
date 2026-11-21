@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from src.lib.markdown_plain_text import markdown_table_to_plain_text
+from src.lib.openai_agents.document_result_view import table_rows_label
 from src.lib.pipeline.chunk import _chunk_by_title, chunk_parsed_document
 from src.lib.pipeline.table_chunking import (
     TableHeaderRule,
@@ -77,6 +79,42 @@ def _table_lines(chunk):
 def test_cells_split_on_unescaped_pipes_only():
     assert split_table_cells(r"| a \| b | c |") == [r" a \| b ", " c "]
     assert split_table_cells("| a |  | c |") == [" a ", "  ", " c "]
+
+
+# An escaped backslash before a pipe (``\\|``) does not escape the pipe. The
+# stored-text clean-up keeps ``\\`` as written, so every reader of table rows
+# must split it the same way as the clean-up does.
+ESCAPED_BACKSLASH_TITLE_ROW = r"| Made-up path C:\\| | |"
+
+
+def test_an_escaped_backslash_before_a_pipe_does_not_escape_it():
+    assert split_table_cells(r"| a \\| b |") == [" a \\\\", " b "]
+    assert split_table_cells(r"| a | b \\|") == [" a ", " b \\\\"]
+    assert split_table_cells(r"| a \\\| b |") == [" a \\\\\\| b "]
+
+
+def test_the_clean_up_and_the_table_reader_agree_on_cells():
+    for row in (r"| a \\| b |", r"| a \| b | c |", "| a&#124;b | c |", "| a&#92;| b |"):
+        assert len(split_table_cells(markdown_table_to_plain_text(row))) == len(split_table_cells(row))
+
+
+def test_header_rule_counts_cells_split_by_an_escaped_backslash():
+    rows = [ESCAPED_BACKSLASH_TITLE_ROW, "| Line | Value | Notes |", "| XS0001 | 1.2 | ok |"]
+
+    assert split_table_cells(ESCAPED_BACKSLASH_TITLE_ROW) == [r" Made-up path C:\\", " ", " "]
+    assert count_table_header_rows(rows, RULE) == 2
+
+
+def test_pieces_and_column_label_read_cells_split_by_an_escaped_backslash():
+    names_row = "| Line | Value | Notes |"
+    text = "\n".join([ESCAPED_BACKSLASH_TITLE_ROW, "| --- | --- | --- |", names_row, "| XS0001 | 1.2 | ok |"])
+
+    (chunk,) = _chunk_by_title([_table_element(text)], _strategy())
+    (segment,) = chunk["table_segments"]
+
+    assert segment["header_row_count"] == 2
+    assert segment["header_text"] == f"{ESCAPED_BACKSLASH_TITLE_ROW}\n{names_row}"
+    assert table_rows_label(segment).endswith(f"{ESCAPED_BACKSLASH_TITLE_ROW}\n    {names_row}")
 
 
 def test_separator_row_is_recognised_by_markdown_syntax():

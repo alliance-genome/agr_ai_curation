@@ -143,6 +143,54 @@ Signal from **B cells** depends on Ca<sup>2+</sup> and *kinase* activity.
     assert elements[1]["metadata"]["section_path"] == ["Results 2+"]
 
 
+def test_markdown_to_pipeline_elements_cleans_each_text_exactly_once():
+    # An escaped pair of asterisks becomes literal asterisks after one clean-up
+    # pass; a second pass would read them as emphasis and delete them.
+    markdown = """# \\*Escaped\\* heading
+A paragraph with \\*literal\\* stars and p.Tyr318*.
+
+- A list item with \\*stars\\*
+
+| Variant | Mark |
+| --- | --- |
+| \\*p.Gln12\\* | **** |
+"""
+
+    elements = markdown_to_pipeline_elements(markdown)
+
+    assert [element["text"] for element in elements] == [
+        "*Escaped* heading",
+        "A paragraph with *literal* stars and p.Tyr318*.",
+        "- A list item with *stars*",
+        "| Variant | Mark |\n| --- | --- |\n| *p.Gln12* | **** |",
+    ]
+    for element in elements:
+        assert element["metadata"]["section_title"] == "*Escaped* heading"
+        assert element["metadata"]["section_path"] == ["*Escaped* heading"]
+
+
+def test_a_character_code_in_a_heading_gives_the_same_section_name_as_the_literal_form():
+    encoded = markdown_to_pipeline_elements("# Materials&nbsp;and Methods\nText.\n")
+    literal = markdown_to_pipeline_elements("# Materials\u00a0and Methods\nText.\n")
+
+    assert encoded[0]["text"] == literal[0]["text"] == "Materials and Methods"
+    assert encoded[1]["metadata"]["section_path"] == literal[1]["metadata"]["section_path"] == [
+        "Materials and Methods"
+    ]
+
+
+def test_markdown_to_pipeline_elements_keeps_code_block_text_as_written():
+    markdown = """```
+x = a*b*c  # `kept`
+```
+"""
+
+    elements = markdown_to_pipeline_elements(markdown)
+
+    assert [element["text"] for element in elements] == ["```\nx = a*b*c  # `kept`\n```"]
+    assert elements[0]["metadata"]["content_type"] == "code_block"
+
+
 @pytest.mark.parametrize(("payload", "expected"), [
     # A sleeping reader being started (as PDFX reported it on dev).
     ({"status": "queued", "state": "starting",
