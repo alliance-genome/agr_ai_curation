@@ -99,6 +99,14 @@ def test_r4_an_escaped_pipe_inside_a_cell_is_not_a_cell_boundary():
     assert _assess(text).refused is False
 
 
+def test_r4_an_escaped_backslash_before_a_pipe_is_a_cell_boundary():
+    # Pinned to the shared splitter (check code version 2): two backslashes then a pipe end a cell.
+    text = TABLE + "| a \\\\| b | 4 |\n"
+    result = _assess(text)
+    assert result.reason is FileCheckReason.TABLE_CELLS_MISMATCH
+    assert (result.measured_value, result.limit_value) == (3, 2)
+
+
 def test_r5_a_row_over_the_token_limit_is_refused():
     wide = "| " + "w" * 60 + " | 1 |"
     text = TABLE + wide + "\n"

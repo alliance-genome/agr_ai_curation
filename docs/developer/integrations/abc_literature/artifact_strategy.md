@@ -179,17 +179,30 @@ numbers, never wording (`src/lib/document_sources/file_listing.py`).
   so a bare count shows less). A converted row whose source is missing from ABC's listing is
   left out by the adapter and is not counted.
 - Copies with the same MD5 collapse to the copy the curator can open, the lowest provider file
-  id among several; the others are counted in `duplicate_copies_count`.
+  id (numeric order) among several; the others are counted in `duplicate_copies_count`.
+- ABC can hold more than one `final` converted text for one original (a re-conversion, or a
+  legacy `_tei` text next to the `_merged` one: both are `converted_merged_supplement`). The
+  newest, the highest provider file id the curator can read, is listed and read.
+- An imported paper is listed by its stored reference CURIE, and the resolved reference id must
+  equal the stored one (`paper_reference_mismatch`; `paper_reference_incomplete` when either is
+  missing). The numeric ABC reference id is never looked up: ABC reads a bare number as a PMID.
 - File role an import would give: `main` for the paper's main PDF; `supplement` for a
   supplementary PDF (`SOURCE_PDF`) or another supplement (`SOURCE_SUPPLEMENT`); any other role
   is a named error.
 - Checks R1 to R7 (`file_assessment.py`) run on the downloaded converted text of each `ready`
-  supplement not checked before, at most `DOCUMENT_FILE_DOWNLOAD_CONCURRENCY` at once (default 4)
-  and never past `DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES`. R7 (one top-level title) applies to
-  converted Word and Excel files. R3 is a note only (`DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW`).
-  Results are stored in `document_file_assessments` by provider file id, MD5 and a check version
-  that includes every threshold, and reused only after the access checks. A refusal found while
-  listing sends no Sentry event. The listing does not clean or parse text.
+  supplement not checked before: at most `DOCUMENT_FILE_DOWNLOAD_CONCURRENCY` downloads at once
+  across the backend process (default 4), shared with imports; never past
+  `DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES`; at most `DOCUMENT_FILE_LISTING_CHECK_LIMIT` files
+  per listing (default 20, the per-paper file limit), the rest `check_limit_reached`. Each file
+  is checked and released before its download slot is freed. A converted text without an MD5 is
+  not downloaded (`text_without_checksum`). `too_large` is stored like any refusal; a failed
+  download (`text_unavailable`, `text_missing`, `text_access_denied`) is tried once per listing
+  and not stored. There is no per-user rate limit: the repository has no such mechanism. R7 (one
+  top-level title) applies to converted Word and Excel files. R3 is a note only
+  (`DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW`). Results are stored in `document_file_assessments`
+  by the converted text's provider file id, MD5 and a check version that includes every
+  threshold and the token encoding, and reused only after the access checks. A refusal found
+  while listing sends no Sentry event. The listing does not clean or parse text.
 - Each entry is named by the original's provider file id (an import writes it to
   `source_provider_source_file_id`; "in this paper" matches it). It carries the original's MD5
   (`md5`), the converted text's MD5 (`converted_md5`, which an import sends back to detect a
@@ -197,6 +210,7 @@ numbers, never wording (`src/lib/document_sources/file_listing.py`).
   `single_title_required` profile flag.
 - Shared with the import (P7): `list_files_for_identifier` / `list_files_for_paper`
   (`file_listing_service.py`), `converted_text_access_allowed` (both rules, separately),
-  `download_converted_texts` (bounded concurrency and size; failure codes `too_large`,
-  `text_unavailable`, `text_missing`, `text_access_denied`), `assess_converted_file` with
+  `download_converted_text` (one file, the process-wide limit and the size cap, bytes handed
+  to a callback while the slot is held; failure codes `too_large`, `text_unavailable`,
+  `text_missing`, `text_access_denied`), `assess_converted_file` with
   `FileCheckReason`, and `stored_assessment` / `store_assessment`.

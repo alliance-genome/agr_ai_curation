@@ -59,6 +59,9 @@ _SUPPLEMENT_FILE_CLASS = "supplement"
 _LARGE_DATA_FILE_CLASS = "htp_supplement"
 # Extensions whose supplements ABC converts to ``converted_merged_supplement`` text:
 # Office files in-process and PDFs through its PDF converter.
+# PDF supplements are read from ABC's converted text for now. This depends on the
+# open Q14 design (a PDF supplement shown as its PDF, possibly extracted by our own
+# PDFX), which may change which PDF supplements are ready and what is checked.
 _CONVERTIBLE_SUPPLEMENT_EXTENSIONS = _OFFICE_SUPPLEMENT_EXTENSIONS | {"pdf"}
 _PUBLISHED_STATUS = "final"
 
