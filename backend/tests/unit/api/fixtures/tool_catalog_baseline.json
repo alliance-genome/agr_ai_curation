@@ -4327,7 +4327,7 @@
           "type": "integer"
         }
       ],
-      "summary": "Returns the complete text of one passage as numbered sentences, with pointers to the passages just before and after it. Each numbered sentence is one of the snippets within it that can be captured as supporting evidence; the sentence is copied exactly from the paper and becomes the verified quote on the saved piece of evidence. The sentence numbers are the same ones Read Section and Read Subsection show for this passage. The default call returns the whole passage; a starting sentence number returns every sentence from there to the end of the passage."
+      "summary": "Returns the complete text of one passage as numbered sentences, with pointers to the passages just before and after it. Each numbered sentence is one of the snippets within it that can be captured as supporting evidence; the sentence is copied exactly from the paper and becomes the verified quote on the saved piece of evidence. The sentence numbers are the same ones Read Section and Read Subsection show for this passage. The default call returns the whole passage; a starting sentence number returns every sentence from there to the end of the passage. In a table, each row is one numbered line, shown under the table's column names."
     },
     "methods": null,
     "name": "Read Chunk",
@@ -4408,7 +4408,7 @@
           "type": "string"
         }
       ],
-      "summary": "Returns the complete text of every passage in a section, grouped by the paper's own structure rather than by page order, however long the section is, so it gives full coverage of the section even when a search might overlook a faintly matching passage. This is the way to read an entire section, including tables and figure legends. Every passage is read in full and shown as numbered sentences, and any of those sentences can be saved as evidence directly, without reading the passage again. The section name matches as part of a name, so Methods also matches Materials and Methods; the result lists every section name that matched."
+      "summary": "Returns the complete text of every passage in a section, grouped by the paper's own structure rather than by page order, however long the section is, so it gives full coverage of the section even when a search might overlook a faintly matching passage. This is the way to read an entire section, including tables and figure legends. Every passage is read in full and shown as numbered sentences, and any of those sentences can be saved as evidence directly, without reading the passage again. The section name matches as part of a name, so Methods also matches Materials and Methods; the result lists every section name that matched. In a table, each row is one numbered line, shown under the table's column names."
     },
     "methods": null,
     "name": "Read Section",
@@ -4450,7 +4450,7 @@
           "type": "string"
         }
       ],
-      "summary": "Returns the complete text of every passage in one subsection, grouped by the paper's own structure rather than by page order, however long it is, so it gives full coverage of that subsection even when a search might overlook a faintly matching passage. This is the way to read a whole subsection, including its figure legends. Every passage is read in full and shown as numbered sentences, and any of those sentences can be saved as evidence directly, without reading the passage again. Both names match as part of a name; the result lists every section and subsection name that matched."
+      "summary": "Returns the complete text of every passage in one subsection, grouped by the paper's own structure rather than by page order, however long it is, so it gives full coverage of that subsection even when a search might overlook a faintly matching passage. This is the way to read a whole subsection, including its figure legends. Every passage is read in full and shown as numbered sentences, and any of those sentences can be saved as evidence directly, without reading the passage again. Both names match as part of a name; the result lists every section and subsection name that matched. In a table, each row is one numbered line, shown under the table's column names."
     },
     "methods": null,
     "name": "Read Subsection",

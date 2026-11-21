@@ -20,6 +20,8 @@ import PdfViewer, {
   type PdfEvidenceSpikeInput,
 } from './PdfViewer'
 import {
+  HOME_PDF_VIEWER_OWNER,
+  dispatchPDFViewerDocumentCleared,
   dispatchPDFViewerNavigateEvidence,
   dispatchPDFDocumentChanged,
   onPDFViewerEvidenceAnchorSelected,
@@ -1293,6 +1295,43 @@ describe('PdfViewer evidence navigation', () => {
     expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
     expect(getNativeSelectedHighlights(iframe).length).toBeGreaterThan(0)
     expect(eventBus.findbarCloseCount).toBe(1)
+  })
+
+  it('drops an evidence navigation queued while the viewer was cleared for a text paper', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+    const onNavigationComplete = vi.fn()
+    const onNavigationStateChange = vi.fn()
+
+    render(
+      <PdfViewer
+        activeDocumentOwnerToken={HOME_PDF_VIEWER_OWNER}
+        onNavigationComplete={onNavigationComplete}
+        onNavigationStateChange={onNavigationStateChange}
+      />,
+    )
+
+    // A hover or click on text-paper evidence while the viewer has no document...
+    dispatchPDFViewerNavigateEvidence(buildNavigationCommand({ anchorId: 'text-paper-anchor' }))
+    // ...then the viewer is cleared for the text paper, and chat's PDF loads later.
+    dispatchPDFViewerDocumentCleared(HOME_PDF_VIEWER_OWNER)
+    dispatchPDFDocumentChanged('doc-chat', '/fixtures/sample.pdf', 'chat-evidence.pdf', 8, {
+      ownerToken: HOME_PDF_VIEWER_OWNER,
+    })
+    await waitFor(() => {
+      expect(screen.getByText('chat-evidence.pdf')).toBeInTheDocument()
+    })
+    const { iframe, eventBus } = installMockPdfViewer({
+      onFind: () => ({ state: 0, total: 1, current: 1, pageIdx: 2 }),
+      pages: buildDefaultPages(),
+    })
+    fireEvent.load(iframe)
+
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    expect(eventBus.findQueries).toEqual([])
+    expect(onNavigationComplete).not.toHaveBeenCalled()
+    expect(onNavigationStateChange).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'matched' }),
+    )
   })
 
   it('matches equivalent chat and curation evidence commands the same way in the shared viewer', async () => {

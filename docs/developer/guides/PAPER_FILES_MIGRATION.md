@@ -47,7 +47,12 @@ Alembic revision `c6d7e8f9a0b1`.
   removal endpoint when it exists.
 
 The API still reports `viewer_mode`: it is the main file's display mode. Text
-files now report `text` (previously `text_only`).
+files now report `text` (previously `text_only`), and plain uploads report
+`local_pdf` (previously no value). `/api/pdf-viewer/documents/{id}` reports
+`page_count: null` for a text paper. Readers must accept that: chat restore
+keeps a text paper active without the PDF viewer, and still refuses a PDF paper
+without a page count (`chatDocumentRehydration.ts`; the shapes are pinned in
+`backend/tests/unit/api/test_pdf_viewer_text_only.py`).
 
 ## The migration (Alembic `c6d7e8f9a0b1`)
 

@@ -23,6 +23,7 @@ from src.lib.document_sources.figure_metadata import (
 from src.lib.openai_agents.evidence_spans import (
     EvidenceSpan,
     EvidenceSpanResolutionError,
+    chunk_table_segments,
     parse_evidence_span_id,
     resolve_evidence_span_id,
 )
@@ -996,6 +997,7 @@ def _create_canonical_evidence_recorder(
                     expected_chunk_id=chunk_id,
                     page_number=page,
                     section_title=section,
+                    table_segments=chunk_table_segments(chunk.get("metadata")),
                 )
             except EvidenceSpanResolutionError as exc:
                 return _log_record_evidence_result(

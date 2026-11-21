@@ -736,6 +736,16 @@ error and the exception class. Intake removes the staged upload and returns the
 usual 503 even if reporting fails. An ordinary license denial returns 403 and
 produces no event.
 
+When an ABC file listing has a converted supplement whose `source` names a file
+missing from the same listing, the ABC adapter leaves that file out and reports
+one warning under component `document_source` and operation
+`converted_source_not_listed`, with tag `provider`, a fixed fingerprint of
+those two codes and context holding only the hashed `artifact_id_hash` and
+`source_artifact_id_hash`. The exception is fixed and chain-free; file names,
+the reference and raw ids are omitted. The companion WARNING log names the raw
+ids and the reference and skips event promotion. The paper's other files are
+still listed.
+
 ## Sensitive Database Wrappers
 
 Some exception types should not be logged or captured directly. SQLAlchemy
