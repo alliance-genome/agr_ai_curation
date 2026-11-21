@@ -277,6 +277,13 @@ class DocumentSourceProvider(Protocol):
         """
         raise NotImplementedError
 
+    def supplement_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
+        """Rank a supplement's listed converted texts when it has more than one (lowest first).
+
+        Among texts of the same rank the newest (highest provider file id) is read.
+        """
+        raise NotImplementedError
+
     def converted_text_has_single_title(self, original: SourceArtifact) -> bool:
         """Whether this original's converted text starts with exactly one top-level title.
 

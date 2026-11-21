@@ -366,9 +366,10 @@ async def list_reference_files(
                 not_shown += 1
                 continue
             # A provider can hold more than one listed converted text for one original
-            # (ABC: a re-conversion, or a legacy TEI-derived text next to the merged one).
-            # The newest, highest provider file id, is the one listed and read.
-            candidate.converted = max(readable, key=_id_order)
+            # (ABC: a legacy TEI-derived text next to the merged one). The provider's
+            # rank decides; within one rank the newest, highest provider file id.
+            newest_first = sorted(readable, key=_id_order, reverse=True)
+            candidate.converted = min(newest_first, key=provider.supplement_text_artifact_sort_key)
         openable.append(candidate)
 
     by_md5: dict[str, _Candidate] = {}

@@ -459,17 +459,20 @@ async def test_an_unavailable_text_is_tried_once_per_listing():
 
 
 @pytest.mark.asyncio
-async def test_two_readable_converted_texts_list_the_newest_and_keep_the_rest_of_the_listing():
-    original, older = _pair(20, "WB")
-    newer = dict(older, referencefile_id=29, md5sum="md5-29", display_name="Made_up_S20_xlsx_again")
-    rows = [_abc_show_all_main_pdf(10, "WB"), original, older, newer, *_pair(30, "WB")]
-    listing, client = await _listing(rows, payloads={"29": GOOD_TABLE, "31": GOOD_TABLE})
+async def test_a_pdf_supplement_with_merged_and_legacy_tei_texts_lists_the_merged_one():
+    """As ABC produces it: both texts name one PDF supplement, the legacy ``_tei`` row has the higher id."""
+
+    original, merged = _pair(20, "WB", extension="pdf")
+    merged["display_name"] = "Made_up_S20_merged"
+    tei = dict(merged, referencefile_id=25, md5sum="md5-25", display_name="Made_up_S20_tei")
+    rows = [_abc_show_all_main_pdf(10, "WB"), original, merged, tei, *_pair(30, "WB")]
+    listing, client = await _listing(rows, payloads={"21": GOOD_TABLE, "31": GOOD_TABLE})
     files = _by_id(listing)
-    assert files["20"].converted_text_id == "29" and files["20"].converted_md5 == "md5-29"
+    assert files["20"].converted_text_id == "21" and files["20"].converted_md5 == "md5-21"
     assert files["30"].check.status is ListedFileCheckStatus.PASSED and "10" in files
-    assert [kwargs["artifact_id"] for name, kwargs in client.calls if name == "download_referencefile"] in (
-        ["29", "31"], ["31", "29"],
-    )
+    assert sorted(kwargs["artifact_id"] for name, kwargs in client.calls if name == "download_referencefile") == [
+        "21", "31",
+    ]
 
 
 @pytest.mark.asyncio

@@ -180,9 +180,11 @@ numbers, never wording (`src/lib/document_sources/file_listing.py`).
   left out by the adapter and is not counted.
 - Copies with the same MD5 collapse to the copy the curator can open, the lowest provider file
   id (numeric order) among several; the others are counted in `duplicate_copies_count`.
-- ABC can hold more than one `final` converted text for one original (a re-conversion, or a
-  legacy `_tei` text next to the `_merged` one: both are `converted_merged_supplement`). The
-  newest, the highest provider file id the curator can read, is listed and read.
+- ABC can hold more than one `final` converted text for one original: a legacy `_tei` text
+  next to the `_merged` one, both `converted_merged_supplement`. ABC treats `_merged` as
+  canonical (it deletes `_tei` rows when it re-converts), so the adapter ranks `_merged` first
+  (`supplement_text_artifact_sort_key`, keyed on ABC's own name suffix). Within one rank the
+  highest provider file id the curator can read is listed and read.
 - An imported paper is listed by its stored reference CURIE, and the resolved reference id must
   equal the stored one (`paper_reference_mismatch`; `paper_reference_incomplete` when either is
   missing). The numeric ABC reference id is never looked up: ABC reads a bare number as a PMID.

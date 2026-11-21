@@ -274,6 +274,15 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
             and artifact.parent_artifact_id is not None
         )
 
+    def supplement_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
+        """ABC's ``_merged`` text is canonical; a legacy ``_tei`` text ranks after it.
+
+        ABC's pdf2md accepts both suffixes for one supplement and deletes ``_tei``
+        rows when it re-converts.
+        """
+
+        return (1,) if _artifact_is_tei_derived(artifact) else (0,)
+
     def converted_text_has_single_title(self, original: SourceArtifact) -> bool:
         """ABC's Office converter gives a converted Word or Excel file exactly one title."""
 
