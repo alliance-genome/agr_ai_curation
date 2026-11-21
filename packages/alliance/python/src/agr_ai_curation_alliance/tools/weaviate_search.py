@@ -20,6 +20,7 @@ from agr_ai_curation_runtime.document_references import LocalIndex, scoped_docum
 from agr_ai_curation_runtime.evidence_spans import (
     EVIDENCE_SPANIZER_VERSION,
     build_evidence_spans,
+    chunk_table_segments,
 )
 from agr_ai_curation_runtime.chunk_identity import resolve_chunk_identifier
 from agr_ai_curation_runtime.tool_result_bounds import parse_offset
@@ -131,6 +132,28 @@ def _strategy_for_search_mode(search_mode: str) -> str:
 ChunkIndexRequest = Annotated[int, Field(strict=True)]
 
 
+class TableRows(BaseModel):
+    """Whole rows of one table held in a passage, with the table's header rows.
+
+    Structural metadata written when the text was cut into passages. The model
+    view shows it as an unnumbered label above the rows; it is never a span.
+    """
+
+    table_index: int
+    char_start: int
+    char_end: int
+    first_data_row: Optional[int] = None
+    last_data_row: Optional[int] = None
+    total_data_rows: int
+    header_row_count: int
+    header_text: str
+    separator_char_start: Optional[int] = None
+
+
+def _table_rows(segments: List[dict]) -> Optional[List[TableRows]]:
+    return [TableRows(**segment) for segment in segments] or None
+
+
 class ChunkHit(BaseModel):
     chunk_id: Optional[str]
     chunk_index: LocalIndex
@@ -139,6 +162,7 @@ class ChunkHit(BaseModel):
     score: Optional[float]
     content: str
     doc_items: Optional[List[dict]] = None  # Bounding box data for PDF highlighting
+    tables: Optional[List[TableRows]] = None
 
 
 class ChunkSearchResult(BaseModel):
@@ -174,6 +198,7 @@ class ChunkReadContent(BaseModel):
     content: str
     evidence_spans: List[EvidenceSpanResult]
     doc_items: Optional[List[dict]] = None
+    tables: Optional[List[TableRows]] = None
     # Present for an explicit span offset: ``content`` is the complete suffix
     # covering all remaining spans.
     content_range: Optional[dict] = None
@@ -255,7 +280,9 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
         figure legends) before retrieval runs.
 
         All selected hits are returned in rank order with full text. The shared
-        model-context boundary handles compaction when context grows.
+        model-context boundary handles compaction when context grows. A hit from a
+        table also lists, under table_labels, the table's column names and which of
+        its rows the hit holds.
 
         Args:
             query: Search terms or natural-language retrieval query.
@@ -324,6 +351,7 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
                     score=score,
                     content=content,
                     doc_items=doc_items if doc_items else None,
+                    tables=_table_rows(chunk_table_segments(metadata)),
                 )
             )
 
@@ -344,7 +372,11 @@ def _search_result(hits: List[ChunkHit]) -> ChunkSearchResult:
 
 
 def _evidence_spans(
-    chunk_id: str, text: str, page_number: Optional[int], section_title: Optional[str],
+    chunk_id: str,
+    text: str,
+    page_number: Optional[int],
+    section_title: Optional[str],
+    table_segments: List[dict],
 ) -> List[EvidenceSpanResult]:
     """The one span builder every reading tool shares, so numbers mean the same everywhere."""
     return [
@@ -354,6 +386,7 @@ def _evidence_spans(
             chunk_text=text,
             page_number=page_number,
             section_title=section_title,
+            table_segments=table_segments,
         )
     ]
 
@@ -400,12 +433,17 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
     async def read_chunk(chunk_index: ChunkIndexRequest, span_offset: int = 0) -> ChunkReadResult:
         """Read one passage (chunk) of the paper, numbered sentence by sentence.
 
-        The passage comes back as numbered lines. Each line starts with a sentence
-        number in square brackets, for example "[3] Wingless expression was lost.",
-        followed by that sentence exactly as it appears in the paper. A sentence
-        that spans several lines in the paper, such as a table row, keeps its line
-        breaks under one number, and its later lines are indented by four spaces,
-        so only a real sentence number ever starts a line.
+        The passage comes back as numbered lines. Each line starts with a
+        sentence number in square brackets, for example "[3] Wingless expression
+        was lost.", followed by that sentence exactly as it appears in the
+        paper. When a passage numbers a table's rows one per line, one line
+        without a number above them starts with "Column names of the" and
+        shows the table's column names and which of its rows the passage holds;
+        further column-name rows follow it, indented by four spaces. That label
+        is for reading only and cannot be recorded as evidence. A sentence that
+        spans several lines, such as a table row in a passage without that
+        label, keeps its line breaks under one number, and its later lines are
+        indented by four spaces.
 
         To keep a sentence as evidence, pass the passage's chunk_index and the
         sentence number (span_index) to record_evidence. The application copies the
@@ -472,7 +510,8 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
             user_id=user_id,
             chunk_index=chunk_index,
         )
-        spans = _evidence_spans(actual_chunk_id, content, page_number, section_title)
+        table_segments = chunk_table_segments(metadata)
+        spans = _evidence_spans(actual_chunk_id, content, page_number, section_title, table_segments)
 
         page_text = f" from page {page_number}" if page_number else ""
 
@@ -507,6 +546,7 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
                     content=window,
                     evidence_spans=window_spans,
                     doc_items=chunk.get("doc_items") or metadata.get("doc_items") or None,
+                    tables=_table_rows(table_segments),
                     content_range=content_range,
                     span_page=span_page,
                 ),
@@ -548,6 +588,7 @@ class NumberedPassage(BaseModel):
     content: str
     evidence_spans: List[EvidenceSpanResult]
     doc_items: Optional[List[dict]] = None
+    tables: Optional[List[TableRows]] = None
 
 
 class NumberedSection(BaseModel):
@@ -652,7 +693,8 @@ async def _numbered_section_read(
         chunk_id = resolve_chunk_identifier(chunk, metadata)
         chunk_index = _coerce_chunk_index(chunk.get("chunk_index"))
         page_number = _chunk_page(chunk, metadata)
-        spans = _evidence_spans(chunk_id, text, page_number, _chunk_section_title(chunk, metadata))
+        table_segments = chunk_table_segments(metadata)
+        spans = _evidence_spans(chunk_id, text, page_number, _chunk_section_title(chunk, metadata), table_segments)
         passages.append(NumberedPassage(
             chunk_id=chunk_id,
             chunk_index=chunk_index,
@@ -662,6 +704,7 @@ async def _numbered_section_read(
             content=text,
             evidence_spans=spans,
             doc_items=metadata.get("doc_items") or chunk.get("doc_items") or None,
+            tables=_table_rows(table_segments),
         ))
         reads.append(_issued_read({"id": chunk_id, "chunk_index": chunk_index, "text": text}, spans, spans))
     if reads:
@@ -725,14 +768,20 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
         need everything a section says: complete lists such as every strain in the
         Methods, full tables and figure legends, or a full methods description.
 
-        Each passage shows its chunk_index, page and subsection, then its text as
-        numbered lines. Each line starts with a sentence number in square brackets,
-        for example "[2] Embryos were fixed in 4% formaldehyde.", followed by that
-        sentence exactly as it appears in the paper. A sentence that spans several
-        lines, such as a table row, keeps its line breaks under one number, and its
-        later lines are indented by four spaces. To keep a sentence as evidence,
-        pass the passage's chunk_index and the sentence number (span_index) to
-        record_evidence; there is no need to read the passage again with read_chunk.
+        Each passage shows its chunk_index, page and subsection, then its text
+        as numbered lines. Each line starts with a sentence number in
+        square brackets, for example "[2] Embryos were fixed in 4%
+        formaldehyde.", followed by that sentence exactly as it appears in the
+        paper. When a passage numbers a table's rows one per line, one line
+        without a number above them starts with "Column names of the" and
+        shows the table's column names and which of its rows the passage holds;
+        further column-name rows follow it, indented by four spaces. That label
+        is for reading only and cannot be recorded as evidence. A sentence that
+        spans several lines, such as a table row in a passage without that
+        label, keeps its line breaks under one number, and its later lines are
+        indented by four spaces. To keep a sentence as evidence, pass the passage's
+        chunk_index and the sentence number (span_index) to record_evidence;
+        there is no need to read the passage again with read_chunk.
 
         The section name is matched as part of a name: "Methods" also matches
         "Materials and Methods" and "Supplementary Methods". The result lists every
@@ -805,14 +854,20 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
         focused read of one part of a section, such as "Fly strains" in the Methods
         or one figure legend.
 
-        Each passage shows its chunk_index, page and subsection, then its text as
-        numbered lines. Each line starts with a sentence number in square brackets,
-        for example "[0] Flies were raised at 25 C.", followed by that sentence
-        exactly as it appears in the paper. A sentence that spans several lines,
-        such as a table row, keeps its line breaks under one number, and its later
-        lines are indented by four spaces. To keep a sentence as evidence, pass the
-        passage's chunk_index and the sentence number (span_index) to
-        record_evidence; there is no need to read the passage again with read_chunk.
+        Each passage shows its chunk_index, page and subsection, then its text
+        as numbered lines. Each line starts with a sentence number in
+        square brackets, for example "[0] Flies were raised at 25 C.", followed
+        by that sentence exactly as it appears in the paper. When a passage
+        numbers a table's rows one per line, one line without a number above
+        them starts with "Column names of the" and shows the table's column names
+        and which of its rows the passage holds; further column-name rows follow
+        it, indented by four spaces. That label is for reading only and cannot
+        be recorded as evidence. A sentence that spans several lines, such as a
+        table row in a passage without that label, keeps its line breaks under
+        one number, and its later lines are indented by four spaces. To keep a
+        sentence as evidence, pass the passage's chunk_index and the sentence
+        number (span_index) to record_evidence; there is
+        no need to read the passage again with read_chunk.
 
         Both names are matched as part of a name, so "Strains" also matches
         "Fly strains and genetics". The result lists every section and subsection

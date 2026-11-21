@@ -1,0 +1,406 @@
+[
+ {
+  "chunk_id": "00000000-0000-4000-8000-000000000000",
+  "text": "A synthetic study of made-up genes",
+  "spans": [
+   {
+    "span_id": "00000000-0000-4000-8000-000000000000:s0000:c0000-c0034:a9fa5d3b",
+    "span_index": 0,
+    "span_type": "sentence",
+    "text": "A synthetic study of made-up genes",
+    "char_start": 0,
+    "char_end": 34,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   }
+  ]
+ },
+ {
+  "chunk_id": "00000000-0000-4000-8000-000000000001",
+  "text": "Abstract\n\nMade-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic g.",
+  "spans": [
+   {
+    "span_id": "00000000-0000-4000-8000-000000000001:s0000:c0000-c0008:56343c88",
+    "span_index": 0,
+    "span_type": "sentence",
+    "text": "Abstract",
+    "char_start": 0,
+    "char_end": 8,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   },
+   {
+    "span_id": "00000000-0000-4000-8000-000000000001:s0001:c0010-c0411:6ee1227d",
+    "span_index": 1,
+    "span_type": "sentence",
+    "text": "Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic g.",
+    "char_start": 10,
+    "char_end": 411,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   }
+  ]
+ },
+ {
+  "chunk_id": "00000000-0000-4000-8000-000000000002",
+  "text": "Results",
+  "spans": [
+   {
+    "span_id": "00000000-0000-4000-8000-000000000002:s0000:c0000-c0007:711cc138",
+    "span_index": 0,
+    "span_type": "sentence",
+    "text": "Results",
+    "char_start": 0,
+    "char_end": 7,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   }
+  ]
+ },
+ {
+  "chunk_id": "00000000-0000-4000-8000-000000000003",
+  "text": "Expression of zeta1",
+  "spans": [
+   {
+    "span_id": "00000000-0000-4000-8000-000000000003:s0000:c0000-c0019:6ce36774",
+    "span_index": 0,
+    "span_type": "sentence",
+    "text": "Expression of zeta1",
+    "char_start": 0,
+    "char_end": 19,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   }
+  ]
+ },
+ {
+  "chunk_id": "00000000-0000-4000-8000-000000000004",
+  "text": "Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2.",
+  "spans": [
+   {
+    "span_id": "00000000-0000-4000-8000-000000000004:s0000:c0000-c1490:bb567bcf",
+    "span_index": 0,
+    "span_type": "sentence",
+    "text": "Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2.",
+    "char_start": 0,
+    "char_end": 1490,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   }
+  ]
+ },
+ {
+  "chunk_id": "00000000-0000-4000-8000-000000000005",
+  "text": "| Strain | Genotype | Source |\n| --- | --- | --- |\n| XS1 | zeta1 mutant. | Lab A |\n| XS2 | zeta2 null. | Lab B |\n\nMade-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sent.",
+  "spans": [
+   {
+    "span_id": "00000000-0000-4000-8000-000000000005:s0000:c0000-c0112:44c7a76f",
+    "span_index": 0,
+    "span_type": "sentence",
+    "text": "| Strain | Genotype | Source |\n| --- | --- | --- |\n| XS1 | zeta1 mutant. | Lab A |\n| XS2 | zeta2 null. | Lab B |",
+    "char_start": 0,
+    "char_end": 112,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   },
+   {
+    "span_id": "00000000-0000-4000-8000-000000000005:s0001:c0114-c0415:b12a0f6e",
+    "span_index": 1,
+    "span_type": "sentence",
+    "text": "Made-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sent.",
+    "char_start": 114,
+    "char_end": 415,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   }
+  ]
+ },
+ {
+  "chunk_id": "00000000-0000-4000-8000-000000000006",
+  "text": "Strains",
+  "spans": [
+   {
+    "span_id": "00000000-0000-4000-8000-000000000006:s0000:c0000-c0007:29360e0a",
+    "span_index": 0,
+    "span_type": "sentence",
+    "text": "Strains",
+    "char_start": 0,
+    "char_end": 7,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   }
+  ]
+ },
+ {
+  "chunk_id": "00000000-0000-4000-8000-000000000007",
+  "text": "| Strain | Description | Notes | Source |\n| --- | --- | --- | --- |\n| XS001 | zeta1(made-up allele 1) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS002 | zeta2(made-up allele 2) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS003 | zeta3(made-up allele 3) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS004 | zeta4(made-up allele 4) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS005 | zeta5(made-up allele 5) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS006 | zeta6(made-up allele 6) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS007 | zeta7(made-up allele 7) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS008 | zeta8(made-up allele 8) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS009 | zeta9(made-up allele 9) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS010 | zeta10(made-up allele 10) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS011 | zeta11(made-up allele 11) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS012 | zeta12(made-up allele 12) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS013 | zeta13(made-up allele 13) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS014 | zeta14(made-up allele 14) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS015 | zeta15(made-up allele 15) is a synthetic line. | Kept at 20 C. Fed daily.",
+  "spans": [
+   {
+    "span_id": "00000000-0000-4000-8000-000000000007:s0000:c0000-c1449:b317ce00",
+    "span_index": 0,
+    "span_type": "sentence",
+    "text": "| Strain | Description | Notes | Source |\n| --- | --- | --- | --- |\n| XS001 | zeta1(made-up allele 1) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS002 | zeta2(made-up allele 2) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS003 | zeta3(made-up allele 3) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS004 | zeta4(made-up allele 4) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS005 | zeta5(made-up allele 5) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS006 | zeta6(made-up allele 6) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS007 | zeta7(made-up allele 7) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS008 | zeta8(made-up allele 8) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS009 | zeta9(made-up allele 9) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS010 | zeta10(made-up allele 10) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS011 | zeta11(made-up allele 11) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS012 | zeta12(made-up allele 12) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS013 | zeta13(made-up allele 13) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS014 | zeta14(made-up allele 14) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS015 | zeta15(made-up allele 15) is a synthetic line. | Kept at 20 C. Fed daily.",
+    "char_start": 0,
+    "char_end": 1449,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   }
+  ]
+ },
+ {
+  "chunk_id": "00000000-0000-4000-8000-000000000008",
+  "text": "| Lab A |\n| XS016 | zeta16(made-up allele 16) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS017 | zeta17(made-up allele 17) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS018 | zeta18(made-up allele 18) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS019 | zeta19(made-up allele 19) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS020 | zeta20(made-up allele 20) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS021 | zeta21(made-up allele 21) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS022 | zeta22(made-up allele 22) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS023 | zeta23(made-up allele 23) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS024 | zeta24(made-up allele 24) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS025 | zeta25(made-up allele 25) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS026 | zeta26(made-up allele 26) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS027 | zeta27(made-up allele 27) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS028 | zeta28(made-up allele 28) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS029 | zeta29(made-up allele 29) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS030 | zeta30(made-up allele 30) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS031 | zeta31(made-up allele 31) is a synthetic line. | Kept at 20 C.",
+  "spans": [
+   {
+    "span_id": "00000000-0000-4000-8000-000000000008:s0000:c0000-c1492:52bf234a",
+    "span_index": 0,
+    "span_type": "sentence",
+    "text": "| Lab A |\n| XS016 | zeta16(made-up allele 16) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS017 | zeta17(made-up allele 17) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS018 | zeta18(made-up allele 18) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS019 | zeta19(made-up allele 19) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS020 | zeta20(made-up allele 20) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS021 | zeta21(made-up allele 21) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS022 | zeta22(made-up allele 22) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS023 | zeta23(made-up allele 23) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS024 | zeta24(made-up allele 24) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS025 | zeta25(made-up allele 25) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS026 | zeta26(made-up allele 26) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS027 | zeta27(made-up allele 27) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS028 | zeta28(made-up allele 28) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS029 | zeta29(made-up allele 29) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS030 | zeta30(made-up allele 30) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS031 | zeta31(made-up allele 31) is a synthetic line. | Kept at 20 C.",
+    "char_start": 0,
+    "char_end": 1492,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   }
+  ]
+ },
+ {
+  "chunk_id": "00000000-0000-4000-8000-000000000009",
+  "text": "Fed daily. | Lab B |\n| XS032 | zeta32(made-up allele 32) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS033 | zeta33(made-up allele 33) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS034 | zeta34(made-up allele 34) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS035 | zeta35(made-up allele 35) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS036 | zeta36(made-up allele 36) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS037 | zeta37(made-up allele 37) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS038 | zeta38(made-up allele 38) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS039 | zeta39(made-up allele 39) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS040 | zeta40(made-up allele 40) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS041 | zeta41(made-up allele 41) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS042 | zeta42(made-up allele 42) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS043 | zeta43(made-up allele 43) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS044 | zeta44(made-up allele 44) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS045 | zeta45(made-up allele 45) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS046 | zeta46(made-up allele 46) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS047 | zeta47(made-up allele 47) is a synthetic line.",
+  "spans": [
+   {
+    "span_id": "00000000-0000-4000-8000-000000000009:s0000:c0000-c1487:3f328156",
+    "span_index": 0,
+    "span_type": "sentence",
+    "text": "Fed daily. | Lab B |\n| XS032 | zeta32(made-up allele 32) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS033 | zeta33(made-up allele 33) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS034 | zeta34(made-up allele 34) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS035 | zeta35(made-up allele 35) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS036 | zeta36(made-up allele 36) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS037 | zeta37(made-up allele 37) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS038 | zeta38(made-up allele 38) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS039 | zeta39(made-up allele 39) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS040 | zeta40(made-up allele 40) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS041 | zeta41(made-up allele 41) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS042 | zeta42(made-up allele 42) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS043 | zeta43(made-up allele 43) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS044 | zeta44(made-up allele 44) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS045 | zeta45(made-up allele 45) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS046 | zeta46(made-up allele 46) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS047 | zeta47(made-up allele 47) is a synthetic line.",
+    "char_start": 0,
+    "char_end": 1487,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   }
+  ]
+ },
+ {
+  "chunk_id": "00000000-0000-4000-8000-000000000010",
+  "text": "| Kept at 20 C. Fed daily. | Lab C |\n| XS048 | zeta48(made-up allele 48) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS049 | zeta49(made-up allele 49) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS050 | zeta50(made-up allele 50) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS051 | zeta51(made-up allele 51) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS052 | zeta52(made-up allele 52) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS053 | zeta53(made-up allele 53) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS054 | zeta54(made-up allele 54) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS055 | zeta55(made-up allele 55) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS056 | zeta56(made-up allele 56) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS057 | zeta57(made-up allele 57) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS058 | zeta58(made-up allele 58) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS059 | zeta59(made-up allele 59) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS060 | zeta60(made-up allele 60) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |",
+  "spans": [
+   {
+    "span_id": "00000000-0000-4000-8000-000000000010:s0000:c0000-c1258:8ae8e8d5",
+    "span_index": 0,
+    "span_type": "sentence",
+    "text": "| Kept at 20 C. Fed daily. | Lab C |\n| XS048 | zeta48(made-up allele 48) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS049 | zeta49(made-up allele 49) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS050 | zeta50(made-up allele 50) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS051 | zeta51(made-up allele 51) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS052 | zeta52(made-up allele 52) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS053 | zeta53(made-up allele 53) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS054 | zeta54(made-up allele 54) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS055 | zeta55(made-up allele 55) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS056 | zeta56(made-up allele 56) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS057 | zeta57(made-up allele 57) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS058 | zeta58(made-up allele 58) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS059 | zeta59(made-up allele 59) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS060 | zeta60(made-up allele 60) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |",
+    "char_start": 0,
+    "char_end": 1258,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   }
+  ]
+ },
+ {
+  "chunk_id": "00000000-0000-4000-8000-000000000011",
+  "text": "Discussion\n\nMade-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about.",
+  "spans": [
+   {
+    "span_id": "00000000-0000-4000-8000-000000000011:s0000:c0000-c0010:f721a16d",
+    "span_index": 0,
+    "span_type": "sentence",
+    "text": "Discussion",
+    "char_start": 0,
+    "char_end": 10,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   },
+   {
+    "span_id": "00000000-0000-4000-8000-000000000011:s0001:c0012-c0613:4a668511",
+    "span_index": 1,
+    "span_type": "sentence",
+    "text": "Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about.",
+    "char_start": 12,
+    "char_end": 613,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   }
+  ]
+ },
+ {
+  "chunk_id": "00000000-0000-4000-8000-000000000012",
+  "text": "A synthetic study of made-up genes\n\nAbstract\n\nMade-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic g.",
+  "spans": [
+   {
+    "span_id": "00000000-0000-4000-8000-000000000012:s0000:c0000-c0034:a9fa5d3b",
+    "span_index": 0,
+    "span_type": "sentence",
+    "text": "A synthetic study of made-up genes",
+    "char_start": 0,
+    "char_end": 34,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   },
+   {
+    "span_id": "00000000-0000-4000-8000-000000000012:s0001:c0036-c0044:56343c88",
+    "span_index": 1,
+    "span_type": "sentence",
+    "text": "Abstract",
+    "char_start": 36,
+    "char_end": 44,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   },
+   {
+    "span_id": "00000000-0000-4000-8000-000000000012:s0002:c0046-c0447:6ee1227d",
+    "span_index": 2,
+    "span_type": "sentence",
+    "text": "Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic g.",
+    "char_start": 46,
+    "char_end": 447,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   }
+  ]
+ },
+ {
+  "chunk_id": "00000000-0000-4000-8000-000000000013",
+  "text": "Results\n\nExpression of zeta1\n\nMade-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2.",
+  "spans": [
+   {
+    "span_id": "00000000-0000-4000-8000-000000000013:s0000:c0000-c0007:711cc138",
+    "span_index": 0,
+    "span_type": "sentence",
+    "text": "Results",
+    "char_start": 0,
+    "char_end": 7,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   },
+   {
+    "span_id": "00000000-0000-4000-8000-000000000013:s0001:c0009-c0028:6ce36774",
+    "span_index": 1,
+    "span_type": "sentence",
+    "text": "Expression of zeta1",
+    "char_start": 9,
+    "char_end": 28,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   },
+   {
+    "span_id": "00000000-0000-4000-8000-000000000013:s0002:c0030-c1520:bb567bcf",
+    "span_index": 2,
+    "span_type": "sentence",
+    "text": "Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2.",
+    "char_start": 30,
+    "char_end": 1520,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   }
+  ]
+ },
+ {
+  "chunk_id": "00000000-0000-4000-8000-000000000014",
+  "text": "Discussion\n\nMade-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about.",
+  "spans": [
+   {
+    "span_id": "00000000-0000-4000-8000-000000000014:s0000:c0000-c0010:f721a16d",
+    "span_index": 0,
+    "span_type": "sentence",
+    "text": "Discussion",
+    "char_start": 0,
+    "char_end": 10,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   },
+   {
+    "span_id": "00000000-0000-4000-8000-000000000014:s0001:c0012-c0613:4a668511",
+    "span_index": 1,
+    "span_type": "sentence",
+    "text": "Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about.",
+    "char_start": 12,
+    "char_end": 613,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   }
+  ]
+ },
+ {
+  "chunk_id": "00000000-0000-4000-8000-000000000015",
+  "text": "Primers were 5'-ACGT-3' and\n5'-TTGA-3'. Dr. Smith et al. measured 3.5 kb (Fig. 2A). Done!\n\n# Heading\n\nNext block?",
+  "spans": [
+   {
+    "span_id": "00000000-0000-4000-8000-000000000015:s0000:c0000-c0039:5a7bdb08",
+    "span_index": 0,
+    "span_type": "sentence",
+    "text": "Primers were 5'-ACGT-3' and\n5'-TTGA-3'.",
+    "char_start": 0,
+    "char_end": 39,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   },
+   {
+    "span_id": "00000000-0000-4000-8000-000000000015:s0001:c0040-c0083:afa43c3b",
+    "span_index": 1,
+    "span_type": "sentence",
+    "text": "Dr. Smith et al. measured 3.5 kb (Fig. 2A).",
+    "char_start": 40,
+    "char_end": 83,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   },
+   {
+    "span_id": "00000000-0000-4000-8000-000000000015:s0002:c0084-c0089:e51d0e72",
+    "span_index": 2,
+    "span_type": "sentence",
+    "text": "Done!",
+    "char_start": 84,
+    "char_end": 89,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   },
+   {
+    "span_id": "00000000-0000-4000-8000-000000000015:s0003:c0091-c0100:3605cb5d",
+    "span_index": 3,
+    "span_type": "sentence",
+    "text": "# Heading",
+    "char_start": 91,
+    "char_end": 100,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   },
+   {
+    "span_id": "00000000-0000-4000-8000-000000000015:s0004:c0102-c0113:71c80d29",
+    "span_index": 4,
+    "span_type": "sentence",
+    "text": "Next block?",
+    "char_start": 102,
+    "char_end": 113,
+    "page_number": 4,
+    "section_title": "Results",
+    "spanizer_version": "pdf_sentence_v1"
+   }
+  ]
+ }
+]
