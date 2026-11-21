@@ -34,10 +34,7 @@ Alembic revision `c6d7e8f9a0b1`.
   of each parsed element that chunking keeps (every element except page footers),
   after clean-up, as saved in the file's processed JSON. It is never the size of
   the JSON file. Text imports and PDFs are measured the same way
-  (`src.lib.document_files.service.element_text_bytes`). Table text is counted as it stands in
-  the processed JSON, before table cutting turns `<br>` and runs of spaces inside a table
-  row into single spaces; the measure is the same everywhere, so the per-paper limit counts
-  table text before that flattening.
+  (`src.lib.document_files.service.element_text_bytes`).
 - Constraints: one `main` file per paper; main-file hashes are unique (duplicate
   upload detection reads `uq_pdf_document_files_main_file_hash`); file paths are
   unique; a provider source file appears once per paper; `page_count` is set only

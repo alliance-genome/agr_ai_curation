@@ -13,9 +13,11 @@ codes and measured values, never wording.
   curator cannot open are only counted.
 - Copies with the same MD5 collapse to one entry: the copy the curator can
   open, and among several, the lowest provider file id.
-- Converted text not checked before (provider file id, MD5, check version) is
-  downloaded, at most ``DOCUMENT_FILE_DOWNLOAD_CONCURRENCY`` at a time and
-  never past ``DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES``, checked and stored.
+- Converted text not checked before (converted text id, MD5, check version) is
+  downloaded, at most ``DOCUMENT_FILE_DOWNLOAD_CONCURRENCY`` at a time across the
+  process, never past ``DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES`` and at most
+  ``DOCUMENT_FILE_LISTING_CHECK_LIMIT`` files per listing; each file is checked
+  and released before its download slot is freed, and its result stored.
   A stored result is reused only after the access checks. No Sentry event is
   sent for a refusal found while listing.
 
@@ -25,11 +27,11 @@ The listing never cleans or parses text: the checks read the downloaded bytes.
 from __future__ import annotations
 
 import asyncio
-import hashlib
+import weakref
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 from src.lib.document_sources.file_assessment import (
     FileAssessment,
@@ -81,6 +83,10 @@ class ListedFileCheckStatus(str, Enum):
     TEXT_MISSING = "text_missing"
     # The provider refused the download although both access rules allowed it.
     TEXT_ACCESS_DENIED = "text_access_denied"
+    # The provider gives the converted text no MD5: not downloaded, cannot be imported safely.
+    TEXT_WITHOUT_CHECKSUM = "text_without_checksum"
+    # Past ``DOCUMENT_FILE_LISTING_CHECK_LIMIT`` for this listing; checked on a later one.
+    CHECK_LIMIT_REACHED = "check_limit_reached"
     NOT_CHECKED = "not_checked"
 
 
@@ -173,49 +179,66 @@ class ConvertedTextDownloadFailure(str, Enum):
     ACCESS_DENIED = "text_access_denied"
 
 
+R = TypeVar("R")
+
+
 @dataclass(frozen=True, slots=True)
-class DownloadedText:
-    content: bytes | None = None
+class DownloadOutcome(Generic[R]):
+    """What ``use`` returned for the downloaded bytes, or why there were no bytes."""
+
+    result: R | None = None
     failure: ConvertedTextDownloadFailure | None = None
     limit_value: int | None = None
 
 
-async def download_converted_texts(
+# One limiter per event loop, so every listing and import in the process shares one bound.
+_download_limiters: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _download_limiter() -> asyncio.Semaphore:
+    from src.lib.openai_agents.config import get_document_file_download_concurrency
+
+    loop = asyncio.get_running_loop()
+    limiter = _download_limiters.get(loop)
+    if limiter is None:
+        limiter = asyncio.Semaphore(get_document_file_download_concurrency())
+        _download_limiters[loop] = limiter
+    return limiter
+
+
+async def download_converted_text(
     provider: DocumentSourceProvider,
-    artifact_ids: Iterable[str],
+    artifact_id: str,
     *,
     request_bearer_token: str,
     max_bytes: int,
-    concurrency: int,
-) -> dict[str, DownloadedText]:
-    """Download converted texts, at most ``concurrency`` at once and never past ``max_bytes``.
+    use: Callable[[bytes], R],
+) -> DownloadOutcome[R]:
+    """Download one converted text and hand its bytes to ``use``, within the process-wide limit.
 
-    Each id gets its bytes or a failure code; other provider errors propagate.
-    Shared by the listing and the import, so both download the same way.
+    At most ``DOCUMENT_FILE_DOWNLOAD_CONCURRENCY`` downloads run at once across the
+    process, and a download stops past ``max_bytes``. ``use`` runs in a worker
+    thread while the slot is still held, so at most that many files are in
+    memory at once; the bytes are not kept afterwards. Each download is tried
+    once. Other provider errors propagate. Shared by the listing and the import.
     """
 
-    semaphore = asyncio.Semaphore(max(1, concurrency))
-
-    async def one(artifact_id: str) -> tuple[str, DownloadedText]:
-        async with semaphore:
-            try:
-                content = await provider.download_artifact(
-                    artifact_id, request_bearer_token=request_bearer_token, max_bytes=max_bytes,
-                )
-            except DocumentSourceArtifactTooLarge as exc:
-                return artifact_id, DownloadedText(
-                    failure=ConvertedTextDownloadFailure.TOO_LARGE, limit_value=exc.max_bytes,
-                )
-            except DocumentSourceUnavailable:
-                return artifact_id, DownloadedText(failure=ConvertedTextDownloadFailure.UNAVAILABLE)
-            except DocumentSourceArtifactNotFound:
-                return artifact_id, DownloadedText(failure=ConvertedTextDownloadFailure.MISSING)
-            except DocumentSourceAccessDenied:
-                return artifact_id, DownloadedText(failure=ConvertedTextDownloadFailure.ACCESS_DENIED)
-        return artifact_id, DownloadedText(content=content)
-
-    unique_ids = list(dict.fromkeys(artifact_ids))
-    return dict(await asyncio.gather(*(one(artifact_id) for artifact_id in unique_ids)))
+    async with _download_limiter():
+        try:
+            content = await provider.download_artifact(
+                artifact_id, request_bearer_token=request_bearer_token, max_bytes=max_bytes,
+            )
+        except DocumentSourceArtifactTooLarge as exc:
+            return DownloadOutcome(failure=ConvertedTextDownloadFailure.TOO_LARGE, limit_value=exc.max_bytes)
+        except DocumentSourceUnavailable:
+            return DownloadOutcome(failure=ConvertedTextDownloadFailure.UNAVAILABLE)
+        except DocumentSourceArtifactNotFound:
+            return DownloadOutcome(failure=ConvertedTextDownloadFailure.MISSING)
+        except DocumentSourceAccessDenied:
+            return DownloadOutcome(failure=ConvertedTextDownloadFailure.ACCESS_DENIED)
+        return DownloadOutcome(result=await asyncio.to_thread(use, content))
 
 
 def current_file_check_limits() -> FileCheckLimits:
@@ -227,18 +250,19 @@ def current_file_check_limits() -> FileCheckLimits:
     )
     from src.lib.pipeline import store
 
-    encoder = store._tiktoken_encoder
-    if encoder is None:
-        raise FileListingError(
-            "The row-width check needs the embedding token counter "
-            "(EMBEDDING_TOKEN_PREFLIGHT_ENABLED=true)"
-        )
+    encoder = store.embedding_token_encoder()
     return FileCheckLimits(
         max_bytes=get_document_file_max_converted_text_bytes(),
         few_characters_below=get_document_file_few_characters_note_below(),
         row_token_limit=store.TOKEN_HARD_LIMIT,
         count_tokens=lambda text: len(encoder.encode(text)),
+        token_encoding=encoder.name,
     )
+
+
+def _id_order(artifact: SourceArtifact) -> tuple[int, str]:
+    # Numeric order for provider ids of different widths ("99" before "100").
+    return (len(artifact.artifact_id), artifact.artifact_id)
 
 
 @dataclass(slots=True)
@@ -262,7 +286,7 @@ async def list_reference_files(
     request_bearer_token: str,
     files_in_paper: Iterable[str] = (),
     limits: FileCheckLimits,
-    download_concurrency: int,
+    check_limit: int,
     load_stored: Callable[[str, str, str], FileAssessment | None],
     save_assessment: Callable[[str, str, str, FileAssessment], None],
 ) -> FileListing:
@@ -272,8 +296,9 @@ async def list_reference_files(
     apply licence rules only to a resolved reference, so a bare identifier is
     refused here rather than listed with fewer rules. ``load_stored`` and
     ``save_assessment`` read and write stored results by
-    (provider file id, MD5, check version); ``files_in_paper`` holds the
-    provider file ids already imported into the paper.
+    (converted text id, MD5, check version); ``files_in_paper`` holds the
+    provider file ids already imported into the paper. At most ``check_limit``
+    files not checked before are downloaded by one listing.
     """
 
     if not isinstance(reference, SourceReference):
@@ -326,14 +351,11 @@ async def list_reference_files(
 
     not_shown = 0
     openable: list[_Candidate] = []
-    for candidate in sorted(candidates.values(), key=lambda item: item.original.artifact_id):
+    for candidate in sorted(candidates.values(), key=lambda item: _id_order(item.original)):
         if not _authorized(candidate.original, groups):
             not_shown += 1
             continue
-        texts = sorted(
-            converted_by_parent.get(candidate.original.artifact_id, []),
-            key=lambda item: item.artifact_id,
-        )
+        texts = converted_by_parent.get(candidate.original.artifact_id, [])
         if texts:
             # Both rules, separately: the original's (already passed) and the text's own.
             readable = [
@@ -343,11 +365,10 @@ async def list_reference_files(
             if not readable:
                 not_shown += 1
                 continue
-            if len(readable) > 1:
-                raise FileListingError(
-                    f"File {candidate.original.artifact_id} has {len(readable)} listed converted texts"
-                )
-            candidate.converted = readable[0]
+            # A provider can hold more than one listed converted text for one original
+            # (ABC: a re-conversion, or a legacy TEI-derived text next to the merged one).
+            # The newest, highest provider file id, is the one listed and read.
+            candidate.converted = max(readable, key=_id_order)
         openable.append(candidate)
 
     by_md5: dict[str, _Candidate] = {}
@@ -367,55 +388,46 @@ async def list_reference_files(
             kept.duplicates.append(candidate.original)
             duplicate_copies += 1
 
-    ready = [candidate for candidate in unique if candidate.converted is not None]
     checks: dict[str, ListedFileCheck] = {}
-    to_download: list[_Candidate] = []
-    for candidate in ready:
+    to_check: list[_Candidate] = []
+    for candidate in unique:
         text = candidate.converted
-        assert text is not None
-        stored = (
-            await asyncio.to_thread(load_stored, text.artifact_id, text.md5sum, limits.check_version)
-            if text.md5sum else None
-        )
+        if text is None:
+            continue
+        if not text.md5sum:
+            # Without the provider's MD5 an import cannot tell the text changed since
+            # listing, and a result cannot be stored: not downloaded, not offered.
+            checks[candidate.original.artifact_id] = ListedFileCheck(ListedFileCheckStatus.TEXT_WITHOUT_CHECKSUM)
+            continue
+        stored = await asyncio.to_thread(load_stored, text.artifact_id, text.md5sum, limits.check_version)
         if stored is not None:
             checks[candidate.original.artifact_id] = _check_from_assessment(stored)
+        elif len(to_check) < check_limit:
+            to_check.append(candidate)
         else:
-            to_download.append(candidate)
+            checks[candidate.original.artifact_id] = ListedFileCheck(ListedFileCheckStatus.CHECK_LIMIT_REACHED)
 
-    downloads = await download_converted_texts(
-        provider,
-        (candidate.converted.artifact_id for candidate in to_download if candidate.converted),
-        request_bearer_token=request_bearer_token,
-        max_bytes=limits.max_bytes,
-        concurrency=download_concurrency,
-    )
-    for candidate in to_download:
+    async def check(candidate: _Candidate) -> ListedFileCheck:
         text = candidate.converted
-        assert text is not None
-        downloaded = downloads[text.artifact_id]
-        if downloaded.failure is ConvertedTextDownloadFailure.TOO_LARGE:
-            assessment = FileAssessment(
-                refused=True, reason=FileCheckReason.TOO_LARGE, limit_value=downloaded.limit_value,
-            )
-        elif downloaded.failure is not None:
-            # Not a check result: reported, never stored.
-            checks[candidate.original.artifact_id] = ListedFileCheck(
-                ListedFileCheckStatus(downloaded.failure.value)
-            )
-            continue
-        else:
-            assert downloaded.content is not None
-            profile = FileProfile(
-                single_title_required=provider.converted_text_has_single_title(candidate.original),
-            )
-            assessment = await asyncio.to_thread(assess_converted_file, downloaded.content, profile, limits)
-        md5 = text.md5sum or (
-            hashlib.md5(downloaded.content, usedforsecurity=False).hexdigest()
-            if downloaded.content is not None else None
+        assert text is not None and text.md5sum
+        profile = FileProfile(single_title_required=provider.converted_text_has_single_title(candidate.original))
+        outcome = await download_converted_text(
+            provider, text.artifact_id, request_bearer_token=request_bearer_token,
+            max_bytes=limits.max_bytes, use=lambda content: assess_converted_file(content, profile, limits),
         )
-        if md5 is not None:
-            await asyncio.to_thread(save_assessment, text.artifact_id, md5, limits.check_version, assessment)
-        checks[candidate.original.artifact_id] = _check_from_assessment(assessment)
+        if outcome.failure is ConvertedTextDownloadFailure.TOO_LARGE:
+            assessment = FileAssessment(refused=True, reason=FileCheckReason.TOO_LARGE, limit_value=outcome.limit_value)
+        elif outcome.failure is not None:
+            # Not a property of the file: reported, never stored, tried once per listing.
+            return ListedFileCheck(ListedFileCheckStatus(outcome.failure.value))
+        else:
+            assert outcome.result is not None
+            assessment = outcome.result
+        await asyncio.to_thread(save_assessment, text.artifact_id, text.md5sum, limits.check_version, assessment)
+        return _check_from_assessment(assessment)
+
+    results = await asyncio.gather(*(check(candidate) for candidate in to_check))
+    checks.update(zip((candidate.original.artifact_id for candidate in to_check), results))
 
     for candidate in unique:
         original = candidate.original

@@ -3,8 +3,8 @@
 Creates the empty ``document_file_assessments`` table. Nothing existing is
 read or changed, so live data cannot make it fail.
 
-Revision ID: d7e8f9a0b1c2
-Revises: c6d7e8f9a0b1
+Revision ID: e8f9a0b1c2d3
+Revises: d7e8f9a0b1c2
 Create Date: 2026-11-21
 """
 
@@ -16,8 +16,8 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 
-revision: str = "d7e8f9a0b1c2"
-down_revision: Union[str, Sequence[str], None] = "c6d7e8f9a0b1"
+revision: str = "e8f9a0b1c2d3"
+down_revision: Union[str, Sequence[str], None] = "d7e8f9a0b1c2"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

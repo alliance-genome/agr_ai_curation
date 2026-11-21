@@ -26,7 +26,9 @@ class FileCheckReason(str, Enum):
 
 
 # Bump when a check's code changes; thresholds are added to the version separately.
-_CHECK_CODE_VERSION = "1"
+# "2": the shared cell splitter now treats an even run of backslashes before a pipe as a
+# cell boundary (ALL-1460 P1), which can change R4 results.
+_CHECK_CODE_VERSION = "2"
 
 _ALLOWED_CONTROL_CHARACTERS = frozenset("\t\n\r")
 
@@ -45,13 +47,17 @@ class FileCheckLimits:
     few_characters_below: int
     row_token_limit: int
     count_tokens: Callable[[str], int]
+    # Names the token counter, so a different encoding re-checks stored R5 results.
+    token_encoding: str
 
     @property
     def check_version(self) -> str:
-        """Code version plus every threshold, so a changed setting re-checks stored results."""
+        """Code version plus every threshold and the token encoding, so a change re-checks stored results."""
 
-        thresholds = f"{self.max_bytes}:{self.few_characters_below}:{self.row_token_limit}"
-        digest = hashlib.sha256(thresholds.encode("ascii")).hexdigest()[:16]
+        thresholds = (
+            f"{self.max_bytes}:{self.few_characters_below}:{self.row_token_limit}:{self.token_encoding}"
+        )
+        digest = hashlib.sha256(thresholds.encode("utf-8")).hexdigest()[:16]
         return f"{_CHECK_CODE_VERSION}-{digest}"
 
 

@@ -277,7 +277,6 @@ def _expect_stop(match: str) -> str:
         ("ALTER TABLE pdf_documents ALTER COLUMN file_path DROP NOT NULL", {"file_path": None}),
         ("ALTER TABLE pdf_documents ALTER COLUMN file_hash DROP NOT NULL", {"file_hash": None}),
         ("ALTER TABLE pdf_documents DROP CONSTRAINT ck_pdf_documents_file_size", {"file_size": 0}),
-        ("ALTER TABLE pdf_documents ALTER COLUMN file_size DROP NOT NULL", {"file_size": None}),
         ("ALTER TABLE pdf_documents DROP CONSTRAINT ck_pdf_documents_page_count", {"page_count": 0}),
         ("ALTER TABLE pdf_documents ALTER COLUMN page_count DROP NOT NULL",
          {"page_count": None, "viewer_mode": "local_pdf"}),

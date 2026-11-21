@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from uuid import UUID
 
 from src.lib.document_sources.access import DocumentSourceRequestContext
@@ -49,14 +50,20 @@ async def _list(
     lookup: str,
     context: DocumentSourceRequestContext,
     files_in_paper: tuple[str, ...],
+    *,
+    expected_reference_id: str | None = None,
 ) -> FileListing:
-    from src.lib.openai_agents.config import get_document_file_download_concurrency
+    from src.lib.openai_agents.config import get_document_file_listing_check_limit
 
     token = (context.curator_token or "").strip()
     if not token:
         raise FileListingUnavailable("document_source_curator_token_unavailable")
     # Always the provider's resolved reference: licence rules apply only to one.
     reference = await provider.resolve_reference(lookup, request_bearer_token=token)
+    if expected_reference_id is not None and reference.reference_id != expected_reference_id:
+        # The stored reference no longer resolves to the paper's own reference: never
+        # list (or let an import take) another reference's files.
+        raise FileListingUnavailable("paper_reference_mismatch")
     load, save = _stores(provider.provider_id)
     return await list_reference_files(
         provider=provider,
@@ -66,7 +73,7 @@ async def _list(
         request_bearer_token=token,
         files_in_paper=files_in_paper,
         limits=current_file_check_limits(),
-        download_concurrency=get_document_file_download_concurrency(),
+        check_limit=get_document_file_listing_check_limit(),
         load_stored=load,
         save_assessment=save,
     )
@@ -84,7 +91,15 @@ async def list_files_for_identifier(
     return await _list(provider, normalized.normalized, context, ())
 
 
-def _paper_lookup(document_id: UUID, owner_user_id: int) -> tuple[str | None, str | None, tuple[str, ...]]:
+@dataclass(frozen=True, slots=True)
+class _PaperSource:
+    provider: str | None
+    reference_id: str | None
+    reference_curie: str | None
+    file_ids: tuple[str, ...]
+
+
+def _paper_lookup(document_id: UUID, owner_user_id: int) -> _PaperSource:
     from src.services.document_access import require_owned_document
 
     with SessionLocal() as session:
@@ -95,7 +110,12 @@ def _paper_lookup(document_id: UUID, owner_user_id: int) -> tuple[str | None, st
             for identifier in (file_row.source_provider_source_file_id, file_row.source_provider_pdf_artifact_id)
             if identifier
         )
-        return paper.source_provider, paper.source_provider_reference_id, file_ids
+        return _PaperSource(
+            provider=paper.source_provider,
+            reference_id=paper.source_provider_reference_id,
+            reference_curie=paper.source_provider_reference_curie,
+            file_ids=file_ids,
+        )
 
 
 async def list_files_for_paper(
@@ -109,13 +129,20 @@ async def list_files_for_paper(
 
     An uploaded paper, including one linked to its reference
     (``pdf_document_reference_links``), has no provider file list in this release.
+    The paper is resolved by its stored reference CURIE, the provider's own id, and
+    must come back as the stored reference id. A stored reference id is never looked
+    up as an identifier: a provider may read a bare number as another kind of id
+    (ABC reads it as a PMID).
     """
 
     import asyncio
 
-    source_provider, reference_id, file_ids = await asyncio.to_thread(
-        _paper_lookup, document_id, owner_user_id,
-    )
-    if source_provider != provider.provider_id or not reference_id:
+    paper = await asyncio.to_thread(_paper_lookup, document_id, owner_user_id)
+    if paper.provider != provider.provider_id:
         raise FileListingUnavailable("not_imported_from_provider")
-    return await _list(provider, reference_id, context, file_ids)
+    if not paper.reference_id or not paper.reference_curie:
+        raise FileListingUnavailable("paper_reference_incomplete")
+    return await _list(
+        provider, paper.reference_curie, context, paper.file_ids,
+        expected_reference_id=paper.reference_id,
+    )

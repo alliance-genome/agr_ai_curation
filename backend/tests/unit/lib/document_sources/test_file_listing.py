@@ -8,9 +8,14 @@ made up.
 
 from __future__ import annotations
 
+import asyncio
+import weakref
 from typing import Any
+from uuid import uuid4
 
 import pytest
+
+from src.lib.document_sources import file_listing
 
 from src.lib.document_sources.file_assessment import FileCheckLimits, FileCheckReason
 from src.lib.document_sources.file_listing import (
@@ -20,7 +25,7 @@ from src.lib.document_sources.file_listing import (
     ListedFileStatus,
     ConvertedTextDownloadFailure,
     converted_text_access_allowed,
-    download_converted_texts,
+    download_converted_text,
     file_role_for_artifact_role,
     list_reference_files,
     listing_to_payload,
@@ -87,14 +92,17 @@ class _Store:
 
 
 def _limits(**overrides) -> FileCheckLimits:
-    values = dict(max_bytes=10_000, few_characters_below=10, row_token_limit=200, count_tokens=len)
+    values = dict(
+        max_bytes=10_000, few_characters_below=10, row_token_limit=200, count_tokens=len,
+        token_encoding="made-up-encoding",
+    )
     values.update(overrides)
     return FileCheckLimits(**values)
 
 
 async def _listing(
     rows, *, groups=("WB",), payloads=None, store=None, licence_open=None, licence_name=None,
-    in_paper=(), limits=None,
+    in_paper=(), limits=None, check_limit=20,
 ):
     client = _Client(payloads or {})
     client.show_reference_payload = _abc_reference_record(
@@ -107,7 +115,7 @@ async def _listing(
     listing = await list_reference_files(
         provider=provider, reference=reference, authorized_group_ids=tuple(groups),
         bearer_kind=ProviderBearerKind.CURATOR, request_bearer_token="curator-token",
-        files_in_paper=in_paper, limits=limits or _limits(), download_concurrency=2,
+        files_in_paper=in_paper, limits=limits or _limits(), check_limit=check_limit,
         load_stored=store.load, save_assessment=store.save,
     )
     return listing, client
@@ -221,7 +229,7 @@ async def test_listing_refuses_an_unresolved_reference():
         await list_reference_files(
             provider=provider, reference="AGRKB:101", authorized_group_ids=("WB",),  # type: ignore[arg-type]
             bearer_kind=ProviderBearerKind.CURATOR, request_bearer_token="t", limits=_limits(),
-            download_concurrency=1, load_stored=_Store().load, save_assessment=_Store().save,
+            check_limit=20, load_stored=_Store().load, save_assessment=_Store().save,
         )
     assert client.calls == []
 
@@ -343,13 +351,183 @@ async def test_converted_text_access_checks_both_rules(original_mods, converted_
 async def test_the_shared_download_helper_bounds_size_and_reports_failure_codes():
     client = _Client({"1": b"text", "2": _http_error(404), "3": _http_error(502), "4": _http_error(403)})
     provider = provider_from_fake(client)
-    results = await download_converted_texts(
-        provider, ["1", "2", "3", "4", "1"], request_bearer_token="curator-token",
-        max_bytes=50, concurrency=2,
-    )
-    assert results["1"].content == b"text" and results["1"].failure is None
+    results = {
+        artifact_id: await download_converted_text(
+            provider, artifact_id, request_bearer_token="curator-token", max_bytes=50, use=len,
+        )
+        for artifact_id in ("1", "2", "3", "4")
+    }
+    assert results["1"].result == 4 and results["1"].failure is None
     assert results["2"].failure is ConvertedTextDownloadFailure.MISSING
     assert results["3"].failure is ConvertedTextDownloadFailure.UNAVAILABLE
     assert results["4"].failure is ConvertedTextDownloadFailure.ACCESS_DENIED
     downloads = [kwargs for name, kwargs in client.calls if name == "download_referencefile"]
     assert len(downloads) == 4 and all(item["max_bytes"] == 50 for item in downloads)
+
+
+class _GatedClient(_Client):
+    """Counts downloads in progress, and holds each until released."""
+
+    def __init__(self, payloads):
+        super().__init__(payloads)
+        self.active = 0
+        self.most_active = 0
+        self.release = asyncio.Event()
+
+    async def download_referencefile(self, artifact_id, *, request_bearer_token=None, max_bytes=None):
+        self.active += 1
+        self.most_active = max(self.most_active, self.active)
+        await self.release.wait()
+        try:
+            return await super().download_referencefile(
+                artifact_id, request_bearer_token=request_bearer_token, max_bytes=max_bytes,
+            )
+        finally:
+            self.active -= 1
+
+
+@pytest.mark.asyncio
+async def test_downloads_share_one_process_wide_limit_and_hold_it_while_the_bytes_are_used(monkeypatch):
+    monkeypatch.setattr(file_listing, "_download_limiters", weakref.WeakKeyDictionary())
+    monkeypatch.setenv("DOCUMENT_FILE_DOWNLOAD_CONCURRENCY", "2")
+    client = _GatedClient({str(i): b"x" for i in range(6)})
+    provider = provider_from_fake(client)
+    in_use = {"now": 0, "most": 0}
+
+    def use(content):
+        in_use["now"] += 1
+        in_use["most"] = max(in_use["most"], in_use["now"])
+        in_use["now"] -= 1
+        return len(content)
+
+    # Two separate callers (two listings, or a listing and an import) still share the limit.
+    first = [asyncio.create_task(download_converted_text(
+        provider, str(i), request_bearer_token="t", max_bytes=10, use=use)) for i in range(3)]
+    second = [asyncio.create_task(download_converted_text(
+        provider, str(i), request_bearer_token="t", max_bytes=10, use=use)) for i in range(3, 6)]
+    await asyncio.sleep(0.05)
+    assert client.active == 2
+    client.release.set()
+    results = await asyncio.gather(*first, *second)
+    assert [item.result for item in results] == [1] * 6
+    assert client.most_active == 2
+
+
+@pytest.mark.asyncio
+async def test_a_listing_checks_at_most_the_limit_and_codes_the_rest():
+    rows = [pair_row for original in (20, 30, 40) for pair_row in _pair(original, "WB")]
+    store = _Store()
+    listing, client = await _listing(
+        rows, payloads={"21": GOOD_TABLE, "31": GOOD_TABLE, "41": GOOD_TABLE}, store=store, check_limit=2,
+    )
+    files = _by_id(listing)
+    assert files["20"].check.status is ListedFileCheckStatus.PASSED
+    assert files["30"].check.status is ListedFileCheckStatus.PASSED
+    assert files["40"].check.status is ListedFileCheckStatus.CHECK_LIMIT_REACHED
+    assert len([name for name, _ in client.calls if name == "download_referencefile"]) == 2
+
+    # Files checked before do not count against the limit.
+    listing, client = await _listing(rows, payloads={"41": GOOD_TABLE}, store=store, check_limit=1)
+    assert _by_id(listing)["40"].check.status is ListedFileCheckStatus.PASSED
+    assert [kwargs["artifact_id"] for name, kwargs in client.calls if name == "download_referencefile"] == ["41"]
+
+
+@pytest.mark.asyncio
+async def test_a_converted_text_without_an_md5_is_never_downloaded():
+    rows = _pair(20, "WB")
+    rows[1]["md5sum"] = None
+    listing, client = await _listing(rows, payloads={"21": GOOD_TABLE})
+    assert _by_id(listing)["20"].check.status is ListedFileCheckStatus.TEXT_WITHOUT_CHECKSUM
+    assert not [name for name, _ in client.calls if name == "download_referencefile"]
+
+
+@pytest.mark.asyncio
+async def test_too_large_is_stored_so_a_second_listing_does_not_download_it_again():
+    store = _Store()
+    rows = _pair(20, "WB")
+    await _listing(rows, payloads={"21": b"x" * 20}, store=store, limits=_limits(max_bytes=10))
+    listing, client = await _listing(rows, payloads={}, store=store, limits=_limits(max_bytes=10))
+    assert _by_id(listing)["20"].check.reason is FileCheckReason.TOO_LARGE
+    assert not [name for name, _ in client.calls if name == "download_referencefile"]
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_text_is_tried_once_per_listing():
+    listing, client = await _listing(_pair(20, "WB"), payloads={"21": _http_error(502)})
+    assert _by_id(listing)["20"].check.status is ListedFileCheckStatus.TEXT_UNAVAILABLE
+    assert len([name for name, _ in client.calls if name == "download_referencefile"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_two_readable_converted_texts_list_the_newest_and_keep_the_rest_of_the_listing():
+    original, older = _pair(20, "WB")
+    newer = dict(older, referencefile_id=29, md5sum="md5-29", display_name="Made_up_S20_xlsx_again")
+    rows = [_abc_show_all_main_pdf(10, "WB"), original, older, newer, *_pair(30, "WB")]
+    listing, client = await _listing(rows, payloads={"29": GOOD_TABLE, "31": GOOD_TABLE})
+    files = _by_id(listing)
+    assert files["20"].converted_text_id == "29" and files["20"].converted_md5 == "md5-29"
+    assert files["30"].check.status is ListedFileCheckStatus.PASSED and "10" in files
+    assert [kwargs["artifact_id"] for name, kwargs in client.calls if name == "download_referencefile"] in (
+        ["29", "31"], ["31", "29"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_ids_of_different_widths_keep_numeric_order():
+    rows = [*_pair(100, "WB", md5="same"), *_pair(98, "WB", md5="same")]
+    listing, _ = await _listing(rows, payloads={"99": GOOD_TABLE})
+    assert [item.provider_file_id for item in listing.files] == ["98"]
+
+
+@pytest.mark.asyncio
+async def test_the_listing_and_the_import_choose_the_same_main_file():
+    from src.lib.document_sources.identifier_import import select_reference_import_candidate
+
+    rows = [
+        _abc_show_all_main_pdf(10, "FB"), _abc_show_all_main_pdf(12, "WB"), _abc_show_all_main_pdf(14),
+        *_pair(20, "WB"),
+    ]
+    listing, client = await _listing(rows, groups=("WB",), payloads={"21": GOOD_TABLE})
+    listed_main = [item for item in listing.files if item.file_role == "main"]
+
+    decision = await select_reference_import_candidate(
+        provider=provider_from_fake(client), identifier="AGRKB:101", authorized_group_ids=("WB",),
+        bearer_kind=ProviderBearerKind.CURATOR, request_bearer_token="curator-token",
+    )
+    assert decision.selected is not None and len(listed_main) == 1
+    assert listed_main[0].provider_file_id == decision.selected.source_artifact.artifact_id
+
+
+@pytest.mark.asyncio
+async def test_an_imported_paper_is_listed_by_its_curie_never_by_its_numeric_id(monkeypatch):
+    """ABC reads a bare number as a PMID: the stored reference id 101 must never be looked up."""
+
+    from src.lib.document_sources import file_listing_service
+    from src.lib.document_sources.access import DocumentSourceRequestContext
+
+    client = _Client({"21": GOOD_TABLE})
+    client.show_reference_payload = _abc_reference_record()
+    # A different paper whose PMID happens to be 101.
+    client.external_lookup_payload = {"reference_curie": "AGRKB:999"}
+    client.show_referencefiles_payload = _pair(20, "WB")  # type: ignore[assignment]
+    provider = provider_from_fake(client)
+    store = _Store()
+    monkeypatch.setattr(file_listing_service, "_stores", lambda _provider: (store.load, store.save))
+    monkeypatch.setattr(file_listing_service, "current_file_check_limits", _limits)
+    monkeypatch.setattr(
+        file_listing_service, "_paper_lookup",
+        lambda *_: file_listing_service._PaperSource(
+            provider=provider.provider_id, reference_id="101", reference_curie="AGRKB:101", file_ids=("20",),
+        ),
+    )
+    context = DocumentSourceRequestContext(
+        provider_groups=("WB",), authorized_group_ids=("WB",), bearer_kind=ProviderBearerKind.CURATOR,
+        curator_token="curator-token",
+    )
+    listing = await file_listing_service.list_files_for_paper(
+        uuid4(), owner_user_id=7, provider=provider, context=context,
+    )
+    assert listing.reference_id == "101" and listing.reference_curie == "AGRKB:101"
+    assert _by_id(listing)["20"].in_this_paper is True
+    assert not [name for name, _ in client.calls if name == "lookup_external_curie"]
+    assert [kwargs["reference"] for name, kwargs in client.calls if name == "show_reference"] == ["AGRKB:101"]

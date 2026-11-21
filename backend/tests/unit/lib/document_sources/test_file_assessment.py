@@ -20,6 +20,7 @@ def _limits(**overrides) -> FileCheckLimits:
         row_token_limit=50,
         # One token per character keeps the arithmetic visible in the tests.
         count_tokens=len,
+        token_encoding="made-up-encoding",
     )
     values.update(overrides)
     return FileCheckLimits(**values)
@@ -121,12 +122,12 @@ def test_r7_needs_exactly_one_top_level_title_when_the_profile_asks(titles):
     assert _assess(text, PLAIN, few_characters_below=0).refused is False
 
 
-def test_check_version_changes_with_every_threshold():
+def test_check_version_changes_with_every_threshold_and_the_token_encoding():
     base = _limits().check_version
     assert _limits(max_bytes=10_001).check_version != base
     assert _limits(few_characters_below=21).check_version != base
     assert _limits(row_token_limit=51).check_version != base
-    assert _limits(count_tokens=lambda text: 0).check_version == base
+    assert _limits(token_encoding="another-encoding").check_version != base
 
 
 def test_the_summary_counts_results_and_notes_only():

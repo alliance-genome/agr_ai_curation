@@ -485,7 +485,11 @@ def test_compose_forwards_document_file_converted_text_cap():
 
 @pytest.mark.parametrize(
     ("name", "default"),
-    [("DOCUMENT_FILE_DOWNLOAD_CONCURRENCY", "4"), ("DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW", "200")],
+    [
+        ("DOCUMENT_FILE_DOWNLOAD_CONCURRENCY", "4"),
+        ("DOCUMENT_FILE_LISTING_CHECK_LIMIT", "20"),
+        ("DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW", "200"),
+    ],
 )
 def test_compose_forwards_document_file_listing_settings(name, default):
     dev_env = _list_environment(_load_dev_compose()["services"]["backend"]["environment"])

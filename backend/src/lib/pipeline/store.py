@@ -98,21 +98,46 @@ if TOKEN_PREFLIGHT_ENABLED and tiktoken is None:
         "EMBEDDING_TOKEN_PREFLIGHT_ENABLED=true requires tiktoken to be installed"
     )
 
-_tiktoken_encoder = None
-if TOKEN_PREFLIGHT_ENABLED and tiktoken is not None:
+def _load_tiktoken_encoder():
     try:
-        _tiktoken_encoder = tiktoken.encoding_for_model(EMBEDDING_MODEL_NAME)
+        return tiktoken.encoding_for_model(EMBEDDING_MODEL_NAME)
     except Exception:
         try:
-            _tiktoken_encoder = tiktoken.get_encoding("cl100k_base")
+            encoder = tiktoken.get_encoding("cl100k_base")
             logger.warning(
                 "No direct tiktoken encoding for model %s; using cl100k_base fallback",
                 EMBEDDING_MODEL_NAME,
             )
+            return encoder
         except Exception as exc:  # pragma: no cover - encoder init is environment-specific
             raise RuntimeError(
                 f"Unable to initialize tiktoken encoder for EMBEDDING_MODEL={EMBEDDING_MODEL_NAME}"
             ) from exc
+
+
+_tiktoken_encoder = None
+if TOKEN_PREFLIGHT_ENABLED and tiktoken is not None:
+    _tiktoken_encoder = _load_tiktoken_encoder()
+# Loaded for counting only; it never switches the insert preflight on.
+_counting_encoder = None
+
+
+def embedding_token_encoder():
+    """The embedding model's token encoder, loaded on first use when preflight is off.
+
+    Callers that measure text against ``TOKEN_HARD_LIMIT`` (the file checks) need
+    it whatever ``EMBEDDING_TOKEN_PREFLIGHT_ENABLED`` says.
+    """
+
+    global _counting_encoder
+    if _tiktoken_encoder is not None:
+        return _tiktoken_encoder
+    if _counting_encoder is None:
+        if tiktoken is None:
+            raise RuntimeError("Counting embedding tokens requires tiktoken to be installed")
+        _counting_encoder = _load_tiktoken_encoder()
+    return _counting_encoder
+
 
 if not TOKEN_PREFLIGHT_ENABLED:
     logger.warning("Embedding token preflight is disabled via EMBEDDING_TOKEN_PREFLIGHT_ENABLED")

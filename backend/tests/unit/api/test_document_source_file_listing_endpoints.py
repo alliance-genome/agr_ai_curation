@@ -14,7 +14,11 @@ from src.lib.document_sources import file_listing_service
 from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.file_listing import FileListing
 from src.lib.document_sources.file_listing_service import FileListingUnavailable
-from src.lib.document_sources.models import DocumentSourceReferenceNotFound, ProviderBearerKind
+from src.lib.document_sources.models import (
+    DocumentSourceReferenceNotFound,
+    ProviderBearerKind,
+    SourceReference,
+)
 
 
 def _request() -> Request:
@@ -108,34 +112,61 @@ async def test_listing_is_refused_when_provider_import_is_disabled(monkeypatch):
     assert raised.value.status_code == 503
 
 
-@pytest.mark.asyncio
-async def test_an_uploaded_paper_has_no_provider_file_list(monkeypatch):
-    """Including an upload linked to its reference (Q5): only provider imports list files."""
+def _paper(provider="made_up_provider", reference_id="55", curie="MADEUP:55", file_ids=("10", "20")):
+    return file_listing_service._PaperSource(
+        provider=provider, reference_id=reference_id, reference_curie=curie, file_ids=file_ids,
+    )
 
-    monkeypatch.setattr(file_listing_service, "_paper_lookup", lambda *_: (None, None, ()))
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("paper", "code"),
+    [
+        (_paper(provider=None, reference_id=None, curie=None, file_ids=()), "not_imported_from_provider"),
+        (_paper(provider="another_provider"), "not_imported_from_provider"),
+        (_paper(curie=None), "paper_reference_incomplete"),
+        (_paper(reference_id=None), "paper_reference_incomplete"),
+    ],
+)
+async def test_only_a_paper_imported_from_this_provider_with_its_reference_is_listed(monkeypatch, paper, code):
+    monkeypatch.setattr(file_listing_service, "_paper_lookup", lambda *_: paper)
     with pytest.raises(FileListingUnavailable) as raised:
         await file_listing_service.list_files_for_paper(
             uuid4(), owner_user_id=7, provider=_Provider(), context=_context(),
         )
-    assert raised.value.code == "not_imported_from_provider"
+    assert raised.value.code == code
 
 
 @pytest.mark.asyncio
-async def test_a_paper_listing_uses_the_papers_reference_and_its_file_ids(monkeypatch):
+async def test_a_paper_listing_resolves_the_papers_curie_and_requires_its_reference_id(monkeypatch):
     captured = {}
-    monkeypatch.setattr(
-        file_listing_service, "_paper_lookup", lambda *_: ("made_up_provider", "55", ("10", "20")),
-    )
+    monkeypatch.setattr(file_listing_service, "_paper_lookup", lambda *_: _paper())
 
-    async def listed(provider, lookup, context, files_in_paper):
-        captured.update(lookup=lookup, files=files_in_paper)
+    async def listed(provider, lookup, context, files_in_paper, *, expected_reference_id=None):
+        captured.update(lookup=lookup, files=files_in_paper, expected=expected_reference_id)
         return EMPTY
 
     monkeypatch.setattr(file_listing_service, "_list", listed)
     await file_listing_service.list_files_for_paper(
         uuid4(), owner_user_id=7, provider=_Provider(), context=_context(),
     )
-    assert captured == {"lookup": "55", "files": ("10", "20")}
+    assert captured == {"lookup": "MADEUP:55", "files": ("10", "20"), "expected": "55"}
+
+
+@pytest.mark.asyncio
+async def test_a_reference_that_resolves_to_another_id_is_refused(monkeypatch):
+    class Resolving(_Provider):
+        async def resolve_reference(self, identifier, *, request_bearer_token=None):
+            return SourceReference(provider="made_up_provider", reference_id="56", reference_curie=identifier)
+
+        async def list_artifacts(self, *_args, **_kwargs):  # pragma: no cover - must not be reached
+            raise AssertionError("another reference's files were listed")
+
+    with pytest.raises(FileListingUnavailable) as raised:
+        await file_listing_service._list(
+            Resolving(), "MADEUP:55", _context(), (), expected_reference_id="55",
+        )
+    assert raised.value.code == "paper_reference_mismatch"
 
 
 @pytest.mark.asyncio

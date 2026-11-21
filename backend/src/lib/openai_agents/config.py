@@ -2083,8 +2083,13 @@ def get_document_file_max_converted_text_bytes() -> int:
 
 
 def get_document_file_download_concurrency() -> int:
-    """Most provider files downloaded at once while listing or checking a paper's files."""
+    """Most provider files downloaded at once across the whole backend process."""
     return max(1, _get_env_int_with_fallback("DOCUMENT_FILE_DOWNLOAD_CONCURRENCY", 4))
+
+
+def get_document_file_listing_check_limit() -> int:
+    """Most files one listing downloads and checks; the rest are listed as not checked yet."""
+    return max(1, _get_env_int_with_fallback("DOCUMENT_FILE_LISTING_CHECK_LIMIT", 20))
 
 
 def get_document_file_few_characters_note_below() -> int:
