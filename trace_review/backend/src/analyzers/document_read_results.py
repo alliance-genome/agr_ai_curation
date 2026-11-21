@@ -13,7 +13,7 @@ Two model views exist, and traces from both must stay readable:
   passage's ``text`` is numbered lines ``[span_index] sentence``; a sentence's
   own line breaks are kept and its later lines are indented four spaces, so
   only a real span number starts a line. A table passage also has, above its
-  rows, one unnumbered label line starting ``Columns of table`` (the table's
+  rows, one unnumbered label line starting ``Column names of the`` (the table's
   column names and which rows the passage holds), with further header rows
   indented four spaces. The label is context, not a span.
 
@@ -36,7 +36,7 @@ SECTION_READ_RESULT_KEYS = {"read_section": "section", "read_subsection": "subse
 # Must match the application's model view renderer
 # (backend/src/lib/openai_agents/document_result_view.py).
 _CONTINUATION_INDENT = "    "
-_TABLE_LABEL_PREFIX = "Columns of table "
+_TABLE_LABEL_PREFIX = "Column names of the "
 _PREVIEW_CHARS = 500
 
 

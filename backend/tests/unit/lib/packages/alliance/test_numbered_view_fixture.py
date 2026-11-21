@@ -99,7 +99,9 @@ def test_the_fixture_covers_the_hard_cases():
     assert any("\r\n" in sentence for sentence in sentences[2])
     assert sentences[3] == []
     assert sentences[4] == ["Strains", "| XS0401 | zeta401. | 25 C |", "| XS0402 | zeta402. | 18 C |"]
-    assert fixture["table_labels"][4][0].startswith("Columns of table 2 (this passage holds rows 401 to 402 of 2,033)")
+    assert fixture["table_labels"][4][0].startswith(
+        "Column names of the 2nd table in this file's text (this passage holds rows 401 to 402 of 2,033)"
+    )
     # model_output is the SDK repr, so its line breaks are escaped.
     assert r"\n    | Strain | Genotype | Temp |" in fixture["model_output"]
     assert fixture["table_labels"][4][0].endswith("\n| Strain | Genotype | Temp |")

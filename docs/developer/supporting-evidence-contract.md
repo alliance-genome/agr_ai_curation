@@ -146,11 +146,13 @@ metadata, so a saved source fragment records `span_type: table_row`.
 `read_chunk`, `read_section`, `read_subsection` and `search_document` return the
 segments as `tables`. The model view (`document_result_view.py`) prints, above
 the first shown row of each table, one unnumbered label line,
-`Columns of table N (this passage holds rows A to B of T): <first header row>`,
+`Column names of the Nth table in this file's text (this passage holds rows A to B of T): <first header row>`
+(N as an ordinal: 1st, 2nd, 3rd, 11th, 21st; it counts tables in the converted
+text, not the paper's own table numbers),
 with further header rows on lines indented four spaces. Search hits list the
 same labels under `table_labels` and keep their content unchanged. The label is
 never an issued span, so `record_evidence` cannot select it. TraceReview's
-`document_read_results.py` decodes label lines (prefix `Columns of table `) as
+`document_read_results.py` decodes label lines (prefix `Column names of the `) as
 context and the rows as numbered lines; the round-trip fixture
 `trace_review/backend/tests/fixtures/numbered_document_view.json` includes a
 table passage.

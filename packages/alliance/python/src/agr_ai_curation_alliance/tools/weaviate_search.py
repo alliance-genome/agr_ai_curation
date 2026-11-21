@@ -437,13 +437,13 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
         sentence number in square brackets, for example "[3] Wingless expression
         was lost.", followed by that sentence exactly as it appears in the
         paper. When a passage numbers a table's rows one per line, one line
-        without a number above them starts with "Columns of table" and shows the
-        table's column names and which of its rows the passage holds; further
-        column-name rows follow it, indented by four spaces. That label is for
-        reading only and cannot be recorded as evidence. A sentence that spans
-        several lines, such as a table row in a passage without that label,
-        keeps its line breaks under one number, and its later lines are indented
-        by four spaces.
+        without a number above them starts with "Column names of the" and
+        shows the table's column names and which of its rows the passage holds;
+        further column-name rows follow it, indented by four spaces. That label
+        is for reading only and cannot be recorded as evidence. A sentence that
+        spans several lines, such as a table row in a passage without that
+        label, keeps its line breaks under one number, and its later lines are
+        indented by four spaces.
 
         To keep a sentence as evidence, pass the passage's chunk_index and the
         sentence number (span_index) to record_evidence. The application copies the
@@ -773,13 +773,13 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
         square brackets, for example "[2] Embryos were fixed in 4%
         formaldehyde.", followed by that sentence exactly as it appears in the
         paper. When a passage numbers a table's rows one per line, one line
-        without a number above them starts with "Columns of table" and shows the
-        table's column names and which of its rows the passage holds; further
-        column-name rows follow it, indented by four spaces. That label is for
-        reading only and cannot be recorded as evidence. A sentence that spans
-        several lines, such as a table row in a passage without that label,
-        keeps its line breaks under one number, and its later lines are indented
-        by four spaces. To keep a sentence as evidence, pass the passage's
+        without a number above them starts with "Column names of the" and
+        shows the table's column names and which of its rows the passage holds;
+        further column-name rows follow it, indented by four spaces. That label
+        is for reading only and cannot be recorded as evidence. A sentence that
+        spans several lines, such as a table row in a passage without that
+        label, keeps its line breaks under one number, and its later lines are
+        indented by four spaces. To keep a sentence as evidence, pass the passage's
         chunk_index and the sentence number (span_index) to record_evidence;
         there is no need to read the passage again with read_chunk.
 
@@ -859,7 +859,7 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
         square brackets, for example "[0] Flies were raised at 25 C.", followed
         by that sentence exactly as it appears in the paper. When a passage
         numbers a table's rows one per line, one line without a number above
-        them starts with "Columns of table" and shows the table's column names
+        them starts with "Column names of the" and shows the table's column names
         and which of its rows the passage holds; further column-name rows follow
         it, indented by four spaces. That label is for reading only and cannot
         be recorded as evidence. A sentence that spans several lines, such as a

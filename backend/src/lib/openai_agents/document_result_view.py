@@ -127,7 +127,18 @@ def _numbered_span_text(record: dict) -> str:
 
 _CONTINUATION_INDENT = "    "
 # TraceReview's document_read_results analyzer recognises label lines by this prefix.
-TABLE_LABEL_PREFIX = "Columns of table "
+TABLE_LABEL_PREFIX = "Column names of the "
+
+
+def ordinal(number: int) -> str:
+    """English ordinal of a positive whole number: 1st, 2nd, 3rd, 4th, 11th, 21st, 111th."""
+    if type(number) is not int or number < 1:
+        raise ValueError("ordinal() takes a whole number of at least 1")
+    if number % 100 in (11, 12, 13):
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(number % 10, "th")
+    return f"{number:,}{suffix}"
 
 
 def table_rows_label(table: dict) -> str:
@@ -145,7 +156,10 @@ def table_rows_label(table: dict) -> str:
     else:
         position = f"this passage holds rows {first:,} to {last:,} of {total:,}"
     header_rows = table["header_text"].split("\n")
-    head = f"{TABLE_LABEL_PREFIX}{table['table_index']} ({position}): {header_rows[0]}"
+    head = (
+        f"{TABLE_LABEL_PREFIX}{ordinal(table['table_index'])} table in this file's text "
+        f"({position}): {header_rows[0]}"
+    )
     return "\n".join([head, *(_CONTINUATION_INDENT + row for row in header_rows[1:])])
 
 

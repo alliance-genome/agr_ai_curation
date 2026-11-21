@@ -16,6 +16,7 @@ import src.lib.openai_agents.tools.record_evidence as record_evidence
 from src.lib.openai_agents.document_result_view import (
     TABLE_LABEL_PREFIX,
     document_result_view,
+    ordinal,
     table_rows_label,
 )
 from src.lib.openai_agents.evidence_spans import (
@@ -200,15 +201,35 @@ def test_label_names_the_table_rows_and_columns():
         "table_index": 2, "first_data_row": 401, "last_data_row": 520, "total_data_rows": 2033,
         "header_text": f"{TITLE_ROW}\n{NAMES_ROW}",
     }) == (
-        f"Columns of table 2 (this passage holds rows 401 to 520 of 2,033): {TITLE_ROW}\n    {NAMES_ROW}"
+        f"Column names of the 2nd table in this file's text (this passage holds rows 401 to 520 of 2,033): "
+        f"{TITLE_ROW}\n    {NAMES_ROW}"
     )
     assert table_rows_label({
         "table_index": 1, "first_data_row": None, "last_data_row": None, "total_data_rows": 7,
         "header_text": NAMES_ROW,
-    }) == f"Columns of table 1 (this passage holds only its header rows; the table has 7 rows): {NAMES_ROW}"
-    assert "row 3 of 9" in table_rows_label({
+    }) == (
+        "Column names of the 1st table in this file's text "
+        f"(this passage holds only its header rows; the table has 7 rows): {NAMES_ROW}"
+    )
+    assert "(this passage holds row 3 of 9)" in table_rows_label({
         "table_index": 1, "first_data_row": 3, "last_data_row": 3, "total_data_rows": 9, "header_text": NAMES_ROW,
     })
+
+
+@pytest.mark.parametrize("number,expected", [
+    (1, "1st"), (2, "2nd"), (3, "3rd"), (4, "4th"), (10, "10th"), (11, "11th"), (12, "12th"), (13, "13th"),
+    (14, "14th"), (21, "21st"), (22, "22nd"), (23, "23rd"), (24, "24th"), (100, "100th"), (101, "101st"),
+    (102, "102nd"), (103, "103rd"), (111, "111th"), (112, "112th"), (113, "113th"), (121, "121st"),
+    (1001, "1,001st"), (1011, "1,011th"),
+])
+def test_ordinals_are_correct_for_every_number(number, expected):
+    assert ordinal(number) == expected
+
+
+@pytest.mark.parametrize("bad", [0, -1, 1.0, True])
+def test_ordinal_refuses_anything_but_a_positive_whole_number(bad):
+    with pytest.raises(ValueError):
+        ordinal(bad)
 
 
 @pytest.fixture
@@ -254,7 +275,7 @@ async def test_read_section_shows_the_label_above_rows_without_a_number(monkeypa
     second = view["section"]["passages"][1]["text"]
     segment = pieces[1]["metadata"]["table_segments"][0]
     assert (
-        f"Columns of table 1 (this passage holds rows {segment['first_data_row']} to "
+        f"Column names of the 1st table in this file's text (this passage holds rows {segment['first_data_row']} to "
         f"{segment['last_data_row']} of 200): {TITLE_ROW}"
     ) in second
     # Every span shown was issued; the label never was.
@@ -302,7 +323,7 @@ async def test_search_hit_lists_table_labels_beside_its_unchanged_content(monkey
 
     (hit,) = view["hits"]
     assert hit["content"] == piece["text"]
-    assert [label.split(" (")[0] for label in hit["table_labels"]] == ["Columns of table 1"]
+    assert [label.split(" (")[0] for label in hit["table_labels"]] == ["Column names of the 1st table in this file's text"]
     assert "tables" not in hit
 
 

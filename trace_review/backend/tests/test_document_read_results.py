@@ -118,7 +118,7 @@ class NumberedViewSpanTests(unittest.TestCase):
     def test_a_table_label_is_context_and_its_rows_are_spans(self):
         text = (
             "[0] Strains\n"
-            "Columns of table 2 (this passage holds rows 401 to 402 of 2,033): | Title | |\n"
+            "Column names of the 2nd table in this file's text (this passage holds rows 401 to 402 of 2,033): | Title | |\n"
             "    | Strain | Temp |\n"
             "[1] | XS0401 | 25 C |\n"
             "[2] | XS0402 | 18 C |"
@@ -126,7 +126,8 @@ class NumberedViewSpanTests(unittest.TestCase):
         self.assertEqual(numbered_view_spans(text), ["Strains", "| XS0401 | 25 C |", "| XS0402 | 18 C |"])
         self.assertEqual(
             numbered_view_table_labels(text),
-            ["Columns of table 2 (this passage holds rows 401 to 402 of 2,033): | Title | |\n| Strain | Temp |"],
+            ["Column names of the 2nd table in this file's text (this passage holds rows 401 to 402 of 2,033): "
+             "| Title | |\n| Strain | Temp |"],
         )
 
     def test_a_passage_with_no_sentences_decodes_to_no_spans(self):
