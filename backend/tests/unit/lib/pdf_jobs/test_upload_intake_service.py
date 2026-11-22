@@ -519,6 +519,12 @@ async def test_intake_upload_accepts_page_counts_through_default_limit(
     )
 
     assert session.added[0].main_file.page_count == page_count
+    # Writer pin (P9a): a pending local PDF with its real page count. The viewer's
+    # per-file routes serve it only once the file is ready.
+    assert (session.added[0].main_file.display_mode, session.added[0].main_file.status) == (
+        "local_pdf",
+        "pending",
+    )
     assert session.commit_calls == 1
     assert len(dispatch.calls) == 1
 

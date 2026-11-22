@@ -100,6 +100,22 @@ def make_workspace_response_payload() -> dict:
                     "citation_label": "PMID:123456",
                     "pdf_url": "/api/documents/document-1/pdf",
                     "viewer_url": "/documents/document-1/viewer",
+                    "files": [
+                        {
+                            "file_id": "aaaaaaaa-0000-0000-0000-000000000001",
+                            "role": "main",
+                            "display_name": "paper.pdf",
+                            "display_mode": "local_pdf",
+                            "status": "ready",
+                            "tab_order": 0,
+                            "page_count": 12,
+                            "content_url": (
+                                "/api/pdf-viewer/documents/bbbbbbbb-0000-0000-0000-000000000001"
+                                "/files/aaaaaaaa-0000-0000-0000-000000000001/content"
+                            ),
+                            "text_url": None,
+                        }
+                    ],
                 },
                 "flow_run_id": "flow-run-1",
                 "progress": {

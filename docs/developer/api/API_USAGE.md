@@ -591,6 +591,36 @@ authentication and expose only documents owned by the current database user.
 Legacy documents without an owner are not readable; shared-source provenance
 does not grant access.
 
+### Per-file routes (a paper's files)
+
+A paper holds one or more files (its main paper and supplements). These routes
+use the same login and ownership rules; a file id is resolved only among the
+paper's own files, so a file of another paper returns 404.
+
+```bash
+curl http://localhost:8000/api/pdf-viewer/documents/<uuid>/files | jq
+curl -I http://localhost:8000/api/pdf-viewer/documents/<uuid>/files/<file-uuid>/content
+curl http://localhost:8000/api/pdf-viewer/documents/<uuid>/files/<file-uuid>/text | jq
+```
+
+- `files` lists every file in tab order: `file_id`, `role` (`main` or
+  `supplement`), `display_name`, `display_mode` (`local_pdf`,
+  `provider_pdf_proxy` or `text`), `status` (`pending`, `ready` or `failed`),
+  `tab_order`, `page_count` (null for a text file), `content_url` (set only for
+  a ready PDF file) and `text_url` (set only for a ready text file).
+- `content` serves a ready PDF file's stored bytes as `application/pdf`,
+  inline, and honours `Range` requests (206 with `Content-Range`). It returns
+  404 for a text file or a file that is not ready.
+- `text` returns a ready text file's display blocks, built from its processed
+  elements: `heading` (with `level`), `paragraph`, `list_item`, `code`, and
+  `table` (rows with the exact stored row `line`, its `cells` and `is_header`).
+  Block text and row lines are exactly the text that was cut into pieces, so a
+  quote can be found by exact match. It returns 404 for a PDF file or a file
+  that is not ready.
+
+Curation session summaries carry the same `files` list on `document`.
+Submissions and exports do not.
+
 ---
 
 ## Trace Review Claude API
