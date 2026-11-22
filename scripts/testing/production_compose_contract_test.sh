@@ -58,6 +58,9 @@ write_test_env() {
       'PDF_JOB_RECOVERY_TIMEOUT_SECONDS=15' \
       'WEAVIATE_CHUNK_FETCH_PAGE_SIZE=40' \
       'DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES=250000' \
+      'DOCUMENT_FILE_DOWNLOAD_CONCURRENCY=7' \
+      'DOCUMENT_FILE_LISTING_CHECK_LIMIT=9' \
+      'DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW=150' \
       'DOCUMENT_TABLE_HEADER_MAX_ROWS=3' \
       'DOCUMENT_TABLE_HEADER_MIN_FILLED_FRACTION=0.75' \
       'VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS=7' \
@@ -126,7 +129,7 @@ assert_rejected_with() {
 
 write_test_env
 unset MAX_PARALLEL_VALIDATORS
-grep -Ev '^(MAX_PARALLEL_VALIDATORS=|LANGFUSE_TIMEOUT=|OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES=|WORKSPACE_REVIEW_CONCURRENCY=|VALIDATION_REVIEW_|EXTRACTION_FANOUT_|VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=|WEAVIATE_CHUNK_FETCH_PAGE_SIZE=|DOCUMENT_TABLE_HEADER_|DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES=)' "${env_file}" >"${default_env_file}"
+grep -Ev '^(MAX_PARALLEL_VALIDATORS=|LANGFUSE_TIMEOUT=|OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES=|WORKSPACE_REVIEW_CONCURRENCY=|VALIDATION_REVIEW_|EXTRACTION_FANOUT_|VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=|WEAVIATE_CHUNK_FETCH_PAGE_SIZE=|DOCUMENT_TABLE_HEADER_|DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES=|DOCUMENT_FILE_DOWNLOAD_CONCURRENCY=|DOCUMENT_FILE_LISTING_CHECK_LIMIT=|DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW=)' "${env_file}" >"${default_env_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":false,"git_sha":"abcdef1"}' \
   >"${frontend_build_metadata_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":true,"git_sha":"abcdef1"}' \
@@ -155,6 +158,10 @@ config = json.load(open(sys.argv[1], encoding="utf-8"))
 for service_name, service in config["services"].items():
     assert not [key for key in (service.get("environment") or {}) if key.startswith("ABSTRACT_EXTRACTION_")], service_name
 assert str(config["services"]["backend"]["environment"]["DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"]) == "1000000"
+assert str(config["services"]["benchmark_worker"]["environment"]["DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"]) == "1000000"
+assert str(config["services"]["backend"]["environment"]["DOCUMENT_FILE_DOWNLOAD_CONCURRENCY"]) == "4"
+assert str(config["services"]["backend"]["environment"]["DOCUMENT_FILE_LISTING_CHECK_LIMIT"]) == "20"
+assert str(config["services"]["backend"]["environment"]["DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW"]) == "200"
 backend_env = config["services"]["backend"]["environment"]
 assert str(backend_env["VALIDATION_HISTORY_PAGE_SIZE"]) == "5"
 assert str(backend_env["WORKSPACE_REVIEW_CONCURRENCY"]) == "1"
@@ -304,6 +311,10 @@ for service in ("backend", "benchmark_worker"):
 for service in ("backend", "benchmark_worker"):
     assert str(config["services"][service]["environment"]["MAX_PARALLEL_VALIDATORS"]) == "3"
 assert str(backend_env["DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"]) == "250000"
+assert str(config["services"]["benchmark_worker"]["environment"]["DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"]) == "250000"
+assert str(backend_env["DOCUMENT_FILE_DOWNLOAD_CONCURRENCY"]) == "7"
+assert str(backend_env["DOCUMENT_FILE_LISTING_CHECK_LIMIT"]) == "9"
+assert str(backend_env["DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW"]) == "150"
 assert str(backend_env["PDF_JOB_RECOVERY_INTERVAL_SECONDS"]) == "75"
 assert str(backend_env["PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS"]) == "6000"
 assert str(backend_env["PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS"]) == "17"

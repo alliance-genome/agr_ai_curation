@@ -748,6 +748,17 @@ Commit is handled by Alembic migration `f4a8b0c2d3e5`. See the
 for mounted-script commands, worker drain, audit receipts and benchmark revisions.
 
 
+### document_sources/assess_converted_files.py
+
+Runs the per-file structural checks (R1 to R7, `backend/src/lib/document_sources/file_assessment.py`)
+over converted text files on disk and prints counts by result and reason only, never names, ids
+or text. `--single-title` applies R7 as for converted Word and Excel files. Thresholds come from
+the same settings as the app.
+
+```bash
+python scripts/document_sources/assess_converted_files.py <dir> [<dir> ...] --json
+```
+
 ### migrations/repair_legacy_domain_envelope_objects_key.py
 
 Audits and repairs persisted `domain_envelopes.envelope_json` payloads that use

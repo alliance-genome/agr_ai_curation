@@ -45,6 +45,7 @@ from src.models.sql.pdf_document import (
 )
 from src.models.sql.user import User
 from src.models.strategy import ChunkingStrategy
+from src.lib.pipeline.text_preparation import TEXT_PREPARATION_VERSION
 
 
 class PreparedBenchmarkDocument(FrozenStrictModel):
@@ -54,6 +55,9 @@ class PreparedBenchmarkDocument(FrozenStrictModel):
     processed_json_path: str
     processed_json_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     chunk_count: int = Field(gt=0)
+    # How the text was cleaned and cut (``TEXT_PREPARATION_VERSION``). Every new
+    # preparation writes it; receipts saved before 0.12.0 never recorded one.
+    text_preparation_version: str | None = None
 
 
 def _write_artifacts(
@@ -191,6 +195,7 @@ async def prepare_frozen_document(
             source_path=source_path, processed_json_path=processed_path,
             processed_json_digest=processed_digest,
             chunk_count=chunk_count,
+            text_preparation_version=TEXT_PREPARATION_VERSION,
         )
         await stage_checkpoint("ready")
         await finalize_new_paper(

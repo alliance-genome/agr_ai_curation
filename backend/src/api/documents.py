@@ -1850,6 +1850,74 @@ async def resolve_documents_by_source_identifiers(
         )
 
 
+async def _file_listing_response(list_call) -> dict[str, Any]:
+    """Run a file listing and map its failures to codes (no names, no text)."""
+
+    from ..lib.document_sources.file_listing import listing_to_payload
+    from ..lib.document_sources.file_listing_service import FileListingUnavailable
+    from ..lib.document_sources.models import DocumentSourceReferenceNotFound
+    from ..lib.document_sources.registry import get_configured_document_source_provider
+
+    provider = get_configured_document_source_provider()
+    try:
+        return listing_to_payload(await list_call(provider))
+    except FileListingUnavailable as unavailable:
+        status_code = 400 if unavailable.code == "invalid_identifier" else 409
+        raise HTTPException(status_code=status_code, detail={"error": unavailable.code}) from None
+    except DocumentSourceReferenceNotFound:
+        raise HTTPException(status_code=404, detail={"error": "reference_not_found"}) from None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail={"error": "file_listing_failed"},
+            log_message="Document-source file listing failed",
+            exc=exc,
+        )
+    finally:
+        await provider.aclose()
+
+
+@router.get("/document-sources/files")
+async def list_document_source_files_by_identifier(
+    request: Request,
+    identifier: str = Query(..., min_length=1, max_length=200),
+    user: dict[str, Any] = get_auth_dependency(),
+):
+    """List a reference's provider files with a status and check result per file (codes only)."""
+    from ..lib.document_sources.file_listing_service import list_files_for_identifier
+
+    if not external_document_source_import_enabled():
+        raise HTTPException(status_code=503, detail={"error": "document_source_import_disabled"})
+    context = await _document_source_context_or_503(request=request, user=user)
+    return await _file_listing_response(
+        lambda provider: list_files_for_identifier(identifier, provider=provider, context=context)
+    )
+
+
+@router.get("/documents/{document_id}/source-files")
+async def list_document_source_files_for_paper(
+    request: Request,
+    document_id: str = Path(..., description="Document ID"),
+    user: dict[str, Any] = get_auth_dependency(),
+):
+    """List an imported paper's provider files; files already in the paper are marked."""
+    from ..lib.document_sources.file_listing_service import list_files_for_paper
+
+    if not external_document_source_import_enabled():
+        raise HTTPException(status_code=503, detail={"error": "document_source_import_disabled"})
+    document_uuid = _parse_document_uuid(document_id)
+    db_user = await provision_user_async(principal_from_claims(user))
+    context = await _document_source_context_or_503(request=request, user=user)
+    return await _file_listing_response(
+        lambda provider: list_files_for_paper(
+            document_uuid, owner_user_id=db_user.id, provider=provider, context=context,
+        )
+    )
+
+
 @router.get("/documents/{document_id}/status")
 async def get_document_processing_status(
     document_id: str = Path(..., description="Document ID"),

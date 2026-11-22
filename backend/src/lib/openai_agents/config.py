@@ -2082,6 +2082,21 @@ def get_document_file_max_converted_text_bytes() -> int:
     )
 
 
+def get_document_file_download_concurrency() -> int:
+    """Most provider files downloaded at once across the whole backend process."""
+    return max(1, _get_env_int_with_fallback("DOCUMENT_FILE_DOWNLOAD_CONCURRENCY", 4))
+
+
+def get_document_file_listing_check_limit() -> int:
+    """Most files one listing downloads and checks; the rest are listed as not checked yet."""
+    return max(1, _get_env_int_with_fallback("DOCUMENT_FILE_LISTING_CHECK_LIMIT", 20))
+
+
+def get_document_file_few_characters_note_below() -> int:
+    """Readable characters below which a file gets the "almost no text" note (never a refusal)."""
+    return max(0, _get_env_int_with_fallback("DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW", 200))
+
+
 def get_document_table_header_max_rows() -> int:
     """Most rows the table header rule may take as a table's header (at least 1).
 

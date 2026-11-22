@@ -474,6 +474,32 @@ def test_compose_forwards_document_file_converted_text_cap():
     expected = f"${{DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES:-{documented_default}}}"
     assert dev_env["DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"] == expected
     assert production_env["DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"] == expected
+    # Benchmark preparation downloads through the same adapter.
+    assert _load_dev_compose()["services"]["benchmark_worker"]["environment"][
+        "DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"
+    ] == expected
+    assert _load_compose()["services"]["benchmark_worker"]["environment"][
+        "DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"
+    ] == expected
+
+
+@pytest.mark.parametrize(
+    ("name", "default"),
+    [
+        ("DOCUMENT_FILE_DOWNLOAD_CONCURRENCY", "4"),
+        ("DOCUMENT_FILE_LISTING_CHECK_LIMIT", "20"),
+        ("DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW", "200"),
+    ],
+)
+def test_compose_forwards_document_file_listing_settings(name, default):
+    dev_env = _list_environment(_load_dev_compose()["services"]["backend"]["environment"])
+    production_env = _load_compose()["services"]["backend"]["environment"]
+    documented_default = _load_env_assignments(ENV_EXAMPLE_PATH)[name]
+
+    assert documented_default == default
+    expected = f"${{{name}:-{default}}}"
+    assert dev_env[name] == expected
+    assert production_env[name] == expected
 
 
 def test_compose_propagates_optional_openrouter_key_name_only():

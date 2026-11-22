@@ -305,6 +305,9 @@ async def test_frozen_copy_uses_normal_owned_ingestion_and_preserves_source(
         ]
         assert receipt.document_id == document_id
         assert receipt.chunk_count > 0
+        from src.lib.pipeline.text_preparation import TEXT_PREPARATION_VERSION
+
+        assert receipt.text_preparation_version == TEXT_PREPARATION_VERSION
         assert (tmp_path / receipt.source_path).read_bytes() == content
         parsed = json.loads((tmp_path / receipt.processed_json_path).read_text())
         assert any("Frozen scientific evidence." in element["text"] for element in parsed)
