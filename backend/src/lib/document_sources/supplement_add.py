@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import logging
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -55,8 +54,6 @@ from src.models.sql.pdf_document import (
     PDFDocument,
     PDFDocumentFile,
 )
-
-logger = logging.getLogger(__name__)
 
 PAPER_STATUS_COMPLETED = "completed"
 
