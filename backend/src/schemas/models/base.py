@@ -107,6 +107,8 @@ class EvidenceSourceFragment(BaseModel):
     span_id: Optional[str] = Field(default=None, description="Backend-generated source span identifier")
     chunk_id: Optional[str] = Field(default=None, description="Source chunk identifier containing this fragment")
     document_id: Optional[str] = Field(default=None, description="Source document identifier containing this fragment")
+    file_id: Optional[str] = Field(default=None, description="Paper file this quote comes from, as returned by record_evidence. Copy it; do not write your own")
+    file_name: Optional[str] = Field(default=None, description="Name of the paper file this quote comes from, as returned by record_evidence")
     text: Optional[str] = Field(default=None, description="Exact source text for this fragment")
     char_start: Optional[int] = Field(default=None, ge=0, description="0-based start offset in the source chunk")
     char_end: Optional[int] = Field(default=None, ge=0, description="0-based exclusive end offset in the source chunk")
@@ -129,6 +131,8 @@ class EvidenceSourceFragment(BaseModel):
         "span_id",
         "chunk_id",
         "document_id",
+        "file_id",
+        "file_name",
         "text",
         "text_hash",
         "section",
@@ -225,6 +229,8 @@ class EvidenceRecord(BaseModel):
     chunk_id: Optional[str] = Field(default=None, description="Source chunk identifier returned by the evidence tool, if available")
     chunk_ids: Optional[List[str]] = Field(default=None, description="All source chunk identifiers for conjoined multi-span evidence")
     document_id: Optional[str] = Field(default=None, description="Source document identifier returned by the evidence tool, if available")
+    file_id: Optional[str] = Field(default=None, description="Paper file this quote comes from, as returned by record_evidence. Copy it; do not write your own")
+    file_name: Optional[str] = Field(default=None, description="Name of the paper file this quote comes from, as returned by record_evidence")
     source_span_ids: Optional[List[str]] = Field(default=None, description="Backend-generated span IDs selected by record_evidence")
     source_fragments: Optional[List[EvidenceSourceFragment]] = Field(
         default=None,
@@ -285,6 +291,8 @@ class EvidenceRecord(BaseModel):
         "subsection",
         "chunk_id",
         "document_id",
+        "file_id",
+        "file_name",
         "figure_reference",
         "object_id",
         "pending_ref_id",

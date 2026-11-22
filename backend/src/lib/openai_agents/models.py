@@ -4,7 +4,9 @@ Shared Pydantic models for OpenAI Agents structured outputs.
 
 from datetime import datetime
 from typing import Any, List, Literal, Mapping, Optional
-from pydantic import BaseModel, ConfigDict, Field, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
+
+from src.schemas.evidence_workspace import evidence_record_page
 from src.schemas.curation_prep import CurationPrepAgentOutput  # noqa: F401 - re-exported here for runtime schema discovery.
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
@@ -133,6 +135,8 @@ class PdfEvidenceSourceFragment(BaseModel):
     span_id: Optional[str] = Field(None, description="Backend-generated evidence span ID")
     chunk_id: Optional[str] = Field(None, description="Source chunk identifier")
     document_id: Optional[str] = Field(None, description="Source document identifier")
+    file_id: Optional[str] = Field(None, description="Paper file this quote comes from, as returned by record_evidence. Copy it; do not write your own")
+    file_name: Optional[str] = Field(None, description="Name of the paper file this quote comes from, as returned by record_evidence")
     text: Optional[str] = Field(None, description="Exact source text for this fragment")
     char_start: Optional[int] = Field(None, ge=0, description="0-based start offset in the chunk")
     char_end: Optional[int] = Field(None, ge=0, description="0-based exclusive end offset in the chunk")
@@ -164,10 +168,13 @@ class PdfEvidenceRecord(BaseModel):
         ...,
         description="Quote verified by record_evidence"
     )
-    page: int = Field(
+    page: Optional[int] = Field(
         ...,
         ge=1,
-        description="1-based page number containing the verified quote"
+        description=(
+            "1-based page containing the quote, as returned by record_evidence; empty when "
+            "the file has no page numbers (for example a converted spreadsheet)"
+        ),
     )
     section: str = Field(
         ...,
@@ -185,6 +192,8 @@ class PdfEvidenceRecord(BaseModel):
         None,
         description="Source document identifier for the evidence record"
     )
+    file_id: Optional[str] = Field(None, description="Paper file this quote comes from, as returned by record_evidence. Copy it; do not write your own")
+    file_name: Optional[str] = Field(None, description="Name of the paper file this quote comes from, as returned by record_evidence")
     source_span_ids: Optional[List[str]] = Field(
         None,
         description="Backend-generated span IDs selected by record_evidence"
@@ -201,6 +210,13 @@ class PdfEvidenceRecord(BaseModel):
         None,
         description="Figure or table reference associated with the quote, if available"
     )
+
+    @model_validator(mode="after")
+    def _page_unless_file_has_none(self) -> "PdfEvidenceRecord":
+        valid, _ = evidence_record_page({"page": self.page, "file_id": self.file_id})
+        if not valid:
+            raise ValueError("page is required unless the evidence names a file (file_id)")
+        return self
 
 
 class PdfMentionCandidate(BaseModel):

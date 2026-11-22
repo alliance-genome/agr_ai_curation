@@ -4,6 +4,8 @@ import logging
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple, get_args, get_origin
 
+from src.schemas.evidence_workspace import evidence_record_page
+
 logger = logging.getLogger(__name__)
 
 _NON_RETAINED_COLLECTION_DESCRIPTION_MARKERS = (
@@ -105,23 +107,6 @@ def _text_hash_from_span_id(span_id: Any) -> Optional[str]:
     if len(candidate) == 8 and all(char in "0123456789abcdef" for char in candidate):
         return candidate
     return None
-
-
-def _record_page(record_dict: Dict[str, Any]) -> tuple[bool, Optional[int]]:
-    """Return (valid, page) for one evidence record's page.
-
-    A record that names its file (every record made since 0.12.0) may have no
-    page: its file has no page numbers there, and its page is None. A record
-    without ``file_id`` was saved before files were recorded and still needs a
-    positive page, exactly as before, so older records normalize unchanged.
-    """
-
-    page = record_dict.get("page")
-    if isinstance(page, int) and not isinstance(page, bool) and page > 0:
-        return True, page
-    if page is None and _normalize_optional_text(record_dict.get("file_id")):
-        return True, None
-    return False, None
 
 
 def _normalize_source_fragment(value: Any) -> Optional[Dict[str, Any]]:
@@ -244,7 +229,7 @@ def _normalize_evidence_record(
     verified_quote = str(record_dict.get("verified_quote") or "").strip()
     section = str(record_dict.get("section") or "").strip()
     chunk_id = str(record_dict.get("chunk_id") or "").strip()
-    page_valid, page = _record_page(record_dict)
+    page_valid, page = evidence_record_page(record_dict)
 
     if (
         not entity
@@ -880,7 +865,7 @@ def build_record_evidence_summary_record(
     chunk_id = str(output_payload.get("chunk_id") or input_payload.get("chunk_id") or "").strip()
     verified_quote = str(output_payload.get("verified_quote") or "").strip()
     section = str(output_payload.get("section") or "").strip()
-    page_valid, page = _record_page(output_payload)
+    page_valid, page = evidence_record_page(output_payload)
 
     if (
         not entity
