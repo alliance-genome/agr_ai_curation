@@ -58,7 +58,8 @@ def viewer_file_refs(document: PDFDocument) -> list[ViewerFileRef]:
             display_mode=file_row.display_mode,
             status=file_row.status,
             tab_order=file_row.tab_order,
-            page_count=file_row.page_count,
+            # A file that is not ready may hold a placeholder page count.
+            page_count=file_row.page_count if serves_pdf(file_row) else None,
             content_url=file_content_url(document.id, file_row.id) if serves_pdf(file_row) else None,
             text_url=file_text_url(document.id, file_row.id) if serves_text(file_row) else None,
         )

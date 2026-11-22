@@ -396,7 +396,7 @@ def test_text_returns_the_files_display_blocks(storage):
             {"kind": "heading", "text": "Sheet 1", "level": 1, "section_path": ["Sheet 1"], "rows": None},
             {
                 "kind": "table",
-                "text": None,
+                "text": "| Strain | Temp |\n|---|---|\n| XS0401 | 25 C |",
                 "level": None,
                 "section_path": ["Sheet 1"],
                 "rows": [
@@ -470,3 +470,50 @@ def test_the_per_paper_routes_still_answer_as_before(storage):
     }
     assert content.status_code == 200
     assert content.content == _PDF_BYTES
+
+
+@pytest.mark.parametrize("main_status", ["pending", "failed"])
+def test_the_old_content_route_still_serves_a_main_pdf_that_is_not_ready(storage, main_status):
+    """Today's per-paper route ignores the file's status; P9a leaves it so until P9a2.
+
+    Production has papers whose main file is pending with all their data; they keep
+    opening through the old route. Only the new per-file route requires ready.
+    """
+
+    files = _four_files()
+    files[0].status = main_status
+    client = _client(_paper(files=files))
+
+    old_route = client.get(f"/api/pdf-viewer/documents/{DOCUMENT_ID}/content")
+    old_url = client.get(f"/api/pdf-viewer/documents/{DOCUMENT_ID}/url")
+    new_route = client.get(_content_url(MAIN_ID))
+
+    assert old_route.status_code == 200
+    assert old_route.content == _PDF_BYTES
+    assert old_url.json()["viewer_url"] == f"/api/pdf-viewer/documents/{DOCUMENT_ID}/content"
+    assert new_route.status_code == 404
+
+
+def test_a_pending_pdf_files_placeholder_page_count_is_not_shown():
+    """An identifier import writes its main file pending with page_count 1 as a placeholder."""
+
+    files = _four_files()
+    files[0].status = "pending"
+    files[0].page_count = 1
+
+    response = _client(_paper(files=files)).get(_files_url())
+
+    main_entry = response.json()["files"][0]
+    assert (main_entry["status"], main_entry["page_count"], main_entry["content_url"]) == (
+        "pending", None, None,
+    )
+
+
+def test_an_empty_display_name_does_not_break_the_files_list():
+    files = _four_files()
+    files[1].display_name = ""
+
+    response = _client(_paper(files=files)).get(_files_url())
+
+    assert response.status_code == 200
+    assert response.json()["files"][1]["display_name"] == ""

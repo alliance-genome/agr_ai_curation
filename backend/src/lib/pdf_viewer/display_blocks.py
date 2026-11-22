@@ -1,10 +1,19 @@
 """Display blocks for a text file, built from its processed elements.
 
-The processed elements are the file's text as it was cut into pieces (after the
-stored-text clean-up). Each block keeps that text exactly, so a viewer can find a
-quote, which is an exact slice of a piece, by exact substring (prose) or exact
-row-line equality (table rows). Everything here reads structure only: element
-types, structural metadata and table layout. Nothing reads words for meaning.
+The processed elements are the file's text after the stored-text clean-up, before
+it is cut into pieces. What a viewer may rely on when locating a quote (an exact
+slice of one stored piece):
+
+- every table row ``line`` is exactly one line of a stored piece; a table's rows can
+  be spread over several pieces, whole rows only;
+- block texts joined to their neighbours with a blank line (``"\n\n"``) contain
+  every stored piece exactly, so a quote can cross blocks;
+- except where an element longer than the chunk limit was cut at a sentence
+  boundary: there the piece holds one space where the block holds the original
+  whitespace.
+
+Everything here reads structure only: element types, structural metadata and table
+layout. Nothing reads words for meaning.
 """
 
 from __future__ import annotations
@@ -39,9 +48,13 @@ def _section_path(element: Mapping[str, Any]) -> list[str]:
     return section_path
 
 
-def _table_rows(text: str, rule: TableHeaderRule) -> list[DisplayTableRow]:
+def _table_block(text: str, section_path: list[str], rule: TableHeaderRule) -> DisplayBlock | None:
+    """The table as the chunker lays it out, or None for a table it leaves out."""
+
     layout = layout_table(text, rule)
-    return [
+    if not layout.lines:
+        return None
+    rows = [
         DisplayTableRow(
             line=line,
             cells=table_row_display_cells(line),
@@ -50,6 +63,7 @@ def _table_rows(text: str, rule: TableHeaderRule) -> list[DisplayTableRow]:
         for line_index, line in enumerate(layout.lines)
         if line_index != layout.separator_line_index
     ]
+    return DisplayBlock(kind="table", text=layout.text, level=None, section_path=section_path, rows=rows)
 
 
 def build_display_blocks(elements: Sequence[Mapping[str, Any]]) -> list[DisplayBlock]:
@@ -70,12 +84,9 @@ def build_display_blocks(elements: Sequence[Mapping[str, Any]]) -> list[DisplayB
         section_path = _section_path(element)
 
         if element_type == "Table":
-            rows = _table_rows(text, header_rule)
-            if not rows:
-                continue
-            blocks.append(
-                DisplayBlock(kind="table", text=None, level=None, section_path=section_path, rows=rows)
-            )
+            table = _table_block(text, section_path, header_rule)
+            if table is not None:
+                blocks.append(table)
             continue
 
         if element_type == "Title":

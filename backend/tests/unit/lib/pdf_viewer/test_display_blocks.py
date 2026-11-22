@@ -82,7 +82,11 @@ def test_blocks_keep_kinds_levels_and_section_paths_in_reading_order():
     assert blocks[3].section_path == ["Supplementary Table S1", "Sheet 1"]
     assert all(block.level is None for block in blocks if block.kind != "heading")
     assert all(block.rows is None for block in blocks if block.kind != "table")
-    assert all(block.text is None for block in blocks if block.kind == "table")
+    # A table's text is its stored lines, separator included, as the chunker lays it out.
+    assert blocks[3].text == (
+        "| Strain | Genotype | Temp |\n|---|---|---|\n"
+        "| XS0401 | zeta401 \\| b | 25 C |\n| XS0402 | | 20 C |"
+    )
 
 
 def test_table_rows_hold_the_exact_stored_line_cells_and_header_flag():
@@ -128,27 +132,90 @@ def test_an_unknown_element_type_is_a_named_error():
         build_display_blocks(elements)
 
 
-def test_every_stored_piece_is_made_of_block_texts_and_row_lines_exactly():
-    elements = _elements()
-    elements.insert(2, _footer_element(len(elements)))
-    chunks = asyncio.run(
+def _pieces(elements):
+    return asyncio.run(
         chunk_parsed_document(
             elements, ChunkingStrategy.get_research_strategy(), "made-up-document"
         )
     )
+
+
+def _joined(blocks) -> str:
+    return "\n\n".join(block.text for block in blocks)
+
+
+def test_every_stored_piece_is_exact_text_of_the_joined_blocks():
+    elements = _elements()
+    elements.insert(2, _footer_element(len(elements)))
+    pieces = _pieces(elements)
     blocks = build_display_blocks(elements)
-    prose = {block.text for block in blocks if block.kind != "table"}
+    joined = _joined(blocks)
     row_lines = {row.line for block in blocks if block.kind == "table" for row in block.rows}
 
-    assert chunks
-    for chunk in chunks:
-        for part in chunk.content.split("\n\n"):
-            if part in prose:
-                continue
-            lines = part.split("\n")
-            # A table part: every line is a row line, or the table's separator line.
-            assert all(line in row_lines or set(line) <= set("|-: ") for line in lines), part
-    # And every block appears in the pieces.
-    contents = "\n\n".join(chunk.content for chunk in chunks)
-    assert all(text in contents for text in prose)
-    assert all(line in contents.split("\n") for line in row_lines)
+    assert pieces
+    for piece in pieces:
+        assert piece.content in joined
+    stored_lines = {line for piece in pieces for line in piece.content.split("\n")}
+    assert row_lines <= stored_lines
+
+
+def _sentences(count: int, separator: str) -> str:
+    return separator.join(
+        f"Sentence {number} describes made-up flies kept at a steady temperature."
+        for number in range(count)
+    )
+
+
+def _oversized_markdown(separator: str) -> str:
+    return f"# Notes\n\n{_sentences(45, separator)}\n"
+
+
+def test_an_oversized_element_cut_at_single_spaces_stays_exact():
+    elements = markdown_to_pipeline_elements(_oversized_markdown(" "))
+    pieces = _pieces(elements)
+    joined = _joined(build_display_blocks(elements))
+
+    assert len(pieces) > 1
+    assert all(piece.content in joined for piece in pieces)
+
+
+def test_an_oversized_element_cut_at_other_whitespace_is_the_documented_exception():
+    """The chunker rejoins sentences with one space; the block keeps the original."""
+
+    elements = markdown_to_pipeline_elements(_oversized_markdown("  "))
+    pieces = _pieces(elements)
+    joined = _joined(build_display_blocks(elements))
+
+    assert len(pieces) > 1
+    assert "  " in joined
+    assert any(piece.content not in joined for piece in pieces)
+    # With the whitespace runs made single, every piece is exact again.
+    assert all(piece.content in joined.replace("  ", " ") for piece in pieces)
+
+
+def test_a_table_split_across_pieces_keeps_every_row_line_exact():
+    rows = "\n".join(f"| XS{number:04d} | made-up genotype {number} | 25 C |" for number in range(200))
+    markdown = f"# Table S2\n\n| Strain | Genotype | Temp |\n|---|---|---|\n{rows}\n"
+    elements = markdown_to_pipeline_elements(markdown)
+    pieces = _pieces(elements)
+    blocks = build_display_blocks(elements)
+    [table] = [block for block in blocks if block.kind == "table"]
+    stored_lines = [line for piece in pieces for line in piece.content.split("\n")]
+
+    assert len(pieces) > 2
+    assert len(table.rows) == 201
+    assert all(row.line in stored_lines for row in table.rows)
+    assert all(piece.content in _joined(blocks) for piece in pieces)
+
+
+def test_a_quote_can_cross_two_blocks_inside_one_piece():
+    elements = markdown_to_pipeline_elements(
+        "# Methods\n\nFlies were raised on made-up food.\n\nThey were kept at 25 C.\n"
+    )
+    [piece] = _pieces(elements)
+    blocks = build_display_blocks(elements)
+    quote = "made-up food.\n\nThey were"
+
+    assert quote in piece.content
+    assert all(quote not in block.text for block in blocks)
+    assert quote in _joined(blocks)

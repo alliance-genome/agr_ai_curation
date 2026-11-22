@@ -17,11 +17,14 @@ class ViewerFileRef(BaseModel):
 
     file_id: UUID = Field(description="The file's id (pdf_document_files.id)")
     role: Literal["main", "supplement"]
-    display_name: str = Field(min_length=1, max_length=255)
+    display_name: str
     display_mode: Literal["local_pdf", "provider_pdf_proxy", "text"]
     status: Literal["pending", "ready", "failed"]
     tab_order: int = Field(ge=0)
-    page_count: int | None = Field(ge=1, description="Pages of a PDF file; none for a text file")
+    page_count: int | None = Field(
+        ge=1,
+        description="Pages of a ready PDF file; none for a text file or a file that is not ready",
+    )
     content_url: str | None = Field(
         pattern=_FILE_URL_PATTERN.format(route="content"),
         description="The file's PDF bytes; only for a ready file shown as a PDF",
@@ -48,7 +51,12 @@ class DisplayBlock(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["heading", "paragraph", "list_item", "code", "table"]
-    text: str | None = Field(description="The block's exact text; none for a table")
+    text: str = Field(
+        description=(
+            "The element's text as stored before cutting; for a table, its lines "
+            "(separator line included) joined by line breaks"
+        )
+    )
     level: int | None = Field(ge=1, description="A heading's depth in its section path")
     section_path: list[str] = Field(description="The headings this block sits under")
     rows: list[DisplayTableRow] | None = Field(description="A table's rows; none otherwise")
