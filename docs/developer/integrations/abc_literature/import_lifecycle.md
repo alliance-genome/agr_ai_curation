@@ -265,6 +265,26 @@ AI Curation does not attempt to cancel ABC Literature conversion work. Even when
 AI Curation initiated `conversion_request`, the ABC endpoint does not provide a
 cancel contract for this flow.
 
+## Classifying An Answer For Chosen Supplements
+
+`classify_conversion_answer` (`backend/src/lib/document_sources/supplement_wait.py`)
+says where each chosen supplement stands after one conversion answer and a
+fresh file listing. The supplement stage of an import (KANBAN-1976 P7b) uses it.
+
+- `converted`: the listing has converted text for the file.
+- `provider_conversion_failed`: ABC's `per_file_progress` has a `failed` entry
+  for the file (matched by `source.referencefile_id`, through the adapter's
+  `conversion_file_statuses`), even while the job still runs.
+- `waiting`: ABC still answers `running`.
+- `provider_not_converted`: ABC's answer is final and the file has neither.
+
+Entries ABC merges in from converted rows without a source id are skipped; the
+listing decides those files. ABC's free-text `error` and `error_message` are
+never read, so causes ABC states only in words (its group rule, its size limits)
+are not known. On ABC's inline Office path a failure names no file (the answer
+carries the progress of ABC's most recent job), so such a file is
+`provider_not_converted`, not `provider_conversion_failed`.
+
 ## Curator-Facing Messages
 
 | Situation | Message/error |
