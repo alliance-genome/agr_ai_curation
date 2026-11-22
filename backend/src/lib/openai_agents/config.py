@@ -2054,19 +2054,24 @@ def get_document_source_import_batch_limit() -> int:
     return max(1, _get_env_int_with_fallback("DOCUMENT_SOURCE_IMPORT_BATCH_LIMIT", 10))
 
 
+# How long an import waits on the provider, and how often it asks. Each poll
+# is one provider request: at 30 s a one-hour wait is at most 121 requests.
 def get_document_source_poll_interval_seconds() -> float:
     """Status-poll interval for provider-backed document imports."""
     return max(
         0.1,
-        _get_env_float_with_fallback("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", 2.0),
+        _get_env_float_with_fallback("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", 30.0),
     )
 
 
 def get_document_source_import_timeout_seconds() -> float:
-    """Provider import deadline; in-flight storage drains before terminal failure."""
+    """Main-paper import deadline, covering the provider's conversion and the ingestion.
+
+    In-flight storage drains before terminal failure.
+    """
     return max(
         1.0,
-        _get_env_float_with_fallback("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", 600.0),
+        _get_env_float_with_fallback("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", 3600.0),
     )
 
 

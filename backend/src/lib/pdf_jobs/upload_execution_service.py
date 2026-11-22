@@ -531,7 +531,7 @@ class UploadExecutionService:
                 message = provider.conversion_progress_message(last_result)
                 pdf_job_service.update_progress(
                     job_id=request.job_id,
-                    stage="provider_conversion",
+                    stage=pdf_job_service.PROVIDER_CONVERSION_STAGE,
                     progress_percentage=progress_percentage,
                     message=message,
                     status=PdfJobStatus.RUNNING.value,
@@ -619,7 +619,7 @@ class UploadExecutionService:
                 )
                 pdf_job_service.update_progress(
                     job_id=request.job_id,
-                    stage="provider_conversion",
+                    stage=pdf_job_service.PROVIDER_CONVERSION_STAGE,
                     status=PdfJobStatus.RUNNING.value,
                     metadata=failure_metadata,
                 )

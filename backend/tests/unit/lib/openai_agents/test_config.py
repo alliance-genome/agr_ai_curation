@@ -2176,10 +2176,23 @@ def test_get_model_for_agent_selects_direct_agents_sdk_adapter(
 def test_provider_import_deadline_default_and_override(monkeypatch):
     from src.lib.openai_agents.config import get_document_source_import_timeout_seconds
 
+    # One hour: ABC's cold start plus its own 30 minutes per file, with margin
+    # (KANBAN-1976 / ALL-1460, P7w).
     monkeypatch.delenv("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", raising=False)
-    assert get_document_source_import_timeout_seconds() == 600.0
+    assert get_document_source_import_timeout_seconds() == 3600.0
     monkeypatch.setenv("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", "900")
     assert get_document_source_import_timeout_seconds() == 900.0
+
+
+def test_provider_poll_interval_default_and_override(monkeypatch):
+    from src.lib.openai_agents.config import get_document_source_poll_interval_seconds
+
+    # 30 s keeps a long wait well under the ~1,000 requests after which an ABC
+    # worker is recycled (KANBAN-1976 / ALL-1460, P7w).
+    monkeypatch.delenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", raising=False)
+    assert get_document_source_poll_interval_seconds() == 30.0
+    monkeypatch.setenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", "5")
+    assert get_document_source_poll_interval_seconds() == 5.0
 
 
 def test_document_file_converted_text_cap_default_and_override(monkeypatch):

@@ -639,3 +639,115 @@ def test_snapshot_single_select_no_repair_and_closes_on_failure(monkeypatch, fai
     assert "count(" not in sql and "FOR UPDATE" not in sql
     assert "ORDER BY pdf_processing_jobs.created_at DESC, pdf_processing_jobs.id DESC" in sql
     assert session.statements[0].compile().params["param_1"] == 3
+
+
+# --- KANBAN-1976 / ALL-1460, P7w: every poll is a heartbeat; cancel of a dead wait
+
+
+def test_update_progress_moves_updated_at_even_when_nothing_else_changes(monkeypatch):
+    """A wait whose ABC answer does not change must still look alive."""
+
+    job = _build_job(status=PdfJobStatus.RUNNING.value)
+    job.current_stage = "provider_conversion"
+    stale_mark = job.updated_at
+    session = _FakeSession([job])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+
+    before = datetime.now(timezone.utc)
+    service_module.update_progress(
+        job_id=job.id,
+        stage=job.current_stage,
+        progress_percentage=job.progress_percentage,
+        message=job.message,
+        status=PdfJobStatus.RUNNING.value,
+    )
+
+    assert job.updated_at != stale_mark
+    assert job.updated_at >= before
+    assert session.commit_calls == 1
+
+
+def _dead_wait_defaults(monkeypatch):
+    monkeypatch.delenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", raising=False)
+    monkeypatch.delenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", raising=False)
+
+
+@pytest.mark.parametrize("stage", ["provider_conversion", "waiting_for_supplements"])
+def test_cancel_of_a_wait_that_stopped_polling_finalizes_at_once(monkeypatch, stage):
+    """A restart leaves the job active with no task; cancel must free the paper."""
+
+    _dead_wait_defaults(monkeypatch)
+    job = _build_job(status=PdfJobStatus.RUNNING.value)
+    job.current_stage = stage
+    # Two minutes and ten seconds since the last poll; a living wait polls
+    # at most every 30 s plus one 10 s ABC request.
+    job.updated_at = datetime.now(timezone.utc) - timedelta(seconds=130)
+    document_status = "completed" if stage == "waiting_for_supplements" else "pending"
+    document = _build_document(job, status=document_status)
+    if document_status == "pending":
+        document.main_file.status = "pending"
+    session = _FakeSession([job, document, job])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+
+    response = service_module.request_cancel(job_id=job.id, user_id=job.user_id)
+
+    assert response is not None
+    assert response.status == PdfJobStatus.CANCELLED.value
+    assert job.status == PdfJobStatus.CANCELLED.value
+    assert job.current_stage == "cancelled"
+    assert job.cancel_requested is True
+    assert job.completed_at is not None
+    assert job.message == "Processing cancelled by user request"
+    assert response.metadata[PDF_PROCESSING_RECEIPT_KEY]["outcome"] == "cancelled"
+    if stage == "waiting_for_supplements":
+        # The main paper was already usable; it stays so.
+        assert document.status == "completed"
+    else:
+        # As after any cancelled import: failed in the Library, can be deleted or retried.
+        assert document.status == "failed"
+        assert document.main_file.status == "failed"
+    assert session.commit_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("stage", "seconds_since_last_poll"),
+    [
+        ("provider_conversion", 100),  # alive: within 3 x (30 s + 10 s)
+        ("waiting_for_supplements", 100),
+        ("parsing", 3 * 3600),  # ingestion stages do not poll
+        ("chunking", 3 * 3600),
+    ],
+)
+def test_cancel_of_a_living_wait_or_a_non_polling_stage_only_sets_the_flag(
+    monkeypatch, stage, seconds_since_last_poll
+):
+    _dead_wait_defaults(monkeypatch)
+    job = _build_job(status=PdfJobStatus.RUNNING.value)
+    job.current_stage = stage
+    job.updated_at = datetime.now(timezone.utc) - timedelta(seconds=seconds_since_last_poll)
+    session = _FakeSession([job])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+
+    response = service_module.request_cancel(job_id=job.id, user_id=job.user_id)
+
+    assert response is not None
+    assert response.status == PdfJobStatus.CANCEL_REQUESTED.value
+    assert job.cancel_requested is True
+    assert job.completed_at is None
+    assert session.commit_calls == 1
+
+
+def test_dead_wait_threshold_follows_the_declared_poll_and_request_settings(monkeypatch):
+    monkeypatch.setenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", "5")
+    monkeypatch.setenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", "10")
+    job = _build_job(status=PdfJobStatus.RUNNING.value)
+    job.current_stage = "provider_conversion"
+    job.updated_at = datetime.now(timezone.utc) - timedelta(seconds=50)
+    document = _build_document(job, status="pending")
+    session = _FakeSession([job, document, job])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+
+    response = service_module.request_cancel(job_id=job.id, user_id=job.user_id)
+
+    # 3 x (5 s + 10 s) = 45 s < 50 s since the last poll.
+    assert response.status == PdfJobStatus.CANCELLED.value

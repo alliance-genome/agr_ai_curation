@@ -15,6 +15,8 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from src.lib.openai_agents.config import (
+    get_document_source_poll_interval_seconds,
+    get_document_source_request_timeout_seconds,
     get_pdf_document_error_message_max_chars,
     get_pdf_job_error_message_max_chars,
     get_pdf_no_job_orphan_batch_size,
@@ -56,6 +58,15 @@ _ACTIVE_STATUSES = {
     PdfJobStatus.RUNNING.value,
     PdfJobStatus.CANCEL_REQUESTED.value,
 }
+# Stages in which a living job asks the document-source provider again at every
+# poll interval and records it (``update_progress``). Only these can be told
+# dead from their last activity alone.
+PROVIDER_CONVERSION_STAGE = "provider_conversion"
+WAITING_FOR_SUPPLEMENTS_STAGE = "waiting_for_supplements"
+_POLLING_STAGES = frozenset({PROVIDER_CONVERSION_STAGE, WAITING_FOR_SUPPLEMENTS_STAGE})
+# A living poll records activity at least once per poll interval plus one
+# provider request; three of those without activity means no task is polling.
+_DEAD_POLL_INTERVALS = 3
 # updated_at is mutable activity time, so equal creation times use a stable ID tie-break.
 _JOB_CREATION_ORDERING = (
     PdfProcessingJob.created_at.desc(),
@@ -757,17 +768,47 @@ def request_cancel(*, job_id: UUID | str, user_id: int) -> Optional[PdfJobRespon
             return None
 
         if job.status not in _TERMINAL_STATUSES:
+            now = datetime.now(timezone.utc)
             job.cancel_requested = True
-            if job.status != PdfJobStatus.CANCEL_REQUESTED.value:
-                job.status = PdfJobStatus.CANCEL_REQUESTED.value
-            if not job.message:
-                job.message = "Cancellation requested"
+            if _polling_stopped(job, now=now):
+                # No task will see the flag (a backend restart ended the
+                # wait), so the cancel is finalized here, freeing the paper.
+                _finalize_cancelled(session, job, now=now)
+            else:
+                if job.status != PdfJobStatus.CANCEL_REQUESTED.value:
+                    job.status = PdfJobStatus.CANCEL_REQUESTED.value
+                if not job.message:
+                    job.message = "Cancellation requested"
             session.commit()
             session.refresh(job)
 
         return _to_response(job)
     finally:
         session.close()
+
+
+def _polling_stopped(job: PdfProcessingJob, *, now: datetime) -> bool:
+    """Whether a job in a polling stage has recorded no poll for too long."""
+    if job.current_stage not in _POLLING_STAGES:
+        return False
+    dead_after_seconds = _DEAD_POLL_INTERVALS * (
+        get_document_source_poll_interval_seconds()
+        + get_document_source_request_timeout_seconds()
+    )
+    return (now - _last_activity_timestamp(job)).total_seconds() > dead_after_seconds
+
+
+def _finalize_cancelled(session, job: PdfProcessingJob, *, now: datetime) -> None:
+    """Make a user's cancel terminal in this transaction, as the task would."""
+    if job.started_at is None:
+        job.started_at = _last_activity_timestamp(job)
+    job.status = PdfJobStatus.CANCELLED.value
+    job.current_stage = "cancelled"
+    job.completed_at = now
+    job.error_message = None
+    job.message = "Processing cancelled by user request"
+    _store_terminal_metadata(job, metadata=None, outcome="cancelled", completed_at=now)
+    _reconcile_terminal_document(session, job)
 
 
 def set_process_id(*, job_id: UUID | str, process_id: str) -> Optional[PdfJobResponse]:
@@ -831,6 +872,11 @@ def update_progress(
         now = datetime.now(timezone.utc)
         if job.started_at is None and job.status in {PdfJobStatus.RUNNING.value, PdfJobStatus.CANCEL_REQUESTED.value}:
             job.started_at = now
+        # Every call is activity, even when no other column changes (a long
+        # provider wait repeats the same answer): ``onupdate`` alone would not
+        # fire, and the stale sweep and the cancel rule would take a living
+        # job for a dead one.
+        job.updated_at = now
 
         session.commit()
         session.refresh(job)
