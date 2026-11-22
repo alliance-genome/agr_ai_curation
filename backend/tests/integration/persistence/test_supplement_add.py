@@ -50,7 +50,7 @@ from src.lib.document_sources.models import (
 PREFIX = "p7c1_add_test_"
 COMPLETED_AT = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
 CONTEXT = DocumentSourceRequestContext(
-    provider_groups=("WB",), authorized_group_ids=("WB",), bearer_kind=ProviderBearerKind.CURATOR,
+    provider_groups=("group-a",), authorized_group_ids=("group-a",), bearer_kind=ProviderBearerKind.CURATOR,
     curator_token="curator-token",
 )
 WORKBOOK = b"# Made_up_S20\n\n## Sheet1\n\n| strain | score |\n| --- | --- |\n| s1 | 1 |\n"
@@ -127,7 +127,7 @@ def _artifact(artifact_id, role, artifact_format, **metadata) -> SourceArtifact:
     return SourceArtifact(
         provider="made_up_provider", artifact_id=artifact_id, role=role, artifact_format=artifact_format,
         status=SourceArtifactStatus.AVAILABLE, display_name=f"Made_up_S{artifact_id}", md5sum=f"md5-{artifact_id}",
-        access_policy=SourceAccessPolicy(scope=SourceAccessScope.RESTRICTED, group_ids=("WB",)),
+        access_policy=SourceAccessPolicy(scope=SourceAccessScope.RESTRICTED, group_ids=("group-a",)),
         metadata=metadata,
     )
 
