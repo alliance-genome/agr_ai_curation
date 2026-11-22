@@ -20,4 +20,5 @@ class ChosenFileRequest(BaseModel):
 class AddFilesRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    files: list[ChosenFileRequest] = Field(min_length=1)
+    # An empty list is refused by the add with the typed code ``no_files_chosen``.
+    files: list[ChosenFileRequest]

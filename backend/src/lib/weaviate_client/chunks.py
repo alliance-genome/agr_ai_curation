@@ -1623,6 +1623,8 @@ def delete_chunk_range(document_id: str, user_id: str, *, start: int, end: int) 
                 & Filter.by_property("chunkIndex").less_or_equal(end)
             )
         )
+    if result.failed:
+        raise RuntimeError(f"{result.failed} pieces of a range could not be deleted")
     return int(result.successful)
 
 
@@ -1645,6 +1647,8 @@ def delete_pieces_of_deleted_paper(document_id: str, user_id: str) -> int:
     with connection.session() as client:
         chunk_collection, _ = get_user_collections(client, user_id)
         result = chunk_collection.data.delete_many(where=Filter.by_property("documentId").equal(document_id))
+    if result.failed:
+        raise RuntimeError(f"{result.failed} pieces of a deleted paper could not be deleted")
     return int(result.successful)
 
 

@@ -79,4 +79,23 @@ describe('pdfTerminalNotifications', () => {
       severity: 'success',
     });
   });
+
+  it('words a job that adds files to a paper as an add, named by the paper', () => {
+    const job = {
+      job_id: 'job-add',
+      status: 'failed',
+      filename: 'made-up-paper.pdf',
+      document_id: 'doc-1',
+      metadata: { job_kind: 'supplement_add' },
+    };
+    expect(buildPdfTerminalNotification(job)).toEqual({
+      key: 'job-add:failed',
+      status: 'failed',
+      message: 'Adding files to made-up-paper.pdf did not finish',
+      severity: 'error',
+    });
+    expect(buildPdfTerminalNotification({ ...job, status: 'completed' })?.message).toBe(
+      'Files added to made-up-paper.pdf',
+    );
+  });
 });

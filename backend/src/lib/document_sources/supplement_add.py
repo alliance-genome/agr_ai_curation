@@ -376,20 +376,28 @@ async def _write(
     from src.lib.document_sources.ingestion import _save_processed_json, _save_source_markdown, store_file_pieces
 
     subject = paper.owner_subject
-    written_paths: list[str] = []
+    # The rows are written first, naming their files, so a process that dies before the
+    # files are written still leaves rows the stale sweep and the next add can clean up.
+    planned = [
+        (item, f"{subject}/source_markdown/{item.file_id}.md", f"{subject}/processed_json/{item.file_id}.json")
+        for item in accepted
+    ]
+    written_paths = [path for _, markdown_path, processed_path in planned for path in (markdown_path, processed_path)]
     try:
         await stage_checkpoint("saving_files")
-        rows = []
-        for tab_order, item in enumerate(accepted, start=paper.next_tab_order):
-            markdown_path = await _save_source_markdown(markdown=item.markdown, file_id=item.file_id, user_id=subject)
-            written_paths.append(markdown_path)
-            processed_path = await _save_processed_json(
-                elements=item.prepared.elements, file_id=item.file_id, user_id=subject,
-            )
-            written_paths.append(processed_path)
-            rows.append(_new_row(item, document_id=document_id, owner_user_id=owner_user_id, tab_order=tab_order,
-                                 markdown_path=markdown_path, processed_path=processed_path))
+        rows = [
+            _new_row(item, document_id=document_id, owner_user_id=owner_user_id, tab_order=tab_order,
+                     markdown_path=markdown_path, processed_path=processed_path)
+            for tab_order, (item, markdown_path, processed_path) in enumerate(planned, start=paper.next_tab_order)
+        ]
         await asyncio.to_thread(_insert_rows, document_id, rows)
+        for item, markdown_path, processed_path in planned:
+            saved = (
+                await _save_source_markdown(markdown=item.markdown, file_id=item.file_id, user_id=subject),
+                await _save_processed_json(elements=item.prepared.elements, file_id=item.file_id, user_id=subject),
+            )
+            if saved != (markdown_path, processed_path):
+                raise SupplementAddError("stored_file_path_mismatch")
         for item in accepted:
             await stage_checkpoint("vector_storage")
             await store_file_pieces(
@@ -399,9 +407,30 @@ async def _write(
         await stage_checkpoint("finishing")
         await asyncio.to_thread(mark_files_ready, {item.file_id: item.prepared.text_bytes for item in accepted})
     except BaseException:
-        await _undo(document_id, subject, [item.file_id for item in accepted], written_paths)
+        await _undo(document_id, subject, [item.file_id for item in accepted], written_paths, weaviate_client)
         raise
-    await _after_add(document_id, subject, weaviate_client)
+    try:
+        await _after_add(document_id, subject, weaviate_client)
+    except Exception as exc:
+        # The files are added and readable; only the paper's search-index count or the
+        # document cache may be stale. Reported, and the add still counts as done.
+        _report_after_add_failure(exc, document_id)
+
+
+def _report_after_add_failure(exc: Exception, document_id: UUID) -> None:
+    from src.lib.observability.runtime import report_runtime_exception
+
+    class SupplementAddFinishFailed(RuntimeError):
+        pass
+
+    report_runtime_exception(
+        SupplementAddFinishFailed(f"Updating the paper after an add failed ({type(exc).__name__})"),
+        component="document_files",
+        operation="supplement_add_finish_failed",
+        level="warning",
+        context={"document_id": str(document_id)},
+        fingerprint=["supplement_add_finish_failed"],
+    )
 
 
 def _new_row(
@@ -534,7 +563,9 @@ async def _delete_pieces(document_id: UUID, subject: str, ranges: Sequence[tuple
         await asyncio.to_thread(delete_chunk_range, str(document_id), subject, start=start, end=end)
 
 
-async def _undo(document_id: UUID, subject: str, file_ids: list[UUID], paths: list[str]) -> None:
+async def _undo(
+    document_id: UUID, subject: str, file_ids: list[UUID], paths: list[str], weaviate_client: Any,
+) -> None:
     """Remove what this add wrote: pieces in its ranges, its stored files, its rows.
 
     When the paper itself was deleted while the add ran, its rows (and so the ranges)
@@ -545,10 +576,14 @@ async def _undo(document_id: UUID, subject: str, file_ids: list[UUID], paths: li
     if await asyncio.to_thread(_paper_exists, document_id):
         ranges = await asyncio.to_thread(_ranges, document_id, file_ids)
         await _delete_pieces(document_id, subject, ranges)
-    else:
-        await _delete_pieces_of_deleted_paper(document_id, subject)
+        await asyncio.to_thread(_remove_stored_files, paths)
+        await asyncio.to_thread(_delete_rows, document_id, file_ids)
+        # Storing marks the paper's own search-index object as embedding (and failed on an
+        # error or cancel); put back what its ready files say, as before the add.
+        await _sync_paper_index_object(document_id, subject, weaviate_client)
+        return
+    await _delete_pieces_of_deleted_paper(document_id, subject)
     await asyncio.to_thread(_remove_stored_files, paths)
-    await asyncio.to_thread(_delete_rows, document_id, file_ids)
 
 
 def _paper_exists(document_id: UUID) -> bool:
@@ -576,9 +611,17 @@ async def _remove_leftovers(document_id: UUID, subject: str, leftovers: Sequence
 
 
 async def _after_add(document_id: UUID, subject: str, weaviate_client: Any) -> None:
-    """The paper's search-index piece count and the document-context cache; never its status."""
+    """The paper's search-index object and the document-context cache; never the paper's SQL status."""
 
     from src.lib.document_cache import invalidate_cache
+
+    await _sync_paper_index_object(document_id, subject, weaviate_client)
+    invalidate_cache(subject, str(document_id))
+
+
+async def _sync_paper_index_object(document_id: UUID, subject: str, weaviate_client: Any) -> None:
+    """The paper's search-index object as its ready files say: their piece count, completed."""
+
     from src.lib.document_files.service import ready_piece_total
     from src.lib.pipeline.store import update_document_metadata
     from src.models.sql.database import SessionLocal
@@ -589,7 +632,6 @@ async def _after_add(document_id: UUID, subject: str, weaviate_client: Any) -> N
 
     stored = await asyncio.to_thread(total)
     await update_document_metadata(str(document_id), {"stored_chunks": stored, "failed_chunks": 0}, weaviate_client, subject)
-    invalidate_cache(subject, str(document_id))
 
 
 # ---------------------------------------------------------------------------
@@ -632,9 +674,14 @@ def start_supplement_add(document_id: UUID, owner_user_id: int, files: Sequence[
     ``ActiveJobExistsError`` (409) when the paper already has an active job.
     """
 
-    from src.lib.document_files.paper_lock import lock_paper_for_add
+    from src.lib.document_files.paper_lock import try_lock_paper_for_add
     from src.lib.openai_agents.config import get_document_max_files_per_paper
-    from src.lib.pdf_jobs.service import create_job_in_session
+    from src.lib.pdf_jobs.service import (
+        JOB_KIND_KEY,
+        SUPPLEMENT_ADD_JOB_KIND,
+        ActiveJobExistsError,
+        create_job_in_session,
+    )
     from src.models.sql.database import SessionLocal
     from src.services.document_access import require_owned_document
 
@@ -645,15 +692,21 @@ def start_supplement_add(document_id: UUID, owner_user_id: int, files: Sequence[
         raise SupplementAddRequestError("file_chosen_twice")
     max_files = get_document_max_files_per_paper()
     with SessionLocal() as session:
-        # Ordered against a delete of the same paper (paper_lock.py): a running delete
-        # finishes first, and the paper is then not found.
-        lock_paper_for_add(session, document_id)
+        # Ordered against a delete of the same paper (paper_lock.py), without waiting: while
+        # a delete holds the paper's lock the add is refused as another operation in progress.
+        if not try_lock_paper_for_add(session, document_id):
+            session.rollback()
+            raise ActiveJobExistsError(document_id)
         paper = require_owned_document(session, document_id, owner_user_id, for_update=True)
         live = sum(1 for row in paper.files if row.status != FILE_STATUS_FAILED)
         if live + len(files) > max_files:
             session.rollback()
             raise SupplementAddRequestError("paper_file_limit", limit_value=max_files)
-        return create_job_in_session(session, document_id=document_id, user_id=owner_user_id)
+        # The paper's name, never its id, names the job; its kind keeps it out of the paper's status.
+        return create_job_in_session(
+            session, document_id=document_id, user_id=owner_user_id, filename=paper.filename,
+            metadata={JOB_KIND_KEY: SUPPLEMENT_ADD_JOB_KIND},
+        )
 
 
 def _supplement_entries(result: AddResult) -> list[dict[str, Any]]:
@@ -764,7 +817,9 @@ async def run_supplement_add_job(request: SupplementAddJobRequest) -> None:
 
     metadata = {"supplements": _supplement_entries(result)}
     if not result.added:
-        _report_nothing_added(result, request.document_id)
+        # Choosing files that are all in the paper already (a repeated click) is not worth a warning.
+        if any(item.reason_code is not FileReason.ALREADY_IN_PAPER for item in result.files):
+            _report_nothing_added(result, request.document_id)
         pdf_job_service.mark_failed(job_id=job_id, message=_MESSAGE_NONE_ADDED, stage="failed", metadata=metadata)
         return
     pdf_job_service.mark_completed(

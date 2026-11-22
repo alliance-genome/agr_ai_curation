@@ -88,7 +88,6 @@ def index(weaviate_connection, setup_collections, clean_chunks, monkeypatch, tmp
 
     monkeypatch.setattr(chunk_reads, "get_connection", lambda: weaviate_connection)
     monkeypatch.setattr("src.lib.weaviate_client.documents.get_connection", lambda: weaviate_connection)
-    monkeypatch.setattr("src.lib.pipeline.store.update_document_status_detailed", AsyncMock())
     monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: tmp_path)
     monkeypatch.setattr(pdf_viewer, "get_pdf_storage_path", lambda: tmp_path)
     monkeypatch.setattr(documents_api, "get_pdf_storage_path", lambda: tmp_path)
@@ -130,7 +129,10 @@ async def _store(connection, document_id: str, start: int, end: int, section: st
 
 
 def _paper(owner_id: int, connection, *, main_end: int = 2) -> UUID:
-    """A finished paper whose ready main PDF holds pieces 0..main_end in the real index."""
+    """A finished paper whose ready main PDF holds pieces 0..main_end in the real index.
+
+    Its own search-index object is real too (completed), so what an add writes to it is seen.
+    """
 
     document_id = uuid4()
     with SessionLocal.begin() as db:
@@ -143,7 +145,23 @@ def _paper(owner_id: int, connection, *, main_end: int = 2) -> UUID:
             source_provider_reference_curie="MADE:101", source_provider_source_file_id="10",
         ))
     asyncio.run(_store(connection, str(document_id), 0, main_end))
+    with connection.session() as client:
+        client.collections.get("PDFDocument").with_tenant(TEST_TENANT_NAME).data.insert(
+            uuid=document_id,
+            properties={
+                "filename": f"{PREFIX}{document_id}.pdf", "processingStatus": "completed",
+                "embeddingStatus": "completed", "chunkCount": main_end + 1, "vectorCount": main_end + 1,
+            },
+        )
     return document_id
+
+
+def _paper_object(connection, document_id: UUID) -> dict:
+    with connection.session() as client:
+        found = client.collections.get("PDFDocument").with_tenant(TEST_TENANT_NAME).query.fetch_object_by_id(
+            document_id,
+        )
+    return dict(found.properties)
 
 
 class _Provider:
@@ -534,14 +552,13 @@ async def test_the_real_stale_sweep_fails_a_dead_adds_rows_on_a_completed_paper(
 # --- a delete and an add cannot interleave (paper_lock.py) ------------------------------------
 
 
-def _wire_delete(monkeypatch, owner_id, *, in_wipe=None, wipe_pause: float = 0.0):
-    """The real delete endpoint, with the paper's search-index object reported present.
+def _wire_delete(monkeypatch, owner_id, *, in_wipe=None, wipe_seconds: float = 0.0, wipe_error=None):
+    """The real delete endpoint, with an index wipe that yields the loop like the real one.
 
-    The index wipe is the real helper's piece delete; ``in_wipe`` is set when the
-    delete is between its active-job check and its row delete.
+    The real helper's wipe runs in an executor; this one awaits for ``wipe_seconds``
+    (handing the loop to other work), then deletes the pieces in a worker thread.
+    ``in_wipe`` is set when the delete is between its active-job check and its row delete.
     """
-
-    import time
 
     async def provision(_principal):
         return type("User", (), {"id": owner_id})()
@@ -552,8 +569,10 @@ def _wire_delete(monkeypatch, owner_id, *, in_wipe=None, wipe_pause: float = 0.0
     async def wipe(user_sub, document_id):
         if in_wipe is not None:
             in_wipe.set()
-        time.sleep(wipe_pause)
-        deleted = chunk_reads.delete_pieces_of_deleted_paper(document_id, user_sub)
+        await asyncio.sleep(wipe_seconds)
+        if wipe_error is not None:
+            raise wipe_error
+        deleted = await asyncio.to_thread(chunk_reads.delete_pieces_of_deleted_paper, document_id, user_sub)
         return {"success": True, "chunks_deleted": deleted}
 
     monkeypatch.setattr(documents_api, "provision_user_async", provision)
@@ -561,77 +580,245 @@ def _wire_delete(monkeypatch, owner_id, *, in_wipe=None, wipe_pause: float = 0.0
     monkeypatch.setattr(documents_api, "delete_document", wipe)
 
 
+async def _delete(paper: UUID):
+    return await documents_api.delete_document_endpoint(document_id=str(paper), user={"sub": TEST_USER_ID})
+
+
 @pytest.mark.asyncio
 async def test_a_delete_with_no_add_running_deletes_the_paper_as_before(owner_id, index, monkeypatch):
     paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
     _wire_delete(monkeypatch, owner_id)
 
-    result = await documents_api.delete_document_endpoint(document_id=str(paper), user={"sub": TEST_USER_ID})
+    result = await _delete(paper)
 
     assert result.success is True
     assert _rows(paper) == [] and _indexes(index, str(paper)) == []
 
 
 @pytest.mark.asyncio
-async def test_an_add_requested_while_the_paper_is_being_deleted_waits_and_then_finds_no_paper(
-    owner_id, index, monkeypatch,
-):
+async def test_two_deletes_of_one_paper_on_one_loop_never_block_it(owner_id, index, monkeypatch):
+    """A double-click on delete: one deletes, the other is refused at once, and the loop keeps serving."""
+
     paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
-    in_wipe = threading.Event()
-    _wire_delete(monkeypatch, owner_id, in_wipe=in_wipe, wipe_pause=1.5)
-    outcome: dict = {}
+    other = await asyncio.to_thread(_paper, owner_id, index, main_end=1)
+    _wire_delete(monkeypatch, owner_id, wipe_seconds=1.0)
+    ticks = 0
 
-    def add_request() -> None:
-        in_wipe.wait(timeout=30)
-        try:
-            outcome["result"] = supplement_add.start_supplement_add(paper, owner_id, [_chosen(20)])
-        except HTTPException as refused:
-            outcome["result"] = refused
-        outcome["paper_existed_when_add_ran"] = _rows(paper) != []
+    async def unrelated_work():
+        nonlocal ticks
+        for _ in range(40):
+            await asyncio.sleep(0.025)
+            ticks += 1
 
-    adder = threading.Thread(target=add_request)
-    adder.start()
-    await documents_api.delete_document_endpoint(document_id=str(paper), user={"sub": TEST_USER_ID})
-    adder.join(timeout=30)
+    outcomes = await asyncio.wait_for(
+        asyncio.gather(_delete(paper), _delete(paper), _delete(other), unrelated_work(), return_exceptions=True),
+        timeout=30,
+    )
 
-    # The add waited for the whole delete: it never saw the paper half deleted, and wrote nothing.
-    assert isinstance(outcome["result"], HTTPException) and outcome["result"].status_code == 404
-    assert outcome["paper_existed_when_add_ran"] is False
+    first, second, other_result, _ = outcomes
+    results = [first, second]
+    refused = [item for item in results if isinstance(item, HTTPException)]
+    deleted = [item for item in results if not isinstance(item, BaseException)]
+    assert len(deleted) == 1 and len(refused) == 1
+    assert refused[0].status_code in (409, 404)
+    assert other_result.success is True  # another paper's delete went ahead meanwhile
+    assert ticks == 40  # an unrelated request on the same loop finished during the wipe
+    assert _rows(paper) == [] and _indexes(index, str(paper)) == []
+
+
+@pytest.mark.asyncio
+async def test_an_add_requested_while_the_paper_is_being_deleted_is_refused_at_once(owner_id, index, monkeypatch):
+    import time
+
+    paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    in_wipe = asyncio.Event()
+    _wire_delete(monkeypatch, owner_id, in_wipe=in_wipe, wipe_seconds=1.0)
+
+    async def add_during_delete():
+        await in_wipe.wait()
+        started = time.monotonic()
+        with pytest.raises(ActiveJobExistsError):
+            await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20)])
+        return time.monotonic() - started
+
+    elapsed, deleted = await asyncio.gather(add_during_delete(), _delete(paper))
+
+    assert elapsed < 0.5 and deleted.success is True  # refused without waiting (409 import_in_progress)
     with SessionLocal() as db:
         assert db.scalar(select(PdfProcessingJob.id).where(PdfProcessingJob.document_id == paper)) is None
     assert _indexes(index, str(paper)) == []
 
 
 @pytest.mark.asyncio
-async def test_a_delete_requested_while_an_add_creates_its_job_waits_and_then_refuses(owner_id, index, monkeypatch):
+async def test_a_delete_requested_while_an_add_creates_its_job_is_refused_at_once(owner_id, index, monkeypatch):
     import time
 
-    from src.lib.document_files.paper_lock import lock_paper_for_add
+    from src.lib.document_files.paper_lock import try_lock_paper_for_add
     from src.lib.pdf_jobs.service import create_job_in_session
 
     paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
     _wire_delete(monkeypatch, owner_id)
     locked = threading.Event()
-    committed_at: dict = {}
+    release = threading.Event()
 
     def add_creating_its_job() -> None:
         with SessionLocal() as session:
-            lock_paper_for_add(session, paper)
+            assert try_lock_paper_for_add(session, paper)
             locked.set()
-            time.sleep(1.5)  # the add's job-creating transaction is still open
+            release.wait(timeout=30)  # the add's job-creating transaction is still open
             create_job_in_session(session, document_id=paper, user_id=owner_id)
-            committed_at["time"] = time.monotonic()
 
     adder = threading.Thread(target=add_creating_its_job)
     adder.start()
     await asyncio.to_thread(locked.wait, 30)
+    started = time.monotonic()
     with pytest.raises(HTTPException) as raised:
-        await documents_api.delete_document_endpoint(document_id=str(paper), user={"sub": TEST_USER_ID})
-    refused_at = time.monotonic()
+        await _delete(paper)
+    elapsed = time.monotonic() - started
+    release.set()
     adder.join(timeout=30)
 
-    assert raised.value.status_code == 409 and refused_at >= committed_at["time"]
+    assert raised.value.status_code == 409 and elapsed < 0.5
     assert [row.role for row in _rows(paper)] == ["main"] and _indexes(index, str(paper)) == [0, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_the_lock_is_released_when_the_delete_fails(owner_id, index, monkeypatch):
+    paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    _wire_delete(monkeypatch, owner_id, wipe_error=RuntimeError("made-up index failure"))
+    with pytest.raises(HTTPException) as raised:
+        await _delete(paper)
+    assert raised.value.status_code == 500
+
+    _wire_delete(monkeypatch, owner_id)
+    assert (await _delete(paper)).success is True
+
+
+@pytest.mark.asyncio
+async def test_the_lock_is_released_when_the_delete_request_is_cancelled(owner_id, index, monkeypatch):
+    paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    in_wipe = asyncio.Event()
+    _wire_delete(monkeypatch, owner_id, in_wipe=in_wipe, wipe_seconds=5.0)
+    request = asyncio.ensure_future(_delete(paper))
+    await in_wipe.wait()
+    request.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await request
+    await asyncio.sleep(0.5)  # the release runs in its thread
+
+    job = await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20)])
+    assert job.status == PdfJobStatus.PENDING.value
+
+
+# --- a paper's status is never taken from an add -----------------------------------------------
+
+
+async def _reported_status(paper: UUID, monkeypatch) -> tuple[str, str]:
+    async def provision(_principal):
+        with SessionLocal() as db:
+            return type("User", (), {"id": db.get(PDFDocument, paper).user_id, "auth_sub": TEST_USER_ID})()
+
+    monkeypatch.setattr(documents_api, "provision_user_async", provision)
+    detail = await documents_api.get_document_endpoint(document_id=str(paper), user={"sub": TEST_USER_ID})
+    status = await documents_api.get_document_processing_status(document_id=str(paper), user={"sub": TEST_USER_ID})
+    detail_status = getattr(detail.status, "value", detail.status)
+    endpoint_status = status["processing_status"]
+    return str(detail_status).lower(), str(getattr(endpoint_status, "value", endpoint_status)).lower()
+
+
+@pytest.mark.asyncio
+async def test_the_papers_status_stays_completed_during_and_after_an_add_that_added_nothing(
+    owner_id, index, monkeypatch,
+):
+    paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    job = await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20)])
+    assert job.filename == f"{PREFIX}{paper}.pdf"  # the paper's name, never its id
+    assert job.metadata == {"job_kind": "supplement_add"}
+
+    assert await _reported_status(paper, monkeypatch) == ("completed", "completed")  # while the add's job is active
+    pdf_job_service.mark_failed(job_id=job.job_id, message="None of the chosen files could be added.", stage="failed")
+    assert await _reported_status(paper, monkeypatch) == ("completed", "completed")
+
+
+@pytest.mark.asyncio
+async def test_a_failed_add_leaves_the_papers_index_object_as_it_was(owner_id, index):
+    paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    job = await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20)])
+
+    async def fail_after_storing(stage):
+        if stage == "finishing":
+            raise RuntimeError("made-up failure after storing")
+
+    with pytest.raises(RuntimeError):
+        await _add(paper, owner_id, index, [_chosen(20)], job_id=UUID(job.job_id), checkpoint=fail_after_storing)
+
+    stored = _paper_object(index, paper)
+    assert (stored["processingStatus"], stored["embeddingStatus"], stored["chunkCount"]) == ("completed", "completed", 3)
+
+
+@pytest.mark.asyncio
+async def test_a_successful_add_counts_its_pieces_on_the_papers_index_object(owner_id, index):
+    paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    job = await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20)])
+    await _add(paper, owner_id, index, [_chosen(20)], job_id=UUID(job.job_id))
+    (_, added) = _rows(paper)
+    stored = _paper_object(index, paper)
+    assert (stored["processingStatus"], stored["embeddingStatus"]) == ("completed", "completed")
+    assert stored["chunkCount"] == added.chunk_index_end + 1
+
+
+# --- a process that dies mid-add leaves nothing private behind ---------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dies_at", ["before_any_file", "after_the_markdown"])
+async def test_files_of_a_dead_add_are_found_and_removed_by_the_next_add(owner_id, index, monkeypatch, dies_at):
+    from src.config import get_pdf_storage_path
+    from src.lib.document_sources import ingestion
+    from src.lib.pdf_jobs.recovery import reconcile_stale_jobs_once
+
+    paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    job = await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20)])
+
+    class ProcessGone(BaseException):
+        pass
+
+    original_markdown, original_json = ingestion._save_source_markdown, ingestion._save_processed_json
+    original_undo = supplement_add._undo
+
+    async def die_on_markdown(**kwargs):
+        raise ProcessGone()
+
+    async def die_on_json(**kwargs):
+        raise ProcessGone()
+
+    if dies_at == "before_any_file":
+        monkeypatch.setattr(ingestion, "_save_source_markdown", die_on_markdown)
+    else:
+        monkeypatch.setattr(ingestion, "_save_processed_json", die_on_json)
+    monkeypatch.setattr(supplement_add, "_undo", AsyncMock())  # nothing runs after the process is gone
+    with pytest.raises(ProcessGone):
+        await _add(paper, owner_id, index, [_chosen(20)], job_id=UUID(job.job_id))
+    monkeypatch.setattr(ingestion, "_save_source_markdown", original_markdown)
+    monkeypatch.setattr(ingestion, "_save_processed_json", original_json)
+    dead = _rows(paper)[1]
+    assert dead.status == "pending" and dead.source_markdown_path and dead.processed_json_path
+    written = get_pdf_storage_path() / dead.source_markdown_path
+    assert written.is_file() is (dies_at == "after_the_markdown")
+
+    with SessionLocal.begin() as db:
+        db.get(PdfProcessingJob, UUID(job.job_id)).status = PdfJobStatus.RUNNING.value
+    later = datetime.now(timezone.utc) + timedelta(hours=3)
+    cursor = reconcile_stale_jobs_once(now=later)
+    while cursor is not None:
+        cursor = reconcile_stale_jobs_once(after=cursor, now=later)
+    assert _rows(paper)[1].status == "failed"
+
+    monkeypatch.setattr(supplement_add, "_undo", original_undo)
+    next_job = await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20)])
+    await _add(paper, owner_id, index, [_chosen(20)], job_id=UUID(next_job.job_id))
+    assert dead.id not in {row.id for row in _rows(paper)}
+    assert not written.exists()
 
 
 # --- awkward section names: repeated headings, text before any heading, symbol-only sheets ----

@@ -60,6 +60,8 @@ class _Storage:
     fail_store_on: int | None = None
     paper_exists: bool = True
     deleted_whole_paper: int = 0
+    after_add_fails: bool = False
+    index_object_synced: int = 0
 
 
 def _paper(**overrides) -> supplement_add._PaperState:
@@ -129,9 +131,15 @@ def storage(monkeypatch):
     monkeypatch.setattr(supplement_add, "_remove_stored_files", lambda paths: record.removed_paths.extend(paths))
 
     async def after_add(*_):
+        if record.after_add_fails:
+            raise RuntimeError("made-up failure updating the paper's index object")
         record.after_add += 1
 
+    async def sync_index_object(*_):
+        record.index_object_synced += 1
+
     monkeypatch.setattr(supplement_add, "_after_add", after_add)
+    monkeypatch.setattr(supplement_add, "_sync_paper_index_object", sync_index_object)
     hierarchy = AsyncMock(side_effect=AssertionError("the hierarchy model is never called for a supplement"))
     figures = AsyncMock(side_effect=AssertionError("no supplement piece reaches the figure locators"))
     monkeypatch.setattr("src.lib.pipeline.hierarchy_resolution.resolve_document_hierarchy", hierarchy)
@@ -493,3 +501,75 @@ def test_an_empty_display_name_for_text_before_any_heading_fails_loudly():
         apply_structural_sections(
             markdown_to_pipeline_elements("Made-up text.\n"), file_title_is_first_heading=True, fallback_section="",
         )
+
+
+@pytest.mark.asyncio
+async def test_a_failure_after_the_files_are_ready_still_counts_the_add_as_done(monkeypatch, storage):
+    """The files are added and readable; only the paper's index count or cache may be stale (reported)."""
+
+    storage.after_add_fails = True
+    reports = []
+    monkeypatch.setattr(
+        "src.lib.observability.runtime.report_runtime_exception", lambda exc, **kwargs: reports.append(kwargs),
+    )
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+    result = await _add(provider, [_chosen(20)])
+
+    assert result.files[0].outcome == "added" and storage.ready and storage.deleted_rows == []
+    assert [report["operation"] for report in reports] == ["supplement_add_finish_failed"]
+
+
+@pytest.mark.asyncio
+async def test_a_write_failure_puts_back_the_papers_index_object(monkeypatch, storage):
+    storage.fail_store_on = 0
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+    with pytest.raises(RuntimeError):
+        await _add(provider, [_chosen(20)])
+    assert storage.index_object_synced == 1
+
+
+@pytest.mark.asyncio
+async def test_rows_naming_the_files_are_written_before_the_files(monkeypatch, storage):
+    order = []
+    from src.lib.document_sources import ingestion
+
+    original_insert = supplement_add._insert_rows
+
+    def insert(document_id, rows):
+        order.append("rows")
+        original_insert(document_id, rows)
+
+    async def save_markdown(*, markdown, file_id, user_id):
+        order.append("markdown")
+        return f"{user_id}/source_markdown/{file_id}.md"
+
+    monkeypatch.setattr(supplement_add, "_insert_rows", insert)
+    monkeypatch.setattr(ingestion, "_save_source_markdown", save_markdown)
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+    await _add(provider, [_chosen(20)])
+    assert order == ["rows", "markdown"]
+    row = storage.inserted[0]
+    assert row.source_markdown_path == f"owner-subject/source_markdown/{row.id}.md"
+
+
+@pytest.mark.asyncio
+async def test_no_warning_when_every_chosen_file_was_already_in_the_paper(monkeypatch):
+    already = AddResult(files=(supplement_add.FileOutcome("20", "left_out", FileReason.ALREADY_IN_PAPER),))
+    monkeypatch.setattr(supplement_add, "add_files_to_paper", AsyncMock(return_value=already))
+    monkeypatch.setattr("src.lib.document_sources.registry.get_configured_document_source_provider", lambda: AsyncMock())
+    monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda: object())
+    reports = []
+    monkeypatch.setattr(
+        "src.lib.observability.runtime.report_runtime_exception", lambda exc, **kwargs: reports.append(kwargs),
+    )
+    failed = []
+    monkeypatch.setattr("src.lib.pdf_jobs.service.mark_failed", lambda **kwargs: failed.append(kwargs))
+
+    await supplement_add.run_supplement_add_job(supplement_add.SupplementAddJobRequest(
+        job_id=JOB_ID, document_id=DOCUMENT_ID, user_id="owner-subject", owner_user_id=7, context=CONTEXT,
+        files=(_chosen(20),),
+    ))
+    assert reports == [] and len(failed) == 1

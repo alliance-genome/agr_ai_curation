@@ -23,17 +23,6 @@ from src.models.pipeline import PipelineStatus, ProcessingStage
 from src.schemas.documents import DocumentUpdateRequest
 
 
-@pytest.fixture(autouse=True)
-def _no_database_paper_lock(monkeypatch):
-    """These tests use fake sessions; the per-paper delete lock is tested against Postgres
-    (tests/integration/persistence/test_supplement_add_search_index.py)."""
-
-    from contextlib import nullcontext
-
-    monkeypatch.setattr(
-        "src.lib.document_files.paper_lock.paper_delete_lock", lambda _document_id: nullcontext(),
-    )
-
 _FILE_FIELDS = (
     "file_path", "file_hash", "file_size", "page_count", "pdfx_json_path", "processed_json_path",
     "hierarchy_metadata", "source_provider_source_file_id", "source_provider_converted_artifact_id",
@@ -282,6 +271,7 @@ async def test_get_document_endpoint_returns_document_response(monkeypatch):
     monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=5))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(
         documents,
         "get_document",
@@ -384,6 +374,7 @@ async def test_update_document_endpoint_renames_source_and_index(monkeypatch, tm
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: document)
     monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: tmp_path)
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args: _async_value(None))
     monkeypatch.setattr(documents, "update_document_filename", _update_index)
     _patch_indexed_document_status(monkeypatch)
@@ -418,6 +409,7 @@ async def test_update_document_endpoint_rejects_active_processing_rename(monkeyp
     monkeypatch.setattr(documents, "SessionLocal", lambda: session)
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: document)
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args: _async_value(None))
     _patch_indexed_document_status(monkeypatch)
 
@@ -460,6 +452,11 @@ async def test_update_document_endpoint_rejects_current_indexed_reembed_with_ter
         lambda **_kwargs: SimpleNamespace(status="completed"),
     )
     monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_paper_job_for_document",
+        lambda **_kwargs: SimpleNamespace(status="completed"),
+    )
+    monkeypatch.setattr(
         documents.pipeline_tracker,
         "get_pipeline_status",
         lambda *_args: _async_value(None),
@@ -498,6 +495,7 @@ async def test_update_document_endpoint_rejects_filename_collision(monkeypatch, 
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: document)
     monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: tmp_path)
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args: _async_value(None))
     _patch_indexed_document_status(monkeypatch)
 
@@ -530,6 +528,7 @@ async def test_update_document_endpoint_rejects_database_path_collision(monkeypa
     monkeypatch.setattr(documents, "SessionLocal", lambda: session)
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: document)
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args: _async_value(None))
     _patch_indexed_document_status(monkeypatch)
 
@@ -570,6 +569,7 @@ async def test_update_document_endpoint_restores_source_when_index_update_fails(
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: document)
     monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: tmp_path)
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args: _async_value(None))
     monkeypatch.setattr(documents, "update_document_filename", _fail_index)
     _patch_indexed_document_status(monkeypatch)
@@ -616,6 +616,7 @@ async def test_update_document_endpoint_restores_index_and_source_when_commit_fa
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: document)
     monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: tmp_path)
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args: _async_value(None))
     monkeypatch.setattr(documents, "update_document_filename", _update_index)
     _patch_indexed_document_status(monkeypatch)
@@ -683,6 +684,11 @@ async def test_update_document_endpoint_completes_forward_when_index_rollback_fa
     monkeypatch.setattr(
         documents.pdf_job_service,
         "get_latest_job_for_document",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_paper_job_for_document",
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -771,6 +777,11 @@ async def test_update_document_endpoint_sanitizes_failed_forward_recovery(
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_paper_job_for_document",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
         documents.pipeline_tracker,
         "get_pipeline_status",
         lambda *_args: _async_value(None),
@@ -824,6 +835,7 @@ async def test_delete_document_endpoint_returns_success(monkeypatch):
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
     monkeypatch.setattr(documents, "delete_document", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 3}))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
 
     result = await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
@@ -848,6 +860,7 @@ async def test_delete_document_endpoint_blocks_processing_documents(monkeypatch)
         lambda *_args, **_kwargs: _async_value({"document": {"processing_status": ProcessingStatus.PROCESSING.value}}),
     )
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
 
     with pytest.raises(HTTPException) as exc:
@@ -866,6 +879,11 @@ async def test_delete_document_endpoint_blocks_active_pdf_job(monkeypatch):
     monkeypatch.setattr(
         documents.pdf_job_service,
         "get_latest_job_for_document",
+        lambda **_kwargs: SimpleNamespace(status="running", current_stage="parsing"),
+    )
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_paper_job_for_document",
         lambda **_kwargs: SimpleNamespace(status="running", current_stage="parsing"),
     )
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
@@ -892,6 +910,11 @@ async def test_delete_document_endpoint_allows_reconciled_stale_pdf_job(monkeypa
         "get_latest_job_for_document",
         lambda **_kwargs: SimpleNamespace(status="failed", current_stage="failed"),
     )
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_paper_job_for_document",
+        lambda **_kwargs: SimpleNamespace(status="failed", current_stage="failed"),
+    )
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
 
     result = await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
@@ -913,6 +936,11 @@ async def test_delete_document_endpoint_allows_stale_active_weaviate_status_when
     monkeypatch.setattr(
         documents.pdf_job_service,
         "get_latest_job_for_document",
+        lambda **_kwargs: SimpleNamespace(status="failed", current_stage="failed"),
+    )
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_paper_job_for_document",
         lambda **_kwargs: SimpleNamespace(status="failed", current_stage="failed"),
     )
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
@@ -972,6 +1000,16 @@ async def test_delete_document_endpoint_allows_old_active_tracker_after_terminal
             updated_at=now,
         ),
     )
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_paper_job_for_document",
+        lambda **_kwargs: SimpleNamespace(
+            status="failed",
+            current_stage="failed",
+            completed_at=now,
+            updated_at=now,
+        ),
+    )
     stale_pipeline = PipelineStatus(
         document_id=doc_id,
         current_stage=ProcessingStage.PARSING,
@@ -1014,6 +1052,16 @@ async def test_delete_document_endpoint_blocks_newer_upload_tracker_after_termin
     monkeypatch.setattr(
         documents.pdf_job_service,
         "get_latest_job_for_document",
+        lambda **_kwargs: SimpleNamespace(
+            status="failed",
+            current_stage="failed",
+            completed_at=now - timedelta(seconds=30),
+            updated_at=now - timedelta(seconds=30),
+        ),
+    )
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_paper_job_for_document",
         lambda **_kwargs: SimpleNamespace(
             status="failed",
             current_stage="failed",
@@ -1071,6 +1119,11 @@ async def test_delete_document_endpoint_allows_stale_postgres_only_document_clea
         "get_latest_job_for_document",
         lambda **_kwargs: SimpleNamespace(status="completed", current_stage="completed"),
     )
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_paper_job_for_document",
+        lambda **_kwargs: SimpleNamespace(status="completed", current_stage="completed"),
+    )
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
 
     result = await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
@@ -1113,6 +1166,7 @@ async def test_delete_document_endpoint_removes_text_source_markdown(monkeypatch
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
     monkeypatch.setattr(documents, "delete_document", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 0}))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
 
     result = await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
@@ -1155,6 +1209,7 @@ async def test_delete_document_endpoint_uses_snapshot_when_helper_removes_sql_ro
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
     monkeypatch.setattr(documents, "delete_document", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 2}))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
 
     result = await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
@@ -1189,6 +1244,7 @@ async def test_delete_document_endpoint_raises_when_cleanup_fails(monkeypatch, t
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
     monkeypatch.setattr(documents, "delete_document", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 0}))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
 
     def _raise_cleanup(**kwargs):
@@ -1226,6 +1282,11 @@ async def test_delete_document_endpoint_blocks_stale_postgres_only_document_with
         "get_latest_job_for_document",
         lambda **_kwargs: SimpleNamespace(status="running", current_stage="parsing"),
     )
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_paper_job_for_document",
+        lambda **_kwargs: SimpleNamespace(status="running", current_stage="parsing"),
+    )
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
 
     with pytest.raises(HTTPException) as exc:
@@ -1246,6 +1307,7 @@ async def test_delete_document_endpoint_raises_500_when_delete_fails(monkeypatch
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
     monkeypatch.setattr(documents, "delete_document", lambda *_args, **_kwargs: _async_value({"success": False, "message": "nope"}))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
 
     with pytest.raises(HTTPException) as exc:
@@ -1596,6 +1658,7 @@ async def test_stream_document_progress_returns_not_found_event(monkeypatch):
     monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=7))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value(None))
 
     response = await documents.stream_document_progress(doc_id, {"sub": "user-1"})
@@ -1631,6 +1694,7 @@ async def test_stream_document_progress_emits_final_completed_event(monkeypatch)
     monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=7))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", _status)
     monkeypatch.setattr(documents.asyncio, "sleep", _no_sleep)
@@ -1658,6 +1722,7 @@ async def test_stream_document_progress_sanitizes_stream_errors(monkeypatch, cap
     monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=7))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(
         documents,
         "get_document",
@@ -1722,6 +1787,17 @@ async def test_stream_document_progress_prefers_terminal_cancelled_job_snapshot(
             updated_at=now,
         ),
     )
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_paper_job_for_document",
+        lambda **_kwargs: SimpleNamespace(
+            status="cancelled",
+            current_stage="cancelled",
+            progress_percentage=64,
+            message="Cancelled by user",
+            updated_at=now,
+        ),
+    )
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "processing"}}))
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", _status)
 
@@ -1757,6 +1833,21 @@ async def test_stream_document_progress_prefers_terminal_cancelled_job_over_stal
     monkeypatch.setattr(
         documents.pdf_job_service,
         "get_latest_job_for_document",
+        lambda **_kwargs: SimpleNamespace(
+            status="cancelled",
+            current_stage="cancelled",
+            progress_percentage=61,
+            message="Processing cancelled",
+            error_message=None,
+            updated_at=now,
+            started_at=now,
+            completed_at=now,
+            document_id=doc_id,
+        ),
+    )
+    monkeypatch.setattr(
+        documents.pdf_job_service,
+        "get_latest_paper_job_for_document",
         lambda **_kwargs: SimpleNamespace(
             status="cancelled",
             current_stage="cancelled",
@@ -1910,6 +2001,7 @@ async def test_progress_stream_default_includes_queue_allowance(monkeypatch):
     monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=7))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "processing"}}))
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args: _async_value(None))
     response = await documents.stream_document_progress(str(uuid4()), {"sub": "user-1"})
@@ -1941,6 +2033,7 @@ async def test_renaming_a_paper_without_a_main_file_changes_its_name_and_index_o
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: document)
     monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: tmp_path)
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args: _async_value(None))
     monkeypatch.setattr(documents, "update_document_filename", _update_index)
     _patch_indexed_document_status(monkeypatch)
@@ -1977,6 +2070,7 @@ async def test_a_failed_rename_of_a_paper_without_a_main_file_puts_the_index_nam
     monkeypatch.setattr(documents, "SessionLocal", lambda: session)
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: document)
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args: _async_value(None))
     monkeypatch.setattr(documents, "update_document_filename", _update_index)
     _patch_indexed_document_status(monkeypatch)
@@ -2001,6 +2095,7 @@ async def test_document_detail_of_a_paper_without_a_main_file_has_no_file_size(m
     monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=7))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(
         documents,
         "get_document",

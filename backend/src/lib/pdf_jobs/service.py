@@ -548,6 +548,7 @@ def create_job(*, document_id: UUID | str, user_id: int, filename: Optional[str]
 
 def create_job_in_session(
     session, *, document_id: UUID | str, user_id: int, filename: Optional[str] = None,
+    metadata: Optional[dict] = None,
 ) -> PdfJobResponse:
     """Create a paper's job in ``session`` and commit it.
 
@@ -565,6 +566,7 @@ def create_job_in_session(
         progress_percentage=0,
         message="Queued for background processing",
         cancel_requested=False,
+        metadata_json=dict(metadata) if metadata else None,
     )
     session.add(job)
     try:
@@ -637,13 +639,55 @@ def get_job_by_id(*, job_id: UUID | str, reconcile_stale: bool = True) -> Option
         session.close()
 
 
+# ``metadata_json["job_kind"]`` of a job that adds files to an existing paper (P7c1).
+# Such a job never stands for the paper's own processing state.
+JOB_KIND_KEY = "job_kind"
+SUPPLEMENT_ADD_JOB_KIND = "supplement_add"
+
+
+def _not_an_add_job():
+    return or_(
+        PdfProcessingJob.metadata_json.is_(None),
+        PdfProcessingJob.metadata_json[JOB_KIND_KEY].astext.is_distinct_from(SUPPLEMENT_ADD_JOB_KIND),
+    )
+
+
+def is_supplement_add_job(job: PdfJobResponse | PdfProcessingJob) -> bool:
+    metadata = job.metadata if isinstance(job, PdfJobResponse) else job.metadata_json
+    return bool(metadata) and metadata.get(JOB_KIND_KEY) == SUPPLEMENT_ADD_JOB_KIND
+
+
 def get_latest_job_for_document(
     *,
     document_id: UUID | str,
     user_id: int,
     reconcile_stale: bool = True,
 ) -> Optional[PdfJobResponse]:
-    """Return most recent job for a document owned by user."""
+    """Return the most recent job of any kind for a document owned by user (the delete's check)."""
+    return _latest_job(document_id=document_id, user_id=user_id, reconcile_stale=reconcile_stale, paper_jobs_only=False)
+
+
+def get_latest_paper_job_for_document(
+    *,
+    document_id: UUID | str,
+    user_id: int,
+    reconcile_stale: bool = True,
+) -> Optional[PdfJobResponse]:
+    """The most recent job that processes the paper itself: jobs adding files to it are left out.
+
+    Every reading of a paper's processing status uses this one, so an add (running,
+    failed or cancelled) never shows the paper as processing, failed or cancelled.
+    """
+    return _latest_job(document_id=document_id, user_id=user_id, reconcile_stale=reconcile_stale, paper_jobs_only=True)
+
+
+def _latest_job(
+    *,
+    document_id: UUID | str,
+    user_id: int,
+    reconcile_stale: bool,
+    paper_jobs_only: bool,
+) -> Optional[PdfJobResponse]:
     session = SessionLocal()
     try:
         statement = (
@@ -655,6 +699,8 @@ def get_latest_job_for_document(
             .order_by(*_JOB_CREATION_ORDERING)
             .limit(1)
         )
+        if paper_jobs_only:
+            statement = statement.where(_not_an_add_job())
         if reconcile_stale:
             statement = statement.with_for_update()
         job = session.execute(statement).scalar_one_or_none()

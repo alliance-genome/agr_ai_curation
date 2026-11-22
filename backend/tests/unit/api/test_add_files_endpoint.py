@@ -124,7 +124,6 @@ async def test_the_add_is_refused_when_provider_import_is_disabled(monkeypatch):
 @pytest.mark.parametrize(
     "body",
     [
-        {"files": []},
         {"files": [{"provider_file_id": "20", "md5": None}]},
         {"files": [{"provider_file_id": "20", "converted_md5": "m", "extra": 1}]},
     ],
@@ -139,3 +138,13 @@ def test_the_same_file_twice_is_refused_before_any_job():
     with pytest.raises(supplement_add.SupplementAddRequestError) as raised:
         supplement_add.start_supplement_add(uuid4(), 7, [chosen, chosen])
     assert raised.value.code == "file_chosen_twice"
+
+
+@pytest.mark.asyncio
+async def test_an_empty_list_is_the_typed_no_files_chosen(monkeypatch, wired):
+    with pytest.raises(HTTPException) as raised:
+        await documents.add_files_to_paper_endpoint(
+            AddFilesRequest(files=[]), BackgroundTasks(), _request(), document_id=DOCUMENT_ID,
+            user={"sub": "owner-subject"},
+        )
+    assert (raised.value.status_code, raised.value.detail["error"]) == (422, "no_files_chosen")
