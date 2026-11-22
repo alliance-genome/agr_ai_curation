@@ -33,7 +33,7 @@ def test_a_piece_number_outside_every_range_or_not_an_integer_is_not_readable(in
 
 
 def test_the_ranges_read_as_today_for_one_file_and_name_each_file_for_several():
-    one = ReadableFiles("doc-1", (ReadableFile("f", "paper.pdf", "main", 0, 348),))
+    one = ReadableFiles("doc-1", (ReadableFile("f", "paper.pdf", "main", 0, 348, "PDF", "paper.pdf"),))
 
     assert one.ranges_text() == "0 to 348"
     assert PAPER.ranges_text() == "0 to 41 (paper.pdf), 42 to 60 (Table S1.xlsx), 70 to 75 (Data S2.docx)"
@@ -41,8 +41,8 @@ def test_the_ranges_read_as_today_for_one_file_and_name_each_file_for_several():
 
 def test_ranges_are_told_in_piece_order_whatever_the_tab_order():
     reordered = ReadableFiles("doc-1", (
-        ReadableFile("b", "Table S1.xlsx", "supplement", 42, 60),
-        ReadableFile("a", "paper.pdf", "main", 0, 41),
+        ReadableFile("b", "Table S1.xlsx", "supplement", 42, 60, "Excel", "Table S1.xlsx"),
+        ReadableFile("a", "paper.pdf", "main", 0, 41, "PDF", "paper.pdf"),
     ))
 
     assert reordered.ranges_text() == "0 to 41 (paper.pdf), 42 to 60 (Table S1.xlsx)"
@@ -79,22 +79,21 @@ def test_the_scope_reaches_tasks_and_threads_started_inside_it():
 
 
 def test_files_sharing_a_name_get_numbered_labels_that_never_collide_with_a_real_name():
-    readable = ReadableFiles("doc-1", (
-        ReadableFile("a", "Table S1.xlsx", "supplement", 0, 1),
-        ReadableFile("b", "Table S1.xlsx (2)", "supplement", 2, 3),
-        ReadableFile("c", "Table S1.xlsx", "supplement", 4, 5),
-        ReadableFile("d", "Table S1.xlsx", "supplement", 6, 7),
-    ))
+    from src.lib.document_files.readable import file_labels
 
-    assert [(label, file.file_id) for label, file in readable.labelled()] == [
-        ("Table S1.xlsx", "a"), ("Table S1.xlsx (2)", "b"), ("Table S1.xlsx (3)", "c"), ("Table S1.xlsx (4)", "d"),
+    assert file_labels(["Table S1.xlsx", "Table S1.xlsx (2)", "Table S1.xlsx", "Table S1.xlsx"]) == [
+        "Table S1.xlsx", "Table S1.xlsx (2)", "Table S1.xlsx (3)", "Table S1.xlsx (4)",
     ]
-    assert readable.by_label("Table S1.xlsx (2)").file_id == "b"
-    assert readable.by_label("Table S1.xlsx (3)").file_id == "c"
+    readable = files("doc-1", ("Table S1.xlsx", 0, 1), ("Table S1.xlsx (2)", 2, 3), ("Table S1.xlsx", 4, 5))
+    assert readable.by_label("Table S1.xlsx (2)").chunk_index_start == 2
+    assert readable.by_label("Table S1.xlsx (3)").chunk_index_start == 4
     assert readable.by_label("Table S1.xlsx (5)") is None
-    assert readable.ranges_text() == (
-        "0 to 1 (Table S1.xlsx), 2 to 3 (Table S1.xlsx (2)), 4 to 5 (Table S1.xlsx (3)), 6 to 7 (Table S1.xlsx (4))"
-    )
+    assert readable.ranges_text() == "0 to 1 (Table S1.xlsx), 2 to 3 (Table S1.xlsx (2)), 4 to 5 (Table S1.xlsx (3))"
+
+
+def test_a_file_without_a_kind_or_label_cannot_be_built():
+    with pytest.raises(TypeError):
+        ReadableFile("f", "paper.pdf", "main", 0, 1)
 
 
 def test_one_file_of_the_paper_can_be_read_on_its_own():
@@ -102,12 +101,13 @@ def test_one_file_of_the_paper_can_be_read_on_its_own():
 
     assert PAPER.only(sheet).files == (sheet,)
     with pytest.raises(Exception, match="not one of this paper's readable files"):
-        PAPER.only(ReadableFile("x", "other.pdf", "supplement", 90, 99))
+        PAPER.only(ReadableFile("x", "other.pdf", "supplement", 90, 99, "PDF", "other.pdf"))
 
 
 @pytest.mark.parametrize("display_mode, extension, kind", [
     ("local_pdf", None, "PDF"), ("provider_pdf_proxy", "pdf", "PDF"), ("text", "xlsx", "Excel"),
-    ("text", ".DOCX", "Word"), ("text", "csv", "text"), ("text", None, "text"),
+    ("text", "xls", "Excel"), ("text", ".DOCX", "Word"), ("text", "doc", "Word"), ("text", "csv", "CSV"),
+    ("text", "txt", "text"), ("text", None, "text"),
 ])
 def test_a_files_kind_comes_from_its_display_mode_and_extension(display_mode, extension, kind):
     from src.lib.document_files.readable import file_kind

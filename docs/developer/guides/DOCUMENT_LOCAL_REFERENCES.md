@@ -83,16 +83,22 @@ files and removed files are never readable.
 `read_section(section_name, file=None)` and
 `read_subsection(parent_section, subsection, file=None)` read the pieces whose
 stored `parentSection` (and `subsection`) equal the requested names exactly
-(Q9): "Methods" does not read "Materials and Methods". The search index tokenizes
-these names by word, so its `equal` filter only narrows the read; the stored
-name is then compared exactly. `file` is a file name as the outline shows it
-(`ReadableFiles.labelled`: a second file with the same display name is shown as
-"name (2)", skipping any suffix another file really has). It is optional when
+(Q9): "Methods" does not read "Materials and Methods". The names are compared in
+code over a names-only listing of the readable pieces, and only the chosen pieces'
+text is read. The search index is never asked to match a name: it tokenizes names
+by word (its `equal` would return "Materials and Methods" for "Methods") and it
+refuses a name made only of stopwords or punctuation ("a", "(").
+`file` is a file name as the outline shows it (`file_labels`: numbered over all of
+the paper's files by tab order, so a label does not move when another file
+becomes ready; a second file with the same display name is "name (2)", skipping
+any suffix another file really has). It is optional when
 the section is in one readable file. A request the model can correct returns
 `section: null` with a summary and an `error_code`, and the run continues:
 
-- `section_not_found`: every exact section name (or the section's subsection
-  names), file by file, as stored;
+- `section_not_found`: every exact section name, file by file, as stored (pieces
+  with no stored section name, listed as "Unknown" in the outline, are not
+  offered); for a subsection, the section's subsection names, or that the
+  section has no subsections;
 - `section_ambiguous`: the files holding the section, asking for `file`;
 - `unknown_file`: the readable file names.
 

@@ -32,6 +32,8 @@ JOINED_CONTENT_SHAPE = "joined_content"
 NUMBERED_PASSAGES_SHAPE = "numbered_passages"
 
 SECTION_READ_RESULT_KEYS = {"read_section": "section", "read_subsection": "subsection"}
+# A section read the model can correct (0.12.0): the result holds a summary and one of these.
+SECTION_ANSWER_CODES = ("section_not_found", "section_ambiguous", "unknown_file")
 
 # Must match the application's model view renderer
 # (backend/src/lib/openai_agents/document_result_view.py).

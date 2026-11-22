@@ -489,6 +489,11 @@ export function ToolCallsView({ data }: ToolCallsViewProps) {
             </Button>
           </ButtonGroup>
           <Chip label={`Total: ${data.total_count}`} color="primary" />
+          {data.section_answers && Object.entries(data.section_answers)
+            .filter(([, count]) => count > 0)
+            .map(([code, count]) => (
+              <Chip key={code} label={`${code}: ${count}`} color="warning" variant="outlined" />
+            ))}
         </Box>
       </Box>
 

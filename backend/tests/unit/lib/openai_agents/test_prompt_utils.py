@@ -150,6 +150,16 @@ def test_while_files_are_being_added_the_outline_says_so_after_the_files():
         "### How to use this outline:")
 
 
+def test_one_blank_line_separates_the_last_file_from_the_usage_notes():
+    plain = format_hierarchy_for_prompt(_outline(_file("paper.pdf", "main", "PDF", 0, 41, [METHODS])))
+    adding = format_hierarchy_for_prompt(
+        {**_outline(_file("paper.pdf", "main", "PDF", 0, 41, [METHODS])), "files_being_added": 1})
+
+    assert "  └─ Fly strains (p.3, 1 chunks)\n\n### How to use this outline:" in plain
+    assert ("  └─ Fly strains (p.3, 1 chunks)\n\nFiles are still being added to this paper; they cannot "
+            "be read yet.\n\n### How to use this outline:") in adding
+
+
 def test_with_no_file_being_added_the_outline_does_not_mention_it():
     for count in (0, None):
         outline = {**_outline(_file("paper.pdf", "main", "PDF", 0, 41, [METHODS])), "files_being_added": count}

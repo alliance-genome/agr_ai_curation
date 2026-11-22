@@ -158,13 +158,23 @@ trace_review/
 - `GET /api/traces/{trace_id}/duplicates` - Report repeated payload fingerprints across trace and observation IO
 - `GET /api/traces/{trace_id}/views/{view_name}` - Get specific view data
 
+**0.12.0 section reads and outlines.** A section read the model can correct
+returns no passages but an `error_code` (`section_not_found`,
+`section_ambiguous`, `unknown_file`) and the exact names; the `tool_calls` view
+labels such results ("Answer: ...") and counts each code (`section_answers`).
+The `document_hierarchy` view reads the per-file outline (`files`, each with its
+role, kind, chunk range and sections; `files_being_added` when the outline said
+files were still being added) and still reads the one-file outline of older
+traces.
+
 **Available Views**: `summary`, `conversation`, `tool_calls`, `pdf_citations`, `token_analysis`, `agent_context`, `trace_summary`, `document_hierarchy`, `agent_configs`, `group_context`, `domain_envelope`, `extraction_timeline`, `evidence_revisions`
 
 **Section reads in two shapes.** A `read_section` or `read_subsection` result in
 a trace is what the model received, not the application's stored result.
 Traces recorded before the numbered-passage release hold one joined `content`
 string with `section_title` (or `parent_section` and `subsection`). Later traces
-hold `requested_section`, `matched_sections` and a `passages` list, where each
+hold `requested_section`, `matched_sections` (until 0.12.0; from 0.12.0 `file`,
+the one file read, since names are exact) and a `passages` list, where each
 passage's `text` is numbered lines, `[span_index] sentence`, with a sentence's
 later lines indented four spaces. TraceReview reads both shapes
 (`backend/src/analyzers/document_read_results.py`): the `tool_calls` view shows

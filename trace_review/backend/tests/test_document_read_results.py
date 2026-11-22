@@ -417,11 +417,39 @@ class ExactSectionReadTests(unittest.TestCase):
         self.assertEqual(parsed["matched_sections"], [])
         self.assertEqual(parsed["section_title"], "Materials and Methods")
 
-    def test_a_section_answer_keeps_its_summary(self):
+    def test_a_section_answer_is_labelled_with_its_code(self):
+        # The model view drops the null section; the code and the exact names remain.
         payload = {"summary": "No section named 'Methods' in the readable files. Section names, exactly "
                               "as stored: paper.pdf: 'Materials and Methods'.",
-                   "section": None, "error_code": "section_not_found"}
+                   "error_code": "section_not_found"}
 
         result = ToolResultParser.parse(str(payload), tool_name="read_section")
 
-        self.assertIn("No section named 'Methods'", json.dumps(result))
+        self.assertEqual(result["parsed"]["section_answer"]["error_code"], "section_not_found")
+        self.assertTrue(result["summary"].startswith("Answer: section_not_found. No section named 'Methods'"))
+
+    def test_other_tools_and_codes_are_not_section_answers(self):
+        cursor = {"summary": "Invalid read_chunk request.", "error_code": "invalid_result_cursor"}
+        self.assertNotIn("section_answer", ToolResultParser.parse(str(cursor), tool_name="read_chunk")["parsed"])
+        other = {"summary": "x", "error_code": "section_not_found"}
+        self.assertNotIn("section_answer", ToolResultParser.parse(str(other), tool_name="search_document")["parsed"])
+
+    def test_the_tool_calls_view_counts_each_section_answer(self):
+        def call(call_id, payload):
+            return [
+                {"type": "GENERATION", "id": f"g-{call_id}", "startTime": f"2026-11-22T00:00:0{call_id}",
+                 "output": [{"type": "function_call", "name": "read_section", "call_id": call_id,
+                             "arguments": json.dumps({"section_name": "Methods"})}]},
+                {"type": "GENERATION", "id": f"o-{call_id}", "startTime": f"2026-11-22T00:00:1{call_id}",
+                 "input": [{"type": "function_call_output", "call_id": call_id, "output": str(payload)}]},
+            ]
+
+        observations = (
+            call("1", {"summary": "No section named 'Methods'.", "error_code": "section_not_found"})
+            + call("2", {"summary": "Section 'Sheet1' is in more than one file.", "error_code": "section_ambiguous"})
+            + call("3", {"summary": "No section named 'Intro'.", "error_code": "section_not_found"})
+        )
+
+        counts = ToolCallAnalyzer.extract_tool_calls(observations)["section_answers"]
+
+        self.assertEqual(counts, {"section_not_found": 2, "section_ambiguous": 1, "unknown_file": 0})

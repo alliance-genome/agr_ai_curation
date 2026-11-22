@@ -352,3 +352,84 @@ def test_a_batch_is_not_told_about_supplements_being_added(owner_id):
     paper = _paper(owner_id)
     with reading_scope(ReadingScope.MAIN_FILE_ONLY):
         assert resolve_readable_files(paper["document_id"], TEST_USER_ID).files_being_added == 0
+
+
+async def _one_file_paper_with_sections(owner_id, weaviate_connection, names):
+    document_id = uuid4()
+    with SessionLocal.begin() as db:
+        db.add(PDFDocument(
+            id=document_id, user_id=owner_id, filename=f"{PREFIX}{document_id}.pdf",
+            status="completed", processing_completed_at=datetime.now(timezone.utc), next_chunk_index=len(names),
+        ))
+        db.flush()
+        db.add(_file(
+            document_id, role="main", display_name="main.pdf", status="ready", tab_order=0,
+            display_mode="local_pdf", file_path=f"o/{document_id}/main.pdf", page_count=1,
+            chunk_index_start=0, chunk_index_end=len(names) - 1, chunk_count=len(names), text_bytes=30,
+        ))
+    await store_chunks_to_weaviate(
+        [{"chunk_index": index, "content": f"Piece {index}.", "element_type": "NarrativeText", "page_number": 1,
+          "section_title": name, "parent_section": name, "subsection": sub, "metadata": {}}
+         for index, (name, sub) in enumerate(names)],
+        str(document_id), weaviate_connection, TEST_USER_ID, chunk_range=(0, len(names) - 1),
+    )
+    return str(document_id)
+
+
+@pytest.mark.asyncio
+async def test_names_of_only_stopwords_or_punctuation_read_without_error(owner_id, weaviate_connection,
+                                                                          setup_collections, clean_chunks,
+                                                                          monkeypatch):
+    """The test Weaviate is production's version; its equal filter refuses "a" and "(" ("only stopwords")."""
+    document_id = await _one_file_paper_with_sections(owner_id, weaviate_connection, [
+        ("Figure Legends", "a"), ("a", None), ("Figure Legends", "("), ("Results", "on"),
+    ])
+    monkeypatch.setattr(chunk_reads, "get_connection", lambda: weaviate_connection)
+    readable = resolve_readable_files(document_id, TEST_USER_ID)
+
+    section_a = await chunk_reads.get_chunks_by_parent_section(document_id, "a", TEST_USER_ID, readable=readable)
+    sub_a = await chunk_reads.get_chunks_by_subsection(document_id, "Figure Legends", "a", TEST_USER_ID,
+                                                       readable=readable)
+    sub_paren = await chunk_reads.get_chunks_by_subsection(document_id, "Figure Legends", "(", TEST_USER_ID,
+                                                           readable=readable)
+    empty = await chunk_reads.get_chunks_by_parent_section(document_id, "", TEST_USER_ID, readable=readable)
+
+    assert [chunk["chunk_index"] for chunk in section_a] == [1]
+    assert [chunk["chunk_index"] for chunk in sub_a] == [0]
+    assert [chunk["chunk_index"] for chunk in sub_paren] == [2]
+    assert empty == []
+
+
+def test_a_files_label_does_not_move_when_an_earlier_same_named_file_becomes_ready(owner_id):
+    document_id = uuid4()
+    with SessionLocal.begin() as db:
+        db.add(PDFDocument(
+            id=document_id, user_id=owner_id, filename=f"{PREFIX}{document_id}.pdf",
+            status="completed", processing_completed_at=datetime.now(timezone.utc), next_chunk_index=5,
+        ))
+        db.flush()
+        db.add(_file(document_id, role="main", display_name="main.pdf", status="ready", tab_order=0,
+                     display_mode="local_pdf", file_path=f"o/{document_id}/main.pdf", page_count=1,
+                     chunk_index_start=0, chunk_index_end=0, chunk_count=1, text_bytes=10))
+        earlier = _file(document_id, role="supplement", display_name="Table S1.xlsx", status="pending",
+                        tab_order=1, display_mode="text", file_path=f"o/{document_id}/a.md", page_count=None,
+                        source_file_extension="xlsx", chunk_index_start=3, chunk_index_end=4, chunk_count=2)
+        later = _file(document_id, role="supplement", display_name="Table S1.xlsx", status="ready",
+                      tab_order=2, display_mode="text", file_path=f"o/{document_id}/b.md", page_count=None,
+                      source_file_extension="xlsx", chunk_index_start=1, chunk_index_end=2, chunk_count=2,
+                      text_bytes=20)
+        db.add_all([earlier, later])
+        db.flush()
+        earlier_id, later_id = str(earlier.id), str(later.id)
+
+    before = resolve_readable_files(str(document_id), TEST_USER_ID)
+    assert [(label, file.file_id, file.kind) for label, file in before.labelled()][1:] == [
+        ("Table S1.xlsx (2)", later_id, "Excel")]
+
+    with SessionLocal.begin() as db:
+        db.get(PDFDocumentFile, UUID(earlier_id)).status = "ready"
+        db.get(PDFDocumentFile, UUID(earlier_id)).text_bytes = 20
+    after = resolve_readable_files(str(document_id), TEST_USER_ID)
+
+    assert after.by_label("Table S1.xlsx (2)").file_id == later_id
+    assert after.by_label("Table S1.xlsx").file_id == earlier_id

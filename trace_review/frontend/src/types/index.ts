@@ -100,10 +100,14 @@ export interface ToolCall {
   domain_envelope?: DomainEnvelopeTraceSummary;
 }
 
+export type SectionAnswerCode = 'section_not_found' | 'section_ambiguous' | 'unknown_file';
+
 export interface ToolCallsData {
   total_count: number;
   unique_tools: string[];
   tool_calls: ToolCall[];
+  // Section reads answered with the paper's exact names instead of text (0.12.0).
+  section_answers?: Record<SectionAnswerCode, number>;
 }
 
 export interface RoutingPlan {
@@ -568,12 +572,26 @@ export interface HierarchySubsection {
   chunk_count: number;
 }
 
+export interface HierarchyFile {
+  number: number;
+  name: string | null;
+  role: string | null;
+  kind: string | null;
+  chunk_count: number | null;
+  chunk_index_start: number | null;
+  chunk_index_end: number | null;
+  sections: HierarchySection[];
+}
+
 export interface DocumentHierarchyData {
   found: boolean;
   document_name: string | null;
   structure_type: 'hierarchy' | 'flat' | 'unresolved' | 'unknown';
   top_level_sections: string[];
   sections: HierarchySection[];
+  // Each file of the paper with its own sections (0.12.0); one unnamed file for older traces.
+  files?: HierarchyFile[];
+  files_being_added?: boolean;
   raw_hierarchy_text: string | null;
   chunk_count_total: number;
   error?: string;

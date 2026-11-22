@@ -777,28 +777,33 @@ async def _not_found_answer(
     """Every exact name the request could have used, file by file, as stored."""
     outline = await get_document_sections_hierarchical(document_id, user_id, readable=scope)
     where = f"file '{file}'" if file is not None else "the readable files"
-    parts = []
-    for listed in outline["files"]:
-        if subsection is None:
-            names = [entry["name"] for entry in listed["sections"]]
-        else:
-            names = [
-                sub["name"] for entry in listed["sections"] if entry["name"] == section
-                for sub in entry["subsections"]
-            ]
-        if names:
-            parts.append(f"{listed['name']}: {_quoted(names)}")
-    if subsection is None:
-        missing = f"No section named '{section}' in {where}."
-        listing = "Section names, exactly as stored"
-    elif parts:
-        missing = f"No subsection '{subsection}' in section '{section}' in {where}."
-        listing = f"Subsection names of '{section}', exactly as stored"
-    else:
-        return await _not_found_answer(
-            document_id, user_id, scope, section=section, subsection=None, file=file,
+    # Names as stored; pieces without a stored section name ("Unknown") are not a name to ask for.
+    stored = [
+        (listed["name"], [entry for entry in listed["sections"] if entry.get("name_stored", True)])
+        for listed in outline["files"]
+    ]
+    holding = [
+        (name, entry) for name, entries in stored for entry in entries if entry["name"] == section
+    ]
+    if subsection is None or not holding:
+        parts = [f"{name}: {_quoted([entry['name'] for entry in entries])}" for name, entries in stored if entries]
+        return (
+            f"No section named '{section}' in {where}. "
+            f"Section names, exactly as stored: {'; '.join(parts) if parts else 'none'}."
         )
-    return f"{missing} {listing}: {'; '.join(parts) if parts else 'none'}."
+    parts = [
+        f"{name}: {_quoted([sub['name'] for sub in entry['subsections']])}"
+        for name, entry in holding if entry["subsections"]
+    ]
+    if not parts:
+        return (
+            f"Section '{section}' in {where} has no subsections. "
+            "Read it whole with read_section."
+        )
+    return (
+        f"No subsection '{subsection}' in section '{section}' in {where}. "
+        f"Subsection names of '{section}', exactly as stored: {'; '.join(parts)}."
+    )
 
 
 async def _read_named_section(

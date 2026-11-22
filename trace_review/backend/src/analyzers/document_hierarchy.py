@@ -140,6 +140,15 @@ class DocumentHierarchyAnalyzer:
             re.DOTALL
         )
 
+        # Traces recorded before 0.12.0 hold the one-file outline: "This document has the
+        # following hierarchical structure:" ... "**Top-level sections (in order):** ...".
+        # Read as one file without a file line, so stored traces keep their outline.
+        old_match = None if hierarchy_match else re.search(
+            r'## Document Structure\s*\n+This document has the following hierarchical structure:\s*\n+(.*?)(?=\*\*Top-level sections|\n### How to use)',
+            instructions,
+            re.DOTALL
+        )
+
         # Also try flat sections pattern
         flat_match = re.search(
             r'## Document Sections\s*\n+This document has the following sections available:\s*\n+(.*?)(?=Use this information|\n### )',
@@ -164,6 +173,28 @@ class DocumentHierarchyAnalyzer:
                 result["structure_type"] = "hierarchy"
                 result["resolution_failed"] = False
             result["top_level_sections"] = [section["name"] for section in result["sections"]]
+
+        elif old_match:
+            raw_text = old_match.group(1).strip()
+            result["found"] = True
+            result["raw_text"] = raw_text
+            result["sections"] = cls._parse_hierarchical_sections(raw_text)
+            result["files"] = [{"number": 1, "name": None, "role": None, "kind": None, "chunk_count": None,
+                                "chunk_index_start": None, "chunk_index_end": None,
+                                "sections": result["sections"]}]
+            if len(result["sections"]) == 1 and result["sections"][0].get("name") == "Unknown":
+                result["structure_type"] = "unresolved"
+                result["resolution_failed"] = True
+            else:
+                result["structure_type"] = "hierarchy"
+                result["resolution_failed"] = False
+            top_level_match = re.search(r'\*\*Top-level sections \(in order\):\*\*\s*(.+?)(?:\n|$)', instructions)
+            if top_level_match and top_level_match.group(1).strip().lower() != "unknown":
+                result["top_level_sections"] = [name.strip() for name in top_level_match.group(1).split(",")]
+            elif top_level_match:
+                result["top_level_sections"] = ["Unknown"]
+            else:
+                result["top_level_sections"] = [section["name"] for section in result["sections"]]
 
         elif flat_match:
             raw_text = flat_match.group(1).strip()

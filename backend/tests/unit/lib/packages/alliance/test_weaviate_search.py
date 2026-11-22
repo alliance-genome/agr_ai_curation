@@ -1219,7 +1219,7 @@ async def test_subsection_real_retrieval_to_registered_tool_and_model_view(
         assert not {"content", "evidence_spans", "chunk_id", "doc_items"} & set(passage)
     assert emitted[0]["doc_items"] == [item for p in result["passages"] for item in p["doc_items"]]
     assert len(emitted) == 1
-    assert tenants == ["owner-1"]
+    assert tenants == ["owner-1", "owner-1"]  # names listed, then the chosen pieces read, both in the tenant
     assert all(str(obj.uuid) not in json.dumps(view) for obj in objects)
     (reads,), _ = weaviate_search.retain_issued_spans.await_args
     assert [(chunk["chunk_index"], chunk["id"], issued) for chunk, _spans, issued in reads] == [
@@ -1408,3 +1408,46 @@ def test_section_tools_take_an_optional_file(monkeypatch):
     for factory in (weaviate_search.create_read_section_tool, weaviate_search.create_read_subsection_tool):
         schema = factory("doc-12345678", "user-1").params_json_schema
         assert "file" in schema["properties"]
+
+
+@pytest.mark.asyncio
+async def test_a_subsection_of_a_section_without_subsections_says_so(monkeypatch):
+    """Recorded call shape: read_subsection("Methods", "Animals") on a paper whose Methods has none."""
+    _OUTLINE["paper.pdf"] = [{"name": "Introduction", "subsections": []}, {"name": "Methods", "subsections": []}]
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_subsection", AsyncMock(return_value=[]))
+    tool = weaviate_search.create_read_subsection_tool("doc-12345678", "user-1")
+
+    result = await tool("Methods", "Animals")
+
+    assert result.error_code == "section_not_found"
+    assert result.summary == (
+        "Section 'Methods' in the readable files has no subsections. Read it whole with read_section."
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_subsection_of_a_missing_section_gets_the_section_names(monkeypatch):
+    _OUTLINE["paper.pdf"] = [{"name": "Materials and Methods", "subsections": [{"name": "Animals"}]}]
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_subsection", AsyncMock(return_value=[]))
+    tool = weaviate_search.create_read_subsection_tool("doc-12345678", "user-1")
+
+    result = await tool("Methods", "Animals")
+
+    assert result.summary == (
+        "No section named 'Methods' in the readable files. "
+        "Section names, exactly as stored: paper.pdf: 'Materials and Methods'."
+    )
+
+
+@pytest.mark.asyncio
+async def test_pieces_without_a_stored_section_name_are_not_offered_as_a_name(monkeypatch):
+    _OUTLINE["paper.pdf"] = [{"name": "Unknown", "name_stored": False, "subsections": []},
+                             {"name": "Results", "name_stored": True, "subsections": []}]
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", AsyncMock(return_value=[]))
+    tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
+
+    result = await tool("Methods")
+
+    assert result.summary == (
+        "No section named 'Methods' in the readable files. Section names, exactly as stored: paper.pdf: 'Results'."
+    )

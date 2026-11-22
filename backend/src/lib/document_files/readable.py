@@ -72,7 +72,7 @@ class ReadableFilesError(RuntimeError):
 # original's file extension (structural metadata, never the file's text).
 FILE_KIND_PDF = "PDF"
 FILE_KIND_TEXT = "text"
-_TEXT_FILE_KINDS = {"docx": "Word", "xlsx": "Excel"}
+_TEXT_FILE_KINDS = {"docx": "Word", "doc": "Word", "xlsx": "Excel", "xls": "Excel", "csv": "CSV"}
 
 
 def file_kind(display_mode: str, source_file_extension: str | None) -> str:
@@ -82,6 +82,30 @@ def file_kind(display_mode: str, source_file_extension: str | None) -> str:
     return _TEXT_FILE_KINDS.get(extension, FILE_KIND_TEXT)
 
 
+def file_labels(display_names: list[str]) -> list[str]:
+    """The name the model sees for each of a paper's files, given in tab order.
+
+    Numbered over ALL of the paper's files (any status), so a file's label does
+    not change when another file becomes ready during a run. A name shared by
+    several files gets " (2)", " (3)" ... on its later files, skipping any suffix
+    that is itself the name of another file, so every label names one file.
+    """
+
+    taken = set(display_names)
+    used: set[str] = set()
+    labels = []
+    for name in display_names:
+        label = name
+        if label in used:
+            number = 2
+            while f"{name} ({number})" in used | taken:
+                number += 1
+            label = f"{name} ({number})"
+        used.add(label)
+        labels.append(label)
+    return labels
+
+
 @dataclass(frozen=True, slots=True)
 class ReadableFile:
     file_id: str
@@ -89,7 +113,9 @@ class ReadableFile:
     role: str
     chunk_index_start: int
     chunk_index_end: int
-    kind: str = FILE_KIND_PDF
+    kind: str
+    # The name the model sees and passes back as ``file`` (see ``file_labels``).
+    label: str
 
     def contains(self, chunk_index: int) -> bool:
         return self.chunk_index_start <= chunk_index <= self.chunk_index_end
@@ -128,26 +154,9 @@ class ReadableFiles:
         return tuple((file.file_id, file.chunk_index_start, file.chunk_index_end) for file in self.files)
 
     def labelled(self) -> tuple[tuple[str, ReadableFile], ...]:
-        """Each file with the name the model sees and passes back as ``file``, in tab order.
+        """Each readable file with the name the model sees and passes back as ``file``, in tab order."""
 
-        A name shared by several files gets " (2)", " (3)" ... on its later files,
-        skipping any suffix that is itself the name of another file, so every
-        label names exactly one file.
-        """
-
-        taken = {file.display_name for file in self.files}
-        used: set[str] = set()
-        labelled = []
-        for file in self.files:
-            label = file.display_name
-            if label in used:
-                number = 2
-                while f"{file.display_name} ({number})" in used | taken:
-                    number += 1
-                label = f"{file.display_name} ({number})"
-            used.add(label)
-            labelled.append((label, file))
-        return tuple(labelled)
+        return tuple((file.label, file) for file in self.files)
 
     def label_of(self, file: ReadableFile) -> str:
         return next(label for label, each in self.labelled() if each == file)
@@ -195,23 +204,26 @@ def readable_files_in_session(
     )
     if owned is None:
         raise ReadableFilesError(f"Document {document_id} is not a paper of this user")
-    statement = select(PDFDocumentFile).where(
-        PDFDocumentFile.document_id == paper_id,
-        PDFDocumentFile.status.in_((FILE_STATUS_READY, FILE_STATUS_PENDING)),
-    )
-    if scope is ReadingScope.MAIN_FILE_ONLY:
-        statement = statement.where(PDFDocumentFile.role == FILE_ROLE_MAIN)
-    rows = session.execute(statement.order_by(PDFDocumentFile.tab_order)).scalars().all()
+    # Every file of the paper, so labels are numbered the same way whatever is ready.
+    rows = session.execute(
+        select(PDFDocumentFile).where(PDFDocumentFile.document_id == paper_id)
+        .order_by(PDFDocumentFile.tab_order)
+    ).scalars().all()
+    labels = file_labels([row.display_name for row in rows])
+    in_scope = [
+        (row, label) for row, label in zip(rows, labels)
+        if scope is not ReadingScope.MAIN_FILE_ONLY or row.role == FILE_ROLE_MAIN
+    ]
     files = []
-    for row in rows:
-        if row.status == FILE_STATUS_PENDING:
+    for row, label in in_scope:
+        if row.status != FILE_STATUS_READY:
             continue
         start, end = require_chunk_range(row)
         files.append(ReadableFile(
             str(row.id), row.display_name, row.role, start, end,
-            file_kind(row.display_mode, row.source_file_extension),
+            file_kind(row.display_mode, row.source_file_extension), label,
         ))
-    being_added = sum(1 for row in rows if row.status == FILE_STATUS_PENDING)
+    being_added = sum(1 for row, _label in in_scope if row.status == FILE_STATUS_PENDING)
     # Keep the caller's spelling: read functions compare it with the documentId they filter on.
     return ReadableFiles(str(document_id), tuple(files), being_added)
 
