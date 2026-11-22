@@ -25,6 +25,7 @@ from src.lib.document_sources.models import (
     SourceArtifactRole,
     SourceArtifactStatus,
     SupplementFileCategory,
+    SourceConversionFileStatus,
     SourceConversionResult,
     SourceConversionStatus,
     SourceReference,
@@ -66,6 +67,18 @@ _LARGE_DATA_FILE_CLASS = "htp_supplement"
 # never copied: the listing observes what ABC converted.
 _CONVERTIBLE_SUPPLEMENT_EXTENSIONS = _OFFICE_SUPPLEMENT_EXTENSIONS | {"pdf"}
 _PUBLISHED_STATUS = "final"
+
+# ABC's per-file conversion statuses (``conversion_job_manager.PerFileProgress``).
+_ABC_FILE_PROGRESS_STATUSES = {
+    "pending": SourceConversionFileStatus.PENDING,
+    "success": SourceConversionFileStatus.CONVERTED,
+    "failed": SourceConversionFileStatus.FAILED,
+}
+_FILE_STATUS_PRECEDENCE = {
+    SourceConversionFileStatus.CONVERTED: 0,
+    SourceConversionFileStatus.PENDING: 1,
+    SourceConversionFileStatus.FAILED: 2,
+}
 
 _FIGURE_METADATA_FILE_CLASSES = {
     "converted_main_figure_metadata",
@@ -411,6 +424,36 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         if failures:
             return "; ".join(failures)
         return "ABC Literature conversion failed"
+
+    def conversion_file_statuses(
+        self, result: SourceConversionResult
+    ) -> dict[str, SourceConversionFileStatus]:
+        """ABC's ``per_file_progress`` status per original, keyed by ``source.referencefile_id``.
+
+        Entries of ABC's current job carry their source's id; entries ABC merges
+        in from converted rows carry an id it inferred from the display name, or
+        ``source: null``, which are skipped (the file listing decides those). When
+        one original has several entries, a failure outranks a pending entry,
+        which outranks a success. ``error`` is free text and never read.
+        """
+
+        statuses: dict[str, SourceConversionFileStatus] = {}
+        for progress in result.per_file_progress:
+            source_id = _source_referencefile_id(progress)
+            if source_id is None:
+                continue
+            raw_status = _first_string(progress, "status")
+            status = _ABC_FILE_PROGRESS_STATUSES.get((raw_status or "").lower())
+            if status is None:
+                raise DocumentSourceError(
+                    "ABC Literature conversion returned an unknown per-file status"
+                )
+            current = statuses.get(source_id)
+            if current is None or (
+                _FILE_STATUS_PRECEDENCE[status] > _FILE_STATUS_PRECEDENCE[current]
+            ):
+                statuses[source_id] = status
+        return statuses
 
     def provider_metadata_artifacts_for_source(
         self,

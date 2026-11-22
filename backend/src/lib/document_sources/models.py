@@ -116,6 +116,14 @@ class SourceConversionStatus(str, Enum):
     NO_SOURCES = "no_sources"
 
 
+class SourceConversionFileStatus(str, Enum):
+    """What a conversion answer says about one original file the provider worked on."""
+
+    PENDING = "pending"
+    CONVERTED = "converted"
+    FAILED = "failed"
+
+
 class ProviderBearerKind(str, Enum):
     """Whose credential a provider call carries, which decides derived-artifact trust.
 
@@ -313,6 +321,16 @@ class DocumentSourceProvider(Protocol):
 
     def conversion_failure_message(self, result: SourceConversionResult) -> str:
         """Return provider-owned sanitized conversion failure wording."""
+        raise NotImplementedError
+
+    def conversion_file_statuses(
+        self, result: SourceConversionResult
+    ) -> Mapping[str, SourceConversionFileStatus]:
+        """Per original file the answer names, by its provider file id, the provider's status.
+
+        Only files the answer identifies by id; the provider's free-text errors
+        are never read. A file the answer does not name is absent.
+        """
         raise NotImplementedError
 
     async def list_artifacts(
