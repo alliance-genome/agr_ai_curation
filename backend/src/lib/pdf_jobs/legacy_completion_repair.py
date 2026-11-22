@@ -22,8 +22,10 @@ Run it in the backend container of the release that is live:
     python -m src.lib.pdf_jobs.legacy_completion_repair --restore-from-report PATH \\
         --expect-digest <digest in that report>
 
-The apply step writes in one transaction, all or nothing, and only when the papers
-that qualify are exactly the ones the dry run reported (count and digest). The
+The apply step checks everything first without locks, then locks only the qualifying
+papers for the database re-check and the write, in one transaction, all or nothing,
+and only when the papers that qualify are exactly the ones the dry run reported (count
+and digest). Run it with admission closed (maintenance mode). The
 report holds internal ids, timestamps, statuses and check names; never titles,
 file names, owners or text.
 """
@@ -44,6 +46,7 @@ from uuid import UUID
 from sqlalchemy import exists, func, select, update
 from sqlalchemy.orm import Session
 
+from src.lib.pipeline.chunk import is_chunked_element
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.pdf_processing_job import PdfProcessingJob
 from src.models.sql.user import User
@@ -52,10 +55,11 @@ STATUS_PENDING = "pending"
 STATUS_COMPLETED = "completed"
 INDEX_DONE = "completed"
 
+# S1 and S3 select the candidates (a paper failing them is never one); the others are
+# checked on every candidate, and a candidate failing any of them is a partial match.
+SELECTION = ("S1_status_pending", "S3_no_processing_job")
 CHECKS = (
-    "S1_status_pending",
     "S2_no_error_or_processing_times",
-    "S3_no_processing_job",
     "S4_uploaded_before_first_job",
     "S5_pdf_stored",
     "S6_processed_elements_readable",
@@ -66,9 +70,10 @@ CHECKS = (
 
 EXIT_NOTHING_TO_DO = 0
 EXIT_ERROR = 1
-EXIT_WOULD_CHANGE = 3
-EXIT_CHANGED = 4
-EXIT_PARTIAL_MATCHES = 5
+EXIT_WOULD_CHANGE = 3  # dry run: papers would change, no partial matches
+EXIT_CHANGED = 4  # apply or restore wrote, no partial matches
+EXIT_PARTIAL_NOTHING_WRITTEN = 5  # partial matches present and nothing written (dry run, or apply of 0)
+EXIT_CHANGED_WITH_PARTIAL = 6  # apply wrote N and partial matches are present
 
 
 class LegacyRepairError(RuntimeError):
@@ -137,12 +142,11 @@ class RepairReport:
         return selection_digest(candidate.document_id for candidate in self.qualifying)
 
     def exit_code(self) -> int:
+        wrote = (self.mode == "apply" and self.written) or (self.mode == "restore" and self.restored)
+        if wrote:
+            return EXIT_CHANGED_WITH_PARTIAL if self.partial else EXIT_CHANGED
         if self.partial:
-            return EXIT_PARTIAL_MATCHES
-        if self.mode == "apply" and self.written:
-            return EXIT_CHANGED
-        if self.mode == "restore" and self.restored:
-            return EXIT_CHANGED
+            return EXIT_PARTIAL_NOTHING_WRITTEN
         if self.mode == "dry_run" and self.qualifying:
             return EXIT_WOULD_CHANGE
         return EXIT_NOTHING_TO_DO
@@ -151,6 +155,7 @@ class RepairReport:
         return {
             "mode": self.mode,
             "run_at": _iso(self.run_at),
+            "selection": list(SELECTION),
             "checks": list(CHECKS),
             "first_job_created_at": _iso(self.first_job_created_at),
             "candidate_count": len(self.candidates),
@@ -210,7 +215,11 @@ def _owned_file(storage_root: Path, relative_path: str | None, owner_auth_sub: s
 
 
 def _processed_elements_readable(path: Path | None) -> bool:
-    """A JSON list of elements, each an object with text, holding some text in all."""
+    """A JSON list of element objects whose chunked elements hold text, some text in all.
+
+    The chunker's own rule decides which elements count (``is_chunked_element``: page
+    footers are not cut into pieces), as main's ``element_text_bytes`` does.
+    """
 
     if path is None:
         return False
@@ -218,11 +227,12 @@ def _processed_elements_readable(path: Path | None) -> bool:
         elements = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, ValueError):
         return False
-    if not isinstance(elements, list) or not elements:
+    if not isinstance(elements, list) or not all(isinstance(element, dict) for element in elements):
         return False
-    if not all(isinstance(element, dict) and isinstance(element.get("text"), str) for element in elements):
+    chunked = [element for element in elements if is_chunked_element(element)]
+    if not all(isinstance(element.get("text"), str) for element in chunked):
         return False
-    return sum(len(element["text"]) for element in elements) > 0
+    return sum(len(element["text"]) for element in chunked) > 0
 
 
 def _unbroken(numbers: Sequence[int]) -> bool:
@@ -233,18 +243,19 @@ def _first_job_created_at(session: Session) -> datetime | None:
     return session.scalar(select(func.min(PdfProcessingJob.created_at)))
 
 
-def _pending_without_job(session: Session, *, lock: bool) -> list[tuple[PDFDocument, str]]:
+def _has_job():
+    return exists(select(PdfProcessingJob.id).where(PdfProcessingJob.document_id == PDFDocument.id))
+
+
+def _pending_without_job(session: Session) -> list[tuple[PDFDocument, str]]:
     """Papers that are ``pending`` with no processing job, with their owner's auth sub."""
 
-    has_job = exists(select(PdfProcessingJob.id).where(PdfProcessingJob.document_id == PDFDocument.id))
     statement = (
         select(PDFDocument, User.auth_sub)
         .join(User, User.id == PDFDocument.user_id)
-        .where(PDFDocument.status == STATUS_PENDING, ~has_job)
+        .where(PDFDocument.status == STATUS_PENDING, ~_has_job())
         .order_by(PDFDocument.id)
     )
-    if lock:
-        statement = statement.with_for_update(of=PDFDocument)
     return [(row[0], str(row[1])) for row in session.execute(statement).all()]
 
 
@@ -259,15 +270,12 @@ def _evaluate(
 ) -> Candidate:
     document_id = str(paper.id)
     failed: list[str] = []
-    if paper.status != STATUS_PENDING:
-        failed.append("S1_status_pending")
     if (
         paper.error_message is not None
         or paper.processing_started_at is not None
         or paper.processing_completed_at is not None
     ):
         failed.append("S2_no_error_or_processing_times")
-    # S3 holds by selection (no job row); it is re-checked under lock at apply time.
     if first_job_created_at is None or paper.upload_timestamp >= first_job_created_at:
         failed.append("S4_uploaded_before_first_job")
     # page_count is NOT NULL and positive by the table's own check.
@@ -294,13 +302,13 @@ def _evaluate(
     )
 
 
-def evaluate(session: Session, *, storage_root: Path, index: IndexReader, lock: bool = False) -> tuple[
+def evaluate(session: Session, *, storage_root: Path, index: IndexReader) -> tuple[
     datetime | None, tuple[Candidate, ...]
 ]:
-    """Check every paper that is ``pending`` with no job; read-only."""
+    """Check every paper that is ``pending`` with no job; read-only, takes no locks."""
 
     first_job = _first_job_created_at(session)
-    rows = _pending_without_job(session, lock=lock)
+    rows = _pending_without_job(session)
     pieces_by_owner: dict[str, Mapping[str, list[int]]] = {}
     candidates = []
     for paper, owner_auth_sub in rows:
@@ -330,6 +338,34 @@ def dry_run(session_factory: Callable[[], Session], *, storage_root: Path, index
     return RepairReport(mode="dry_run", run_at=now, first_job_created_at=first_job, candidates=candidates)
 
 
+def _repairable_now():
+    """The database conditions a paper must still meet at the moment it is written."""
+
+    return (
+        PDFDocument.status == STATUS_PENDING,
+        PDFDocument.error_message.is_(None),
+        PDFDocument.processing_started_at.is_(None),
+        PDFDocument.processing_completed_at.is_(None),
+        ~_has_job(),
+    )
+
+
+def lock_and_recheck(session: Session, document_ids: Sequence[UUID], first_job: datetime | None) -> set[UUID]:
+    """Lock the given papers and return those that still meet the database conditions (S1 to S4).
+
+    A paper deleted or changed since the checks drops out, which the caller refuses.
+    """
+
+    if first_job is None or not document_ids:
+        return set()
+    statement = (
+        select(PDFDocument.id)
+        .where(PDFDocument.id.in_(document_ids), PDFDocument.upload_timestamp < first_job, *_repairable_now())
+        .with_for_update(of=PDFDocument)
+    )
+    return set(session.execute(statement).scalars().all())
+
+
 def apply(
     session_factory: Callable[[], Session],
     *,
@@ -341,35 +377,37 @@ def apply(
 ) -> RepairReport:
     """Repair every qualifying paper in one transaction, or nothing.
 
-    The papers are locked, every check is run again, and the qualifying set must be
-    exactly the one the dry run reported (``expect_count`` and ``expect_digest``).
+    Every check runs first, without locks (the index and disk reads take the time).
+    The qualifying set must equal the dry run's (``expect_count`` and
+    ``expect_digest``). Only then are those papers locked, their database conditions
+    checked again, and the rows written. Each UPDATE repeats the conditions, including
+    "no processing job", so a job committed while the lock was awaited stops the
+    repair: nothing is written. Run with admission closed (maintenance mode).
     """
 
     with session_factory() as session:
         try:
-            first_job, candidates = evaluate(session, storage_root=storage_root, index=index, lock=True)
+            first_job, candidates = evaluate(session, storage_root=storage_root, index=index)
             qualifying = [candidate for candidate in candidates if candidate.qualifies]
-            digest = selection_digest(candidate.document_id for candidate in qualifying)
-            if len(qualifying) != expect_count or digest != expect_digest:
+            qualifying_ids = [candidate.document_id for candidate in qualifying]
+            if len(qualifying) != expect_count or selection_digest(qualifying_ids) != expect_digest:
                 raise LegacyRepairError(
                     "selection_changed: the qualifying papers are not the ones the dry run reported "
                     f"(found {len(qualifying)}, expected {expect_count})"
+                )
+            if lock_and_recheck(session, qualifying_ids, first_job) != set(qualifying_ids):
+                raise LegacyRepairError(
+                    "selection_changed: a qualifying paper changed between the checks and the lock"
                 )
             written = 0
             for candidate in qualifying:
                 result = session.execute(
                     update(PDFDocument)
-                    .where(
-                        PDFDocument.id == candidate.document_id,
-                        PDFDocument.status == STATUS_PENDING,
-                        PDFDocument.error_message.is_(None),
-                        PDFDocument.processing_started_at.is_(None),
-                        PDFDocument.processing_completed_at.is_(None),
-                    )
+                    .where(PDFDocument.id == candidate.document_id, *_repairable_now())
                     .values(
                         status=STATUS_COMPLETED,
-                        processing_started_at=candidate.upload_timestamp,
-                        processing_completed_at=candidate.upload_timestamp,
+                        processing_started_at=PDFDocument.upload_timestamp,
+                        processing_completed_at=PDFDocument.upload_timestamp,
                         # Keep the column's on-update default from touching it.
                         last_accessed=PDFDocument.last_accessed,
                     )
@@ -387,6 +425,14 @@ def apply(
     )
 
 
+_EXPECTED_PREVIOUS = {
+    "status": STATUS_PENDING,
+    "error_message": None,
+    "processing_started_at": None,
+    "processing_completed_at": None,
+}
+
+
 def restore(
     session_factory: Callable[[], Session],
     *,
@@ -394,40 +440,50 @@ def restore(
     expect_digest: str,
     now: datetime,
 ) -> RepairReport:
-    """Put back the previous values an apply report recorded, in one transaction, or nothing.
+    """Undo an apply, from its report, in one transaction, or nothing.
 
-    Only papers that still hold exactly what the repair wrote (``completed``, both
-    times at the upload time, no error, no job) are restored; otherwise nothing is.
+    The report only names papers; it never decides what is written. Each entry's
+    recorded previous state must be exactly the one the repair starts from (pending,
+    no error, no times), and the paper must still hold exactly what the repair wrote:
+    ``completed``, no error, both times equal to the row's own upload time, upload time
+    equal to the report's, and no processing job. It is then set back to pending with
+    no times. Any entry that does not match stops the restore: nothing is written.
     """
 
+    entries = report.get("qualifying")
     if report.get("mode") != "apply" or report.get("selection_digest") != expect_digest:
         raise LegacyRepairError("restore needs the apply report whose selection digest is given")
-    entries = report.get("qualifying")
     if not isinstance(entries, list) or selection_digest(entry["document_id"] for entry in entries) != expect_digest:
         raise LegacyRepairError("the report's papers do not match its selection digest")
+    if report.get("written") != len(entries):
+        raise LegacyRepairError("the report does not record a complete apply of its papers")
+    for entry in entries:
+        if entry.get("previous") != _EXPECTED_PREVIOUS:
+            raise LegacyRepairError(
+                f"Paper {entry.get('document_id')}: the report's previous state is not the one the repair starts from"
+            )
     restored: list[str] = []
     with session_factory() as session:
         try:
             for entry in entries:
                 document_id = UUID(entry["document_id"])
                 upload_timestamp = datetime.fromisoformat(entry["upload_timestamp"])
-                previous = entry["previous"]
-                has_job = exists(select(PdfProcessingJob.id).where(PdfProcessingJob.document_id == document_id))
                 result = session.execute(
                     update(PDFDocument)
                     .where(
                         PDFDocument.id == document_id,
+                        PDFDocument.upload_timestamp == upload_timestamp,
                         PDFDocument.status == STATUS_COMPLETED,
                         PDFDocument.error_message.is_(None),
-                        PDFDocument.processing_started_at == upload_timestamp,
-                        PDFDocument.processing_completed_at == upload_timestamp,
-                        ~has_job,
+                        PDFDocument.processing_started_at == PDFDocument.upload_timestamp,
+                        PDFDocument.processing_completed_at == PDFDocument.upload_timestamp,
+                        ~_has_job(),
                     )
                     .values(
-                        status=previous["status"],
-                        error_message=previous["error_message"],
-                        processing_started_at=_parse(previous["processing_started_at"]),
-                        processing_completed_at=_parse(previous["processing_completed_at"]),
+                        status=STATUS_PENDING,
+                        error_message=None,
+                        processing_started_at=None,
+                        processing_completed_at=None,
                         last_accessed=PDFDocument.last_accessed,
                     )
                     .execution_options(synchronize_session=False)
@@ -442,10 +498,6 @@ def restore(
             session.rollback()
             raise
     return RepairReport(mode="restore", run_at=now, first_job_created_at=None, candidates=(), restored=tuple(restored))
-
-
-def _parse(value: str | None) -> datetime | None:
-    return datetime.fromisoformat(value) if value is not None else None
 
 
 # --- the search index --------------------------------------------------------------

@@ -37,7 +37,11 @@ def _report(mode, candidates, written=0):
         (_report("dry_run", [_candidate()]), repair.EXIT_WOULD_CHANGE),
         (_report("apply", [_candidate()], written=1), repair.EXIT_CHANGED),
         (_report("apply", [], written=0), repair.EXIT_NOTHING_TO_DO),
-        (_report("dry_run", [_candidate(), _candidate(["S8_pieces_in_search_index"])]), repair.EXIT_PARTIAL_MATCHES),
+        (_report("dry_run", [_candidate(), _candidate(["S8_pieces_in_search_index"])]),
+         repair.EXIT_PARTIAL_NOTHING_WRITTEN),
+        (_report("apply", [_candidate(["S8_pieces_in_search_index"])], written=0), repair.EXIT_PARTIAL_NOTHING_WRITTEN),
+        (_report("apply", [_candidate(), _candidate(["S5_pdf_stored"])], written=1),
+         repair.EXIT_CHANGED_WITH_PARTIAL),
     ],
 )
 def test_exit_codes_tell_nothing_would_change_changed_and_partial_apart(report, expected):
@@ -65,9 +69,58 @@ def test_the_report_holds_ids_times_statuses_and_checks_only():
     assert payload["partial"] == [{"document_id": str(PAPER), "failed_checks": ["S5_pdf_stored"]}]
     assert payload["selection_digest"] == repair.selection_digest([PAPER])
     assert set(payload) == {
-        "mode", "run_at", "checks", "first_job_created_at", "candidate_count", "qualifying_count",
+        "mode", "run_at", "selection", "checks", "first_job_created_at", "candidate_count", "qualifying_count",
         "partial_count", "selection_digest", "written", "restored", "qualifying", "partial",
     }
+
+
+def test_s1_and_s3_are_selection_criteria_not_checks():
+    assert repair.SELECTION == ("S1_status_pending", "S3_no_processing_job")
+    assert not set(repair.SELECTION) & set(repair.CHECKS)
+
+
+def _write_json(tmp_path, payload):
+    path = tmp_path / "elements.json"
+    path.write_text(payload if isinstance(payload, str) else json.dumps(payload), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize(
+    ("payload", "readable"),
+    [
+        ([{"type": "NarrativeText", "text": "Made-up text."}], True),
+        # A page footer is not cut into pieces (the chunker's rule), so it needs no text.
+        ([{"text": "Made-up text."}, {"text": None, "metadata": {"doc_item_label": "page_footer"}}], True),
+        ([{"text": "Made-up text."}, {"type": "Image"}], False),
+        ([{"text": ""}], False),
+        ([], False),
+        ({"elements": [{"text": "x"}]}, False),
+        (["not an object"], False),
+        ("\xff\xfe", False),
+        ("not json", False),
+    ],
+)
+def test_processed_elements_follow_the_chunkers_rule(tmp_path, payload, readable):
+    assert repair._processed_elements_readable(_write_json(tmp_path, payload)) is readable
+
+
+def test_the_owner_folder_check_refuses_symlinks_absolute_paths_and_parent_steps(tmp_path):
+    (tmp_path / "owner-a").mkdir()
+    (tmp_path / "owner-b").mkdir()
+    (tmp_path / "owner-b" / "x.pdf").write_bytes(b"%PDF")
+    (tmp_path / "owner-a" / "link.pdf").symlink_to(tmp_path / "owner-b" / "x.pdf")
+    (tmp_path / "owner-a" / "own.pdf").write_bytes(b"%PDF")
+
+    assert repair._owned_file(tmp_path, "owner-a/own.pdf", "owner-a") is not None
+    assert repair._owned_file(tmp_path, "owner-a/link.pdf", "owner-a") is None
+    assert repair._owned_file(tmp_path, str(tmp_path / "owner-b" / "x.pdf"), "owner-a") is None
+    assert repair._owned_file(tmp_path, "owner-a/../owner-b/x.pdf", "owner-a") is None
+    assert repair._owned_file(tmp_path, "owner-b/x.pdf", "owner-a") is None
+
+
+@pytest.mark.parametrize(("numbers", "unbroken"), [([1, 2, 3], False), ([0, 0, 1], False), ([0], True), ([], False), ([2, 0, 1], True)])
+def test_piece_numbers_must_run_from_zero_without_gaps(numbers, unbroken):
+    assert repair._unbroken(numbers) is unbroken
 
 
 def test_the_digest_does_not_depend_on_order():

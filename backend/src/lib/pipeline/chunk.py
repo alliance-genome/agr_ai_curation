@@ -104,6 +104,12 @@ class ChunkingError(Exception):
     pass
 
 
+def is_chunked_element(element: Dict[str, Any]) -> bool:
+    """True for every parsed element whose text is cut into pieces (page footers are not)."""
+
+    return element.get("metadata", {}).get("doc_item_label") != "page_footer"
+
+
 async def chunk_parsed_document(
     elements: List[Dict[str, Any]],
     strategy: ChunkingStrategy,
@@ -122,11 +128,7 @@ async def chunk_parsed_document(
     Raises:
         ChunkingError: If chunking fails
     """
-    filtered_elements = [
-        element
-        for element in elements
-        if element.get("metadata", {}).get("doc_item_label") != "page_footer"
-    ]
+    filtered_elements = [element for element in elements if is_chunked_element(element)]
 
     if not filtered_elements:
         raise ChunkingError("No elements to chunk")

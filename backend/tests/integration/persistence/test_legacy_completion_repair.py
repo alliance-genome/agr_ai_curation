@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -19,6 +21,7 @@ import pytest
 from alembic import command  # pyright: ignore[reportAttributeAccessIssue]
 from alembic.config import Config  # pyright: ignore[reportMissingImports]
 from sqlalchemy import select, text
+from sqlalchemy.exc import OperationalError
 
 from src.lib.openai_agents import document_references
 from src.lib.pdf_jobs import legacy_completion_repair as repair
@@ -197,6 +200,17 @@ def _break_s5_missing_pdf(world, document_id):
     (world["storage"] / world["auth_sub"] / f"{document_id}.pdf").unlink()
 
 
+def _break_s5_file_of_another_owner(world, document_id):
+    """A real file exists, but under another owner's folder."""
+
+    foreign = f"another-owner-{document_id}/{document_id}.pdf"
+    _write(world["storage"], foreign, b"%PDF-1.7\nanother owner")
+    with SessionLocal() as session:
+        session.execute(text("UPDATE pdf_documents SET file_path = :path WHERE id = :id"),
+                        {"path": foreign, "id": document_id})
+        session.commit()
+
+
 def _break_s6_unreadable_elements(world, document_id):
     _write(world["storage"], f"{world['auth_sub']}/processed_json/{document_id}.json", "not json")
 
@@ -222,9 +236,11 @@ def _break_s9_index_not_done(world, document_id):
     [
         ({"error_message": "made-up failure"}, None, "S2_no_error_or_processing_times"),
         ({"processing_started_at": LEGACY_UPLOAD}, None, "S2_no_error_or_processing_times"),
+        ({"processing_completed_at": LEGACY_UPLOAD}, None, "S2_no_error_or_processing_times"),
         ({"upload_timestamp": FIRST_JOB + timedelta(days=1)}, None, "S4_uploaded_before_first_job"),
         ({"file_path": "someone-else/x.pdf"}, None, "S5_pdf_stored"),
         ({}, _break_s5_missing_pdf, "S5_pdf_stored"),
+        ({}, _break_s5_file_of_another_owner, "S5_pdf_stored"),
         ({}, _break_s6_unreadable_elements, "S6_processed_elements_readable"),
         ({"processed_json_path": None}, None, "S6_processed_elements_readable"),
         ({}, _break_s7_no_extraction_output, "S7_extraction_output_present"),
@@ -243,10 +259,11 @@ def test_a_paper_failing_one_check_is_reported_and_never_written(world, columns,
     report = _dry_run(world)
     partial = {candidate.document_id: candidate.failed_checks for candidate in report.partial}
     assert partial[broken_id] == (failed_check,)
-    assert report.exit_code() == repair.EXIT_PARTIAL_MATCHES
+    assert report.exit_code() == repair.EXIT_PARTIAL_NOTHING_WRITTEN
 
     applied = _apply(world, report)
 
+    assert applied.exit_code() == repair.EXIT_CHANGED_WITH_PARTIAL
     assert broken_id not in _qualifying_ids(applied)
     assert _row(broken_id) == before
     assert _row(complete_id)[0] == "completed"
@@ -415,3 +432,187 @@ def test_orphan_repair_skips_a_pending_paper_with_processed_output(world, monkey
         assert session.scalar(
             select(PdfProcessingJob.id).where(PdfProcessingJob.document_id == legacy_id)
         ) is None
+
+
+def test_with_no_job_rows_at_all_nothing_qualifies(world, monkeypatch):
+    """Without a first job row the pre-job pipeline cannot be told apart: S4 fails."""
+
+    document_id = legacy_paper(world)
+    monkeypatch.setattr(repair, "_first_job_created_at", lambda _session: None)
+
+    report = _dry_run(world)
+
+    assert report.first_job_created_at is None
+    assert {c.document_id: c.failed_checks for c in report.candidates}[document_id] == (
+        "S4_uploaded_before_first_job",
+    )
+    assert document_id not in _qualifying_ids(report)
+
+
+def _job(document_id, owner_id):
+    return PdfProcessingJob(
+        document_id=document_id, user_id=owner_id, filename="made-up.pdf",
+        status=PdfJobStatus.PENDING.value, current_stage="pending", progress_percentage=0,
+        message="made-up", cancel_requested=False,
+    )
+
+
+def test_the_lock_blocks_a_job_being_created_for_a_locked_paper(world):
+    document_id = legacy_paper(world)
+    report = _dry_run(world)
+    holder = SessionLocal()
+    try:
+        locked = repair.lock_and_recheck(holder, [document_id], report.first_job_created_at)
+        assert locked == {document_id}
+        other = SessionLocal()
+        try:
+            other.execute(text("SET lock_timeout = '1500ms'"))
+            other.add(_job(document_id, world["owner_id"]))
+            with pytest.raises(OperationalError, match="lock"):
+                other.flush()
+        finally:
+            other.rollback()
+            other.close()
+    finally:
+        holder.rollback()
+        holder.close()
+
+
+def test_a_job_committed_while_apply_waits_for_the_lock_stops_the_repair(world):
+    """Reviewer's race: the job exists uncommitted before apply locks, and commits while apply waits."""
+
+    document_id = legacy_paper(world)
+    report = _dry_run(world)
+    other = SessionLocal()
+    other.add(_job(document_id, world["owner_id"]))
+    other.flush()  # holds a key-share lock on the paper, uncommitted
+    outcome = {}
+
+    def run_apply():
+        try:
+            outcome["report"] = _apply(world, report)
+        except repair.LegacyRepairError as exc:
+            outcome["error"] = str(exc)
+
+    worker = threading.Thread(target=run_apply)
+    worker.start()
+    time.sleep(2)
+    other.commit()
+    other.close()
+    worker.join(30)
+
+    assert "error" in outcome and "changed" in outcome["error"]
+    assert _row(document_id)[0] == "pending"
+    with SessionLocal() as session:
+        assert session.scalar(text("SELECT count(*) FROM pdf_processing_jobs WHERE document_id = :d"),
+                              {"d": document_id}) == 1
+
+
+def test_the_update_repeats_the_conditions_even_if_the_recheck_was_skipped(world, monkeypatch):
+    """A paper that gains a job after the locked re-check is still not written (UPDATE guard)."""
+
+    document_id = legacy_paper(world)
+    report = _dry_run(world)
+    before = _database_digest()
+
+    def recheck_then_job_appears(session, document_ids, first_job):
+        with SessionLocal() as other:
+            other.add(_job(document_id, world["owner_id"]))
+            other.commit()
+        return set(document_ids)
+
+    monkeypatch.setattr(repair, "lock_and_recheck", recheck_then_job_appears)
+
+    with pytest.raises(repair.LegacyRepairError, match="changed during the repair"):
+        _apply(world, report)
+
+    assert _row(document_id)[0] == "pending"
+    after = _database_digest()
+    # Only the job the test itself added (and its audit row, if audited); no paper written.
+    changed = {t for t in before if before[t] != after[t]}
+    assert "pdf_processing_jobs" in changed and changed <= {"pdf_processing_jobs", "audit_log"}
+    assert before["pdf_documents"] == after["pdf_documents"]
+
+
+def test_an_error_part_way_rolls_back_every_write(world, monkeypatch):
+    legacy_paper(world)
+    legacy_paper(world)
+    report = _dry_run(world)
+    assert len(report.qualifying) >= 2
+    real_update, calls = repair.update, {"n": 0}
+
+    def failing_second_update(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("made-up failure on the second update")
+        return real_update(*args, **kwargs)
+
+    monkeypatch.setattr(repair, "update", failing_second_update)
+    before = _database_digest()
+
+    with pytest.raises(RuntimeError):
+        _apply(world, report)
+
+    assert _database_digest() == before
+
+
+def _crafted_report(document_id, *, upload_timestamp, previous):
+    entries = [{"document_id": str(document_id), "upload_timestamp": upload_timestamp.isoformat(),
+                "previous": previous}]
+    digest = repair.selection_digest([str(document_id)])
+    return {"mode": "apply", "selection_digest": digest, "written": 1, "qualifying": entries}, digest
+
+
+_PENDING_PREVIOUS = {"status": "pending", "error_message": None,
+                     "processing_started_at": None, "processing_completed_at": None}
+
+
+@pytest.mark.parametrize("previous", [
+    {**_PENDING_PREVIOUS, "status": "failed"},
+    {**_PENDING_PREVIOUS, "error_message": "made-up"},
+    {**_PENDING_PREVIOUS, "processing_started_at": "2026-01-01T00:00:00+00:00"},
+])
+def test_restore_refuses_a_report_whose_previous_state_is_not_the_repairs(world, previous):
+    """Reviewer's misuse: a crafted report must not set arbitrary values on any row."""
+
+    stamp = datetime(2026, 4, 1, 12, tzinfo=timezone.utc)
+    victim = legacy_paper(world, columns={
+        "status": "completed", "processing_started_at": stamp, "processing_completed_at": stamp,
+        "upload_timestamp": stamp,
+    })
+    report, digest = _crafted_report(victim, upload_timestamp=stamp, previous=previous)
+    before = _row(victim)
+
+    with pytest.raises(repair.LegacyRepairError, match="previous state"):
+        repair.restore(SessionLocal, report=report, expect_digest=digest, now=NOW)
+
+    assert _row(victim) == before
+
+
+def test_restore_refuses_a_paper_whose_own_upload_time_does_not_match(world):
+    """Times equal the report's upload time but not the row's own: not written by the repair."""
+
+    stamp = datetime(2026, 4, 1, 12, tzinfo=timezone.utc)
+    victim = legacy_paper(world, columns={
+        "status": "completed", "processing_started_at": stamp, "processing_completed_at": stamp,
+        "upload_timestamp": stamp - timedelta(days=3),
+    })
+    report, digest = _crafted_report(victim, upload_timestamp=stamp, previous=_PENDING_PREVIOUS)
+    before = _row(victim)
+
+    with pytest.raises(repair.LegacyRepairError, match="no longer holds"):
+        repair.restore(SessionLocal, report=report, expect_digest=digest, now=NOW)
+
+    assert _row(victim) == before
+
+
+def test_restore_refuses_a_report_of_an_incomplete_apply(world):
+    document_id = legacy_paper(world)
+    applied = _apply(world, _dry_run(world))
+    report_json = json.loads(json.dumps(applied.to_json()))
+    report_json["written"] = report_json["written"] - 1
+
+    with pytest.raises(repair.LegacyRepairError, match="complete apply"):
+        repair.restore(SessionLocal, report=report_json, expect_digest=report_json["selection_digest"], now=NOW)
+
+    assert _row(document_id)[0] == "completed"
