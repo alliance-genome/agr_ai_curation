@@ -154,7 +154,7 @@ def _create_document(db_session) -> PDFDocument:
         page_count=5,
         upload_timestamp=now,
         last_accessed=now,
-        status="processed",
+        status="completed",
         chunk_index_start=0,
         chunk_index_end=9,
         chunk_count=10,
@@ -698,7 +698,7 @@ def test_manual_evidence_refuses_a_file_of_another_paper(db_session):
             )
         assert (exc.value.status_code, exc.value.detail) == (
             400,
-            "file_id is not a file of this paper",
+            {"code": "file_not_in_paper", "message": "file_id is not a file of this paper"},
         )
     assert db_session.scalars(select(EvidenceRecordModel)).all() == []
 
@@ -731,4 +731,41 @@ def test_resolve_refuses_a_file_without_pieces_yet(db_session):
             db=db_session,
         )
 
-    assert (exc.value.status_code, exc.value.detail) == (409, "This file has no text to search yet")
+    assert (exc.value.status_code, exc.value.detail) == (
+        409,
+        {"code": "file_has_no_text", "message": "This file has no text to search yet"},
+    )
+
+
+@pytest.mark.parametrize("file_status", ["pending", "failed"])
+def test_evidence_refuses_a_file_that_is_not_ready(db_session, file_status):
+    document = _create_document(db_session)
+    document.main_file.status = file_status
+    db_session.commit()
+    session = _create_session(db_session, document_id=document.id, total_candidates=1)
+    candidate, _draft = _create_candidate(
+        db_session,
+        session=session,
+        extraction_result_id=None,
+        source=CurationCandidateSource.MANUAL,
+        order=0,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        module.create_manual_evidence(
+            CurationManualEvidenceCreateRequest(
+                session_id=str(session.id),
+                candidate_id=str(candidate.id),
+                field_keys=["gene.symbol"],
+                anchor=_anchor(snippet_text="Manual curator quote."),
+                file_id=str(document.main_file.id),
+            ),
+            actor_claims={"sub": "curator-1"},
+            db=db_session,
+        )
+
+    assert (exc.value.status_code, exc.value.detail) == (
+        409,
+        {"code": "file_not_ready", "message": "This file is not ready"},
+    )
+    assert db_session.scalars(select(EvidenceRecordModel)).all() == []

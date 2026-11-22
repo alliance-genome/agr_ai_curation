@@ -22,6 +22,8 @@ from pydantic import (
     model_validator,
 )
 
+from pydantic.json_schema import SkipJsonSchema
+
 from src.schemas.domain_envelope import DomainEnvelopeStatus, validate_field_path_syntax
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.schemas.viewer_files import ViewerFileRef
@@ -835,6 +837,12 @@ class CurationDraft(CurationWorkspaceBaseModel):
     )
 
 
+def _absent_when_unrecorded(field_schema: dict[str, Any]) -> None:
+    """Describe ``file_id`` as the wire carries it: a string when recorded, else no key."""
+
+    field_schema.pop("default", None)
+
+
 def _without_unrecorded_file(record: Any, serialized: dict[str, Any]) -> dict[str, Any]:
     """Leave ``file_id`` out of evidence saved before files were recorded.
 
@@ -868,8 +876,9 @@ class CurationEvidenceRecord(CurationWorkspaceBaseModel):
         description="Whether the anchor is the primary evidence record for its target field(s)",
     )
     anchor: EvidenceAnchor = Field(description="Resolved evidence anchor payload")
-    file_id: Optional[str] = Field(
+    file_id: str | SkipJsonSchema[None] = Field(
         default=None,
+        json_schema_extra=_absent_when_unrecorded,
         description=(
             "The paper file this evidence quotes (pdf_document_files id). Every record "
             "made since 0.12.0 has one; absent means saved before files were recorded"
@@ -976,8 +985,9 @@ class DomainEnvelopeEvidenceAnchorProjection(CurationWorkspaceBaseModel):
         default=None,
         description="Workspace or source document identifier used for viewer navigation",
     )
-    file_id: Optional[str] = Field(
+    file_id: str | SkipJsonSchema[None] = Field(
         default=None,
+        json_schema_extra=_absent_when_unrecorded,
         description=(
             "The paper file the evidence record quotes (its stored file_id). Every record "
             "made since 0.12.0 has one; absent means saved before files were recorded"

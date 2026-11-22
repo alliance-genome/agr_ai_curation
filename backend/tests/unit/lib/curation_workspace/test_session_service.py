@@ -476,6 +476,14 @@ def _create_review_session(
     return session_row
 
 
+def _ready_main_file_id(db_session, document) -> str:
+    """The main file's id once it is ready (only a ready file can be quoted)."""
+
+    document.main_file.status = "ready"
+    db_session.commit()
+    return str(document.main_file.id)
+
+
 def _build_manual_candidate_request(
     *,
     session_id: str,
@@ -1132,7 +1140,7 @@ def test_create_manual_candidate_persists_candidate_updates_session_and_logs_act
         db_session,
         str(session_row.id),
         _build_manual_candidate_request(
-            session_id=str(session_row.id), file_id=str(document.main_file.id)
+            session_id=str(session_row.id), file_id=_ready_main_file_id(db_session, document)
         ),
         actor_claims={"sub": "user-1", "email": "user-1@example.org"},
     )
@@ -1195,7 +1203,7 @@ def test_manual_candidate_persists_and_serializes_selected_session_receipt(db_se
     db_session.flush()
     db_session.expire(session, ["execution_revisions"])
     request = _build_manual_candidate_request(
-        session_id=str(session.id), file_id=str(document.main_file.id)
+        session_id=str(session.id), file_id=_ready_main_file_id(db_session, document)
     ).model_copy(
         update={"agent_revision_id": receipt.agent_revision_id},
     )
@@ -1226,7 +1234,7 @@ def test_create_manual_candidate_rejects_non_manual_source(db_session):
             str(session_row.id),
             _build_manual_candidate_request(
                 session_id=str(session_row.id),
-                file_id=str(document.main_file.id),
+                file_id=_ready_main_file_id(db_session, document),
                 source=CurationCandidateSource.IMPORTED,
             ),
             actor_claims={"sub": "user-1"},
@@ -6244,7 +6252,10 @@ def test_manual_candidate_evidence_must_name_a_file_of_the_paper(db_session):
         )
 
     assert exc.value.status_code == 400
-    assert exc.value.detail == "file_id is required: evidence names the paper file it quotes"
+    assert exc.value.detail == {
+        "code": "file_id_required",
+        "message": "file_id is required: evidence names the paper file it quotes",
+    }
 
 
 def test_manual_candidate_evidence_stores_its_file(db_session):
@@ -6262,7 +6273,7 @@ def test_manual_candidate_evidence_stores_its_file(db_session):
         db_session,
         str(session_row.id),
         _build_manual_candidate_request(
-            session_id=str(session_row.id), file_id=str(document.main_file.id)
+            session_id=str(session_row.id), file_id=_ready_main_file_id(db_session, document)
         ),
         actor_claims={"sub": "user-1"},
     )

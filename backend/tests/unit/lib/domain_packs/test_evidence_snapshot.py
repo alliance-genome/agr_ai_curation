@@ -29,7 +29,7 @@ def test_rich_source_and_projection_resolve_without_mutation(source):
 
 @pytest.mark.parametrize("field,value", [("verified_quote", "Other"), ("page", 8),
                                          ("source_span_ids", ["s1", "s2"]), ("document_id", "D2"),
-                                         ("file_id", "F2"), ("file_name", "Other file")])
+                                         ("file_id", "F2")])
 def test_known_source_conflicts_never_merged(source, field, value):
     source = {**source, "file_id": "F1", "file_name": "Main paper"}
     changed = {**source, field: value}
@@ -73,3 +73,14 @@ def test_unresolved_source_never_becomes_supporting_pdf_anchor(source, conflict)
     envelope = DomainEnvelope(envelope_id="snapshot", domain_pack_id="fixture", metadata={"evidence_records": records},
         extracted_objects=[{"object_type": "Assertion", "object_id": "O1", "evidence_record_ids": ["E1"]}])
     assert project_evidence_anchor_projections(envelope, envelope_revision=1, document_id="D1") == []
+
+
+def test_a_changed_file_display_name_alone_is_not_a_conflict(source):
+    # The file is identified by file_id; file_name is the display name when recorded.
+    first = {**source, "file_id": "F1", "file_name": "Table S1"}
+    renamed = {**first, "file_name": "Supplementary Table 1"}
+
+    record, problem = EvidenceSnapshot([first, renamed]).resolve("E1")
+
+    assert problem is None
+    assert record["file_id"] == "F1"

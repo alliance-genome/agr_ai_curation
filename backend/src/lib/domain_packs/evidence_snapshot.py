@@ -13,13 +13,13 @@ from typing import Any
 # Every source text/location form consumed by export, inspection and PDF anchors.
 # Keep values exactly as saved: these keys select provenance, not object attachments
 # or validation metadata. In particular, nested anchors are source-bearing too.
+# A file is identified by file_id; file_name is a display copy, not identity.
 SOURCE_FIELDS = frozenset({
     "verified_quote", "quote", "source_quote", "evidence_quote", "snippet",
     "snippet_text", "sentence_text", "text", "normalized_text",
     "page", "page_number", "page_label", "section", "section_title", "source_section",
     "subsection", "subsection_title", "chunk_id", "chunk_ids", "source_chunk_id",
-    "document_id", "source_document_id", "pdf_document_id", "file_id", "file_name",
-    "source_span_ids",
+    "document_id", "source_document_id", "pdf_document_id", "file_id", "source_span_ids",
     "source_fragments", "figure_reference", "table_reference", "anchor",
     "source_id", "source", "source_title", "title", "source_url", "url", "uri",
 })
