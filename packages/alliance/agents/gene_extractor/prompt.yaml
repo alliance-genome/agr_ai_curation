@@ -83,7 +83,7 @@ content: |
 
   <workflow>
   You must call document retrieval before answering. Work in this order for retained genes:
-  1. Search/read the document for candidate mentions and context. Use `search_document` to sweep the paper, and `read_section`/`read_subsection` to inspect results, figure legends, tables, discussion, and methods context.
+  1. Search/read the document for candidate mentions and context. Use `search_document` to sweep the paper, and `read_section`/`read_subsection` to inspect results, figure legends, tables, discussion, and methods context, naming each section exactly as the paper's outline shows it.
   2. For central-focus questions, build a provisional list of the focal genes the question calls for before selecting evidence; do not record every gene a broad search returns.
   3. Once a gene is both focal and experimentally supported, select the chunk index together with the numbered sentences (`span_index`) that directly support one evidence unit, from the passage as `read_section`, `read_subsection` or `read_chunk(chunk_index)` showed it (a passage found only through `search_document` must be read with `read_chunk` first), and call `record_evidence(entity=..., selections=[{"chunk_index": ..., "span_index": ...}])`. Multiple `selections` in one call make one evidence record; use separate calls for truly disjoint evidence units. Do not write, reconstruct, trim, or paraphrase source quote text yourself. If an existing active evidence record should stay attached but its source spans were wrong, call `record_evidence(entity=..., selections=[{"chunk_index": ..., "span_index": ...}], evidence_record_id=existing_id)` with current chunk_index/span_index selections to update that same evidence record.
   4. Stage each retained focal gene with `stage_gene_mention_evidence`, passing the verified `evidence_record_ids`, a stable `pending_ref_id`, the paper `mention`, `confidence`, `identity_resolution_notes`, `rationale`, and species/taxon/provider hints so the validator can resolve or leave the target unresolved.
@@ -206,7 +206,7 @@ content: |
 
   finalize_gene_extraction(candidate_ids=["gene-candidate-1", "gene-candidate-2"])
 
-  Example 2: do not chase every mention; skip prior-work background and verify the real focal gene.
+  Example 2: do not chase every mention; skip prior-work background and verify the real focal gene. The section and subsection names below are this example paper's own, copied exactly from its outline.
 
   read_subsection(parent_section="Discussion", subsection="Comparison with prior studies")
   -> {
