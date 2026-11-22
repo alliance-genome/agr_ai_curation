@@ -6,7 +6,11 @@ import pytest
 from pydantic import ValidationError
 
 from src.lib.openai_agents.models import PdfEvidenceRecord
-from src.schemas.evidence_workspace import evidence_record_page, project_to_provenance
+from src.schemas.evidence_workspace import (
+    evidence_record_page,
+    evidence_record_section,
+    project_to_provenance,
+)
 from src.schemas.models.base import EvidenceRecord
 
 FILE_ID = "6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c"
@@ -72,3 +76,26 @@ def test_the_generic_pdf_record_needs_a_page_unless_it_names_a_file():
     assert PdfEvidenceRecord.model_validate(_pdf_record()).page == 3
     with pytest.raises(ValidationError, match="page is required unless the evidence names a file"):
         PdfEvidenceRecord.model_validate(_pdf_record(page=None))
+
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        ({"section": " Results "}, (True, "Results")),
+        ({"section": None, "file_id": FILE_ID}, (True, None)),
+        ({"file_id": FILE_ID}, (True, None)),
+        ({"section": "", "file_id": FILE_ID}, (True, None)),
+        ({}, (False, None)),
+        ({"section": "   "}, (False, None)),
+        ({"section": 5, "file_id": FILE_ID}, (False, None)),
+    ],
+)
+def test_the_one_section_rule(record, expected):
+    assert evidence_record_section(record) == expected
+
+
+def test_the_generic_pdf_record_needs_a_section_unless_it_names_a_file():
+    assert PdfEvidenceRecord.model_validate(_pdf_record(section=None, file_id=FILE_ID)).section is None
+    with pytest.raises(ValidationError, match="section is required unless the evidence names a file"):
+        PdfEvidenceRecord.model_validate(_pdf_record(section=None))

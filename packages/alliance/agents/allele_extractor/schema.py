@@ -10,7 +10,7 @@ from src.lib.openai_agents.models import (
     AlleleExtractionResultEnvelope as RuntimeAlleleExtractionResultEnvelope,
 )
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DefinitionState
-from src.schemas.evidence_workspace import evidence_record_page
+from src.schemas.evidence_workspace import evidence_record_page, evidence_record_section
 
 
 _EXPECTED_OBJECT_ROLES = {
@@ -220,16 +220,21 @@ class AlleleExtractionResultEnvelope(RuntimeAlleleExtractionResultEnvelope):
         *,
         evidence_files_by_id: Mapping[str, str | None],
     ) -> None:
-        # A quote's page is required unless its evidence record names a file (ALL-1460).
-        source_file_id = evidence_files_by_id.get(obj.payload.get("evidence_record_id"))
+        # A quote's page and section are required unless its evidence record names
+        # a file (ALL-1460).
+        located = {
+            "page": obj.payload.get("page"),
+            "section": obj.payload.get("section"),
+            "file_id": evidence_files_by_id.get(obj.payload.get("evidence_record_id")),
+        }
         missing_fields = [
             field_name
             for field_name in field_names
             if (
-                not evidence_record_page(
-                    {"page": obj.payload.get("page"), "file_id": source_file_id}
-                )[0]
+                not evidence_record_page(located)[0]
                 if field_name == "page"
+                else not evidence_record_section(located)[0]
+                if field_name == "section"
                 else _is_missing_payload_value(obj.payload.get(field_name))
             )
         ]

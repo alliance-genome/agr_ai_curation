@@ -18,7 +18,7 @@ from pydantic import (
     model_validator,
 )
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DefinitionState, SchemaRef
-from src.schemas.evidence_workspace import evidence_record_page
+from src.schemas.evidence_workspace import evidence_record_page, evidence_record_section
 from src.schemas.models.base import MentionCandidate
 
 
@@ -140,7 +140,13 @@ class GeneMentionEvidencePayload(BaseModel):
             "the file has no page numbers (for example a converted spreadsheet)"
         ),
     )
-    section: StrictStr = Field(description="Document section containing the verified quote")
+    section: StrictStr | None = Field(
+        default=None,
+        description=(
+            "Document section containing the quote, as returned by record_evidence; empty when "
+            "the file has no heading before the quote"
+        ),
+    )
     chunk_id: StrictStr = Field(description="Document chunk identifier used to verify the quote")
     subsection: StrictStr | None = Field(default=None, description="Subsection heading, if available")
     figure_reference: StrictStr | None = Field(
@@ -152,7 +158,6 @@ class GeneMentionEvidencePayload(BaseModel):
         "mention",
         "evidence_record_id",
         "verified_quote",
-        "section",
         "chunk_id",
         mode="before",
     )
@@ -170,6 +175,7 @@ class GeneMentionEvidencePayload(BaseModel):
         "rationale",
         "subsection",
         "figure_reference",
+        "section",
         mode="before",
     )
     @classmethod
@@ -319,7 +325,6 @@ class GeneExtractionResultEnvelope(RuntimeGeneExtractionResultEnvelope):
 
             required_evidence_fields = {
                 "verified_quote": evidence_record.verified_quote,
-                "section": evidence_record.section,
                 "chunk_id": evidence_record.chunk_id,
             }
             missing_evidence_fields = sorted(
@@ -327,10 +332,16 @@ class GeneExtractionResultEnvelope(RuntimeGeneExtractionResultEnvelope):
                 for field_name, value in required_evidence_fields.items()
                 if value is None
             )
-            page_valid, _ = evidence_record_page(
-                {"page": evidence_record.page, "file_id": evidence_record.file_id}
-            )
-            if missing_evidence_fields or not page_valid:
+            located = {
+                "page": evidence_record.page,
+                "section": evidence_record.section,
+                "file_id": evidence_record.file_id,
+            }
+            if (
+                missing_evidence_fields
+                or not evidence_record_page(located)[0]
+                or not evidence_record_section(located)[0]
+            ):
                 raise ValueError(
                     "metadata.evidence_records[] entries referenced by gene_mention_evidence "
                     "must include verified_quote, page, section, and chunk_id"

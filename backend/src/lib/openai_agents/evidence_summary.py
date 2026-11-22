@@ -4,7 +4,7 @@ import logging
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple, get_args, get_origin
 
-from src.schemas.evidence_workspace import evidence_record_page
+from src.schemas.evidence_workspace import evidence_record_page, evidence_record_section
 
 logger = logging.getLogger(__name__)
 
@@ -227,14 +227,14 @@ def _normalize_evidence_record(
         entity_source = entity_fallback
     entity = str(entity_source or "").strip()
     verified_quote = str(record_dict.get("verified_quote") or "").strip()
-    section = str(record_dict.get("section") or "").strip()
+    section_valid, section = evidence_record_section(record_dict)
     chunk_id = str(record_dict.get("chunk_id") or "").strip()
     page_valid, page = evidence_record_page(record_dict)
 
     if (
         not entity
         or not verified_quote
-        or not section
+        or not section_valid
         or not chunk_id
         or not page_valid
     ):
@@ -243,7 +243,7 @@ def _normalize_evidence_record(
             invalid_fields.append("entity")
         if not verified_quote:
             invalid_fields.append("verified_quote")
-        if not section:
+        if not section_valid:
             invalid_fields.append("section")
         if not chunk_id:
             invalid_fields.append("chunk_id")
@@ -864,14 +864,14 @@ def build_record_evidence_summary_record(
     entity = str(input_payload.get("entity") or "").strip()
     chunk_id = str(output_payload.get("chunk_id") or input_payload.get("chunk_id") or "").strip()
     verified_quote = str(output_payload.get("verified_quote") or "").strip()
-    section = str(output_payload.get("section") or "").strip()
+    section_valid, section = evidence_record_section(output_payload)
     page_valid, page = evidence_record_page(output_payload)
 
     if (
         not entity
         or not chunk_id
         or not verified_quote
-        or not section
+        or not section_valid
         or not page_valid
     ):
         logger.debug(

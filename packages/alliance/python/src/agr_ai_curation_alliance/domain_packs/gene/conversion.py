@@ -11,6 +11,7 @@ from pydantic import (
     model_validator,
 )
 
+from src.schemas.evidence_workspace import evidence_record_section
 from src.lib.domain_packs.resolvable_values import (
     ResolvableValueError,
     check_resolvable_value,
@@ -173,11 +174,20 @@ def validate_gene_builder_objects(
         notes = payload.get("identity_resolution_notes")
         if not isinstance(notes, list) or not [n for n in notes if _gene_clean_text(n)]:
             errors.append(f"{location}.payload.identity_resolution_notes must be non-empty")
-        for field_name in ("evidence_record_id", "verified_quote", "section", "chunk_id"):
+        for field_name in ("evidence_record_id", "verified_quote", "chunk_id"):
             if not _gene_clean_text(payload.get(field_name)):
                 errors.append(f"{location}.payload.{field_name} is required")
 
         payload_evidence_id = _gene_clean_text(payload.get("evidence_record_id"))
+        # The section is required unless the evidence record names a file (ALL-1460).
+        source_record = evidence_by_id.get(payload_evidence_id) if payload_evidence_id else None
+        if not evidence_record_section(
+            {
+                "section": payload.get("section"),
+                "file_id": source_record.file_id if source_record is not None else None,
+            }
+        )[0]:
+            errors.append(f"{location}.payload.section is required")
         if obj.evidence_record_ids != ([payload_evidence_id] if payload_evidence_id else []):
             errors.append(
                 f"{location}.evidence_record_ids must equal [payload.evidence_record_id]"

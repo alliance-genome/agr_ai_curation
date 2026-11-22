@@ -22,7 +22,7 @@ from src.lib.domain_packs.resolvable_values import (
     ResolvableValueError,
     check_resolvable_value,
 )
-from src.schemas.evidence_workspace import evidence_record_page
+from src.schemas.evidence_workspace import evidence_record_page, evidence_record_section
 from src.lib.openai_agents.models import (
     PhenotypeResultEnvelope as RuntimePhenotypeResultEnvelope,
 )
@@ -195,13 +195,13 @@ def _has_object_ref_type(obj: Mapping[str, Any], object_type: str) -> bool:
 def _evidence_payload_from_metadata(record: Mapping[str, Any]) -> dict[str, Any] | None:
     evidence_record_id = _optional_text(record.get("evidence_record_id"))
     verified_quote = _optional_text(record.get("verified_quote"))
-    section = _optional_text(record.get("section"))
+    section_valid, section = evidence_record_section(record)
     chunk_id = _optional_text(record.get("chunk_id"))
     page_valid, page = evidence_record_page(record)
     if (
         evidence_record_id is None
         or verified_quote is None
-        or section is None
+        or not section_valid
         or chunk_id is None
         or not page_valid
     ):
@@ -506,7 +506,13 @@ class EvidenceQuotePayload(BaseModel):
             "the file has no page numbers (for example a converted spreadsheet)"
         ),
     )
-    section: StrictStr = Field(description="Document section containing the quote")
+    section: StrictStr | None = Field(
+        default=None,
+        description=(
+            "Document section containing the quote, as returned by record_evidence; empty when "
+            "the file has no heading before the quote"
+        ),
+    )
     chunk_id: StrictStr = Field(description="Document chunk ID used for verification")
     subsection: StrictStr | None = Field(default=None, description="Subsection, if present")
     figure_reference: StrictStr | None = Field(
@@ -516,10 +522,11 @@ class EvidenceQuotePayload(BaseModel):
 
     @model_validator(mode="after")
     def _validate_evidence_fields(self) -> "EvidenceQuotePayload":
+        # The section may be empty when the evidence names a file (ALL-1460); the
+        # envelope checks it against its metadata evidence record.
         for field_name in (
             "evidence_record_id",
             "verified_quote",
-            "section",
             "chunk_id",
         ):
             if _is_missing(getattr(self, field_name)):
@@ -1130,6 +1137,12 @@ def _evidence_quote_errors(
             f"metadata.evidence_records[]: {evidence_id}"
         ]
     errors: list[str] = []
+    # Page and section may be empty only when the evidence names a file (ALL-1460).
+    located = {"page": record.page, "section": record.section, "file_id": record.file_id}
+    if not evidence_record_page(located)[0]:
+        errors.append(f"{location}.payload.page must not be empty")
+    if not evidence_record_section(located)[0]:
+        errors.append(f"{location}.payload.section must not be empty")
     for field_name in ("verified_quote", "page", "section", "chunk_id"):
         if getattr(record, field_name) != getattr(obj.payload, field_name):
             errors.append(

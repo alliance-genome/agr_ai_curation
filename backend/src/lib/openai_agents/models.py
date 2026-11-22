@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, List, Literal, Mapping, Optional
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
-from src.schemas.evidence_workspace import evidence_record_page
+from src.schemas.evidence_workspace import evidence_record_page, evidence_record_section
 from src.schemas.curation_prep import CurationPrepAgentOutput  # noqa: F401 - re-exported here for runtime schema discovery.
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
@@ -176,9 +176,12 @@ class PdfEvidenceRecord(BaseModel):
             "the file has no page numbers (for example a converted spreadsheet)"
         ),
     )
-    section: str = Field(
+    section: Optional[str] = Field(
         ...,
-        description="Top-level document section containing the quote"
+        description=(
+            "Top-level document section containing the quote, as returned by record_evidence"
+            "; empty when the file has no heading before the quote"
+        ),
     )
     chunk_id: str = Field(
         ...,
@@ -213,9 +216,11 @@ class PdfEvidenceRecord(BaseModel):
 
     @model_validator(mode="after")
     def _page_unless_file_has_none(self) -> "PdfEvidenceRecord":
-        valid, _ = evidence_record_page({"page": self.page, "file_id": self.file_id})
-        if not valid:
+        located = {"page": self.page, "section": self.section, "file_id": self.file_id}
+        if not evidence_record_page(located)[0]:
             raise ValueError("page is required unless the evidence names a file (file_id)")
+        if not evidence_record_section(located)[0]:
+            raise ValueError("section is required unless the evidence names a file (file_id)")
         return self
 
 

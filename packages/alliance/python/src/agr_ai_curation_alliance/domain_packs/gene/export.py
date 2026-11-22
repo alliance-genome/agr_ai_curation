@@ -26,7 +26,7 @@ from src.lib.domain_packs.resolvable_values import (
     effective_value,
     value_covered_by_validator,
 )
-from src.schemas.evidence_workspace import evidence_record_page
+from src.schemas.evidence_workspace import evidence_record_page, evidence_record_section
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DomainEnvelope,
@@ -209,8 +209,8 @@ def _gene_evidence_record(
 
     evidence = {
         field: (
-            _required_page(domain_object.payload, evidence_files)
-            if field == "page"
+            _required_locator(domain_object.payload, evidence_files, field)
+            if field in ("page", "section")
             else _required_payload_value(domain_object.payload, field)
         )
         for field in _REQUIRED_EVIDENCE_FIELDS
@@ -241,17 +241,27 @@ def _gene_evidence_record(
     }
 
 
-def _required_page(payload: Mapping[str, Any], evidence_files: Mapping[str, Any]) -> int | None:
-    """The page, required unless the evidence record names a file (ALL-1460).
+def _required_locator(
+    payload: Mapping[str, Any], evidence_files: Mapping[str, Any], field_path: str
+) -> Any:
+    """Page or section, required unless the evidence record names a file (ALL-1460).
 
-    The key stays in the export: null for a file without page numbers.
+    The key stays in the export: null when the file has no page numbers there, or
+    no heading before the quote.
     """
 
-    page = payload.get("page")
-    file_id = evidence_files.get(payload.get("evidence_record_id"))
-    if not evidence_record_page({"page": page, "file_id": file_id})[0]:
-        raise ValueError("gene_mention_evidence payload is missing page")
-    return page
+    located = {
+        "page": payload.get("page"),
+        "section": payload.get("section"),
+        "file_id": evidence_files.get(payload.get("evidence_record_id")),
+    }
+    rule = evidence_record_page if field_path == "page" else evidence_record_section
+    valid, value = rule(located)
+    if not valid:
+        if field_path == "section" and isinstance(located["section"], str):
+            raise ValueError("gene_mention_evidence payload has blank section")
+        raise ValueError(f"gene_mention_evidence payload is missing {field_path}")
+    return value
 
 
 def _required_payload_value(payload: Mapping[str, Any], field_path: str) -> Any:

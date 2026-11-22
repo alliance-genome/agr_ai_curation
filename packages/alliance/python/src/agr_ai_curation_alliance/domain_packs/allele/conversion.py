@@ -53,7 +53,11 @@ from src.schemas.domain_envelope import (
     ObjectRef,
     SchemaRef,
 )
-from src.schemas.evidence_workspace import evidence_record_page, normalize_workspace_records
+from src.schemas.evidence_workspace import (
+    evidence_record_page,
+    evidence_record_section,
+    normalize_workspace_records,
+)
 
 from ..schema_refs import (
     ALLIANCE_LINKML_COMMIT,
@@ -353,17 +357,22 @@ def validate_allele_builder_objects(
             errors.append(f"{location}.definition_state must be 'in_development'")
         if obj.object_type == ALLELE_EVIDENCE_QUOTE_OBJECT_TYPE:
             payload = obj.payload if isinstance(obj.payload, Mapping) else {}
-            # A quote's page is required unless its evidence record names a file (ALL-1460).
+            # A quote's page and section are required unless its evidence record names
+            # a file (ALL-1460).
             source_record = evidence_by_id.get(payload.get("evidence_record_id"))
-            source_file_id = source_record.file_id if source_record is not None else None
+            located = {
+                "page": payload.get("page"),
+                "section": payload.get("section"),
+                "file_id": source_record.file_id if source_record is not None else None,
+            }
             missing = [
                 field_name
                 for field_name in _REQUIRED_EVIDENCE_QUOTE_PAYLOAD_FIELDS
                 if (
-                    not evidence_record_page(
-                        {"page": payload.get("page"), "file_id": source_file_id}
-                    )[0]
+                    not evidence_record_page(located)[0]
                     if field_name == "page"
+                    else not evidence_record_section(located)[0]
+                    if field_name == "section"
                     else _is_missing(payload.get(field_name))
                 )
             ]

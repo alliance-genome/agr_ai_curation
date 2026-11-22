@@ -912,3 +912,32 @@ def test_evidence_saved_before_files_were_recorded_normalizes_as_before():
             "evidence_record_id": "evidence-1",
         }
     ]
+
+
+
+def test_record_evidence_summary_keeps_section_less_evidence_that_names_its_file():
+    # Text before a file's first heading has no section; record_evidence omits it.
+    output = _page_less_tool_output()
+    output.pop("section")
+    output["source_fragments"][0].pop("section")
+
+    record = build_record_evidence_summary_record(
+        tool_name="record_evidence",
+        tool_input={"entity": "abc-1"},
+        tool_output=output,
+    )
+
+    assert record is not None
+    assert (record["section"], record["page"], record["file_id"]) == (None, None, _FILE_ID)
+    [stored] = normalize_evidence_records([{**output, "status": "verified"}])
+    assert stored["section"] is None
+
+
+def test_section_less_evidence_without_a_file_is_still_dropped():
+    output = _page_less_tool_output(page=3)
+    for key in ("section", "file_id", "file_name"):
+        output.pop(key)
+
+    assert build_record_evidence_summary_record(
+        tool_name="record_evidence", tool_input={"entity": "abc-1"}, tool_output=output,
+    ) is None

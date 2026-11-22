@@ -28,6 +28,7 @@ __all__ = [
     "WORKSPACE_ONLY_FIELDS",
     "EvidenceIntegrityError",
     "evidence_record_page",
+    "evidence_record_section",
     "canonical_evidence_payload",
     "is_discarded",
     "normalize_workspace_records",
@@ -77,6 +78,24 @@ def evidence_record_page(record: Mapping[str, Any]) -> tuple[bool, int | None]:
         return True, page
     file_id = record.get("file_id")
     if page is None and isinstance(file_id, str) and file_id.strip():
+        return True, None
+    return False, None
+
+
+def evidence_record_section(record: Mapping[str, Any]) -> tuple[bool, str | None]:
+    """Return ``(valid, section)`` for one evidence record (ALL-1460).
+
+    The section rule, keyed the same way as the page rule. A record that names
+    its file may have no section: text before a file's first heading has none.
+    A record without ``file_id`` was saved before files were recorded and still
+    needs a non-empty section, exactly as before.
+    """
+
+    section = record.get("section")
+    if isinstance(section, str) and section.strip():
+        return True, section.strip()
+    file_id = record.get("file_id")
+    if (section is None or section == "") and isinstance(file_id, str) and file_id.strip():
         return True, None
     return False, None
 

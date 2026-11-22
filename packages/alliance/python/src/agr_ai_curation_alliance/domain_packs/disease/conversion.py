@@ -8,7 +8,7 @@ from typing import Any
 
 from pydantic import model_validator
 
-from src.schemas.evidence_workspace import evidence_record_page
+from src.schemas.evidence_workspace import evidence_record_page, evidence_record_section
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     CuratableObjectStatus,
@@ -228,9 +228,14 @@ def _missing_required_mapping_fields(
 
     missing_fields: list[str] = []
     for field_name in field_names:
+        located = {"page": record.get("page"), "section": record.get("section"), "file_id": file_id}
         if field_name == "page":
-            # A page is required unless the evidence names a file (ALL-1460).
-            if not evidence_record_page({"page": record.get("page"), "file_id": file_id})[0]:
+            # Page and section are required unless the evidence names a file (ALL-1460).
+            if not evidence_record_page(located)[0]:
+                missing_fields.append(field_name)
+            continue
+        if field_name == "section":
+            if not evidence_record_section(located)[0]:
                 missing_fields.append(field_name)
             continue
         value = record.get(field_name, _MISSING_PAYLOAD_VALUE)
@@ -262,9 +267,13 @@ def _required_evidence_field_errors(evidence_id: str, evidence: Any) -> list[str
     missing_fields: list[str] = []
     for field_name in _REQUIRED_DISEASE_EVIDENCE_SNAPSHOT_FIELDS:
         value = getattr(evidence, field_name, None)
+        located = {"page": evidence.page, "section": evidence.section, "file_id": evidence.file_id}
         if field_name == "page":
-            # A page is required unless the evidence names a file (ALL-1460).
-            if not evidence_record_page({"page": value, "file_id": evidence.file_id})[0]:
+            # Page and section are required unless the evidence names a file (ALL-1460).
+            if not evidence_record_page(located)[0]:
+                missing_fields.append(field_name)
+        elif field_name == "section":
+            if not evidence_record_section(located)[0]:
                 missing_fields.append(field_name)
         elif value is None or (isinstance(value, str) and not value.strip()):
             missing_fields.append(field_name)

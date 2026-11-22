@@ -191,9 +191,15 @@ def test_a_record_saved_before_files_were_recorded_projects_as_before(normalize)
         pytest.param(disease_tests, DiseaseBuilderExtractionOutput, validate_disease_builder_objects, id="disease"),
     ],
 )
-def test_page_less_file_evidence_reaches_the_builder_envelope(module, output_model, validate, monkeypatch):
+@pytest.mark.parametrize("without_section", [False, True], ids=["with_section", "without_section"])
+def test_page_less_file_evidence_reaches_the_builder_envelope(
+    module, output_model, validate, without_section, monkeypatch
+):
     evidence_record_id = module._evidence_records()[0]["evidence_record_id"]
-    monkeypatch.setattr(module, "_evidence_records", lambda: _page_less_records_from(module, evidence_record_id))
+    monkeypatch.setattr(
+        module, "_evidence_records",
+        lambda: _page_less_records_from(module, evidence_record_id, without_section=without_section),
+    )
 
     result = module._materialize_one_candidate()
 
@@ -206,12 +212,13 @@ def test_page_less_file_evidence_reaches_the_builder_envelope(module, output_mod
     ]
     assert (record["file_id"], record.get("page")) == (FILE_ID, None)
     assert record["source_fragments"][0]["file_id"] == FILE_ID
+    assert ("section" in record) is not without_section
 
 
 _ORIGINAL_RECORDS = {}
 
 
-def _page_less_records_from(module, evidence_record_id):
+def _page_less_records_from(module, evidence_record_id, *, without_section=False):
     if module not in _ORIGINAL_RECORDS:
         raise AssertionError("original records not captured")
     original = _ORIGINAL_RECORDS[module]
@@ -221,6 +228,11 @@ def _page_less_records_from(module, evidence_record_id):
         if key in original:
             record[key] = original[key]
     record["source_fragments"][0]["text"] = original["verified_quote"]
+    if without_section:
+        # Text before a file's first heading: record_evidence omits section and subsection.
+        for target in (record, record["source_fragments"][0]):
+            target.pop("section", None)
+            target.pop("subsection", None)
     return [record]
 
 
@@ -334,3 +346,23 @@ def test_gene_export_of_evidence_saved_before_files_were_recorded_is_unchanged()
         "evidence_record_id", "verified_quote", "page", "section", "chunk_id",
         "subsection", "figure_reference",
     ]
+
+
+
+def test_section_less_file_evidence_exports_from_the_gene_envelope(monkeypatch):
+    evidence_record_id = gene_tests._evidence_records()[0]["evidence_record_id"]
+    monkeypatch.setattr(
+        gene_tests, "_evidence_records",
+        lambda: _page_less_records_from(gene_tests, evidence_record_id, without_section=True),
+    )
+    result = gene_tests._materialize_one_candidate()
+    envelope = DomainEnvelope(
+        envelope_id="gene-file-evidence",
+        domain_pack_id=gene_tests.GENE_DOMAIN_PACK_ID,
+        extracted_objects=result.payload["curatable_objects"],
+        metadata=result.payload["metadata"],
+    )
+
+    record, = build_gene_mention_evidence_export(envelope)["records"]
+
+    assert (record["evidence"]["page"], record["evidence"]["section"]) == (None, None)
