@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -25,6 +26,7 @@ from src.lib.document_sources.file_reasons import (
     PROVIDER_OBSERVATION_REASONS,
     FileReason,
     FileReasonGroupError,
+    SupplementState,
 )
 from src.lib.document_sources.models import DocumentSourceProvider
 from src.models.sql.database import SessionLocal
@@ -42,10 +44,6 @@ class FileListingUnavailable(RuntimeError):
 
 class SupplementProgressMetadataError(FileListingError):
     """A job's ``metadata_json.supplements`` (interface I1) is not in the written shape."""
-
-
-# Interface I1 (plan section 4.4): the states one chosen supplement can be in.
-_SUPPLEMENT_STATES = frozenset({"queued", "waiting", "adding", "added", "left_out"})
 
 
 def provider_observations_from_jobs(
@@ -88,7 +86,7 @@ def _observation_from_entry(entry: object) -> tuple[str, ProviderObservation | N
     observed_at = entry.get("observed_at")
     if not isinstance(file_id, str) or not file_id:
         raise SupplementProgressMetadataError("a supplements entry has no provider_file_id")
-    if state not in _SUPPLEMENT_STATES:
+    if state not in {member.value for member in SupplementState}:
         raise SupplementProgressMetadataError(f"a supplements entry has an unknown state {state!r}")
     if code is None:
         return file_id, None
@@ -98,7 +96,7 @@ def _observation_from_entry(entry: object) -> tuple[str, ProviderObservation | N
         reason = FileReason(code)
     except ValueError:
         raise SupplementProgressMetadataError(f"a supplements entry has an unknown reason_code {code!r}") from None
-    if state != "left_out" or reason not in PROVIDER_OBSERVATION_REASONS:
+    if state != SupplementState.LEFT_OUT.value or reason not in PROVIDER_OBSERVATION_REASONS:
         return file_id, None
     if not isinstance(observed_at, str):
         raise SupplementProgressMetadataError("a provider observation has no observed_at")
@@ -140,6 +138,7 @@ async def _list(
     *,
     route: ListingRoute,
     provider_observations: Mapping[str, ProviderObservation],
+    owner_user_id: int,
     expected_reference_id: str | None = None,
 ) -> FileListing:
     from src.lib.openai_agents.config import get_document_file_listing_check_limit
@@ -167,12 +166,43 @@ async def _list(
         save_assessment=save,
         route=route,
         provider_observations=provider_observations,
+        find_paper_in_library=(
+            _library_lookup(provider.provider_id, owner_user_id) if route is ListingRoute.IDENTIFIER else None
+        ),
     )
+
+
+def _library_lookup(provider_id: str, owner_user_id: int):
+    """The import's own duplicate check for this decision, read only (no phantom clean-up)."""
+
+    async def find(decision) -> str | None:
+        from src.lib.document_sources.identifier_import import _build_reference_source_provenance
+        from src.lib.document_sources.provenance import find_existing_document_by_source
+
+        provenance = _build_reference_source_provenance(decision)
+
+        def lookup() -> str | None:
+            with SessionLocal() as session:
+                existing = find_existing_document_by_source(
+                    session,
+                    user_id=owner_user_id,
+                    source_provider=provider_id,
+                    reference_id=provenance.get("reference_id"),
+                    reference_curie=provenance.get("reference_curie"),
+                    converted_artifact_id=provenance.get("converted_artifact_id"),
+                    source_md5=provenance.get("source_md5"),
+                )
+                return str(existing.id) if existing is not None else None
+
+        return await asyncio.to_thread(lookup)
+
+    return find
 
 
 async def list_files_for_identifier(
     identifier: str,
     *,
+    owner_user_id: int,
     provider: DocumentSourceProvider,
     context: DocumentSourceRequestContext,
 ) -> FileListing:
@@ -181,6 +211,7 @@ async def list_files_for_identifier(
         raise FileListingUnavailable("invalid_identifier")
     return await _list(
         provider, normalized.normalized, context, (), route=ListingRoute.IDENTIFIER, provider_observations={},
+        owner_user_id=owner_user_id,
     )
 
 
@@ -236,8 +267,6 @@ async def list_files_for_paper(
     (ABC reads it as a PMID).
     """
 
-    import asyncio
-
     paper = await asyncio.to_thread(_paper_lookup, document_id, owner_user_id)
     if paper.provider != provider.provider_id:
         raise FileListingUnavailable("not_imported_from_provider")
@@ -246,5 +275,5 @@ async def list_files_for_paper(
     return await _list(
         provider, paper.reference_curie, context, paper.file_ids,
         route=ListingRoute.PAPER, provider_observations=paper.provider_observations,
-        expected_reference_id=paper.reference_id,
+        owner_user_id=owner_user_id, expected_reference_id=paper.reference_id,
     )

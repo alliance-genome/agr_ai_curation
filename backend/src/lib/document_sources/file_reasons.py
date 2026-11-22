@@ -35,6 +35,12 @@ class FileReason(str, Enum):
     # Its converted text did not pass its check, or was not checked; the entry's check says which.
     CHECK_NOT_PASSED = "check_not_passed"
     ALREADY_IN_PAPER = "already_in_paper"
+    # An import of this identifier would end with an error for the whole paper (no main
+    # file, access denied, an ambiguous main, a failed conversion); ``main_status`` says which.
+    PAPER_NOT_IMPORTABLE = "paper_not_importable"
+    # The curator already has this paper: an import answers ``duplicate``; files are added
+    # through that paper's own listing (``existing_document_id``).
+    PAPER_ALREADY_IN_LIBRARY = "paper_already_in_library"
 
     # What the provider last told an import about a chosen file (P7b writes, P6f reads).
     # The provider's answer was final and the file had neither converted text nor a failure.
@@ -43,6 +49,19 @@ class FileReason(str, Enum):
     PROVIDER_CONVERSION_FAILED = "provider_conversion_failed"
     # The import stopped waiting before the provider had converted the file.
     NOT_CONVERTED_IN_TIME = "not_converted_in_time"
+
+
+class SupplementState(str, Enum):
+    """The state of one chosen supplement in a job's ``metadata.supplements`` (interface I1).
+
+    Shared by every writer (imports, adds) and the listing that reads them back.
+    """
+
+    QUEUED = "queued"
+    WAITING = "waiting"
+    ADDING = "adding"
+    ADDED = "added"
+    LEFT_OUT = "left_out"
 
 
 class FileReasonGroupError(ValueError):
@@ -64,6 +83,8 @@ NOT_TICKABLE_REASONS: frozenset[FileReason] = frozenset({
     FileReason.TYPE_NOT_SUPPORTED,
     FileReason.CHECK_NOT_PASSED,
     FileReason.ALREADY_IN_PAPER,
+    FileReason.PAPER_NOT_IMPORTABLE,
+    FileReason.PAPER_ALREADY_IN_LIBRARY,
 })
 
 PROVIDER_OBSERVATION_REASONS: frozenset[FileReason] = frozenset({

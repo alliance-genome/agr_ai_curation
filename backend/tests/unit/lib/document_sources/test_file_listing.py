@@ -93,6 +93,10 @@ class _Store:
         self.saved[(file_id, md5, version)] = assessment
 
 
+async def _not_in_library(_decision):
+    return None
+
+
 def _limits(**overrides) -> FileCheckLimits:
     values = dict(
         max_bytes=10_000, few_characters_below=10, row_token_limit=200, count_tokens=len,
@@ -121,6 +125,7 @@ async def _listing(
         load_stored=store.load, save_assessment=store.save,
         route=ListingRoute.PAPER if in_paper else ListingRoute.IDENTIFIER,
         provider_observations={},
+        find_paper_in_library=None if in_paper else _not_in_library,
     )
     return listing, client
 
@@ -234,7 +239,7 @@ async def test_listing_refuses_an_unresolved_reference():
             provider=provider, reference="AGRKB:101", authorized_group_ids=("WB",),  # type: ignore[arg-type]
             bearer_kind=ProviderBearerKind.CURATOR, request_bearer_token="t", limits=_limits(),
             check_limit=20, load_stored=_Store().load, save_assessment=_Store().save,
-            route=ListingRoute.IDENTIFIER, provider_observations={},
+            route=ListingRoute.IDENTIFIER, provider_observations={}, find_paper_in_library=_not_in_library,
         )
     assert client.calls == []
 

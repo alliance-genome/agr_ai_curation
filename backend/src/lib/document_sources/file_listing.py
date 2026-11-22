@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import weakref
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -172,6 +172,9 @@ class FileListing:
     # Further copies of a listed file (same MD5) that are not listed again.
     duplicate_copies_count: int
     check_version: str
+    # Identifier listing only: the curator's paper an import would answer ``duplicate`` with;
+    # its files are added through that paper's own listing.
+    existing_document_id: str | None
 
 
 def file_role_for_artifact_role(role: SourceArtifactRole, *, is_main: bool) -> str:
@@ -317,26 +320,25 @@ def _authorized(artifact: SourceArtifact, groups: tuple[str, ...]) -> bool:
 def will_ask_provider(
     decision: ReferenceImportDecision, *, bearer_kind: ProviderBearerKind, route: ListingRoute,
 ) -> bool:
-    """Whether the import or add chosen from this listing will ask the provider to convert files.
+    """Whether the import or add chosen from this listing asks the provider to convert the paper.
 
-    A readable, convertible supplement with no converted text can be ticked exactly
-    when this is true (plan section 3.4, decision A1; interface I9). It is read from
-    the decision ``decide_reference_import(..., allow_conversion_request=False)`` made,
-    never re-derived from the artifacts:
+    Interface I9 (signature ``(decision, *, bearer_kind, route)``): other parts read
+    it as "the import will ask the provider", so it never encodes a tick policy. It is
+    read from the decision ``decide_reference_import(..., allow_conversion_request=False)``
+    made, never re-derived from the artifacts, and is true only when that decision
+    reached its own conversion request:
     - a curator's own login only: a machine login (``SERVICE``) never asks, and its
       branch is also ``READY`` with no converted text, so it is checked here;
-    - ``READY`` only: a main text the provider lists as running or failed
-      (``CONVERSION_RUNNING``, ``CONVERSION_FAILED``) returns before any request;
-    - before an import (``IDENTIFIER``) with no converted main text: the point where
-      an import sends today's conversion request. A main text the provider does not
-      count as main text (ABC's legacy ``_tei`` rows) is no main text, as in the import.
-      An add from an imported paper (``PAPER``) sends no request.
+    - ``READY`` only: a main text the provider lists as failed (``CONVERSION_FAILED``)
+      returns before any request. A main text listed as running (``CONVERSION_RUNNING``)
+      returns before the decision's request too and is excluded on purpose (plan M1),
+      although the import of such a paper then polls with the same request;
+    - before an import (``IDENTIFIER``) with no converted main text. A main text the
+      provider does not count as main text (ABC's legacy ``_tei`` rows) is no main
+      text, as in the import. An add from an imported paper (``PAPER``) sends no request.
 
-    Decision O2 (option (a)): the provider's own rules decide which supplements it
-    converts, and they are never copied here, so on a paper whose supplements the
-    provider does not convert, a ticked file is later reported as not converted.
-    Under O2 option (b) this function returns ``False``. P7d adds its one condition
-    (its setting on: also true with a converted main, on both routes) before the last line.
+    P7d adds its one condition (its setting on: also true with a converted main, on both
+    routes) before the last line.
     """
 
     reference = decision.reference
@@ -365,6 +367,7 @@ async def list_reference_files(
     save_assessment: Callable[[str, str, str, FileAssessment], None],
     route: ListingRoute,
     provider_observations: Mapping[str, ProviderObservation],
+    find_paper_in_library: Callable[[ReferenceImportDecision], Awaitable[str | None]] | None,
 ) -> FileListing:
     """List one resolved reference's files for one curator.
 
@@ -376,13 +379,17 @@ async def list_reference_files(
     provider file ids already imported into the paper. At most ``check_limit``
     files not checked before are downloaded by one listing. ``provider_observations``
     maps a provider file id to the last observation of this paper's imports; only the
-    per-paper listing has any.
+    per-paper listing has any. ``find_paper_in_library`` (identifier listing only)
+    returns the curator's paper an import of this decision would answer ``duplicate``
+    with, the import's own check.
     """
 
     if not isinstance(reference, SourceReference):
         raise FileListingError("Files are listed only for a resolved provider reference")
     if provider_observations and route is not ListingRoute.PAPER:
         raise FileListingError("Provider observations belong to the per-paper listing only")
+    if (find_paper_in_library is None) != (route is not ListingRoute.IDENTIFIER):
+        raise FileListingError("Only the identifier listing checks the curator's Library")
     groups = tuple(authorized_group_ids)
     in_paper = set(files_in_paper)
     artifacts = await provider.list_artifacts(reference, request_bearer_token=request_bearer_token)
@@ -398,6 +405,7 @@ async def list_reference_files(
         allow_conversion_request=False,
     )
     unconverted_tickable = will_ask_provider(decision, bearer_kind=bearer_kind, route=route)
+    paper_reason, existing_document_id = await _paper_refusal(decision, route, find_paper_in_library)
     files: list[ListedFile] = []
     if decision.selected is not None and decision.status in (
         ReferenceImportDecisionStatus.READY,
@@ -420,8 +428,8 @@ async def list_reference_files(
             category=None,
             single_title_required=False,
             # The main paper is always part of an import; it is never added twice.
-            tickable=not main_in_paper,
-            not_tickable_reason=FileReason.ALREADY_IN_PAPER if main_in_paper else None,
+            tickable=paper_reason is None and not main_in_paper,
+            not_tickable_reason=paper_reason or (FileReason.ALREADY_IN_PAPER if main_in_paper else None),
             last_provider_observation=None,
         ))
 
@@ -529,7 +537,7 @@ async def list_reference_files(
         copy_ids = (original.artifact_id, *(copy.artifact_id for copy in candidate.duplicates))
         in_this_paper = any(file_id in in_paper for file_id in copy_ids)
         check = checks.get(original.artifact_id, ListedFileCheck(ListedFileCheckStatus.NOT_CHECKED))
-        not_tickable = _not_tickable_reason(
+        not_tickable = paper_reason or _not_tickable_reason(
             status=status, check=check, in_this_paper=in_this_paper, unconverted_tickable=unconverted_tickable,
         )
         files.append(ListedFile(
@@ -550,7 +558,8 @@ async def list_reference_files(
             single_title_required=provider.converted_text_has_single_title(original),
             tickable=not_tickable is None,
             not_tickable_reason=not_tickable,
-            last_provider_observation=next(
+            # A file in the paper shows no observation: what the provider said before it was added is stale.
+            last_provider_observation=None if in_this_paper else next(
                 (provider_observations[file_id] for file_id in copy_ids if file_id in provider_observations),
                 None,
             ),
@@ -565,7 +574,40 @@ async def list_reference_files(
         not_shown_count=not_shown,
         duplicate_copies_count=duplicate_copies,
         check_version=limits.check_version,
+        existing_document_id=existing_document_id,
     )
+
+
+async def _paper_refusal(
+    decision: ReferenceImportDecision,
+    route: ListingRoute,
+    find_paper_in_library: Callable[[ReferenceImportDecision], Awaitable[str | None]] | None,
+) -> tuple[FileReason | None, str | None]:
+    """Whether an import through this listing refuses the whole paper, read from the import's decision.
+
+    On the identifier listing, an import goes ahead only when the decision selected a
+    main file and is ``READY`` or ``CONVERSION_RUNNING`` (``_import_one_identifier``);
+    anything else (no main file, access denied, an ambiguous main, a failed conversion)
+    ends it with an error, so no file can be ticked (``paper_not_importable``;
+    ``main_status`` says which). When the curator already has the paper, the import
+    answers ``duplicate`` and imports nothing (``paper_already_in_library``, with the
+    paper's id so the screen can open its own listing). The per-paper listing's adds
+    do not depend on the main file's decision.
+    """
+
+    if route is not ListingRoute.IDENTIFIER:
+        return None, None
+    assert find_paper_in_library is not None
+    importable = decision.selected is not None and decision.status in (
+        ReferenceImportDecisionStatus.READY,
+        ReferenceImportDecisionStatus.CONVERSION_RUNNING,
+    )
+    if not importable:
+        return FileReason.PAPER_NOT_IMPORTABLE, None
+    existing = await find_paper_in_library(decision)
+    if existing is not None:
+        return FileReason.PAPER_ALREADY_IN_LIBRARY, existing
+    return None, None
 
 
 def _not_tickable_reason(
@@ -575,7 +617,16 @@ def _not_tickable_reason(
     in_this_paper: bool,
     unconverted_tickable: bool,
 ) -> FileReason | None:
-    """Why a supplement cannot be ticked, or ``None`` when it can. Codes from ``NOT_TICKABLE_REASONS``."""
+    """Why a supplement cannot be ticked, or ``None`` when it can. Codes from ``NOT_TICKABLE_REASONS``.
+
+    Decision O2 (option (a), decided 22 Nov 2026): an unconverted file is tickable when
+    the import will ask the provider to convert the paper (``will_ask_provider``); the
+    provider's own rules decide what it converts and are never copied here, so on a
+    paper whose supplements the provider does not convert, a ticked file is later
+    reported as not converted. Under option (b) the ``NO_CONVERTED_TEXT`` line would
+    always give ``PROVIDER_NOT_CONVERTED_YET``; under (c) it would read the provider's
+    eligibility field. ``will_ask_provider`` stays the same in every option.
+    """
 
     if in_this_paper:
         return FileReason.ALREADY_IN_PAPER
@@ -610,6 +661,7 @@ def listing_to_payload(listing: FileListing) -> dict[str, Any]:
         "not_shown_count": listing.not_shown_count,
         "duplicate_copies_count": listing.duplicate_copies_count,
         "check_version": listing.check_version,
+        "existing_document_id": listing.existing_document_id,
         "files": [
             {
                 "provider_file_id": item.provider_file_id,

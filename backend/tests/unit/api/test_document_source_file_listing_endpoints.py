@@ -44,7 +44,7 @@ class _Provider:
 
 EMPTY = FileListing(
     provider="made_up_provider", reference_id="1", reference_curie="MADEUP:1", main_status="ready",
-    files=(), not_shown_count=2, duplicate_copies_count=0, check_version="1-x",
+    files=(), not_shown_count=2, duplicate_copies_count=0, check_version="1-x", existing_document_id=None,
 )
 
 
@@ -57,6 +57,12 @@ def wired(monkeypatch):
         return _context()
 
     monkeypatch.setattr(documents, "_document_source_context_or_503", context)
+
+    async def provision(_principal):
+        return SimpleNamespace(id=7)
+
+    monkeypatch.setattr(documents, "provision_user_async", provision)
+    monkeypatch.setattr(documents, "principal_from_claims", lambda claims: claims)
     monkeypatch.setattr(
         "src.lib.document_sources.registry.get_configured_document_source_provider", lambda: provider,
     )
@@ -65,8 +71,8 @@ def wired(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_listing_by_identifier_returns_codes_and_counts(monkeypatch, wired):
-    async def listed(identifier, *, provider, context):
-        assert identifier == "MADEUP:1" and provider is wired
+    async def listed(identifier, *, owner_user_id, provider, context):
+        assert identifier == "MADEUP:1" and provider is wired and owner_user_id == 7
         return EMPTY
 
     monkeypatch.setattr(file_listing_service, "list_files_for_identifier", listed)
@@ -144,7 +150,7 @@ async def test_a_paper_listing_resolves_the_papers_curie_and_requires_its_refere
     monkeypatch.setattr(file_listing_service, "_paper_lookup", lambda *_: _paper())
 
     async def listed(provider, lookup, context, files_in_paper, *, route, provider_observations,
-                     expected_reference_id=None):
+                     owner_user_id, expected_reference_id=None):
         captured.update(
             lookup=lookup, files=files_in_paper, expected=expected_reference_id, route=route,
             observations=provider_observations,
@@ -173,7 +179,7 @@ async def test_a_reference_that_resolves_to_another_id_is_refused(monkeypatch):
     with pytest.raises(FileListingUnavailable) as raised:
         await file_listing_service._list(
             Resolving(), "MADEUP:55", _context(), (), route=ListingRoute.PAPER, provider_observations={},
-            expected_reference_id="55",
+            owner_user_id=7, expected_reference_id="55",
         )
     assert raised.value.code == "paper_reference_mismatch"
 
@@ -184,5 +190,6 @@ async def test_no_curator_token_means_no_listing():
     with pytest.raises(FileListingUnavailable) as raised:
         await file_listing_service._list(
             provider, "MADEUP:1", _context(token=None), (), route=ListingRoute.IDENTIFIER, provider_observations={},
+            owner_user_id=7,
         )
     assert raised.value.code == "document_source_curator_token_unavailable"

@@ -146,3 +146,14 @@ def test_the_summary_counts_results_and_notes_only():
     assert summary["results"] == {"invalid_text": 1, "ok": 2}
     assert summary["few_characters_notes"] == 1
     assert summary["check_version"] == _limits().check_version
+
+
+def test_a_code_that_is_not_a_check_reason_is_refused_before_it_can_be_stored():
+    """Stored results are shared by every curator; a non-check code must never reach the table (review F1)."""
+
+    from src.lib.document_sources.file_assessment import FileAssessment
+    from src.lib.document_sources.file_reasons import FileReasonGroupError
+
+    with pytest.raises(FileReasonGroupError):
+        FileAssessment(refused=True, reason=FileReason.ALREADY_IN_PAPER)
+    assert FileAssessment(refused=True, reason=FileReason.TITLE_COUNT).reason is FileReason.TITLE_COUNT

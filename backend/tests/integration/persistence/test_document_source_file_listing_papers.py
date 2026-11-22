@@ -66,7 +66,7 @@ def captured(monkeypatch):
     calls = {}
 
     async def listed(provider, lookup, context, files_in_paper, *, route, provider_observations,
-                     expected_reference_id=None):
+                     owner_user_id, expected_reference_id=None):
         calls.update(
             lookup=lookup, files=set(files_in_paper), expected=expected_reference_id, route=route.value,
             observations=dict(provider_observations),
@@ -74,6 +74,7 @@ def captured(monkeypatch):
         return FileListing(
             provider=PROVIDER, reference_id="55", reference_curie="MADEUP:55", main_status="ready",
             files=(), not_shown_count=0, duplicate_copies_count=0, check_version="v",
+            existing_document_id=None,
         )
 
     monkeypatch.setattr(file_listing_service, "_list", listed)

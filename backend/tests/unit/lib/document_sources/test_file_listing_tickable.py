@@ -92,8 +92,11 @@ def _wb_rows(*main_text_rows: dict[str, Any]) -> list[dict[str, Any]]:
 
 async def _listing(
     rows, *, bearer_kind=CURATOR, route=ListingRoute.IDENTIFIER, in_paper=(),
-    observations=None, payloads=None,
+    observations=None, payloads=None, library_paper=None,
 ):
+    async def library(_decision):
+        return library_paper
+
     client = _Client({"21": GOOD_TABLE, **(payloads or {})})
     client.show_reference_payload = _abc_reference_record()
     client.show_referencefiles_payload = rows  # type: ignore[assignment]
@@ -105,6 +108,7 @@ async def _listing(
         bearer_kind=bearer_kind, request_bearer_token="curator-token", files_in_paper=in_paper,
         limits=_limits(), check_limit=20, load_stored=store.load, save_assessment=store.save,
         route=route, provider_observations=observations or {},
+        find_paper_in_library=library if route is ListingRoute.IDENTIFIER else None,
     )
     return listing, client
 
@@ -385,7 +389,100 @@ async def test_the_per_paper_service_lists_with_this_papers_observations_and_the
     )
     assert by_id["10"].not_tickable_reason is FileReason.ALREADY_IN_PAPER
 
+    async def not_in_library(_decision):
+        return None
+
+    monkeypatch.setattr(file_listing_service, "_library_lookup", lambda *_: not_in_library)
     before_import = await file_listing_service.list_files_for_identifier(
-        "AGRKB:101", provider=provider, context=context,
+        "AGRKB:101", owner_user_id=7, provider=provider, context=context,
     )
     assert all(item.last_provider_observation is None for item in before_import.files)
+
+
+# Review fixes (22 Nov): F2 and F6.
+
+
+@pytest.mark.asyncio
+async def test_a_file_already_in_the_paper_shows_no_old_observation():
+    seen = datetime(2026, 11, 22, 15, 4, tzinfo=timezone.utc)
+    observations = {"20": ProviderObservation(code=FileReason.PROVIDER_NOT_CONVERTED, observed_at=seen)}
+    listing, _ = await _listing(
+        _wb_rows(_main_text(11)), route=ListingRoute.PAPER, in_paper=("10", "20"), observations=observations,
+    )
+    entry = {item.provider_file_id: item for item in listing.files}["20"]
+    assert entry.not_tickable_reason is FileReason.ALREADY_IN_PAPER
+    assert entry.last_provider_observation is None
+
+
+@pytest.mark.asyncio
+async def test_a_paper_already_in_the_library_has_no_tickable_file_and_names_that_paper():
+    listing, _ = await _listing(_wb_rows(), library_paper="made-up-paper-id")
+    assert {item.tickable for item in listing.files} == {False}
+    assert {item.not_tickable_reason for item in listing.files} == {FileReason.PAPER_ALREADY_IN_LIBRARY}
+    payload = listing_to_payload(listing)
+    assert payload["existing_document_id"] == "made-up-paper-id"
+
+
+@pytest.mark.asyncio
+async def test_a_reference_without_a_main_file_cannot_be_imported_so_nothing_is_tickable():
+    """The import of an identifier with no main PDF ends with an error (no_source_artifact)."""
+
+    rows = [row for row in _wb_rows() if row["referencefile_id"] != 10]
+    listing, _ = await _listing(rows)
+    assert listing.main_status == ReferenceImportDecisionStatus.NO_SOURCE_ARTIFACT
+    assert {item.not_tickable_reason for item in listing.files} == {FileReason.PAPER_NOT_IMPORTABLE}
+    assert listing_to_payload(listing)["existing_document_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_main_file_the_curator_cannot_open_makes_nothing_tickable():
+    rows = [_abc_show_all_main_pdf(10, "FB"), *_pair(20, "WB")]
+    listing, _ = await _listing(rows)
+    assert listing.main_status == ReferenceImportDecisionStatus.ACCESS_DENIED
+    assert [(item.provider_file_id, item.not_tickable_reason) for item in listing.files] == [
+        ("20", FileReason.PAPER_NOT_IMPORTABLE),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_the_per_paper_listing_does_not_depend_on_the_main_files_decision():
+    """Adds to an imported paper go ahead whatever the provider now says about its main file."""
+
+    rows = [row for row in _wb_rows() if row["referencefile_id"] != 10]
+    listing, _ = await _listing(rows, route=ListingRoute.PAPER, in_paper=())
+    assert {item.provider_file_id: item.tickable for item in listing.files}["20"] is True
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        ReferenceImportDecisionStatus.AMBIGUOUS_MATCH,
+        ReferenceImportDecisionStatus.CONVERSION_FAILED,
+        ReferenceImportDecisionStatus.NO_CONVERTED_TEXT,
+    ],
+)
+@pytest.mark.asyncio
+async def test_every_decision_the_import_refuses_refuses_the_whole_paper(status):
+    from src.lib.document_sources.file_listing import _paper_refusal
+
+    async def not_reached(_decision):
+        raise AssertionError("the Library is checked only for an importable paper")
+
+    reason, existing = await _paper_refusal(
+        _decision(status, converted=False), ListingRoute.IDENTIFIER, not_reached,
+    )
+    assert (reason, existing) == (FileReason.PAPER_NOT_IMPORTABLE, None)
+
+
+@pytest.mark.asyncio
+async def test_a_main_text_still_running_keeps_the_paper_importable():
+    from src.lib.document_sources.file_listing import _paper_refusal
+
+    async def not_in_library(_decision):
+        return None
+
+    reason, _ = await _paper_refusal(
+        _decision(ReferenceImportDecisionStatus.CONVERSION_RUNNING, converted=False), ListingRoute.IDENTIFIER,
+        not_in_library,
+    )
+    assert reason is None

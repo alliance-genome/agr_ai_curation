@@ -12,7 +12,7 @@ import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from src.lib.document_sources.file_reasons import FileReason
+from src.lib.document_sources.file_reasons import CHECK_REASONS, FileReason, reason_in_group
 
 # Bump when a check's code changes; thresholds are added to the version separately.
 # "2": the shared cell splitter now treats an even run of backslashes before a pipe as a
@@ -58,6 +58,12 @@ class FileAssessment:
     limit_value: int | None = None
     # R3: set only when the readable text is below the note threshold.
     few_characters_count: int | None = None
+
+    def __post_init__(self) -> None:
+        # Stored results are shared by every curator listing the file, so a code that is
+        # not a check reason must never reach the table (read is checked again, loudly).
+        if self.reason is not None:
+            reason_in_group(self.reason.value, CHECK_REASONS, group_name="check reasons")
 
 
 def _refused(reason: FileReason, measured: int | None = None, limit: int | None = None) -> FileAssessment:
