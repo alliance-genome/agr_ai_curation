@@ -8,6 +8,7 @@ from typing import Any
 
 from pydantic import model_validator
 
+from src.schemas.evidence_workspace import evidence_record_page
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     CuratableObjectStatus,
@@ -220,19 +221,23 @@ def _payload_enum_errors(*, location: str, payload: Mapping[str, Any]) -> list[s
 def _missing_required_mapping_fields(
     record: Mapping[str, Any],
     field_names: Sequence[str],
+    *,
+    file_id: Any,
 ) -> list[str]:
+    """``file_id`` is the file the evidence names: the record's own, or its source record's."""
+
     missing_fields: list[str] = []
     for field_name in field_names:
+        if field_name == "page":
+            # A page is required unless the evidence names a file (ALL-1460).
+            if not evidence_record_page({"page": record.get("page"), "file_id": file_id})[0]:
+                missing_fields.append(field_name)
+            continue
         value = record.get(field_name, _MISSING_PAYLOAD_VALUE)
         if value is _MISSING_PAYLOAD_VALUE or value is None:
             missing_fields.append(field_name)
             continue
         if isinstance(value, str) and not value.strip():
-            missing_fields.append(field_name)
-            continue
-        if field_name == "page" and (
-            isinstance(value, bool) or not isinstance(value, int) or value < 1
-        ):
             missing_fields.append(field_name)
     return missing_fields
 
@@ -242,8 +247,9 @@ def _required_mapping_field_errors(
     location: str,
     record: Mapping[str, Any],
     field_names: Sequence[str],
+    file_id: Any,
 ) -> list[str]:
-    missing_fields = _missing_required_mapping_fields(record, field_names)
+    missing_fields = _missing_required_mapping_fields(record, field_names, file_id=file_id)
     if not missing_fields:
         return []
     return [
@@ -256,7 +262,11 @@ def _required_evidence_field_errors(evidence_id: str, evidence: Any) -> list[str
     missing_fields: list[str] = []
     for field_name in _REQUIRED_DISEASE_EVIDENCE_SNAPSHOT_FIELDS:
         value = getattr(evidence, field_name, None)
-        if value is None or (isinstance(value, str) and not value.strip()):
+        if field_name == "page":
+            # A page is required unless the evidence names a file (ALL-1460).
+            if not evidence_record_page({"page": value, "file_id": evidence.file_id})[0]:
+                missing_fields.append(field_name)
+        elif value is None or (isinstance(value, str) and not value.strip()):
             missing_fields.append(field_name)
     if not missing_fields:
         return []
@@ -312,11 +322,13 @@ def _validate_payload_evidence_snapshot(
         if not isinstance(payload_record, Mapping):
             errors.append(f"{payload_record_location} must be an object")
             continue
+        source_record = evidence_by_id.get(payload_record.get("evidence_record_id"))
         errors.extend(
             _required_mapping_field_errors(
                 location=payload_record_location,
                 record=payload_record,
                 field_names=_REQUIRED_DISEASE_EVIDENCE_SNAPSHOT_FIELDS,
+                file_id=getattr(source_record, "file_id", None),
             )
         )
 
@@ -746,6 +758,7 @@ def validate_pending_disease_envelope(
                 missing_evidence_fields = _missing_required_mapping_fields(
                     record,
                     _REQUIRED_DISEASE_EVIDENCE_SNAPSHOT_FIELDS,
+                    file_id=record.get("file_id"),
                 )
                 raw_record_id = record.get("evidence_record_id")
                 record_id = raw_record_id.strip() if isinstance(raw_record_id, str) else None

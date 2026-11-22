@@ -22,6 +22,7 @@ from src.lib.domain_packs.resolvable_values import (
     ResolvableValueError,
     check_resolvable_value,
 )
+from src.schemas.evidence_workspace import evidence_record_page
 from src.lib.openai_agents.models import (
     PhenotypeResultEnvelope as RuntimePhenotypeResultEnvelope,
 )
@@ -196,14 +197,13 @@ def _evidence_payload_from_metadata(record: Mapping[str, Any]) -> dict[str, Any]
     verified_quote = _optional_text(record.get("verified_quote"))
     section = _optional_text(record.get("section"))
     chunk_id = _optional_text(record.get("chunk_id"))
-    page = record.get("page")
+    page_valid, page = evidence_record_page(record)
     if (
         evidence_record_id is None
         or verified_quote is None
         or section is None
         or chunk_id is None
-        or isinstance(page, bool)
-        or not isinstance(page, int)
+        or not page_valid
     ):
         return None
     return {
@@ -498,7 +498,14 @@ class EvidenceQuotePayload(BaseModel):
     evidence_record_id: StrictStr = Field(description="Stable verified evidence record ID")
     entity: StrictStr | None = Field(default=None, description="Entity or assertion label")
     verified_quote: StrictStr = Field(description="Verbatim quote verified by record_evidence")
-    page: int = Field(ge=1, description="1-based page containing the quote")
+    page: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "1-based page containing the quote, as returned by record_evidence; empty when "
+            "the file has no page numbers (for example a converted spreadsheet)"
+        ),
+    )
     section: StrictStr = Field(description="Document section containing the quote")
     chunk_id: StrictStr = Field(description="Document chunk ID used for verification")
     subsection: StrictStr | None = Field(default=None, description="Subsection, if present")

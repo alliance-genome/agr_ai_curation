@@ -18,6 +18,7 @@ from pydantic import (
     model_validator,
 )
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DefinitionState, SchemaRef
+from src.schemas.evidence_workspace import evidence_record_page
 from src.schemas.models.base import MentionCandidate
 
 
@@ -131,7 +132,14 @@ class GeneMentionEvidencePayload(BaseModel):
         description="Stable ID returned by the paper evidence verification tool"
     )
     verified_quote: StrictStr = Field(description="Verbatim paper text verified by record_evidence")
-    page: int = Field(ge=1, description="1-based page containing the verified quote")
+    page: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "1-based page containing the quote, as returned by record_evidence; empty when "
+            "the file has no page numbers (for example a converted spreadsheet)"
+        ),
+    )
     section: StrictStr = Field(description="Document section containing the verified quote")
     chunk_id: StrictStr = Field(description="Document chunk identifier used to verify the quote")
     subsection: StrictStr | None = Field(default=None, description="Subsection heading, if available")
@@ -184,6 +192,8 @@ class GeneMentionEvidencePayload(BaseModel):
     @field_validator("page", mode="before")
     @classmethod
     def _validate_page(cls, value: object) -> object:
+        if value is None:
+            return None
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError("page must be an integer")
         return value
@@ -309,7 +319,6 @@ class GeneExtractionResultEnvelope(RuntimeGeneExtractionResultEnvelope):
 
             required_evidence_fields = {
                 "verified_quote": evidence_record.verified_quote,
-                "page": evidence_record.page,
                 "section": evidence_record.section,
                 "chunk_id": evidence_record.chunk_id,
             }
@@ -318,7 +327,10 @@ class GeneExtractionResultEnvelope(RuntimeGeneExtractionResultEnvelope):
                 for field_name, value in required_evidence_fields.items()
                 if value is None
             )
-            if missing_evidence_fields:
+            page_valid, _ = evidence_record_page(
+                {"page": evidence_record.page, "file_id": evidence_record.file_id}
+            )
+            if missing_evidence_fields or not page_valid:
                 raise ValueError(
                     "metadata.evidence_records[] entries referenced by gene_mention_evidence "
                     "must include verified_quote, page, section, and chunk_id"
