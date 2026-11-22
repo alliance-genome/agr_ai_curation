@@ -656,3 +656,66 @@ def test_phenotype_domain_pack_validator_rejects_legacy_semantic_keys():
     assert [finding.code for finding in findings] == [
         "alliance.phenotype.legacy_semantic_store_present"
     ]
+
+
+def _without_page(payload: dict[str, object], *, file_id: str | None) -> dict[str, object]:
+    # The fixture shares one dict between the metadata record and the quote copy.
+    payload = copy.deepcopy(payload)
+    for obj in payload["curatable_objects"]:
+        if obj["object_type"] == "EvidenceQuote":
+            obj["payload"] = {key: value for key, value in obj["payload"].items() if key != "page"}
+    records = []
+    for record in payload["metadata"]["evidence_records"]:
+        record = {key: value for key, value in record.items() if key != "page"}
+        if file_id is not None:
+            record["file_id"] = file_id
+        records.append(record)
+    payload["metadata"]["evidence_records"] = records
+    return payload
+
+
+def test_phenotype_extractor_schema_accepts_a_page_less_quote_whose_evidence_names_its_file():
+    # ALL-1460 P8b3: a quote from a converted spreadsheet has no page.
+    payload = _without_page(_valid_phenotype_payload(), file_id="6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c")
+
+    _validate_phenotype_extractor_payload(payload)
+
+
+def test_phenotype_extractor_schema_still_rejects_a_page_less_quote_without_a_file():
+    # An empty copy must not pass by matching an empty metadata page.
+    payload = _without_page(_valid_phenotype_payload(), file_id=None)
+
+    with pytest.raises(ValidationError) as exc_info:
+        _validate_phenotype_extractor_payload(payload)
+
+    assert "payload.page must not be empty" in str(exc_info.value)
+
+
+def _without_section(payload: dict[str, object], *, file_id: str | None) -> dict[str, object]:
+    payload = copy.deepcopy(payload)
+    for obj in payload["curatable_objects"]:
+        if obj["object_type"] == "EvidenceQuote":
+            obj["payload"] = {key: value for key, value in obj["payload"].items() if key != "section"}
+    records = []
+    for record in payload["metadata"]["evidence_records"]:
+        record = {key: value for key, value in record.items() if key != "section"}
+        if file_id is not None:
+            record["file_id"] = file_id
+        records.append(record)
+    payload["metadata"]["evidence_records"] = records
+    return payload
+
+
+def test_phenotype_extractor_schema_accepts_a_section_less_quote_whose_evidence_names_its_file():
+    payload = _without_section(_valid_phenotype_payload(), file_id="6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c")
+
+    _validate_phenotype_extractor_payload(payload)
+
+
+def test_phenotype_extractor_schema_still_rejects_a_section_less_quote_without_a_file():
+    payload = _without_section(_valid_phenotype_payload(), file_id=None)
+
+    with pytest.raises(ValidationError) as exc_info:
+        _validate_phenotype_extractor_payload(payload)
+
+    assert "payload.section must not be empty" in str(exc_info.value)
