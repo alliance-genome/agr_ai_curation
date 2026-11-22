@@ -15,6 +15,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.engine import make_url
 
+from src.lib.config.models_loader import get_default_model
 from src.models.sql.agent import Agent
 from src.models.sql.database import SessionLocal
 from src.models.sql.prompts import PromptTemplate
@@ -35,8 +36,10 @@ def test_cold_worker_builds_real_agent():
         # and restore construction-only fixture changes afterwards.
         agent = db.scalar(select(Agent).where(Agent.agent_key == "supervisor"))
         assert agent is not None
+        model = get_default_model()
+        assert model is not None, "Cold-worker construction requires a configured catalog model"
         original_model, original_tools = agent.model_id, agent.tool_ids
-        agent.model_id, agent.tool_ids = "gpt-5.6-terra", []
+        agent.model_id, agent.tool_ids = model.model_id, []
         prompt = db.scalars(select(PromptTemplate).where(
             PromptTemplate.agent_name == "supervisor",
             PromptTemplate.prompt_type == "system",
