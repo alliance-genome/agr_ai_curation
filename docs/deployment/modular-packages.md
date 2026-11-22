@@ -236,9 +236,10 @@ service client, never a user account, and carries no curator identity: core
 authorizes every import from the requesting development user's own groups and
 only forwards the bearer to the provider. The package owns authentication and
 provider-specific environment reads. Core maintains a per-worker cache scoped to
-the provider and resolver. It renews before expiry using
-`DOCUMENT_SOURCE_DEV_READER_REFRESH_SKEW_SECONDS` and the import timeout, and
-bounds resolution with `DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS`.
+the provider and resolver. It renews when less than
+`DOCUMENT_SOURCE_DEV_READER_REFRESH_SKEW_SECONDS` of the bearer's lifetime is
+left (the machine reader sends no conversion request, so no import waits on the
+provider with it), and bounds resolution with `DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS`.
 Missing resolvers and invalid or expired credentials fail closed. Expected
 authentication failures should raise `DevelopmentReaderUnavailable` with a
 sanitized message; never include secrets in errors. The Alliance resolver

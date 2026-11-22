@@ -24,7 +24,6 @@ from src.lib.document_sources.registry import (
 from src.lib.openai_agents.config import (
     get_document_source_dev_reader_refresh_skew_seconds,
     get_document_source_import_enabled,
-    get_document_source_import_timeout_seconds,
     get_document_source_provider,
     get_document_source_request_timeout_seconds,
 )
@@ -52,10 +51,10 @@ class DevelopmentReaderService:
         ] = {}
 
     def _cache_is_usable(self, credentials: DevelopmentReaderCredentials) -> bool:
-        required_lifetime = max(
-            float(get_document_source_dev_reader_refresh_skew_seconds()),
-            get_document_source_import_timeout_seconds(),
-        )
+        # The machine reader sends no conversion request, so an import never
+        # waits on the provider with it: its bearer only has to last through
+        # the refresh skew, not the (one-hour) import deadline.
+        required_lifetime = float(get_document_source_dev_reader_refresh_skew_seconds())
         return credentials.expires_at > time.time() + required_lifetime
 
     async def get_credentials(self) -> DevelopmentReaderCredentials:
