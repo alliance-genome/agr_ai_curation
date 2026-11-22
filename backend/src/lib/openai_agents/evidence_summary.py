@@ -107,6 +107,23 @@ def _text_hash_from_span_id(span_id: Any) -> Optional[str]:
     return None
 
 
+def _record_page(record_dict: Dict[str, Any]) -> tuple[bool, Optional[int]]:
+    """Return (valid, page) for one evidence record's page.
+
+    A record that names its file (every record made since 0.12.0) may have no
+    page: its file has no page numbers there, and its page is None. A record
+    without ``file_id`` was saved before files were recorded and still needs a
+    positive page, exactly as before, so older records normalize unchanged.
+    """
+
+    page = record_dict.get("page")
+    if isinstance(page, int) and not isinstance(page, bool) and page > 0:
+        return True, page
+    if page is None and _normalize_optional_text(record_dict.get("file_id")):
+        return True, None
+    return False, None
+
+
 def _normalize_source_fragment(value: Any) -> Optional[Dict[str, Any]]:
     fragment_dict = _coerce_evidence_record_dict(value)
     if not isinstance(fragment_dict, dict):
@@ -117,6 +134,8 @@ def _normalize_source_fragment(value: Any) -> Optional[Dict[str, Any]]:
         "span_id",
         "chunk_id",
         "document_id",
+        "file_id",
+        "file_name",
         "text",
         "section",
         "subsection",
@@ -182,9 +201,10 @@ def _copy_span_provenance_fields(
     evidence_record: Dict[str, Any],
     record_dict: Dict[str, Any],
 ) -> None:
-    document_id = _normalize_optional_text(record_dict.get("document_id"))
-    if document_id:
-        evidence_record["document_id"] = document_id
+    for key in ("document_id", "file_id", "file_name"):
+        normalized = _normalize_optional_text(record_dict.get(key))
+        if normalized:
+            evidence_record[key] = normalized
 
     chunk_ids = _normalize_unique_string_list(record_dict.get("chunk_ids"))
     if chunk_ids:
@@ -224,16 +244,14 @@ def _normalize_evidence_record(
     verified_quote = str(record_dict.get("verified_quote") or "").strip()
     section = str(record_dict.get("section") or "").strip()
     chunk_id = str(record_dict.get("chunk_id") or "").strip()
-    page = record_dict.get("page")
+    page_valid, page = _record_page(record_dict)
 
     if (
         not entity
         or not verified_quote
         or not section
         or not chunk_id
-        or not isinstance(page, int)
-        or isinstance(page, bool)
-        or page <= 0
+        or not page_valid
     ):
         invalid_fields: List[str] = []
         if not entity:
@@ -244,8 +262,8 @@ def _normalize_evidence_record(
             invalid_fields.append("section")
         if not chunk_id:
             invalid_fields.append("chunk_id")
-        if not isinstance(page, int) or isinstance(page, bool) or page <= 0:
-            invalid_fields.append(f"page={page!r}")
+        if not page_valid:
+            invalid_fields.append(f"page={record_dict.get('page')!r}")
 
         logger.debug(
             "Dropping malformed evidence record with invalid fields %s; keys=%s entity_fallback=%r",
@@ -862,23 +880,21 @@ def build_record_evidence_summary_record(
     chunk_id = str(output_payload.get("chunk_id") or input_payload.get("chunk_id") or "").strip()
     verified_quote = str(output_payload.get("verified_quote") or "").strip()
     section = str(output_payload.get("section") or "").strip()
-    page = output_payload.get("page")
+    page_valid, page = _record_page(output_payload)
 
     if (
         not entity
         or not chunk_id
         or not verified_quote
         or not section
-        or not isinstance(page, int)
-        or isinstance(page, bool)
-        or page <= 0
+        or not page_valid
     ):
         logger.debug(
             "Skipping verified record_evidence payload with invalid fields: entity=%r chunk_id=%r section=%r page=%r",
             entity,
             chunk_id,
             section,
-            page,
+            output_payload.get("page"),
         )
         return None
 

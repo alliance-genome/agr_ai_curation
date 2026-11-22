@@ -1044,6 +1044,18 @@ class CurationEvidenceRecord(Base):
         server_default="false",
     )
     anchor: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    # The paper file this evidence quotes. Every anchor made since 0.12.0 has one;
+    # NULL only on anchors saved before files were recorded. A quoted file row
+    # cannot be deleted (RESTRICT); paper delete removes anchors first.
+    source_file_id: Mapped[UUID | None] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey(
+            "pdf_document_files.id",
+            ondelete="RESTRICT",
+            name="fk_evidence_anchors_source_file_id",
+        ),
+        nullable=True,
+    )
     warnings: Mapped[list[str]] = mapped_column(
         JSONB,
         nullable=False,
@@ -1069,6 +1081,7 @@ class CurationEvidenceRecord(Base):
 
     __table_args__ = (
         Index("ix_evidence_anchors_candidate", "candidate_id"),
+        Index("ix_evidence_anchors_source_file_id", "source_file_id"),
     )
 
 

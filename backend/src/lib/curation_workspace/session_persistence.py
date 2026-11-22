@@ -191,6 +191,7 @@ def _persist_candidate_evidence_records(
             field_group_keys=list(evidence_input.field_group_keys),
             is_primary=evidence_input.is_primary,
             anchor=dict(evidence_input.anchor),
+            source_file_id=evidence_input.source_file_id,
             warnings=list(evidence_input.warnings),
             created_at=created_at,
             updated_at=created_at,

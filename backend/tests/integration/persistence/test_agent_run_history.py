@@ -30,9 +30,12 @@ def test_history_downgrade_cannot_remove_retained_originals():
         before = MigrationContext.configure(db.connection()).get_current_heads()
         counts = [db.scalar(select(func.count()).select_from(model))
                   for model in (AgentHistoryEvent, AgentHistoryPayload)]
-    # The newest forward-only migration stops the downgrade first.
-    with pytest.raises(RuntimeError, match="File check results are forward-only"):
+    # The newest forward-only migration (whichever is head) stops the downgrade first.
+    with pytest.raises(RuntimeError, match="forward-only") as head_refusal:
+        scripts.get_revision(scripts.get_current_head()).module.downgrade()
+    with pytest.raises(RuntimeError, match="forward-only") as refused:
         command.downgrade(config, "b8a2d3f4e5c6")
+    assert str(refused.value) == str(head_refusal.value)
     with SessionLocal() as db:
         assert MigrationContext.configure(db.connection()).get_current_heads() == before
         assert [db.scalar(select(func.count()).select_from(model))

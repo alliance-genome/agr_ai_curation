@@ -248,6 +248,12 @@ def _draft_detail(record: DraftModel | None) -> CurationDraftPayload | None:
     )
 
 
+def _served_file_id(record: EvidenceRecordModel) -> str | None:
+    """The quoted file's id; None only for anchors saved before files were recorded."""
+
+    return None if record.source_file_id is None else str(record.source_file_id)
+
+
 def _evidence_record(record: EvidenceRecordModel) -> CurationEvidenceRecordPayload:
     return CurationEvidenceRecordPayload(
         anchor_id=str(record.id),
@@ -257,6 +263,7 @@ def _evidence_record(record: EvidenceRecordModel) -> CurationEvidenceRecordPaylo
         field_group_keys=list(record.field_group_keys or []),
         is_primary=record.is_primary,
         anchor=EvidenceAnchor.model_validate(record.anchor or {}),
+        file_id=_served_file_id(record),
         created_at=record.created_at,
         updated_at=record.updated_at,
         warnings=list(record.warnings or []),
@@ -780,6 +787,7 @@ def _candidate_evidence_record(record: EvidenceRecordModel) -> CurationEvidenceR
         field_group_keys=list(record.field_group_keys or []),
         is_primary=record.is_primary,
         anchor=dict(record.anchor or {}),
+        file_id=_served_file_id(record),
         created_at=record.created_at,
         updated_at=record.updated_at,
         warnings=list(record.warnings or []),

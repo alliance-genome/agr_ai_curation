@@ -4,6 +4,7 @@ from src.lib.openai_agents.evidence_summary import (
     build_record_evidence_summary_record,
     canonicalize_structured_result_payload,
     extract_evidence_records_from_structured_result,
+    normalize_evidence_records,
     structured_result_evidence_reference_report,
     structured_result_missing_evidence_record_refs,
     structured_result_requires_evidence,
@@ -774,3 +775,140 @@ def test_canonicalize_copies_payload_evidence_ids_to_curatable_objects():
         )
         is False
     )
+
+
+# ALL-1460 P8b: evidence names its file; a file without pages gives no page.
+_FILE_ID = "6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c"
+_TABLE_SPAN = "4c1e2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c:s0002:c0000-c0017:1a2b3c4d"
+
+
+def _page_less_tool_output(**overrides):
+    # The shape record_evidence returns for a row of a converted spreadsheet.
+    output = {
+        "status": "verified",
+        "entity": "abc-1",
+        "document_id": "doc-1",
+        "file_id": _FILE_ID,
+        "file_name": "Supplementary Table 2",
+        "span_ids": [_TABLE_SPAN],
+        "source_span_ids": [_TABLE_SPAN],
+        "chunk_id": "4c1e2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c",
+        "chunk_ids": ["4c1e2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c"],
+        "verified_quote": "| abc-1 | 3 | 5 |",
+        "section": "Sheet1",
+        "source_fragments": [
+            {
+                "span_id": _TABLE_SPAN,
+                "chunk_id": "4c1e2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c",
+                "document_id": "doc-1",
+                "file_id": _FILE_ID,
+                "file_name": "Supplementary Table 2",
+                "text": "| abc-1 | 3 | 5 |",
+                "char_start": 0,
+                "char_end": 17,
+                "text_hash": "1a2b3c4d",
+                "span_index": 2,
+                "span_type": "table_row",
+                "spanizer_version": "pdf_sentence_v1",
+                "section": "Sheet1",
+            }
+        ],
+        "evidence_record_id": "evidence-page-less",
+    }
+    output.update(overrides)
+    return output
+
+
+def test_record_evidence_summary_keeps_page_less_evidence_that_names_its_file():
+    record = build_record_evidence_summary_record(
+        tool_name="record_evidence",
+        tool_input={"entity": "abc-1"},
+        tool_output=_page_less_tool_output(),
+    )
+
+    assert record is not None
+    assert record["file_id"] == _FILE_ID
+    assert record["file_name"] == "Supplementary Table 2"
+    assert record["page"] is None
+    assert record["source_fragments"][0]["file_id"] == _FILE_ID
+    assert record["source_fragments"][0]["file_name"] == "Supplementary Table 2"
+    assert "page" not in record["source_fragments"][0]
+
+
+def test_record_evidence_summary_still_drops_page_less_evidence_without_a_file():
+    output = _page_less_tool_output()
+    output.pop("file_id")
+    output.pop("file_name")
+
+    assert (
+        build_record_evidence_summary_record(
+            tool_name="record_evidence",
+            tool_input={"entity": "abc-1"},
+            tool_output=output,
+        )
+        is None
+    )
+
+
+def test_stored_page_less_evidence_that_names_its_file_is_kept():
+    stored = _page_less_tool_output()
+    stored.pop("status")
+
+    [record] = normalize_evidence_records([stored])
+
+    assert record["file_id"] == _FILE_ID
+    assert record["page"] is None
+    assert record["evidence_record_id"] == "evidence-page-less"
+
+
+def test_stored_page_less_evidence_without_a_file_is_still_dropped():
+    stored = _page_less_tool_output()
+    for key in ("status", "file_id", "file_name"):
+        stored.pop(key)
+
+    assert normalize_evidence_records([stored]) == []
+
+
+def test_evidence_saved_before_files_were_recorded_normalizes_as_before():
+    # A record as stored before 0.12.0: a page, no file. Expected output is what
+    # origin/main a88e06413 produced for it.
+    stored = {
+        "entity": "abc-1",
+        "verified_quote": "abc-1 was detected in the tested sample.",
+        "page": 7,
+        "section": "Results",
+        "chunk_id": "chunk-7",
+        "document_id": "doc-1",
+        "source_span_ids": ["chunk-7:s0000:c0000-c0040:aaaabbbb"],
+        "source_fragments": [
+            {
+                "span_id": "chunk-7:s0000:c0000-c0040:aaaabbbb",
+                "chunk_id": "chunk-7",
+                "text": "abc-1 was detected in the tested sample.",
+                "page": 7,
+            }
+        ],
+        "evidence_record_id": "evidence-1",
+    }
+
+    assert normalize_evidence_records([stored]) == [
+        {
+            "entity": "abc-1",
+            "verified_quote": "abc-1 was detected in the tested sample.",
+            "page": 7,
+            "section": "Results",
+            "chunk_id": "chunk-7",
+            "document_id": "doc-1",
+            "source_span_ids": ["chunk-7:s0000:c0000-c0040:aaaabbbb"],
+            "source_fragments": [
+                {
+                    "span_id": "chunk-7:s0000:c0000-c0040:aaaabbbb",
+                    "chunk_id": "chunk-7",
+                    "text": "abc-1 was detected in the tested sample.",
+                    "text_hash": "aaaabbbb",
+                    "page": 7,
+                }
+            ],
+            "evidence_record_id": "evidence-1",
+        }
+    ]

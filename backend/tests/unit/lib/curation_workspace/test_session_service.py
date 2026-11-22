@@ -476,9 +476,18 @@ def _create_review_session(
     return session_row
 
 
+def _ready_main_file_id(db_session, document) -> str:
+    """The main file's id once it is ready (only a ready file can be quoted)."""
+
+    document.main_file.status = "ready"
+    db_session.commit()
+    return str(document.main_file.id)
+
+
 def _build_manual_candidate_request(
     *,
     session_id: str,
+    file_id: str | None,
     source: CurationCandidateSource = CurationCandidateSource.MANUAL,
 ) -> CurationManualCandidateCreateRequest:
     timestamp = _now()
@@ -557,6 +566,7 @@ def _build_manual_candidate_request(
                     "table_reference": None,
                     "chunk_ids": [],
                 },
+                "file_id": file_id,
                 "created_at": timestamp,
                 "updated_at": timestamp,
                 "warnings": [],
@@ -1129,7 +1139,9 @@ def test_create_manual_candidate_persists_candidate_updates_session_and_logs_act
     response = module.create_manual_candidate(
         db_session,
         str(session_row.id),
-        _build_manual_candidate_request(session_id=str(session_row.id)),
+        _build_manual_candidate_request(
+            session_id=str(session_row.id), file_id=_ready_main_file_id(db_session, document)
+        ),
         actor_claims={"sub": "user-1", "email": "user-1@example.org"},
     )
 
@@ -1190,7 +1202,9 @@ def test_manual_candidate_persists_and_serializes_selected_session_receipt(db_se
     ))
     db_session.flush()
     db_session.expire(session, ["execution_revisions"])
-    request = _build_manual_candidate_request(session_id=str(session.id)).model_copy(
+    request = _build_manual_candidate_request(
+        session_id=str(session.id), file_id=_ready_main_file_id(db_session, document)
+    ).model_copy(
         update={"agent_revision_id": receipt.agent_revision_id},
     )
     response = module.create_manual_candidate(db_session, session.id, request, actor_claims={"sub": "user-1"})
@@ -1220,6 +1234,7 @@ def test_create_manual_candidate_rejects_non_manual_source(db_session):
             str(session_row.id),
             _build_manual_candidate_request(
                 session_id=str(session_row.id),
+                file_id=_ready_main_file_id(db_session, document),
                 source=CurationCandidateSource.IMPORTED,
             ),
             actor_claims={"sub": "user-1"},
@@ -5933,3 +5948,336 @@ def test_persisted_submission_payload_holds_no_served_search_text(
     persisted_text = json.dumps(persisted.payload)
     assert json.dumps(_TABLE_ROW_QUOTE)[1:-1] in persisted_text
     assert "search_text" not in persisted_text
+
+
+# ALL-1460 P8b: evidence saved before 0.12.0 has no file id. The served file id
+# (beside an anchor, on a projection) must not change the submission intent
+# fingerprint or the persisted submission payload of such evidence. The golden
+# values below were computed on origin/main a88e06413, before P8b.
+_PRE_RELEASE_FINGERPRINT_NON_ENVELOPE = "d80752a134185f784a862db204a0dd3e70fb9cd0ceb4d2d0a1a3296a6997d2ca"
+_PRE_RELEASE_FINGERPRINT_PROJECTION = "db814879d91ade7aa9a5eb2a35309fdf2ca076bfffe89cca9cc774b3a25de300"
+_PRE_RELEASE_PAYLOAD_SHA256 = "8ef972eec82182155db8f6e6c394bd7f3c7243eceb14a7e32159ad5a443c5913"
+
+
+def _deterministic_uuids(monkeypatch) -> None:
+    import sys
+
+    counter = iter(range(1, 10_000))
+    monkeypatch.setattr(
+        sys.modules[__name__], "uuid4", lambda: UUID(int=next(counter))
+    )
+
+
+def _persisted_payload_without_volatile_keys(db_session, session_id: str) -> str:
+    persisted = db_session.scalars(
+        select(SubmissionModel).where(SubmissionModel.session_id == UUID(session_id))
+    ).one()
+    # Times stamped by this run (validation, autosave) and the new validation
+    # snapshot's random id are the only volatile values.
+    import re
+
+    text = re.sub(
+        r"\d{4}-\d\d-\d\dT[0-9:.]+Z?",
+        "<time>",
+        json.dumps(persisted.payload, sort_keys=True),
+    )
+    return re.sub(r'(snapshot_id\\*"\s*:\s*\\*")[0-9a-f-]{36}', r"\1<id>", text)
+
+
+def test_pre_release_anchor_keeps_its_submission_fingerprint_and_payload(
+    db_session,
+    monkeypatch,
+):
+    _deterministic_uuids(monkeypatch)
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+        with_manual_evidence=True,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    session_row.adapter_key = REFERENCE_ADAPTER_KEY
+    db_session.commit()
+    candidate = db_session.get(CurationCandidate, UUID(seeded["first_candidate_id"]))
+    assert len(candidate.evidence_anchors) == 1
+    # A full anchor as the evidence routes store it; made-up text and ids.
+    from src.schemas.curation_workspace import (
+        EvidenceAnchor,
+        EvidenceAnchorKind,
+        EvidenceLocatorQuality,
+        EvidenceSupportsDecision,
+    )
+
+    candidate.evidence_anchors[0].anchor = EvidenceAnchor(
+        anchor_kind=EvidenceAnchorKind.SNIPPET,
+        locator_quality=EvidenceLocatorQuality.EXACT_QUOTE,
+        supports_decision=EvidenceSupportsDecision.SUPPORTS,
+        snippet_text="The bronze astrolabe was catalogued in 1901.",
+        sentence_text="The bronze astrolabe was catalogued in 1901.",
+        viewer_search_text="The bronze astrolabe was catalogued in 1901.",
+        viewer_highlightable=True,
+        page_number=3,
+        section_title="Results",
+        chunk_ids=[str(UUID(int=4_242))],
+    ).model_dump(mode="json")
+    db_session.commit()
+
+    fingerprint = submission_module._submission_intent_fingerprint(
+        db=db_session,
+        session_row=session_row,
+        adapter_key=REFERENCE_ADAPTER_KEY,
+        mode=SubmissionMode.DIRECT_SUBMIT,
+        target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ready_candidates=[candidate],
+        domain_context=None,
+    )
+    assert fingerprint == _PRE_RELEASE_FINGERPRINT_NON_ENVELOPE
+
+    response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionExecuteRequest(
+            session_id=seeded["session_id"],
+            idempotency_key=str(UUID(int=9_999)),
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+        actor_claims={"sub": "user-1"},
+    )
+    assert response.submission.status == CurationSubmissionStatus.ACCEPTED
+    persisted_text = _persisted_payload_without_volatile_keys(db_session, seeded["session_id"])
+    assert "file_id" not in persisted_text
+    assert sha256(persisted_text.encode()).hexdigest() == _PRE_RELEASE_PAYLOAD_SHA256
+
+
+def test_pre_release_projection_keeps_its_submission_fingerprint(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    _deterministic_uuids(monkeypatch)
+    seeded = _table_row_envelope_session(
+        db_session, tmp_path=tmp_path, monkeypatch=monkeypatch, reviewed=False
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    candidate = db_session.get(CurationCandidate, UUID(seeded["candidate_id"]))
+    domain_context = submission_module._build_domain_envelope_submission_context(
+        db=db_session,
+        candidates={seeded["candidate_id"]: candidate},
+        target_candidate_ids=[seeded["candidate_id"]],
+        user_id="user-1",
+    )
+    material = submission_module._non_envelope_candidate_submission_intent(candidate)
+    assert material["evidence_anchor_projections"]
+    assert "file_id" not in json.dumps(material)
+    assert (
+        _intent_fingerprint(db_session, session_row, candidate, domain_context)
+        == _PRE_RELEASE_FINGERPRINT_PROJECTION
+    )
+
+
+def _seed_anchor_with_file(db_session, *, quoted_file: bool):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+        with_manual_evidence=True,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    session_row.adapter_key = REFERENCE_ADAPTER_KEY
+    candidate = db_session.get(CurationCandidate, UUID(seeded["first_candidate_id"]))
+    document = db_session.get(PDFDocument, session_row.document_id)
+    anchor_row = candidate.evidence_anchors[0]
+    from src.schemas.curation_workspace import (
+        EvidenceAnchor,
+        EvidenceAnchorKind,
+        EvidenceLocatorQuality,
+        EvidenceSupportsDecision,
+    )
+
+    anchor_row.anchor = EvidenceAnchor(
+        anchor_kind=EvidenceAnchorKind.SNIPPET,
+        locator_quality=EvidenceLocatorQuality.EXACT_QUOTE,
+        supports_decision=EvidenceSupportsDecision.SUPPORTS,
+        snippet_text="The bronze astrolabe was catalogued in 1901.",
+        viewer_highlightable=True,
+        chunk_ids=[str(uuid4())],
+    ).model_dump(mode="json")
+    if quoted_file:
+        anchor_row.source_file_id = document.main_file.id
+    db_session.commit()
+    return seeded, session_row, candidate, document
+
+
+def test_served_evidence_anchor_names_its_file_beside_the_anchor(db_session):
+    _, _, candidate, document = _seed_anchor_with_file(db_session, quoted_file=True)
+
+    served = serializer_module._candidate_payload(candidate).model_dump(mode="json")
+
+    assert served["evidence_anchors"][0]["file_id"] == str(document.main_file.id)
+    assert "file_id" not in served["evidence_anchors"][0]["anchor"]
+
+
+def test_served_pre_release_evidence_anchor_has_no_file(db_session):
+    _, _, candidate, _ = _seed_anchor_with_file(db_session, quoted_file=False)
+
+    served = serializer_module._candidate_payload(candidate).model_dump(mode="json")
+
+    assert "file_id" not in served["evidence_anchors"][0]
+
+
+def test_submission_of_evidence_that_names_its_file_carries_the_file(db_session):
+    seeded, session_row, candidate, document = _seed_anchor_with_file(db_session, quoted_file=True)
+    file_id = str(document.main_file.id)
+
+    material = submission_module._non_envelope_candidate_submission_intent(candidate)
+    assert material["evidence_anchors"][0]["file_id"] == file_id
+
+    response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionExecuteRequest(
+            session_id=seeded["session_id"],
+            idempotency_key=str(uuid4()),
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+        actor_claims={"sub": "user-1"},
+    )
+    assert response.submission.status == CurationSubmissionStatus.ACCEPTED
+    persisted = db_session.scalars(
+        select(SubmissionModel).where(SubmissionModel.session_id == UUID(seeded["session_id"]))
+    ).one()
+    assert persisted.payload["payload_json"]["candidates"][0]["evidence_anchors"][0]["file_id"] == file_id
+
+
+def test_fingerprint_of_evidence_that_names_its_file_is_stable_across_a_reload(db_session):
+    _, session_row, candidate, _ = _seed_anchor_with_file(db_session, quoted_file=True)
+
+    def fingerprint(current_candidate) -> str:
+        return submission_module._submission_intent_fingerprint(
+            db=db_session,
+            session_row=session_row,
+            adapter_key=REFERENCE_ADAPTER_KEY,
+            mode=SubmissionMode.DIRECT_SUBMIT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            ready_candidates=[current_candidate],
+            domain_context=None,
+        )
+
+    before = fingerprint(candidate)
+    candidate_id = candidate.id
+    db_session.expunge_all()
+    reloaded = db_session.get(CurationCandidate, candidate_id)
+    session_row = db_session.get(ReviewSessionModel, session_row.id)
+
+    assert reloaded is not candidate
+    assert fingerprint(reloaded) == before
+
+
+def test_fingerprint_of_a_projection_that_names_its_file_is_stable_across_a_reload(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={"artifact": {"accession_id": "A-1", "title": "Bronze astrolabe"}},
+        reviewed=False,
+        object_evidence_record_ids=["E1"],
+        envelope_metadata={
+            "evidence_records": [
+                {
+                    "evidence_record_id": "E1",
+                    "verified_quote": _TABLE_ROW_QUOTE,
+                    "page": None,
+                    "file_id": "6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c",
+                    "file_name": "Supplementary Table 2",
+                    "source_span_ids": ["s1"],
+                    "source_fragments": [
+                        {
+                            "text": _TABLE_ROW_QUOTE,
+                            "span_type": "table_row",
+                            "file_id": "6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c",
+                            "file_name": "Supplementary Table 2",
+                        },
+                    ],
+                }
+            ]
+        },
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    candidate = db_session.get(CurationCandidate, UUID(seeded["candidate_id"]))
+    domain_context = submission_module._build_domain_envelope_submission_context(
+        db=db_session,
+        candidates={seeded["candidate_id"]: candidate},
+        target_candidate_ids=[seeded["candidate_id"]],
+        user_id="user-1",
+    )
+    material = submission_module._non_envelope_candidate_submission_intent(candidate)
+    assert material["evidence_anchor_projections"][0]["file_id"] == (
+        "6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c"
+    )
+    before = _intent_fingerprint(db_session, session_row, candidate, domain_context)
+
+    db_session.expunge_all()
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    reloaded = db_session.get(CurationCandidate, UUID(seeded["candidate_id"]))
+    reloaded_context = submission_module._build_domain_envelope_submission_context(
+        db=db_session,
+        candidates={seeded["candidate_id"]: reloaded},
+        target_candidate_ids=[seeded["candidate_id"]],
+        user_id="user-1",
+    )
+
+    assert _intent_fingerprint(db_session, session_row, reloaded, reloaded_context) == before
+
+
+
+def test_manual_candidate_evidence_must_name_a_file_of_the_paper(db_session):
+    document = _create_document(db_session)
+    extraction_result = _create_extraction_result(
+        db_session, document_id=str(document.id), label="alpha"
+    )
+    session_row = _create_session_for_extraction(
+        db_session,
+        document_id=str(document.id),
+        extraction_result_id=extraction_result.id,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        module.create_manual_candidate(
+            db_session,
+            str(session_row.id),
+            _build_manual_candidate_request(session_id=str(session_row.id), file_id=None),
+            actor_claims={"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == {
+        "code": "file_id_required",
+        "message": "file_id is required: evidence names the paper file it quotes",
+    }
+
+
+def test_manual_candidate_evidence_stores_its_file(db_session):
+    document = _create_document(db_session)
+    extraction_result = _create_extraction_result(
+        db_session, document_id=str(document.id), label="alpha"
+    )
+    session_row = _create_session_for_extraction(
+        db_session,
+        document_id=str(document.id),
+        extraction_result_id=extraction_result.id,
+    )
+
+    response = module.create_manual_candidate(
+        db_session,
+        str(session_row.id),
+        _build_manual_candidate_request(
+            session_id=str(session_row.id), file_id=_ready_main_file_id(db_session, document)
+        ),
+        actor_claims={"sub": "user-1"},
+    )
+
+    stored = db_session.scalars(select(EvidenceRecordModel)).one()
+    assert stored.source_file_id == document.main_file.id
+    assert response.candidate.evidence_anchors[0].file_id == str(document.main_file.id)

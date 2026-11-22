@@ -25,6 +25,10 @@ SENDER: SenderIdentity = {"sender_issuer": "https://identity.example.org/pool", 
 SENDER_PARTS = (SENDER["sender_issuer"], SENDER["sender_subject"])
 
 
+MAIN_FILE_ID = uuid4()
+SUPPLEMENT_FILE_ID = uuid4()
+
+
 class _ScalarRows:
     def __init__(self, value):
         self.value = value
@@ -34,14 +38,17 @@ class _ScalarRows:
 
 
 class _SnapshotDb:
-    def __init__(self, *, envelope, modified_event=None):
+    def __init__(self, *, envelope, modified_event=None, main_file_id=MAIN_FILE_ID):
         self.envelope = envelope
+        self.main_file = None if main_file_id is None else SimpleNamespace(id=main_file_id)
         self.modified_event = modified_event
         self.added = None
         self.scalar_calls = 0
         self.envelope_statement = None
 
     def get(self, model, _identity):
+        if model is module.PDFDocument:
+            return SimpleNamespace(main_file_or_none=self.main_file)
         assert model is module.CurationReviewSession
         return SimpleNamespace(created_by_id="curator-1")
 
@@ -162,6 +169,65 @@ def test_snapshot_is_canonical_redacted_and_history_classified(
     assert str(response.snapshot_id) in response.download_path
     assert db.envelope_statement is not None
     assert db.envelope_statement._for_update_arg is not None
+
+
+def _with_evidence(envelope, *records):
+    envelope.envelope_json["metadata"]["evidence_records"] = list(records)
+    return envelope
+
+
+def _evidence(file_id=None, *, fragment_file_id=None):
+    record = {"evidence_record_id": "E1", "verified_quote": "Made-up row.", "page": None}
+    if file_id is not None:
+        record["file_id"] = str(file_id)
+        record["file_name"] = "A file"
+    fragment = {"text": "Made-up row."}
+    if fragment_file_id is not None:
+        fragment["file_id"] = str(fragment_file_id)
+    record["source_fragments"] = [fragment]
+    return record
+
+
+@pytest.mark.parametrize(
+    ("record", "main_file_id"),
+    [
+        (_evidence(SUPPLEMENT_FILE_ID, fragment_file_id=SUPPLEMENT_FILE_ID), MAIN_FILE_ID),
+        (_evidence(MAIN_FILE_ID, fragment_file_id=SUPPLEMENT_FILE_ID), MAIN_FILE_ID),
+        (_evidence(SUPPLEMENT_FILE_ID, fragment_file_id=SUPPLEMENT_FILE_ID), None),
+    ],
+    ids=["supplement", "supplement_fragment", "paper_without_main_file"],
+)
+def test_snapshot_refuses_evidence_from_a_file_other_than_the_main_paper(
+    monkeypatch, record, main_file_id
+):
+    monkeypatch.setattr(module, "get_benchmark_max_snapshot_bytes", lambda: 100_000)
+    db = _SnapshotDb(envelope=_with_evidence(_envelope_row(), record), main_file_id=main_file_id)
+
+    with pytest.raises(module.CurationBenchmarkSnapshotError) as exc:
+        module.create_benchmark_snapshot(
+            db, session_id=uuid4(), envelope_id="env-1",
+            expected_revision=7, current_user_id="curator-1",
+        )
+
+    assert (exc.value.status_code, exc.value.error) == (422, "snapshot_quotes_supplement")
+    assert db.added is None
+
+
+@pytest.mark.parametrize(
+    "record",
+    [_evidence(MAIN_FILE_ID, fragment_file_id=MAIN_FILE_ID), _evidence()],
+    ids=["main_paper", "saved_before_files_were_recorded"],
+)
+def test_snapshot_accepts_evidence_from_the_main_paper(monkeypatch, record):
+    monkeypatch.setattr(module, "get_benchmark_max_snapshot_bytes", lambda: 100_000)
+    db = _SnapshotDb(envelope=_with_evidence(_envelope_row(), record))
+
+    module.create_benchmark_snapshot(
+        db, session_id=uuid4(), envelope_id="env-1",
+        expected_revision=7, current_user_id="curator-1",
+    )
+
+    assert db.added is not None
 
 
 def test_snapshot_rejects_stale_revision_before_export(monkeypatch):

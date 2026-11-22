@@ -236,6 +236,51 @@ def test_evidence_anchor_projection_preserves_navigation_context():
     assert projection.anchor.viewer_search_text == projection.quote
 
 
+def test_evidence_anchor_projection_has_no_file_for_evidence_saved_before_files_were_recorded():
+    projections = project_evidence_anchor_projections(
+        _envelope(),
+        envelope_revision=3,
+        document_id="document-from-session",
+        object_id="gene-1",
+    )
+
+    assert projections[0].file_id is None
+
+
+def test_evidence_anchor_projection_names_the_file_of_a_page_less_record():
+    # A record_evidence record on a converted spreadsheet: file named, no page.
+    file_id = "6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c"
+    envelope = _envelope()
+    record = envelope.metadata["evidence_records"][0]
+    record.pop("page")
+    record.update(
+        file_id=file_id,
+        file_name="Supplementary Table 2",
+        source_fragments=[
+            {
+                "span_id": "chunk-7:0:20:1a2b3c4d",
+                "chunk_id": "chunk-7",
+                "document_id": "document-from-evidence",
+                "file_id": file_id,
+                "file_name": "Supplementary Table 2",
+                "text": "| abc-1 | 3 | 5 |",
+                "span_type": "table_row",
+            }
+        ],
+    )
+
+    projection = project_evidence_anchor_projections(
+        envelope,
+        envelope_revision=3,
+        document_id="document-from-session",
+        object_id="gene-1",
+    )[0]
+
+    assert projection.file_id == file_id
+    assert projection.page_number is None
+    assert projection.metadata["source_record"]["file_name"] == "Supplementary Table 2"
+
+
 def test_evidence_anchor_projection_reads_nested_extraction_metadata_records():
     envelope = DomainEnvelope(
         envelope_id="env-nested",
