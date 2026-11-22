@@ -2236,6 +2236,56 @@ def test_startup_refuses_document_source_wait_settings_that_would_hammer_the_pro
         validate_document_source_wait_settings()
 
 
+@pytest.mark.parametrize("key", [
+    "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS",
+    "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS",
+])
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_startup_refuses_a_wait_setting_that_is_not_a_finite_number(monkeypatch, key, value):
+    """nan passed the old checks and failed every import after its first poll;
+    inf made every wait sleep to its deadline."""
+    from src.lib.openai_agents.config import (
+        DocumentSourceWaitSettingsError,
+        validate_document_source_wait_settings,
+    )
+
+    for name in (
+        "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS",
+        "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS",
+        "DOCUMENT_SOURCE_DEAD_WAIT_POLLS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(key, value)
+
+    with pytest.raises(DocumentSourceWaitSettingsError, match=key):
+        validate_document_source_wait_settings()
+
+
+def test_startup_logs_the_effective_wait_settings_only(monkeypatch, caplog):
+    """An override that pins the deadline below the new default is not unsafe,
+    so it is not refused; the start-up log line makes it visible."""
+    import logging
+
+    from src.lib.openai_agents.config import validate_document_source_wait_settings
+
+    for name in (
+        "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS",
+        "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS",
+        "DOCUMENT_SOURCE_DEAD_WAIT_POLLS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", "600")
+
+    with caplog.at_level(logging.INFO, logger="src.lib.openai_agents.config"):
+        validate_document_source_wait_settings()
+
+    lines = [record.getMessage() for record in caplog.records if "wait settings" in record.getMessage()]
+    assert lines == [
+        "Document-source wait settings: DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=30, "
+        "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=600, DOCUMENT_SOURCE_DEAD_WAIT_POLLS=3"
+    ]
+
+
 def test_startup_accepts_the_default_wait_settings_and_the_limit_itself(monkeypatch):
     from src.lib.openai_agents.config import (
         DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT,

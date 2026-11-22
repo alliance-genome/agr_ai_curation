@@ -2077,6 +2077,8 @@ def get_document_source_poll_interval_seconds() -> float:
     """Status-poll interval for provider-backed document imports."""
     name = "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS"
     value = _get_env_float_with_fallback(name, 30.0)
+    if not math.isfinite(value):
+        raise ValueError(f"{name} is {value}; it must be a finite number of seconds")
     if value < DOCUMENT_SOURCE_MIN_POLL_INTERVAL_SECONDS:
         raise ValueError(
             f"{name} is {value:g}; it must be at least "
@@ -2105,10 +2107,11 @@ def get_document_source_import_timeout_seconds() -> float:
 
     In-flight storage drains before terminal failure.
     """
-    return max(
-        1.0,
-        _get_env_float_with_fallback("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", 3600.0),
-    )
+    name = "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS"
+    value = _get_env_float_with_fallback(name, 3600.0)
+    if not math.isfinite(value):
+        raise ValueError(f"{name} is {value}; it must be a finite number of seconds")
+    return max(1.0, value)
 
 
 def validate_document_source_wait_settings() -> None:
@@ -2119,10 +2122,10 @@ def validate_document_source_wait_settings() -> None:
     """
     try:
         poll_seconds = get_document_source_poll_interval_seconds()
-        get_document_source_dead_wait_polls()
+        deadline_seconds = get_document_source_import_timeout_seconds()
+        dead_wait_polls = get_document_source_dead_wait_polls()
     except ValueError as error:
         raise DocumentSourceWaitSettingsError(str(error)) from error
-    deadline_seconds = get_document_source_import_timeout_seconds()
     polls = deadline_seconds / poll_seconds
     if polls > DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT:
         raise DocumentSourceWaitSettingsError(
@@ -2131,6 +2134,15 @@ def validate_document_source_wait_settings() -> None:
             f"one wait, more than {DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT}; raise the poll "
             "interval or lower the deadline"
         )
+    # A deadline pinned below the default (an old override) is not unsafe and is
+    # not refused; stating the effective values makes it visible.
+    logger.info(
+        "Document-source wait settings: DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=%g, "
+        "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=%g, DOCUMENT_SOURCE_DEAD_WAIT_POLLS=%d",
+        poll_seconds,
+        deadline_seconds,
+        dead_wait_polls,
+    )
 
 
 def get_document_file_max_converted_text_bytes() -> int:
