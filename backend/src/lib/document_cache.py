@@ -14,6 +14,11 @@ Cold preparations run independently. Active fill leases are revoked on
 invalidation, preventing obsolete work from repopulating the cache. Leases
 are removed on completion/cancellation; no per-document tombstones accumulate.
 A missing (None) hierarchy is cached with the same TTL as a found one.
+
+An entry records the readable files it was built from (their fingerprint); a
+lookup for a different readable set misses, so a batch run (main file only)
+and a chat run on the same paper never share a hierarchy, and a file that
+became ready is seen at once.
 """
 
 from contextlib import contextmanager
@@ -28,8 +33,9 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CachedDocumentMetadata:
-    """Cached document hierarchy."""
+    """Cached document hierarchy, for one set of readable files."""
     hierarchy: Optional[Dict[str, Any]]
+    readable_fingerprint: Tuple[Tuple[str, int, int], ...]
     fetched_at: float
 
 
@@ -42,13 +48,18 @@ _lock = RLock()
 _pending_fills: Dict[Tuple[str, str], set] = {}
 
 
-def get_cached_metadata(user_id: str, document_id: str) -> Optional[CachedDocumentMetadata]:
+def get_cached_metadata(
+    user_id: str,
+    document_id: str,
+    readable_fingerprint: Tuple[Tuple[str, int, int], ...],
+) -> Optional[CachedDocumentMetadata]:
     """
-    Get cached document metadata if available and not expired.
+    Get cached document metadata if available, not expired and built from the same readable files.
 
     Args:
         user_id: The user's ID for tenant isolation
         document_id: The document UUID
+        readable_fingerprint: ``ReadableFiles.fingerprint`` of the run asking
 
     Returns:
         CachedDocumentMetadata if cache hit and not expired, None otherwise
@@ -59,6 +70,10 @@ def get_cached_metadata(user_id: str, document_id: str) -> Optional[CachedDocume
 
     with _lock:
         cached = _cache.get(key)
+
+        if cached and cached.readable_fingerprint != readable_fingerprint:
+            logger.info('[DocumentCache] Cache MISS (other readable files) for document %s...', document_id[:8])
+            return None
 
         if cached and (time.time() - cached.fetched_at) < get_document_context_cache_ttl_seconds():
             logger.info('[DocumentCache] Cache HIT for document %s...', document_id[:8])
@@ -76,6 +91,7 @@ def set_cached_metadata(
     user_id: str,
     document_id: str,
     hierarchy: Optional[Dict[str, Any]],
+    readable_fingerprint: Tuple[Tuple[str, int, int], ...],
 ) -> None:
     """
     Cache document metadata for subsequent requests.
@@ -84,12 +100,14 @@ def set_cached_metadata(
         user_id: The user's ID for tenant isolation
         document_id: The document UUID
         hierarchy: The document hierarchy (sections, subsections)
+        readable_fingerprint: ``ReadableFiles.fingerprint`` the hierarchy was built from
     """
     key = (user_id, document_id)
 
     with _lock:
         _cache[key] = CachedDocumentMetadata(
             hierarchy=hierarchy,
+            readable_fingerprint=readable_fingerprint,
             fetched_at=time.time()
         )
 
@@ -116,7 +134,11 @@ def invalidate_cache(user_id: str, document_id: str) -> None:
 
 
 @contextmanager
-def metadata_cache_fill(user_id: str, document_id: str):
+def metadata_cache_fill(
+    user_id: str,
+    document_id: str,
+    readable_fingerprint: Tuple[Tuple[str, int, int], ...],
+):
     """Register a revocable fill; never hold the lock while fetching."""
     key = (user_id, document_id)
     token = object()
@@ -126,7 +148,7 @@ def metadata_cache_fill(user_id: str, document_id: str):
     def publish(hierarchy):
         with _lock:
             if token in _pending_fills.get(key, ()):
-                set_cached_metadata(user_id, document_id, hierarchy)
+                set_cached_metadata(user_id, document_id, hierarchy, readable_fingerprint)
 
     try:
         yield publish

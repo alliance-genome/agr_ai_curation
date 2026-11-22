@@ -31,7 +31,7 @@ from src.api import (
     benchmark_sources,
 )
 from src.auth.providers import cognito_current_principal
-from src.lib.benchmarks import runtime, runtime_catalog
+from src.lib.benchmarks import runtime, runtime_catalog, selected_catalog
 from src.lib.openai_agents.provider_usage import (
     ProviderUsageRecord,
     begin_provider_invocation,
@@ -149,8 +149,11 @@ class CanaryProvider:
     def install(self, monkeypatch):
         # Use a reviewed synthetic catalog, not a fake resolved plan. Both API
         # preview and admission still independently run the public planner.
-        monkeypatch.setattr(runtime_catalog, "build_curator_route_catalog", lambda *args: _catalog())
-        monkeypatch.setattr(benchmark_catalog, "build_curator_route_catalog", lambda *args: _catalog())
+        def build_catalog(session, curator, *, freeze_targets=None):
+            return _catalog()
+
+        for module in (benchmark_catalog, runtime_catalog, selected_catalog):
+            monkeypatch.setattr(module, "build_curator_route_catalog", build_catalog)
 
         def agent(key, **kwargs):
             assert key == "extractor"
@@ -167,11 +170,15 @@ class CanaryProvider:
         monkeypatch.setattr("src.lib.pipeline.figure_locator_resolution.resolve_figure_locators", figures)
 
     async def stream(self, **kwargs):
+        import asyncio
+        from src.lib.document_files.readable import resolve_readable_files
         from src.lib.weaviate_client.chunks import get_chunk_by_index
         selected = kwargs["agent"].selected
         assert kwargs["doc_context"] is not None
         assert selected["db_user_id"] is not None
-        chunk = await get_chunk_by_index(chunk_index=0, user_id=kwargs["user_id"], document_id=kwargs["document_id"])
+        readable = await asyncio.to_thread(resolve_readable_files, kwargs["document_id"], kwargs["user_id"])
+        chunk = await get_chunk_by_index(chunk_index=0, user_id=kwargs["user_id"], document_id=kwargs["document_id"],
+                                         readable=readable)
         assert chunk and "Synthetic replacement canary evidence." in str(chunk)
         provider, model = selected["model_provider_override"], selected["model_id_override"]
         slot = selected["benchmark_route_slot"]
@@ -199,12 +206,10 @@ class CanaryProvider:
         from src.lib.curation_workspace.extraction_results import (
             persist_extraction_result,
         )
+        from src.lib.domain_packs.resolvable_values import unresolved_value
         from src.schemas.curation_workspace import (
             CurationExtractionPersistenceRequest,
             CurationExtractionSourceKind,
-        )
-        from tests.unit.lib.curation_workspace.test_curation_prep_service import (
-            _make_domain_envelope_extraction_result,
         )
 
         # The public flow adapter supplies independently frozen named roles.
@@ -221,11 +226,25 @@ class CanaryProvider:
                 actual_provider=route.provider, actual_model=route.model, routing_attempt=0,
                 latency_ms=1, input_tokens=2, output_tokens=3, total_tokens=5, billed_cost=None,
             ))
-        fixture = _make_domain_envelope_extraction_result(document_id=kwargs["document_id"])
-        payload = fixture.payload_json
-        assert isinstance(payload, dict)
-        payload["summary"] = "Synthetic transport fixture; no biological correctness claim."
-        payload["curatable_objects"][0]["payload"]["verified_quote"] = CONTENT.decode().splitlines()[0]
+        quote = CONTENT.decode().splitlines()[0]
+        evidence_id = "canary-evidence-1"
+        mention = "Synthetic replacement canary"
+        payload = {
+            "curatable_objects": [{
+                "object_type": "gene_mention_evidence",
+                "object_role": "validated_reference",
+                "pending_ref_id": "canary-gene-1",
+                "payload": unresolved_value(
+                    mention, identity_keys=("primary_external_id", "gene_symbol", "taxon"),
+                    evidence_record_id=evidence_id, verified_quote=quote,
+                ),
+                "evidence_record_ids": [evidence_id],
+            }],
+            "metadata": {"evidence_records": [{
+                "evidence_record_id": evidence_id, "entity": mention, "verified_quote": quote,
+            }]},
+            "run_summary": {"candidate_count": 1},
+        }
         record = persist_extraction_result(CurationExtractionPersistenceRequest(
             document_id=kwargs["document_id"], agent_key="gene_extractor", adapter_key="gene",
             source_kind=CurationExtractionSourceKind.FLOW, origin_session_id=kwargs["session_id"], flow_run_id=kwargs["flow_run_id"],

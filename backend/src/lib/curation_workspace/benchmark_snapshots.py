@@ -26,6 +26,8 @@ from src.lib.curation_workspace.models import (
     DomainEnvelopeModel,
 )
 from src.lib.curation_workspace.session_ownership import is_owned_by
+from src.lib.domain_packs.evidence_snapshot import evidence_records
+from src.models.sql.pdf_document import PDFDocument
 from src.lib.openai_agents.config import (
     get_benchmark_handoff_max_identity_bytes,
     get_benchmark_handoff_timeout_seconds,
@@ -167,6 +169,38 @@ def _schema_references(envelope: DomainEnvelope) -> list[CurationBenchmarkSchema
     return [references[key] for key in sorted(references)]
 
 
+def _quoted_file_ids(envelope_json: Mapping[str, Any]) -> set[str]:
+    """Every file id named by the envelope's evidence records and their fragments."""
+
+    file_ids: set[str] = set()
+    for record in evidence_records(envelope_json):
+        if record.get("file_id") is not None:
+            file_ids.add(str(record["file_id"]))
+        for fragment in record.get("source_fragments") or []:
+            if isinstance(fragment, Mapping) and fragment.get("file_id") is not None:
+                file_ids.add(str(fragment["file_id"]))
+    return file_ids
+
+
+def _require_main_paper_evidence(db: Session, envelope_row: DomainEnvelopeModel) -> None:
+    """Refuse a snapshot whose evidence quotes a file other than the paper's main file.
+
+    Benchmarks hold main papers only. Evidence without a file id was saved before
+    files were recorded, when every paper had only its main file, so it passes.
+    """
+
+    document = db.get(PDFDocument, envelope_row.document_id)
+    main_file = document.main_file_or_none
+    main_file_ids = set() if main_file is None else {str(main_file.id)}
+    if _quoted_file_ids(envelope_row.envelope_json) - main_file_ids:
+        raise CurationBenchmarkSnapshotError(
+            422,
+            "snapshot_quotes_supplement",
+            "This review quotes a supplement. A Benchmark snapshot can only hold "
+            "evidence from the main paper.",
+        )
+
+
 def create_benchmark_snapshot(
     db: Session,
     *,
@@ -198,6 +232,7 @@ def create_benchmark_snapshot(
         )
 
     envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    _require_main_paper_evidence(db, envelope_row)
     exported_envelope = json.loads(json.dumps(envelope_row.envelope_json))
     exported_envelope.pop("authenticated_context", None)
     envelope_bytes = canonical_json_bytes(exported_envelope)

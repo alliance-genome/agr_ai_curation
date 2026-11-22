@@ -31,7 +31,8 @@ async def test_recheck_paper_lines_arrive_in_order_through_real_execution(planne
     doc, owner = item.scope.document_id, item.scope.owner_id
     history = HistoryStore(store.SessionLocal)
     history_scope = HistoryScope(owner, uuid4().hex, uuid4().hex, 'extractor', 'followup/', item.scope.session_id)
-    binding = refs.SourceBinding(doc, owner, 'fixture-generation', history_scope, history, [])
+    from tests.readable_files_support import single_file
+    binding = refs.SourceBinding(doc, owner, 'fixture-generation', history_scope, history, [], single_file(doc))
     binding.pin_generation()
 
     @asynccontextmanager

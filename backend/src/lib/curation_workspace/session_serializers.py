@@ -42,6 +42,7 @@ from src.schemas.curation_workspace import (
     CurationDraft as CurationDraftPayload,
     CurationDraftField as CurationDraftFieldSchema,
     CurationDocumentRef,
+    CurationSessionDocumentRef,
     CurationEntityTag as CurationEntityTagPayload,
     CurationEntityTagDbValidationStatus,
     CurationEntityTagEvidence as CurationEntityTagEvidencePayload,
@@ -67,6 +68,7 @@ from src.schemas.curation_workspace import (
     SubmissionPayloadContract,
 )
 from src.schemas.domain_envelope import DomainEnvelope
+from src.lib.pdf_viewer.files import viewer_file_refs
 from src.services.document_access import protected_pdf_url
 
 
@@ -116,12 +118,17 @@ def _adapter_ref(
     )
 
 
-def _document_ref(document: PDFDocument | None) -> CurationDocumentRef:
+def _require_session_document(document: PDFDocument | None) -> PDFDocument:
     if document is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Session document metadata is missing",
         )
+    return document
+
+
+def _document_ref(document: PDFDocument | None) -> CurationDocumentRef:
+    document = _require_session_document(document)
 
     # No viewer URL or page count for a text main file or a paper of supplements only.
     main_file = document.main_file_or_none
@@ -145,6 +152,16 @@ def _document_ref(document: PDFDocument | None) -> CurationDocumentRef:
         page_count=main_file.page_count if main_file is not None else None,
         reference_curie=reference.curie if reference is not None else None,
         reference_source=reference.source if reference is not None else None,
+    )
+
+
+def _session_document_ref(document: PDFDocument | None) -> CurationSessionDocumentRef:
+    """The session's document with its files, as the viewer's files route lists them."""
+
+    document = _require_session_document(document)
+    return CurationSessionDocumentRef(
+        **_document_ref(document).model_dump(),
+        files=viewer_file_refs(document),
     )
 
 
@@ -231,6 +248,12 @@ def _draft_detail(record: DraftModel | None) -> CurationDraftPayload | None:
     )
 
 
+def _served_file_id(record: EvidenceRecordModel) -> str | None:
+    """The quoted file's id; None only for anchors saved before files were recorded."""
+
+    return None if record.source_file_id is None else str(record.source_file_id)
+
+
 def _evidence_record(record: EvidenceRecordModel) -> CurationEvidenceRecordPayload:
     return CurationEvidenceRecordPayload(
         anchor_id=str(record.id),
@@ -240,6 +263,7 @@ def _evidence_record(record: EvidenceRecordModel) -> CurationEvidenceRecordPaylo
         field_group_keys=list(record.field_group_keys or []),
         is_primary=record.is_primary,
         anchor=EvidenceAnchor.model_validate(record.anchor or {}),
+        file_id=_served_file_id(record),
         created_at=record.created_at,
         updated_at=record.updated_at,
         warnings=list(record.warnings or []),
@@ -593,7 +617,7 @@ def _session_summary(
         session_id=str(session.id),
         status=session.status,
         adapter=_adapter_ref(session),
-        document=_document_ref(document_map.get(session.document_id)),
+        document=_session_document_ref(document_map.get(session.document_id)),
         flow_run_id=session.flow_run_id,
         progress=_session_progress(session),
         validation=_latest_validation_summary(session),
@@ -763,6 +787,7 @@ def _candidate_evidence_record(record: EvidenceRecordModel) -> CurationEvidenceR
         field_group_keys=list(record.field_group_keys or []),
         is_primary=record.is_primary,
         anchor=dict(record.anchor or {}),
+        file_id=_served_file_id(record),
         created_at=record.created_at,
         updated_at=record.updated_at,
         warnings=list(record.warnings or []),

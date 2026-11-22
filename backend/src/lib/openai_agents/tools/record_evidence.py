@@ -13,7 +13,12 @@ from uuid import UUID
 from agr_ai_curation_runtime.function_tools import function_tool
 from agents.exceptions import ModelBehaviorError
 from pydantic import ValidationError
-from agr_ai_curation_runtime.document_references import DocumentSelection, resolve_selections, scoped_document_tool
+from agr_ai_curation_runtime.document_references import (
+    DocumentSelection,
+    current_readable_files,
+    resolve_selections,
+    scoped_document_tool,
+)
 
 from src.lib.openai_agents.config import get_record_evidence_preview_chars
 from src.lib.document_sources.figure_metadata import (
@@ -962,6 +967,28 @@ def _create_canonical_evidence_recorder(
                     verification_method="missing_chunk",
                 )
 
+            # A piece is used only while its file is readable in this run.
+            if not current_readable_files().contains(chunk.get("chunk_index")):
+                return _log_record_evidence_result(
+                    _build_span_resolution_error_result(
+                        entity=normalized_entity,
+                        span_ids=normalized_span_ids,
+                        failed_span_id=next(
+                            span_id
+                            for span_id, span_chunk_id in chunk_ids_by_span_id.items()
+                            if span_chunk_id == chunk_id
+                        ),
+                        failed_span_error=(
+                            "Chunk referenced by this span ID is not part of a readable file"
+                        ),
+                        resolution_failure="unreadable_chunk",
+                        chunk_id=chunk_id,
+                        extra_fields=error_extra_fields,
+                    ),
+                    document_id=document_id,
+                    verification_method="unreadable_chunk",
+                )
+
             chunks_by_id[chunk_id] = chunk
 
         fragments: list[_ResolvedSpanFragment] = []
@@ -1226,9 +1253,28 @@ def create_record_evidence_tool(
             object_type: Optional target object type.
             validation_finding_id: Optional validation finding being corrected.
         """
-        from src.lib.openai_agents.document_references import UnissuedDocumentSelectionError
+        from src.lib.openai_agents.document_references import (
+            UnissuedDocumentSelectionError,
+            UnreadableDocumentSelectionError,
+        )
         try:
             span_ids = await resolve_selections(selections)
+        except UnreadableDocumentSelectionError as exc:
+            return _log_record_evidence_result(
+                {
+                    "status": "needs_source_read",
+                    "error_code": "unreadable_document_selection",
+                    "saved": False,
+                    "selection": exc.selection.model_dump(),
+                    "message": (
+                        f"Nothing was saved. chunk_index {exc.selection.chunk_index} is not part of "
+                        f"a file you can read now. This document has chunks {exc.readable.ranges_text()}. "
+                        "Read a passage from them and call record_evidence again."
+                    ),
+                },
+                document_id=document_id,
+                verification_method="local_selection",
+            )
         except UnissuedDocumentSelectionError as exc:
             return _log_record_evidence_result(
                 {

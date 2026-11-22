@@ -1019,6 +1019,8 @@ async def test_flow_owned_dependency_outage_reaches_single_runtime_capture(monke
 
     monkeypatch.setattr(weaviate_search, "hybrid_search_chunks", _weaviate_outage)
     monkeypatch.setattr(weaviate_search, "scoped_document_tool", lambda tool, **kwargs: tool)
+    from tests.readable_files_support import single_file
+    monkeypatch.setattr(weaviate_search, "current_readable_files", lambda: single_file("doc-12345678"))
     weaviate_tool = weaviate_search.create_search_tool("doc-12345678", "user-flow")
     tool_payload = {"query": "gene expression"}
 

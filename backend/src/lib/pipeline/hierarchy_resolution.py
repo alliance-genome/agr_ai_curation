@@ -18,8 +18,8 @@ more reliable than trying to find headers in the document.
 import logging
 import os
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Mapping, Optional, Sequence
+from pydantic import BaseModel, Field, ValidationError
 
 from src.lib.document_sources.figure_metadata import (
     PROVIDER_FIGURE_METADATA_SECTION,
@@ -96,6 +96,86 @@ class HierarchyMetadata(BaseModel):
     created_at: str
     model_used: str
     llm_raw_response: Optional[Dict[str, Any]] = None  # Raw LLM response for debugging
+
+
+class StoredSectionMapError(ValueError):
+    """A file's stored hierarchy metadata does not hold a section map of the known shape."""
+
+
+def section_map(sections: Sequence[SectionItem]) -> Dict[str, SectionItem]:
+    """The classification keyed by header; headers are the application's own stripped titles."""
+
+    return {item.header: item for item in sections}
+
+
+def stored_section_map(hierarchy_metadata: Mapping[str, Any]) -> Dict[str, SectionItem]:
+    """The section map a file's stored ``hierarchy_metadata`` recorded when it was indexed."""
+
+    sections = hierarchy_metadata.get("sections") if isinstance(hierarchy_metadata, Mapping) else None
+    if not isinstance(sections, list):
+        raise StoredSectionMapError("Stored hierarchy metadata has no list of sections")
+    try:
+        return section_map([SectionItem.model_validate(item) for item in sections])
+    except ValidationError as exc:
+        raise StoredSectionMapError("Stored hierarchy metadata holds a section of an unknown shape") from exc
+
+
+def apply_section_hierarchy(
+    elements: List[Dict[str, Any]],
+    hierarchy_map: Mapping[str, SectionItem],
+) -> int:
+    """Write each element's resolved section fields in place, looked up by its section_title.
+
+    The one copy of this step: indexing applies it before cutting pieces, and the
+    viewer's text route applies a file's stored map to its saved elements, so both
+    give an element the same section names. Returns how many elements changed.
+    """
+
+    updated_count = 0
+    for elem in elements:
+        metadata = elem.get("metadata", {})
+        section_title = metadata.get("section_title") or ""
+        section_title = str(section_title).strip() if section_title else ""
+
+        if not section_title:
+            continue
+
+        # Look up the classification for this element's section_title
+        section_info = hierarchy_map.get(section_title)
+
+        if section_info:
+            if "metadata" not in elem:
+                elem["metadata"] = {}
+
+            # Store structured fields
+            elem["metadata"]["parent_section"] = section_info.parent_section
+            elem["metadata"]["subsection"] = section_info.subsection
+            elem["metadata"]["is_top_level"] = section_info.is_top_level
+
+            # Also store at top level for Weaviate properties
+            elem["parent_section"] = section_info.parent_section
+            elem["subsection"] = section_info.subsection
+            elem["is_top_level"] = section_info.is_top_level
+
+            # Backward compatibility: concatenated section_title
+            if section_info.subsection:
+                full_path = f"{section_info.parent_section} > {section_info.subsection}"
+            else:
+                full_path = section_info.parent_section
+
+            elem["section_title"] = full_path
+            elem["metadata"]["section_title"] = full_path
+
+            # Keep old field for compatibility
+            if section_info.subsection:
+                elem["metadata"]["section_path"] = [section_info.parent_section, section_info.subsection]
+                elem["section_path"] = [section_info.parent_section, section_info.subsection]
+            else:
+                elem["metadata"]["section_path"] = [section_info.parent_section]
+                elem["section_path"] = [section_info.parent_section]
+
+            updated_count += 1
+    return updated_count
 
 
 # =============================================================================
@@ -205,58 +285,8 @@ async def resolve_document_hierarchy(
     if len(hierarchy_result) > 5:
         logger.info('  ... and %s more', len(hierarchy_result) - 5)
 
-    # 3. Build lookup map. Headers are the application's own stripped titles.
-    hierarchy_map: Dict[str, SectionItem] = {
-        item.header: item for item in hierarchy_result
-    }
-
-    # 4. Apply hierarchy to elements based on their section_title (in metadata)
-    updated_count = 0
-
-    for elem in elements:
-        metadata = elem.get("metadata", {})
-        section_title = metadata.get("section_title") or ""
-        section_title = str(section_title).strip() if section_title else ""
-
-        if not section_title:
-            continue
-
-        # Look up the classification for this element's section_title
-        section_info = hierarchy_map.get(section_title)
-
-        if section_info:
-            if "metadata" not in elem:
-                elem["metadata"] = {}
-
-            # Store structured fields
-            elem["metadata"]["parent_section"] = section_info.parent_section
-            elem["metadata"]["subsection"] = section_info.subsection
-            elem["metadata"]["is_top_level"] = section_info.is_top_level
-
-            # Also store at top level for Weaviate properties
-            elem["parent_section"] = section_info.parent_section
-            elem["subsection"] = section_info.subsection
-            elem["is_top_level"] = section_info.is_top_level
-
-            # Backward compatibility: concatenated section_title
-            if section_info.subsection:
-                full_path = f"{section_info.parent_section} > {section_info.subsection}"
-            else:
-                full_path = section_info.parent_section
-
-            elem["section_title"] = full_path
-            elem["metadata"]["section_title"] = full_path
-
-            # Keep old field for compatibility
-            if section_info.subsection:
-                elem["metadata"]["section_path"] = [section_info.parent_section, section_info.subsection]
-                elem["section_path"] = [section_info.parent_section, section_info.subsection]
-            else:
-                elem["metadata"]["section_path"] = [section_info.parent_section]
-                elem["section_path"] = [section_info.parent_section]
-
-            updated_count += 1
-
+    # 3. Apply the classification to every element by its section_title.
+    updated_count = apply_section_hierarchy(elements, section_map(hierarchy_result))
     logger.info('[HIERARCHY] Applied hierarchy to %s elements.', updated_count)
 
     # 5. Build metadata for storage and tracing

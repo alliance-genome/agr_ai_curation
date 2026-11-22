@@ -11,6 +11,7 @@ import pytest
 from weaviate.exceptions import WeaviateQueryError
 
 import src.lib.weaviate_client.chunks as chunks
+from tests.readable_files_support import single_file
 
 
 def _connection_with_client(client):
@@ -170,7 +171,7 @@ def test_update_chunk_embeddings_failure_returns_error_payload():
 @pytest.mark.asyncio
 async def test_get_chunks_requires_user_id():
     with pytest.raises(ValueError):
-        await chunks.get_chunks("doc-1", {"page": 1, "page_size": 10}, "")
+        await chunks.get_chunks("doc-1", {"page": 1, "page_size": 10}, "", readable=single_file("doc-1"))
 
 
 @pytest.mark.asyncio
@@ -218,7 +219,7 @@ async def test_get_chunks_success_parses_metadata_and_doc_items(monkeypatch):
         result = await chunks.get_chunks(
             "doc-1",
             {"page": 1, "page_size": 10, "include_metadata": True},
-            "user-1",
+            "user-1", readable=single_file("doc-1"),
         )
 
     assert result["total"] == 2
@@ -243,7 +244,7 @@ async def test_get_chunks_total_counts_every_chunk_above_one_thousand(monkeypatc
 
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
          patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())):
-        result = await chunks.get_chunks("doc-1", {"page": 30, "page_size": 50}, "user-1")
+        result = await chunks.get_chunks("doc-1", {"page": 30, "page_size": 50}, "user-1", readable=single_file("doc-1"))
 
     assert result["total"] == 1500
     count_call = chunk_collection.aggregate.over_all.call_args.kwargs
@@ -270,9 +271,51 @@ async def test_get_chunks_pages_in_a_total_order(monkeypatch):
 
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
          patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())):
-        await chunks.get_chunks("doc-1", {"page": 2, "page_size": 50}, "user-1")
+        await chunks.get_chunks("doc-1", {"page": 2, "page_size": 50}, "user-1", readable=single_file("doc-1"))
 
     assert _sort_keys(chunk_collection.query.fetch_objects.call_args) == [("chunkIndex", True), ("_id", True)]
+
+
+@contextmanager
+def _ready_files(document_id, readable, seen=None):
+    """The paper's ready files as the resolution fetch resolves them (no database)."""
+    def resolve(_session, doc, user, *, scope):
+        if seen is not None:
+            seen.append((doc, user, scope))
+        return readable
+
+    with patch("src.models.sql.database.SessionLocal", MagicMock()), \
+         patch("src.lib.document_files.readable.readable_files_in_session", resolve):
+        yield
+
+
+def test_resolution_fetch_reads_only_ready_files_even_inside_a_batch():
+    """Evidence is never anchored to a file being added; batches do not narrow review."""
+    from weaviate.collections.classes.filters import _FilterOr
+    from src.lib.document_files.readable import ReadingScope, reading_scope
+    from tests.readable_files_support import files
+
+    chunk_collection = MagicMock()
+    chunk_collection.query.fetch_objects.return_value = SimpleNamespace(objects=[])
+    seen = []
+    readable = files("doc-1", ("paper.pdf", 0, 41), ("Table S1.xlsx", 42, 60))
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())), \
+         _ready_files("doc-1", readable, seen), reading_scope(ReadingScope.MAIN_FILE_ONLY):
+        chunks.fetch_document_chunks_for_resolution("doc-1", "user-1")
+
+    assert seen == [("doc-1", "user-1", ReadingScope.ALL_READY_FILES)]
+    _, in_ranges = chunk_collection.query.fetch_objects.call_args.kwargs["filters"].filters
+    assert isinstance(in_ranges, _FilterOr)
+    assert [tuple(bound.value for bound in each.filters) for each in in_ranges.filters] == [(0, 41), (42, 60)]
+
+
+def test_resolution_fetch_of_a_paper_without_ready_files_reads_nothing():
+    from tests.readable_files_support import files
+
+    with patch("src.lib.weaviate_client.chunks.get_connection", side_effect=AssertionError("no query")), \
+         _ready_files("doc-1", files("doc-1")):
+        assert chunks.fetch_document_chunks_for_resolution("doc-1", "user-1") == []
 
 
 def test_resolution_fetch_pages_every_chunk_in_a_total_order():
@@ -289,7 +332,8 @@ def test_resolution_fetch_pages_every_chunk_in_a_total_order():
     connection = _connection_with_client(MagicMock())
 
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
-         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())):
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())), \
+         _ready_files("doc-1", single_file("doc-1")):
         rows = chunks.fetch_document_chunks_for_resolution("doc-1", "user-1", page_size=2)
 
     assert [row["id"] for row in rows] == [f"uuid-{index}" for index in range(5)]
@@ -355,7 +399,7 @@ async def test_get_chunks_raises_when_query_fails(monkeypatch):
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
          patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, pdf_collection)):
         with pytest.raises(RuntimeError, match="fetch failed"):
-            await chunks.get_chunks("doc-1", {"page": 1, "page_size": 5}, "user-1")
+            await chunks.get_chunks("doc-1", {"page": 1, "page_size": 5}, "user-1", readable=single_file("doc-1"))
 
 
 @pytest.mark.asyncio
@@ -389,7 +433,7 @@ async def test_get_chunks_include_metadata_false_returns_minimal_required_metada
         result = await chunks.get_chunks(
             "doc-1",
             {"page": 1, "page_size": 10, "include_metadata": False},
-            "user-1",
+            "user-1", readable=single_file("doc-1"),
         )
 
     assert result["total"] == 1
@@ -431,7 +475,7 @@ async def test_get_chunks_include_metadata_false_repairs_null_required_metadata(
         result = await chunks.get_chunks(
             "doc-1",
             {"page": 1, "page_size": 10, "include_metadata": False},
-            "user-1",
+            "user-1", readable=single_file("doc-1"),
         )
 
     assert result["total"] == 1
@@ -508,7 +552,7 @@ async def test_get_chunk_neighbor_ids_fetches_adjacent_chunk_ids(monkeypatch):
         result = await chunks.get_chunk_neighbor_ids(
             document_id="doc-1",
             user_id="user-1",
-            chunk_index=5,
+            chunk_index=5, readable=single_file("doc-1"),
         )
 
     assert result == {
@@ -532,7 +576,7 @@ async def test_get_chunk_neighbor_ids_requires_weaviate_objects_response(monkeyp
             await chunks.get_chunk_neighbor_ids(
                 document_id="doc-1",
                 user_id="user-1",
-                chunk_index=5,
+                chunk_index=5, readable=single_file("doc-1"),
             )
 
 
@@ -541,7 +585,7 @@ async def test_get_chunk_neighbor_ids_returns_empty_when_index_missing():
     result = await chunks.get_chunk_neighbor_ids(
         document_id="doc-1",
         user_id="user-1",
-        chunk_index=None,
+        chunk_index=None, readable=single_file("doc-1"),
     )
 
     assert result == {
@@ -557,6 +601,7 @@ async def test_get_chunk_neighbor_ids_rejects_invalid_chunk_index_type():
             document_id="doc-1",
             user_id="user-1",
             chunk_index="5",  # type: ignore[arg-type]
+            readable=single_file("doc-1"),
         )
 
 
@@ -573,7 +618,7 @@ async def test_get_chunk_neighbor_ids_propagates_thread_creation_failure(monkeyp
             await chunks.get_chunk_neighbor_ids(
                 document_id="doc-1",
                 user_id="user-1",
-                chunk_index=5,
+                chunk_index=5, readable=single_file("doc-1"),
             )
 
 
@@ -678,7 +723,7 @@ async def _run_hybrid_search(monkeypatch, hybrid_side_effect, **kwargs):
                 user_id="user-1",
                 limit=5,
                 apply_mmr=False,
-                **kwargs,
+                **kwargs, readable=single_file("doc-1"),
             ), chunk_collection
         except Exception as error:
             error.chunk_collection = chunk_collection

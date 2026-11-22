@@ -59,9 +59,11 @@ _SUPPLEMENT_FILE_CLASS = "supplement"
 _LARGE_DATA_FILE_CLASS = "htp_supplement"
 # Extensions whose supplements ABC converts to ``converted_merged_supplement`` text:
 # Office files in-process and PDFs through its PDF converter.
-# PDF supplements are read from ABC's converted text for now. KANBAN-2147 makes every
-# PDF supplement importable (our own extraction where ABC has none), which changes
-# which PDF supplements are ready and where their checks run.
+# A PDF supplement is ready only once ABC lists its converted text; AI Curation never
+# converts a supplement itself (ALL-1460 decision N2). This list mirrors ABC's
+# file-type gate, so a type ABC starts converting later stays "type not supported"
+# here until the list changes. ABC's other rules (which groups, which sizes) are
+# never copied: the listing observes what ABC converted.
 _CONVERTIBLE_SUPPLEMENT_EXTENSIONS = _OFFICE_SUPPLEMENT_EXTENSIONS | {"pdf"}
 _PUBLISHED_STATUS = "final"
 

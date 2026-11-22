@@ -9,6 +9,7 @@ import json
 import pytest
 
 import agr_ai_curation_alliance.tools.weaviate_search as weaviate_search
+from tests.readable_files_support import single_file
 import src.lib.openai_agents.tools.evidence_workspace as evidence_workspace
 from agr_ai_curation_alliance.tools import agr_curation
 from src.lib.openai_agents import extraction_builder_workspace as builder
@@ -25,6 +26,7 @@ def _size(value):
 @pytest.fixture(autouse=True)
 def identity_function_tool(monkeypatch):
     monkeypatch.setattr(weaviate_search, "scoped_document_tool", lambda tool, **kwargs: tool)
+    monkeypatch.setattr(weaviate_search, "current_readable_files", lambda: single_file("doc-12345678"))
     monkeypatch.setattr(evidence_workspace, "function_tool", lambda fn=None, **kwargs: fn if fn is not None else lambda decorated: decorated)
     monkeypatch.setattr(weaviate_search, "function_tool", lambda fn=None, **kwargs: fn if fn is not None else lambda decorated: decorated)
 

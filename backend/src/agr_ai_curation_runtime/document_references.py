@@ -31,6 +31,11 @@ def scoped_document_tool(tool: Any, *, document_id: str, user_id: str) -> Any:
     return tool
 
 
+def current_readable_files() -> Any:
+    """The readable files (``ReadableFiles``) of the document tool call in progress."""
+    return _implementation().current_readable_files()
+
+
 async def retain_issued_spans(reads: list[tuple[dict, list[dict], list[int]]]) -> None:
     """Issue the spans one read displayed, as ``(chunk, spans, issued_indexes)`` per chunk."""
     await _implementation().retain_issued_spans(reads)

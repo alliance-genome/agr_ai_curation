@@ -11,6 +11,7 @@ from agents.run import CallModelData, ModelInputData
 
 from src.lib.openai_agents.model_context_view import ModelContextView, run_config_with_history
 from src.lib.openai_agents.run_history import HistoryScope, RunHistory, exact_json
+from tests.readable_files_support import single_file
 
 
 class MemoryStore:
@@ -276,6 +277,8 @@ async def test_archive_failure_preserves_numeric_source_view(setup, monkeypatch,
     history, agent = setup
     monkeypatch.setattr("src.lib.weaviate_client.chunks.get_chunk_by_id", AsyncMock(
         return_value={"id": "12345678-1234-1234-1234-123456789abc", "document_id": "doc", "chunk_index": 7}))
+    monkeypatch.setattr("src.lib.openai_agents.document_references.resolve_readable_files",
+                        lambda document_id, user_id: single_file(document_id))
     if failure == "prior":
         history.healthy = False
     else:

@@ -23,6 +23,7 @@ from src.lib.openai_agents import fanout_extraction as fanout
 from src.lib.openai_agents import streaming_tools
 from src.lib.openai_agents.tools import evidence_workspace
 from src.lib.packages import tool_roles
+from tests.readable_files_support import single_file
 from tests.unit.lib.openai_agents.test_model_request_measurement import (
     FakeResponsesHTTPModel,
     _final,
@@ -601,13 +602,16 @@ def harness(monkeypatch):
     chunk_checks = []
     existing_chunks = {"indexes": set(range(50)), "error": None}
 
-    async def _existing_chunk_indexes(*, chunk_indexes, user_id, document_id):
+    async def _existing_chunk_indexes(*, chunk_indexes, user_id, document_id, readable):
+        assert readable == single_file(document_id)
         chunk_checks.append({"chunk_indexes": list(chunk_indexes), "user_id": user_id, "document_id": document_id})
         if existing_chunks["error"] is not None:
             raise existing_chunks["error"]
         return {index for index in chunk_indexes if index in existing_chunks["indexes"]}
 
     monkeypatch.setattr("src.lib.weaviate_client.chunks.get_existing_chunk_indexes", _existing_chunk_indexes)
+    monkeypatch.setattr("src.lib.document_files.readable.resolve_readable_files",
+                        lambda document_id, user_id: single_file(document_id))
 
     class Harness:
         def __init__(self):
@@ -1745,7 +1749,7 @@ def _chunk_store(monkeypatch, objects):
 async def test_existing_chunk_indexes_uses_one_tenant_scoped_query(monkeypatch):
     chunks, collection = _chunk_store(monkeypatch, [("doc-a", 1), ("doc-a", 3)])
 
-    found = await chunks.get_existing_chunk_indexes(chunk_indexes=[3, 1, 5, 1], user_id="alice", document_id="doc-a")
+    found = await chunks.get_existing_chunk_indexes(chunk_indexes=[3, 1, 5, 1], user_id="alice", document_id="doc-a", readable=single_file("doc-a"))
 
     assert found == {1, 3}
     collection.query.fetch_objects.assert_called_once()
@@ -1759,10 +1763,10 @@ async def test_existing_chunk_indexes_rejects_inconsistent_results_and_bad_input
     chunks, collection = _chunk_store(monkeypatch, [("doc-b", 1)])
 
     with pytest.raises(ValueError, match="inconsistent"):
-        await chunks.get_existing_chunk_indexes(chunk_indexes=[1], user_id="alice", document_id="doc-a")
+        await chunks.get_existing_chunk_indexes(chunk_indexes=[1], user_id="alice", document_id="doc-a", readable=single_file("doc-a"))
     with pytest.raises(ValueError, match="non-negative"):
-        await chunks.get_existing_chunk_indexes(chunk_indexes=[-1], user_id="alice", document_id="doc-a")
-    assert await chunks.get_existing_chunk_indexes(chunk_indexes=[], user_id="alice", document_id="doc-a") == set()
+        await chunks.get_existing_chunk_indexes(chunk_indexes=[-1], user_id="alice", document_id="doc-a", readable=single_file("doc-a"))
+    assert await chunks.get_existing_chunk_indexes(chunk_indexes=[], user_id="alice", document_id="doc-a", readable=single_file("doc-a")) == set()
     assert collection.query.fetch_objects.call_count == 1
 
 

@@ -15,6 +15,36 @@ evidence ID produce one bundle, while different IDs (including conflicting
 quotes) remain distinct. Consumers must use database/tool grounding for
 identity resolution; accepting multiple quotes is not evidence of resolution.
 
+## Every evidence record names its file (0.12.0, ALL-1460)
+
+A paper can have several files: its main paper and supplements
+(`pdf_document_files`). **Every evidence record made since 0.12.0 has a
+`file_id`.** A record without one was saved before files were recorded; nothing
+may guess a file for it (the viewer shows "This evidence was saved before files
+were recorded" and opens nothing). Records saved before 0.12.0 are never
+rewritten.
+
+- Chat and extraction evidence records (what `record_evidence` returns and what
+  is stored in extraction results, envelopes, flow-step evidence and chat
+  history) carry `file_id` (the `pdf_document_files` row id) and `file_name`
+  (the file's display name when the evidence was recorded), and so does each
+  `source_fragments[]` item. `record_evidence` takes both from the readable file
+  whose piece range holds the quoted piece; it never infers a file from text.
+- `page` is an integer where the file has page numbers there. A record whose
+  file has none (converted Word or Excel text, a PDF supplement until ABC keeps
+  page data) carries `page: null`; a fragment then has no `page` key. A record
+  without `file_id` still needs a positive page, exactly as before 0.12.0, so
+  older records normalize unchanged.
+- Review workspace anchors store the file in `evidence_anchors.source_file_id`
+  (foreign key to `pdf_document_files`, `ON DELETE RESTRICT`) and serve it as
+  `file_id` beside the anchor, never inside the anchor JSON. Envelope evidence
+  projections serve the stored record's `file_id`.
+- Where a record has no file, the served `file_id` key is absent, not null. The
+  serialized shape of older evidence, and so its submission payloads, exports and
+  submission intent fingerprints, stays exactly as it was.
+- The evidence record ID does not include the file: the chunk ID already fixes
+  it.
+
 ## Shipped binding audit (ALL-1214)
 
 | Domain pack | Supporting-evidence bindings | Change |

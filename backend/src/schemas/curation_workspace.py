@@ -18,11 +18,15 @@ from pydantic import (
     Field,
     StringConstraints,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
+from pydantic.json_schema import SkipJsonSchema
+
 from src.schemas.domain_envelope import DomainEnvelopeStatus, validate_field_path_syntax
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
+from src.schemas.viewer_files import ViewerFileRef
 
 
 class EvidenceAnchorKind(str, Enum):
@@ -547,6 +551,16 @@ class CurationDocumentRef(CurationWorkspaceBaseModel):
     )
 
 
+class CurationSessionDocumentRef(CurationDocumentRef):
+    """The session's document with its files, for the inventory and the workspace viewer.
+
+    Submissions, their retry fingerprints and exports use ``CurationDocumentRef``,
+    without files, so a file joining the paper never changes them.
+    """
+
+    files: list[ViewerFileRef] = Field(description="Every file of the paper, in tab order")
+
+
 class CurationDateRange(CurationWorkspaceBaseModel):
     """Reusable inclusive date-range filter contract."""
 
@@ -823,6 +837,24 @@ class CurationDraft(CurationWorkspaceBaseModel):
     )
 
 
+def _absent_when_unrecorded(field_schema: dict[str, Any]) -> None:
+    """Describe ``file_id`` as the wire carries it: a string when recorded, else no key."""
+
+    field_schema.pop("default", None)
+
+
+def _without_unrecorded_file(record: Any, serialized: dict[str, Any]) -> dict[str, Any]:
+    """Leave ``file_id`` out of evidence saved before files were recorded.
+
+    Such evidence then serializes exactly as before 0.12.0, so submission
+    payloads, exports and intent fingerprints of existing records are unchanged.
+    """
+
+    if record.file_id is None:
+        serialized.pop("file_id", None)
+    return serialized
+
+
 class CurationEvidenceRecord(CurationWorkspaceBaseModel):
     """Workspace-owned wrapper around the reusable evidence anchor contract."""
 
@@ -844,12 +876,24 @@ class CurationEvidenceRecord(CurationWorkspaceBaseModel):
         description="Whether the anchor is the primary evidence record for its target field(s)",
     )
     anchor: EvidenceAnchor = Field(description="Resolved evidence anchor payload")
+    file_id: str | SkipJsonSchema[None] = Field(
+        default=None,
+        json_schema_extra=_absent_when_unrecorded,
+        description=(
+            "The paper file this evidence quotes (pdf_document_files id). Every record "
+            "made since 0.12.0 has one; absent means saved before files were recorded"
+        ),
+    )
     created_at: datetime = Field(description="Evidence record creation timestamp")
     updated_at: datetime = Field(description="Latest evidence record mutation timestamp")
     warnings: list[str] = Field(
         default_factory=list,
         description="Warnings or degraded-mode notes for this evidence record",
     )
+
+    @model_serializer(mode="wrap")
+    def serialize_without_unrecorded_file(self, handler):
+        return _without_unrecorded_file(self, handler(self))
 
 
 class CurationValidationSnapshot(CurationWorkspaceBaseModel):
@@ -941,6 +985,14 @@ class DomainEnvelopeEvidenceAnchorProjection(CurationWorkspaceBaseModel):
         default=None,
         description="Workspace or source document identifier used for viewer navigation",
     )
+    file_id: str | SkipJsonSchema[None] = Field(
+        default=None,
+        json_schema_extra=_absent_when_unrecorded,
+        description=(
+            "The paper file the evidence record quotes (its stored file_id). Every record "
+            "made since 0.12.0 has one; absent means saved before files were recorded"
+        ),
+    )
     quote: Optional[str] = Field(
         default=None,
         description="Best available quote or snippet text for curator display",
@@ -968,6 +1020,10 @@ class DomainEnvelopeEvidenceAnchorProjection(CurationWorkspaceBaseModel):
         default_factory=dict,
         description="Projection metadata retained from the envelope evidence record",
     )
+
+    @model_serializer(mode="wrap")
+    def serialize_without_unrecorded_file(self, handler):
+        return _without_unrecorded_file(self, handler(self))
 
 
 class DomainEnvelopeValidationFindingProjection(CurationWorkspaceBaseModel):
@@ -1778,7 +1834,7 @@ class CurationSessionSummary(CurationWorkspaceBaseModel):
     session_id: str = Field(description="Session identifier")
     status: CurationSessionStatus = Field(description="Session lifecycle status")
     adapter: CurationAdapterRef = Field(description="Adapter/profile metadata")
-    document: CurationDocumentRef = Field(description="Document metadata")
+    document: CurationSessionDocumentRef = Field(description="Document metadata and files")
     flow_run_id: Optional[str] = Field(
         default=None,
         description="Flow-run identifier when the session came from a batch flow",
@@ -2432,6 +2488,12 @@ class CurationEvidenceResolveRequest(CurationWorkspaceBaseModel):
     anchor: EvidenceAnchor = Field(
         description="Anchor payload to resolve or enrich against workspace context",
     )
+    file_id: str = Field(
+        description=(
+            "The paper file to resolve the evidence in (pdf_document_files id); "
+            "only that file's text is searched"
+        ),
+    )
     replace_existing: bool = Field(
         default=False,
         description="Whether matching existing evidence should be replaced",
@@ -2459,6 +2521,9 @@ class CurationManualEvidenceCreateRequest(CurationWorkspaceBaseModel):
         description="Field-group identifiers linked to the manual evidence",
     )
     anchor: EvidenceAnchor = Field(description="Manual evidence anchor payload")
+    file_id: str = Field(
+        description="The paper file this evidence quotes (pdf_document_files id)",
+    )
     is_primary: bool = Field(default=False)
 
 
@@ -2486,11 +2551,27 @@ class CurationEvidenceRecomputeRequest(CurationWorkspaceBaseModel):
     )
 
 
+class CurationEvidenceNotRecomputed(CurationWorkspaceBaseModel):
+    """One evidence anchor that recompute left unchanged, and why."""
+
+    anchor_id: str = Field(description="Evidence anchor identifier")
+    code: Literal["saved_before_files_were_recorded"] = Field(
+        description=(
+            "Why it was left unchanged: saved_before_files_were_recorded means the "
+            "anchor has no file, so there is no file to search"
+        ),
+    )
+
+
 class CurationEvidenceRecomputeResponse(CurationWorkspaceBaseModel):
     """Response contract for bulk evidence re-resolution."""
 
     session: CurationReviewSession = Field(description="Updated session payload")
     updated_evidence_records: list[CurationEvidenceRecord] = Field(default_factory=list)
+    not_recomputed: list[CurationEvidenceNotRecomputed] = Field(
+        default_factory=list,
+        description="Evidence anchors left unchanged, each with a code",
+    )
     action_log_entry: CurationActionLogEntry = Field(
         description="Action-log entry emitted by the recompute mutation",
     )
@@ -2838,6 +2919,7 @@ __all__ = [
     "CurationDocumentBootstrapAvailabilityResponse",
     "CurationDocumentBootstrapResponse",
     "CurationDocumentRef",
+    "CurationSessionDocumentRef",
     "CurationDraft",
     "CurationDraftField",
     "CurationDraftFieldChange",

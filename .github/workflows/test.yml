@@ -10,6 +10,7 @@ on:
       - 'packages/**'
       - 'docker-compose.yml'
       - 'docker-compose.test.yml'
+      - 'docker-compose.benchmark-canary.yml'
       - 'docker-compose.production.yml'
       - 'promtail-config.yml'
       - 'scripts/install/**'
@@ -28,6 +29,7 @@ on:
       - 'packages/**'
       - 'docker-compose.yml'
       - 'docker-compose.test.yml'
+      - 'docker-compose.benchmark-canary.yml'
       - 'docker-compose.production.yml'
       - 'promtail-config.yml'
       - 'scripts/install/**'
@@ -444,6 +446,16 @@ jobs:
           echo "These tests verify chunks actually persist in Weaviate after batch insert." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**No OpenAI API key required** - uses vectorizer: none" >> $GITHUB_STEP_SUMMARY
+
+  benchmark-replacement-canary:
+    name: Benchmark Replacement Canary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the isolated replacement canary
+        env:
+          AI_CURATION_TEST_DOCKER_MODE: rootful
+        run: scripts/testing/benchmark-replacement-canary.sh
 
   frontend-tests:
     name: Frontend Tests

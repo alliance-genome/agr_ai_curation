@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
+import pytest
+
 from src.lib.curation_workspace.evidence_resolver import DeterministicEvidenceAnchorResolver
 from src.lib.curation_workspace.pipeline import EvidenceResolutionContext, NormalizedCandidate
 from src.schemas.curation_prep import CurationPrepCandidate
 from src.schemas.curation_workspace import EvidenceAnchor, EvidenceAnchorKind, EvidenceLocatorQuality
+
+
+# The evidence's file: its pieces are 0 to 99 of the paper. Made-up id.
+_FILE_ID = UUID("6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c")
+_FILE_RANGE = (0, 99)
 
 
 def _make_candidate(anchor_payload: dict, *, field_path: str = "gene_symbol") -> CurationPrepCandidate:
@@ -78,6 +87,8 @@ def _resolve_anchor(
     resolve_against_document: bool = True,
 ) -> tuple[EvidenceAnchor, list[str], list[str]]:
     resolver = DeterministicEvidenceAnchorResolver(
+        source_file_id=_FILE_ID,
+        chunk_index_range=_FILE_RANGE,
         user_id_resolver=lambda _prep_result_id: "user-1",
         chunk_loader=lambda _document_id, _user_id: chunks,
         resolve_against_document=resolve_against_document,
@@ -97,7 +108,9 @@ def _resolve_anchor(
 
 def test_resolver_preserves_tool_verified_anchor_payload():
     candidate = _make_candidate(_make_anchor_payload())
-    resolver = DeterministicEvidenceAnchorResolver()
+    resolver = DeterministicEvidenceAnchorResolver(
+        source_file_id=_FILE_ID, chunk_index_range=_FILE_RANGE
+    )
 
     result = resolver.resolve(
         candidate,
@@ -218,6 +231,8 @@ def test_resolver_uses_context_current_user_id_when_prep_result_has_no_user_id()
     observed_users: list[str | None] = []
 
     resolver = DeterministicEvidenceAnchorResolver(
+        source_file_id=_FILE_ID,
+        chunk_index_range=_FILE_RANGE,
         user_id_resolver=lambda _prep_result_id: None,
         chunk_loader=lambda _document_id, user_id: (
             observed_users.append(user_id)
@@ -250,6 +265,8 @@ def test_resolver_caches_document_chunks_for_same_document_and_user():
     load_calls: list[tuple[str, str | None]] = []
 
     resolver = DeterministicEvidenceAnchorResolver(
+        source_file_id=_FILE_ID,
+        chunk_index_range=_FILE_RANGE,
         user_id_resolver=lambda _prep_result_id: "user-1",
         chunk_loader=lambda document_id, user_id: (
             load_calls.append((document_id, user_id))
@@ -290,7 +307,9 @@ def test_resolver_moves_table_literal_into_table_reference():
         ),
         field_path="anatomy_label",
     )
-    resolver = DeterministicEvidenceAnchorResolver()
+    resolver = DeterministicEvidenceAnchorResolver(
+        source_file_id=_FILE_ID, chunk_index_range=_FILE_RANGE
+    )
 
     result = resolver.resolve(
         candidate,
@@ -342,3 +361,72 @@ def test_resolver_finds_a_table_row_quote_in_its_stored_piece_exactly():
     assert anchor.chunk_ids == ["chunk-7"]
     assert anchor.page_number == 4
     assert warnings == []
+
+
+def _two_file_chunks(quote: str) -> list[dict]:
+    # The same sentence in the main paper (piece 3) and in a supplement (piece 120).
+    return [
+        {
+            "id": "main-piece",
+            "chunk_index": 3,
+            "content": f"Main text. {quote} More main text.",
+            "page_number": 2,
+            "section_title": "Results",
+            "metadata": {},
+        },
+        {
+            "id": "supplement-piece",
+            "chunk_index": 120,
+            "content": f"Sheet text. {quote} More sheet text.",
+            "page_number": None,
+            "section_title": "Sheet1",
+            "metadata": {},
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("chunk_index_range", "expected_chunk"),
+    [((0, 99), "main-piece"), ((100, 130), "supplement-piece")],
+    ids=["main_file", "supplement_file"],
+)
+def test_resolver_searches_only_the_evidence_file(chunk_index_range, expected_chunk):
+    quote = "Verified quote from the paper."
+    candidate = _make_candidate(_make_anchor_payload(page_number=None, chunk_ids=[]))
+    resolver = DeterministicEvidenceAnchorResolver(
+        source_file_id=_FILE_ID,
+        chunk_index_range=chunk_index_range,
+        user_id_resolver=lambda _prep_result_id: "user-1",
+        chunk_loader=lambda _document_id, _user_id: _two_file_chunks(quote),
+        resolve_against_document=True,
+    )
+
+    [record] = resolver.resolve(
+        candidate,
+        normalized_candidate=_make_normalized_candidate(candidate),
+        context=_make_context(),
+    )
+
+    assert record.source_file_id == _FILE_ID
+    assert EvidenceAnchor.model_validate(record.anchor).chunk_ids == [expected_chunk]
+    assert record.warnings == []
+
+
+def test_resolver_refuses_a_piece_without_a_piece_number():
+    candidate = _make_candidate(_make_anchor_payload(chunk_ids=[]))
+    chunks = _two_file_chunks("Verified quote from the paper.")
+    del chunks[0]["chunk_index"]
+    resolver = DeterministicEvidenceAnchorResolver(
+        source_file_id=_FILE_ID,
+        chunk_index_range=_FILE_RANGE,
+        user_id_resolver=lambda _prep_result_id: "user-1",
+        chunk_loader=lambda _document_id, _user_id: chunks,
+        resolve_against_document=True,
+    )
+
+    with pytest.raises(ValueError, match="has no chunk_index"):
+        resolver.resolve(
+            candidate,
+            normalized_candidate=_make_normalized_candidate(candidate),
+            context=_make_context(),
+        )

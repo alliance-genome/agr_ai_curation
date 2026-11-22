@@ -58,9 +58,11 @@ their original explicit project name. `ps`, `config`, and `down` never build.
 
 ## Synthetic Benchmark Replacement Canary
 
-For the opt-in, no-provider v2 benchmark composition proof, run
-`bash scripts/testing/benchmark-replacement-canary.sh`. It owns a disposable,
-externally isolated Compose project and cleans only that project. See
+The **Benchmark Replacement Canary** job in the `Unit Tests` workflow runs
+the synthetic lifecycle and cold-worker tests on matching pull requests and
+pushes. To run the same tests locally, use
+`bash scripts/testing/benchmark-replacement-canary.sh`. It creates a disposable,
+externally isolated Compose project and cleans it up on exit. See
 [the canary boundary and evidence guide](guides/BENCHMARK_REPLACEMENT_CANARY.md).
 This does not change the live release validation sequence.
 

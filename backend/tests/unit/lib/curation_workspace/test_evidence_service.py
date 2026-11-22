@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
@@ -147,13 +148,16 @@ def _create_document(db_session) -> PDFDocument:
         user_id=1,
         filename="paper.pdf",
         title="Paper Title",
-        file_path="/tmp/paper.pdf",
-        file_hash="a" * 64,
+        file_path=f"/tmp/{uuid4()}.pdf",
+        file_hash=uuid4().hex * 2,
         file_size=1024,
         page_count=5,
         upload_timestamp=now,
         last_accessed=now,
-        status="processed",
+        status="completed",
+        chunk_index_start=0,
+        chunk_index_end=9,
+        chunk_count=10,
     )
     db_session.add(document)
     db_session.commit()
@@ -295,6 +299,7 @@ def _add_evidence(
     field_key: str = "gene.symbol",
     is_primary: bool = True,
     anchor: EvidenceAnchor | None = None,
+    source_file_id: UUID | None,
 ) -> EvidenceRecordModel:
     now = _now()
     evidence = EvidenceRecordModel(
@@ -305,6 +310,7 @@ def _add_evidence(
         field_group_keys=[],
         is_primary=is_primary,
         anchor=(anchor or _anchor()).model_dump(mode="json"),
+        source_file_id=source_file_id,
         warnings=[],
         created_at=now,
         updated_at=now,
@@ -357,6 +363,7 @@ def test_create_manual_evidence_flushes_record_updates_draft_and_logs_action(
             field_keys=["gene.symbol"],
             field_group_keys=["gene"],
             anchor=_anchor(snippet_text="Manual curator quote."),
+            file_id=str(document.main_file.id),
             is_primary=True,
         ),
         actor_claims={"sub": "curator-1", "email": "curator-1@example.org"},
@@ -375,6 +382,8 @@ def test_create_manual_evidence_flushes_record_updates_draft_and_logs_action(
 
     stored_evidence = db_session.scalars(select(EvidenceRecordModel)).one()
     assert stored_evidence.source is CurationEvidenceSource.MANUAL
+    assert stored_evidence.source_file_id == document.main_file.id
+    assert response.evidence_record.file_id == str(document.main_file.id)
     stored_action = db_session.scalars(select(SessionActionLogModel)).one()
     assert stored_action.action_type is CurationActionType.EVIDENCE_MANUAL_ADDED
     assert commit_calls == 0
@@ -397,6 +406,7 @@ def test_resolve_evidence_replaces_matching_record_in_place(db_session, monkeypa
         draft=draft,
         source=CurationEvidenceSource.EXTRACTED,
         anchor=_anchor(snippet_text="Original extracted quote."),
+        source_file_id=document.main_file.id,
     )
 
     monkeypatch.setattr(
@@ -417,6 +427,7 @@ def test_resolve_evidence_replaces_matching_record_in_place(db_session, monkeypa
             candidate_id=str(candidate.id),
             field_key="gene.symbol",
             anchor=_anchor(snippet_text="Resolve me."),
+            file_id=str(document.main_file.id),
             replace_existing=True,
         ),
         current_user_id="curator-1",
@@ -459,6 +470,7 @@ def test_resolve_anchor_against_document_uses_public_resolver_surface(db_session
         return [
             PreparedEvidenceRecordInput(
                 source=CurationEvidenceSource.RECOMPUTED,
+                source_file_id=document.main_file.id,
                 field_keys=["gene.symbol"],
                 anchor=_anchor(
                     snippet_text="Resolved via public resolver API.",
@@ -473,6 +485,7 @@ def test_resolve_anchor_against_document_uses_public_resolver_surface(db_session
     resolved_anchor, warnings = module._resolve_anchor_against_document(
         db_session,
         document_id=str(document.id),
+        file_row=document.main_file,
         anchor=_anchor(snippet_text="Example quote."),
         adapter_key="reference_adapter",
         field_path="gene.symbol",
@@ -514,6 +527,7 @@ def test_resolve_anchor_against_document_enriches_anchor_from_matching_chunk(
     resolved_anchor, warnings = module._resolve_anchor_against_document(
         db_session,
         document_id=str(document.id),
+        file_row=document.main_file,
         anchor=_anchor(snippet_text="Example quote.", page_number=None),
         adapter_key="reference_adapter",
         field_path="gene.symbol",
@@ -558,6 +572,7 @@ def test_recompute_evidence_updates_all_selected_records_including_manual(
         draft=extracted_draft,
         source=CurationEvidenceSource.EXTRACTED,
         anchor=_anchor(snippet_text="Extracted quote."),
+        source_file_id=document.main_file.id,
     )
     manual_evidence = _add_evidence(
         db_session,
@@ -565,6 +580,7 @@ def test_recompute_evidence_updates_all_selected_records_including_manual(
         draft=manual_draft,
         source=CurationEvidenceSource.MANUAL,
         anchor=_anchor(snippet_text="Manual quote."),
+        source_file_id=document.main_file.id,
     )
 
     monkeypatch.setattr(
@@ -607,3 +623,149 @@ def test_recompute_evidence_updates_all_selected_records_including_manual(
     assert refreshed_manual is not None
     assert refreshed_extracted.source is CurationEvidenceSource.RECOMPUTED
     assert refreshed_manual.source is CurationEvidenceSource.RECOMPUTED
+
+
+def test_recompute_leaves_evidence_saved_before_files_were_recorded_unchanged(
+    db_session,
+    monkeypatch,
+):
+    document = _create_document(db_session)
+    extraction_result = _create_extraction_result(db_session, document_id=document.id)
+    session = _create_session(db_session, document_id=document.id, total_candidates=1)
+    candidate, draft = _create_candidate(
+        db_session,
+        session=session,
+        extraction_result_id=extraction_result.id,
+        source=CurationCandidateSource.EXTRACTED,
+        order=0,
+    )
+    old_evidence = _add_evidence(
+        db_session,
+        candidate=candidate,
+        draft=draft,
+        source=CurationEvidenceSource.EXTRACTED,
+        anchor=_anchor(snippet_text="Saved before 0.12.0."),
+        source_file_id=None,
+    )
+    stored_before = dict(old_evidence.anchor)
+
+    def _never_called(*_args, **_kwargs):
+        raise AssertionError("evidence without a file is never resolved")
+
+    monkeypatch.setattr(module, "_resolve_anchor_against_document", _never_called)
+
+    response = module.recompute_evidence(
+        CurationEvidenceRecomputeRequest(session_id=str(session.id), candidate_ids=[str(candidate.id)]),
+        current_user_id="curator-1",
+        actor_claims={"sub": "curator-1"},
+        db=db_session,
+    )
+
+    assert response.updated_evidence_records == []
+    assert [(item.anchor_id, item.code) for item in response.not_recomputed] == [
+        (str(old_evidence.id), "saved_before_files_were_recorded")
+    ]
+    refreshed = db_session.get(EvidenceRecordModel, old_evidence.id)
+    assert refreshed.source is CurationEvidenceSource.EXTRACTED
+    assert refreshed.anchor == stored_before
+    assert refreshed.source_file_id is None
+
+
+def test_manual_evidence_refuses_a_file_of_another_paper(db_session):
+    document = _create_document(db_session)
+    other_document = _create_document(db_session)
+    session = _create_session(db_session, document_id=document.id, total_candidates=1)
+    candidate, _draft = _create_candidate(
+        db_session,
+        session=session,
+        extraction_result_id=None,
+        source=CurationCandidateSource.MANUAL,
+        order=0,
+    )
+
+    for file_id in (str(other_document.main_file.id), "not-a-uuid"):
+        with pytest.raises(HTTPException) as exc:
+            module.create_manual_evidence(
+                CurationManualEvidenceCreateRequest(
+                    session_id=str(session.id),
+                    candidate_id=str(candidate.id),
+                    field_keys=["gene.symbol"],
+                    anchor=_anchor(snippet_text="Manual curator quote."),
+                    file_id=file_id,
+                ),
+                actor_claims={"sub": "curator-1"},
+                db=db_session,
+            )
+        assert (exc.value.status_code, exc.value.detail) == (
+            400,
+            {"code": "file_not_in_paper", "message": "file_id is not a file of this paper"},
+        )
+    assert db_session.scalars(select(EvidenceRecordModel)).all() == []
+
+
+def test_resolve_refuses_a_file_without_pieces_yet(db_session):
+    document = _create_document(db_session)
+    document.main_file.chunk_index_start = None
+    document.main_file.chunk_index_end = None
+    document.main_file.chunk_count = None
+    db_session.commit()
+    session = _create_session(db_session, document_id=document.id, total_candidates=1)
+    candidate, _draft = _create_candidate(
+        db_session,
+        session=session,
+        extraction_result_id=None,
+        source=CurationCandidateSource.MANUAL,
+        order=0,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        module.resolve_evidence(
+            CurationEvidenceResolveRequest(
+                session_id=str(session.id),
+                candidate_id=str(candidate.id),
+                field_key="gene.symbol",
+                anchor=_anchor(snippet_text="Resolve me."),
+                file_id=str(document.main_file.id),
+            ),
+            current_user_id="curator-1",
+            db=db_session,
+        )
+
+    assert (exc.value.status_code, exc.value.detail) == (
+        409,
+        {"code": "file_has_no_text", "message": "This file has no text to search yet"},
+    )
+
+
+@pytest.mark.parametrize("file_status", ["pending", "failed"])
+def test_evidence_refuses_a_file_that_is_not_ready(db_session, file_status):
+    document = _create_document(db_session)
+    document.main_file.status = file_status
+    db_session.commit()
+    session = _create_session(db_session, document_id=document.id, total_candidates=1)
+    candidate, _draft = _create_candidate(
+        db_session,
+        session=session,
+        extraction_result_id=None,
+        source=CurationCandidateSource.MANUAL,
+        order=0,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        module.create_manual_evidence(
+            CurationManualEvidenceCreateRequest(
+                session_id=str(session.id),
+                candidate_id=str(candidate.id),
+                field_keys=["gene.symbol"],
+                anchor=_anchor(snippet_text="Manual curator quote."),
+                file_id=str(document.main_file.id),
+            ),
+            actor_claims={"sub": "curator-1"},
+            db=db_session,
+        )
+
+    assert (exc.value.status_code, exc.value.detail) == (
+        409,
+        {"code": "file_not_ready", "message": "This file is not ready"},
+    )
+    assert db_session.scalars(select(EvidenceRecordModel)).all() == []

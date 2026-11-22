@@ -65,6 +65,7 @@ from src.lib.observability import tool_results, runtime
             None,
         ),
         ({"status": "needs_source_read", "error_code": "unissued_document_selection", "saved": False}, False, False, None),
+        ({"status": "needs_source_read", "error_code": "unreadable_document_selection", "saved": False}, False, False, None),
         ({"status": "needs_source_read"}, False, True, None),
         ({"status": "invalid_arguments", "error_code": "invalid_tool_arguments", "saved": False}, False, False, None),
         ({"status": "invalid_arguments"}, False, True, None),

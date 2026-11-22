@@ -4567,6 +4567,7 @@ def _evidence_anchor_projection(
         field_path=field_path,
         envelope_revision=envelope_revision,
         document_id=projection_document_id,
+        file_id=_optional_string(evidence_record.get("file_id")),
         quote=_quote_from_anchor(anchor),
         page_number=anchor.page_number,
         page_label=anchor.page_label,

@@ -229,7 +229,8 @@ async def test_followup_reads_real_paper_tools_and_retains_exact_new_evidence(pl
     doc, owner = item.scope.document_id, item.scope.owner_id
     history = HistoryStore(store.SessionLocal)
     history_scope = HistoryScope(owner, uuid4().hex, uuid4().hex, 'extractor', 'followup/', item.scope.session_id)
-    binding = refs.SourceBinding(doc, owner, 'fixture-generation', history_scope, history, [])
+    from tests.readable_files_support import single_file
+    binding = refs.SourceBinding(doc, owner, 'fixture-generation', history_scope, history, [], single_file(doc))
     binding.pin_generation()
     @asynccontextmanager
     async def scoped(document, user):

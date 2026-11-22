@@ -32,6 +32,7 @@ from src.lib.domain_envelopes.persistence import (
 )
 from src.lib.domain_packs.materialization import validation_finding_projection_id
 from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+from src.lib.curation_workspace.evidence_files import require_paper_file
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
@@ -310,11 +311,18 @@ def _manual_candidate_field_inputs(
 
 
 def _manual_candidate_evidence_inputs(
+    db: Session,
+    session_row: ReviewSessionModel,
     evidence_records: Sequence[CurationEvidenceRecordPayload],
 ) -> list[PreparedEvidenceRecordInput]:
     prepared_records: list[PreparedEvidenceRecordInput] = []
 
     for evidence_record in evidence_records:
+        file_row = require_paper_file(
+            db,
+            document_id=session_row.document_id,
+            file_id=evidence_record.file_id,
+        )
         field_keys = _dedupe_non_empty_strings(
             evidence_record.field_keys,
             field_name="evidence_anchors.field_keys",
@@ -336,6 +344,7 @@ def _manual_candidate_evidence_inputs(
         prepared_records.append(
             PreparedEvidenceRecordInput(
                 source=evidence_record.source,
+                source_file_id=file_row.id,
                 field_keys=field_keys,
                 field_group_keys=field_group_keys,
                 is_primary=evidence_record.is_primary,
@@ -414,7 +423,7 @@ def create_manual_candidate(
         profiled_payload = profiled_draft_payload(db, receipt, field_inputs)
         if profiled_payload is not None:
             normalized_payload = profiled_payload
-    evidence_inputs = _manual_candidate_evidence_inputs(request.evidence_anchors)
+    evidence_inputs = _manual_candidate_evidence_inputs(db, session_row, request.evidence_anchors)
     available_field_keys = {
         field_input.field_key
         for field_input in field_inputs
