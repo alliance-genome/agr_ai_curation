@@ -22,25 +22,37 @@ codes and measured values, never wording.
   sent for a refusal found while listing.
 
 The listing never cleans or parses text: the checks read the downloaded bytes.
+
+Each entry also says whether the curator can tick it (P6f). A supplement the
+provider has not converted can be ticked only where the import would ask the
+provider to convert it: ``will_ask_provider`` holds that whole rule and reads it
+from the import's own decision. On an imported paper, each entry carries the last thing the provider told
+one of this paper's imports about the file (``ProviderObservation``).
 """
 
 from __future__ import annotations
 
 import asyncio
 import weakref
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Any, Generic, TypeVar
 
 from src.lib.document_sources.file_assessment import (
     FileAssessment,
     FileCheckLimits,
-    FileCheckReason,
     FileProfile,
     assess_converted_file,
 )
+from src.lib.document_sources.file_reasons import (
+    PROVIDER_OBSERVATION_REASONS,
+    FileReason,
+    reason_in_group,
+)
 from src.lib.document_sources.identifier_import import (
+    ReferenceImportDecision,
     ReferenceImportDecisionStatus,
     decide_reference_import,
 )
@@ -93,10 +105,30 @@ class ListedFileCheckStatus(str, Enum):
 @dataclass(frozen=True, slots=True)
 class ListedFileCheck:
     status: ListedFileCheckStatus
-    reason: FileCheckReason | None = None
+    reason: FileReason | None = None
     measured_value: int | None = None
     limit_value: int | None = None
     few_characters_count: int | None = None
+
+
+class ListingRoute(str, Enum):
+    """Which listing this is: what the curator's choice can lead to differs."""
+
+    # Before an import: the import may send the provider's conversion request.
+    IDENTIFIER = "identifier"
+    # An imported paper: adding files sends no conversion request (P7c1).
+    PAPER = "paper"
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderObservation:
+    """The last thing the provider told one of this paper's imports about a chosen file."""
+
+    code: FileReason
+    observed_at: datetime
+
+    def __post_init__(self) -> None:
+        reason_in_group(self.code.value, PROVIDER_OBSERVATION_REASONS, group_name="provider observation reasons")
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +152,11 @@ class ListedFile:
     category: SupplementFileCategory | None
     # The provider's profile: the converted text's first top-level title is the file's title.
     single_title_required: bool
+    # Whether the curator can choose this file now, and if not, why (a ``NOT_TICKABLE_REASONS`` code).
+    tickable: bool
+    not_tickable_reason: FileReason | None
+    # Per-paper listing only; ``None`` for files no import of this paper chose or that were added.
+    last_provider_observation: ProviderObservation | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,6 +314,43 @@ def _authorized(artifact: SourceArtifact, groups: tuple[str, ...]) -> bool:
     return source_artifact_is_authorized(artifact, authorized_group_ids=groups)
 
 
+def will_ask_provider(
+    decision: ReferenceImportDecision, *, bearer_kind: ProviderBearerKind, route: ListingRoute,
+) -> bool:
+    """Whether the import or add chosen from this listing will ask the provider to convert files.
+
+    A readable, convertible supplement with no converted text can be ticked exactly
+    when this is true (plan section 3.4, decision A1; interface I9). It is read from
+    the decision ``decide_reference_import(..., allow_conversion_request=False)`` made,
+    never re-derived from the artifacts:
+    - a curator's own login only: a machine login (``SERVICE``) never asks, and its
+      branch is also ``READY`` with no converted text, so it is checked here;
+    - ``READY`` only: a main text the provider lists as running or failed
+      (``CONVERSION_RUNNING``, ``CONVERSION_FAILED``) returns before any request;
+    - before an import (``IDENTIFIER``) with no converted main text: the point where
+      an import sends today's conversion request. A main text the provider does not
+      count as main text (ABC's legacy ``_tei`` rows) is no main text, as in the import.
+      An add from an imported paper (``PAPER``) sends no request.
+
+    Decision O2 (option (a)): the provider's own rules decide which supplements it
+    converts, and they are never copied here, so on a paper whose supplements the
+    provider does not convert, a ticked file is later reported as not converted.
+    Under O2 option (b) this function returns ``False``. P7d adds its one condition
+    (its setting on: also true with a converted main, on both routes) before the last line.
+    """
+
+    reference = decision.reference
+    if (
+        bearer_kind is not ProviderBearerKind.CURATOR
+        or decision.status != ReferenceImportDecisionStatus.READY
+        or decision.selected is None
+        or reference is None
+        or not (reference.reference_curie or reference.reference_id)
+    ):
+        return False
+    return route is ListingRoute.IDENTIFIER and decision.selected.converted_artifact is None
+
+
 async def list_reference_files(
     *,
     provider: DocumentSourceProvider,
@@ -289,6 +363,8 @@ async def list_reference_files(
     check_limit: int,
     load_stored: Callable[[str, str, str], FileAssessment | None],
     save_assessment: Callable[[str, str, str, FileAssessment], None],
+    route: ListingRoute,
+    provider_observations: Mapping[str, ProviderObservation],
 ) -> FileListing:
     """List one resolved reference's files for one curator.
 
@@ -298,11 +374,15 @@ async def list_reference_files(
     ``save_assessment`` read and write stored results by
     (converted text id, MD5, check version); ``files_in_paper`` holds the
     provider file ids already imported into the paper. At most ``check_limit``
-    files not checked before are downloaded by one listing.
+    files not checked before are downloaded by one listing. ``provider_observations``
+    maps a provider file id to the last observation of this paper's imports; only the
+    per-paper listing has any.
     """
 
     if not isinstance(reference, SourceReference):
         raise FileListingError("Files are listed only for a resolved provider reference")
+    if provider_observations and route is not ListingRoute.PAPER:
+        raise FileListingError("Provider observations belong to the per-paper listing only")
     groups = tuple(authorized_group_ids)
     in_paper = set(files_in_paper)
     artifacts = await provider.list_artifacts(reference, request_bearer_token=request_bearer_token)
@@ -317,6 +397,7 @@ async def list_reference_files(
         request_bearer_token=request_bearer_token,
         allow_conversion_request=False,
     )
+    unconverted_tickable = will_ask_provider(decision, bearer_kind=bearer_kind, route=route)
     files: list[ListedFile] = []
     if decision.selected is not None and decision.status in (
         ReferenceImportDecisionStatus.READY,
@@ -324,6 +405,7 @@ async def list_reference_files(
     ):
         source = decision.selected.source_artifact
         converted = decision.selected.converted_artifact
+        main_in_paper = source.artifact_id in in_paper
         files.append(ListedFile(
             provider_file_id=source.artifact_id,
             converted_text_id=converted.artifact_id if converted is not None else None,
@@ -331,12 +413,16 @@ async def list_reference_files(
             file_role=file_role_for_artifact_role(source.role, is_main=True),
             status=ListedFileStatus.READY,
             check=ListedFileCheck(ListedFileCheckStatus.NOT_CHECKED),
-            in_this_paper=source.artifact_id in in_paper,
+            in_this_paper=main_in_paper,
             md5=source.md5sum,
             converted_md5=converted.md5sum if converted is not None else None,
             artifact_format=source.artifact_format.value,
             category=None,
             single_title_required=False,
+            # The main paper is always part of an import; it is never added twice.
+            tickable=not main_in_paper,
+            not_tickable_reason=FileReason.ALREADY_IN_PAPER if main_in_paper else None,
+            last_provider_observation=None,
         ))
 
     candidates: dict[str, _Candidate] = {}
@@ -417,7 +503,7 @@ async def list_reference_files(
             max_bytes=limits.max_bytes, use=lambda content: assess_converted_file(content, profile, limits),
         )
         if outcome.failure is ConvertedTextDownloadFailure.TOO_LARGE:
-            assessment = FileAssessment(refused=True, reason=FileCheckReason.TOO_LARGE, limit_value=outcome.limit_value)
+            assessment = FileAssessment(refused=True, reason=FileReason.TOO_LARGE, limit_value=outcome.limit_value)
         elif outcome.failure is not None:
             # Not a property of the file: reported, never stored, tried once per listing.
             return ListedFileCheck(ListedFileCheckStatus(outcome.failure.value))
@@ -440,6 +526,12 @@ async def list_reference_files(
             status = ListedFileStatus.NO_CONVERTED_TEXT
         else:
             status = ListedFileStatus.READY
+        copy_ids = (original.artifact_id, *(copy.artifact_id for copy in candidate.duplicates))
+        in_this_paper = any(file_id in in_paper for file_id in copy_ids)
+        check = checks.get(original.artifact_id, ListedFileCheck(ListedFileCheckStatus.NOT_CHECKED))
+        not_tickable = _not_tickable_reason(
+            status=status, check=check, in_this_paper=in_this_paper, unconverted_tickable=unconverted_tickable,
+        )
         files.append(ListedFile(
             provider_file_id=original.artifact_id,
             converted_text_id=candidate.converted.artifact_id if candidate.converted else None,
@@ -449,14 +541,19 @@ async def list_reference_files(
                 if status is ListedFileStatus.READY else None
             ),
             status=status,
-            check=checks.get(original.artifact_id, ListedFileCheck(ListedFileCheckStatus.NOT_CHECKED)),
-            in_this_paper=original.artifact_id in in_paper
-            or any(copy.artifact_id in in_paper for copy in candidate.duplicates),
+            check=check,
+            in_this_paper=in_this_paper,
             md5=original.md5sum,
             converted_md5=candidate.converted.md5sum if candidate.converted else None,
             artifact_format=original.artifact_format.value,
             category=candidate.category,
             single_title_required=provider.converted_text_has_single_title(original),
+            tickable=not_tickable is None,
+            not_tickable_reason=not_tickable,
+            last_provider_observation=next(
+                (provider_observations[file_id] for file_id in copy_ids if file_id in provider_observations),
+                None,
+            ),
         ))
 
     return FileListing(
@@ -469,6 +566,27 @@ async def list_reference_files(
         duplicate_copies_count=duplicate_copies,
         check_version=limits.check_version,
     )
+
+
+def _not_tickable_reason(
+    *,
+    status: ListedFileStatus,
+    check: ListedFileCheck,
+    in_this_paper: bool,
+    unconverted_tickable: bool,
+) -> FileReason | None:
+    """Why a supplement cannot be ticked, or ``None`` when it can. Codes from ``NOT_TICKABLE_REASONS``."""
+
+    if in_this_paper:
+        return FileReason.ALREADY_IN_PAPER
+    if status is ListedFileStatus.LARGE_DATA_FILE:
+        return FileReason.LARGE_DATA_FILE
+    if status is ListedFileStatus.TYPE_NOT_SUPPORTED:
+        return FileReason.TYPE_NOT_SUPPORTED
+    if status is ListedFileStatus.NO_CONVERTED_TEXT:
+        return None if unconverted_tickable else FileReason.PROVIDER_NOT_CONVERTED_YET
+    # Ready: only a converted text that passed its check (a few-characters note still passes).
+    return None if check.status is ListedFileCheckStatus.PASSED else FileReason.CHECK_NOT_PASSED
 
 
 def _check_from_assessment(assessment: FileAssessment) -> ListedFileCheck:
@@ -504,6 +622,15 @@ def listing_to_payload(listing: FileListing) -> dict[str, Any]:
                 "category": item.category.value if item.category else None,
                 "status": item.status.value,
                 "in_this_paper": item.in_this_paper,
+                "tickable": item.tickable,
+                "not_tickable_reason": item.not_tickable_reason.value if item.not_tickable_reason else None,
+                "last_provider_observation": (
+                    {
+                        "code": item.last_provider_observation.code.value,
+                        "observed_at": item.last_provider_observation.observed_at.isoformat(),
+                    }
+                    if item.last_provider_observation is not None else None
+                ),
                 "check": {
                     "status": item.check.status.value,
                     "reason": item.check.reason.value if item.check.reason else None,

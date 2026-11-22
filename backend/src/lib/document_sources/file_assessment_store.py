@@ -11,7 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from src.lib.document_sources.file_assessment import FileAssessment, FileCheckReason
+from src.lib.document_sources.file_assessment import FileAssessment
+from src.lib.document_sources.file_reasons import CHECK_REASONS, reason_in_group
 from src.models.sql.document_file_assessment import (
     ASSESSMENT_RESULT_OK,
     ASSESSMENT_RESULT_REFUSED,
@@ -34,7 +35,10 @@ def stored_assessment(
         return None
     return FileAssessment(
         refused=row.result == ASSESSMENT_RESULT_REFUSED,
-        reason=FileCheckReason(row.reason_code) if row.reason_code is not None else None,
+        reason=(
+            reason_in_group(row.reason_code, CHECK_REASONS, group_name="check reasons")
+            if row.reason_code is not None else None
+        ),
         measured_value=row.measured_value,
         limit_value=row.limit_value,
         few_characters_count=row.few_characters_count,

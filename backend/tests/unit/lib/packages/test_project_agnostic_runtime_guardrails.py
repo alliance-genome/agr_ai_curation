@@ -327,6 +327,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/document_sources/test_abc_literature_provider.py"),
     # Lists files through the Alliance ABC adapter with ABC show_all rows.
     Path("backend/tests/unit/lib/document_sources/test_file_listing.py"),
+    Path("backend/tests/unit/lib/document_sources/test_file_listing_tickable.py"),
     Path("backend/tests/unit/lib/document_sources/test_access_health.py"),
     # Dev machine-reader access gate drives real ABC MOD group ids (FB/WB).
     Path("backend/tests/unit/lib/document_sources/test_dev_reader_access.py"),

@@ -17,12 +17,14 @@ import pytest
 
 from src.lib.document_sources import file_listing
 
-from src.lib.document_sources.file_assessment import FileCheckLimits, FileCheckReason
+from src.lib.document_sources.file_assessment import FileCheckLimits
+from src.lib.document_sources.file_reasons import FileReason
 from src.lib.document_sources.file_listing import (
     FileListingError,
     FileRoleMappingError,
     ListedFileCheckStatus,
     ListedFileStatus,
+    ListingRoute,
     ConvertedTextDownloadFailure,
     converted_text_access_allowed,
     download_converted_text,
@@ -117,6 +119,8 @@ async def _listing(
         bearer_kind=ProviderBearerKind.CURATOR, request_bearer_token="curator-token",
         files_in_paper=in_paper, limits=limits or _limits(), check_limit=check_limit,
         load_stored=store.load, save_assessment=store.save,
+        route=ListingRoute.PAPER if in_paper else ListingRoute.IDENTIFIER,
+        provider_observations={},
     )
     return listing, client
 
@@ -173,8 +177,8 @@ async def test_a_refusal_is_stored_and_reported_with_its_code():
     listing, _ = await _listing([*_pair(20, "WB")], payloads={"21": bad}, store=store)
     check = _by_id(listing)["20"].check
     assert check.status is ListedFileCheckStatus.REFUSED
-    assert check.reason is FileCheckReason.TABLE_CELLS_MISMATCH
-    assert [assessment.reason for assessment in store.saved.values()] == [FileCheckReason.TABLE_CELLS_MISMATCH]
+    assert check.reason is FileReason.TABLE_CELLS_MISMATCH
+    assert [assessment.reason for assessment in store.saved.values()] == [FileReason.TABLE_CELLS_MISMATCH]
 
 
 @pytest.mark.asyncio
@@ -183,7 +187,7 @@ async def test_an_oversized_download_is_a_too_large_refusal():
         [*_pair(20, "WB")], payloads={"21": _http_error(413)},
     )
     check = _by_id(listing)["20"].check
-    assert check.reason is FileCheckReason.TOO_LARGE and check.limit_value == 10_000
+    assert check.reason is FileReason.TOO_LARGE and check.limit_value == 10_000
 
 
 @pytest.mark.asyncio
@@ -230,6 +234,7 @@ async def test_listing_refuses_an_unresolved_reference():
             provider=provider, reference="AGRKB:101", authorized_group_ids=("WB",),  # type: ignore[arg-type]
             bearer_kind=ProviderBearerKind.CURATOR, request_bearer_token="t", limits=_limits(),
             check_limit=20, load_stored=_Store().load, save_assessment=_Store().save,
+            route=ListingRoute.IDENTIFIER, provider_observations={},
         )
     assert client.calls == []
 
@@ -277,7 +282,7 @@ async def test_the_single_title_rule_comes_from_the_provider_for_office_files_on
     listing, _ = await _listing([*pdf_pair, *office_pair], payloads={"21": two_titles, "31": two_titles})
     files = _by_id(listing)
     assert files["20"].check.status is ListedFileCheckStatus.PASSED
-    assert files["30"].check.reason is FileCheckReason.TITLE_COUNT
+    assert files["30"].check.reason is FileReason.TITLE_COUNT
 
 
 @pytest.mark.asyncio
@@ -447,7 +452,7 @@ async def test_too_large_is_stored_so_a_second_listing_does_not_download_it_agai
     rows = _pair(20, "WB")
     await _listing(rows, payloads={"21": b"x" * 20}, store=store, limits=_limits(max_bytes=10))
     listing, client = await _listing(rows, payloads={}, store=store, limits=_limits(max_bytes=10))
-    assert _by_id(listing)["20"].check.reason is FileCheckReason.TOO_LARGE
+    assert _by_id(listing)["20"].check.reason is FileReason.TOO_LARGE
     assert not [name for name, _ in client.calls if name == "download_referencefile"]
 
 
@@ -521,6 +526,7 @@ async def test_an_imported_paper_is_listed_by_its_curie_never_by_its_numeric_id(
         file_listing_service, "_paper_lookup",
         lambda *_: file_listing_service._PaperSource(
             provider=provider.provider_id, reference_id="101", reference_curie="AGRKB:101", file_ids=("20",),
+            provider_observations={},
         ),
     )
     context = DocumentSourceRequestContext(

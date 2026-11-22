@@ -6,11 +6,11 @@ import pytest
 
 from src.lib.document_sources.file_assessment import (
     FileCheckLimits,
-    FileCheckReason,
     FileProfile,
     assess_converted_file,
     summarize_assessments,
 )
+from src.lib.document_sources.file_reasons import FileReason
 
 
 def _limits(**overrides) -> FileCheckLimits:
@@ -51,7 +51,7 @@ def test_a_well_formed_file_passes_with_no_note():
 
 def test_r1_too_large_is_refused_and_the_limit_passes():
     content = "x" * 101
-    assert _assess(content, max_bytes=100).reason is FileCheckReason.TOO_LARGE
+    assert _assess(content, max_bytes=100).reason is FileReason.TOO_LARGE
     refused = _assess(content, max_bytes=100)
     assert (refused.measured_value, refused.limit_value) == (101, 100)
     assert _assess("x" * 100, max_bytes=100, few_characters_below=0).refused is False
@@ -64,7 +64,7 @@ def test_r1_too_large_is_refused_and_the_limit_passes():
 )
 def test_r2_damaged_or_control_characters_are_refused(content):
     result = assess_converted_file(content, PLAIN, _limits())
-    assert result.reason is FileCheckReason.INVALID_TEXT
+    assert result.reason is FileReason.INVALID_TEXT
 
 
 def test_r2_tabs_and_both_line_endings_pass():
@@ -84,13 +84,13 @@ def test_r3_does_not_count_headings_pipes_or_separator_rows():
 
 def test_r4_table_without_a_separator_line_is_refused():
     text = "| strain | score |\n| s1 | 1 |\n"
-    assert _assess(text).reason is FileCheckReason.TABLE_CELLS_MISMATCH
+    assert _assess(text).reason is FileReason.TABLE_CELLS_MISMATCH
 
 
 def test_r4_row_with_a_different_number_of_cells_is_refused():
     text = TABLE + "| s3 | 3 | extra |\n"
     result = _assess(text)
-    assert result.reason is FileCheckReason.TABLE_CELLS_MISMATCH
+    assert result.reason is FileReason.TABLE_CELLS_MISMATCH
     assert (result.measured_value, result.limit_value) == (3, 2)
 
 
@@ -103,7 +103,7 @@ def test_r4_an_escaped_backslash_before_a_pipe_is_a_cell_boundary():
     # Pinned to the shared splitter (check code version 2): two backslashes then a pipe end a cell.
     text = TABLE + "| a \\\\| b | 4 |\n"
     result = _assess(text)
-    assert result.reason is FileCheckReason.TABLE_CELLS_MISMATCH
+    assert result.reason is FileReason.TABLE_CELLS_MISMATCH
     assert (result.measured_value, result.limit_value) == (3, 2)
 
 
@@ -111,21 +111,21 @@ def test_r5_a_row_over_the_token_limit_is_refused():
     wide = "| " + "w" * 60 + " | 1 |"
     text = TABLE + wide + "\n"
     result = _assess(text, row_token_limit=50)
-    assert result.reason is FileCheckReason.TABLE_ROW_TOO_WIDE
+    assert result.reason is FileReason.TABLE_ROW_TOO_WIDE
     assert result.measured_value == len(wide) and result.limit_value == 50
     assert _assess(text, row_token_limit=len(wide)).refused is False
 
 
 def test_r6_a_separator_row_inside_the_data_is_refused():
     text = TABLE + "| --- | --- |\n| s4 | 4 |\n"
-    assert _assess(text).reason is FileCheckReason.TABLE_STRAY_SEPARATOR
+    assert _assess(text).reason is FileReason.TABLE_STRAY_SEPARATOR
 
 
 @pytest.mark.parametrize("titles", [0, 2])
 def test_r7_needs_exactly_one_top_level_title_when_the_profile_asks(titles):
     text = "".join(f"# Title {n}\n\n" for n in range(titles)) + "## Sheet\n\nsome readable text\n"
     result = _assess(text, TITLED, few_characters_below=0)
-    assert result.reason is FileCheckReason.TITLE_COUNT
+    assert result.reason is FileReason.TITLE_COUNT
     assert (result.measured_value, result.limit_value) == (titles, 1)
     assert _assess(text, PLAIN, few_characters_below=0).refused is False
 

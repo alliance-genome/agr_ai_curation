@@ -214,5 +214,43 @@ numbers, never wording (`src/lib/document_sources/file_listing.py`).
   (`file_listing_service.py`), `converted_text_access_allowed` (both rules, separately),
   `download_converted_text` (one file, the process-wide limit and the size cap, bytes handed
   to a callback while the slot is held; failure codes `too_large`, `text_unavailable`,
-  `text_missing`, `text_access_denied`), `assess_converted_file` with
-  `FileCheckReason`, and `stored_assessment` / `store_assessment`.
+  `text_missing`, `text_access_denied`), `assess_converted_file` with the check reasons of
+  `FileReason`, and `stored_assessment` / `store_assessment`.
+- Reason codes live in one enum, `FileReason` (`src/lib/document_sources/file_reasons.py`), with
+  a group per use: `CHECK_REASONS` (R1 to R7, stored in `document_file_assessments.reason_code`;
+  a stored code outside the group is a named error), `NOT_TICKABLE_REASONS` (the listing) and
+  `PROVIDER_OBSERVATION_REASONS` (what ABC told an import about a chosen file). Other parts add
+  their codes to this enum, never an enum of their own.
+
+### Which listed files can be ticked (KANBAN-1976 / ALL-1460, P6f)
+
+Each entry carries `tickable`, `not_tickable_reason` (a `NOT_TICKABLE_REASONS` code or `null`)
+and `last_provider_observation` (`{code, observed_at}` or `null`). Codes only; the screens hold
+the wording.
+
+- The main paper is tickable unless it is already in the paper (`already_in_paper`); an import
+  always includes it.
+- A `ready` supplement is tickable when its check `passed` (a few-characters note still passes);
+  any other check status is `check_not_passed`, and the entry's `check` says which.
+- `large_data_file` and `type_not_supported` keep those codes; a supplement already in the paper
+  is `already_in_paper`.
+- A convertible supplement with no converted text (`no_converted_text`) is tickable only where
+  the import would ask ABC to convert it (decision A1); otherwise `provider_not_converted_yet`.
+  `will_ask_provider` holds the whole rule and reads it from the import's own decision
+  (`decide_reference_import(..., allow_conversion_request=False)`): `READY` with no converted
+  main text, on a curator login, before an import. That is exactly when an import sends today's
+  `conversion_request`. No unconverted file is tickable if the main text is converted, the login
+  is a machine login, or the main text is listed as running or failed. A legacy `_tei` main
+  text counts as no main text, as in the import. The per-paper listing never marks one
+  tickable, because an add sends no request.
+- Decision O2 is in the same function: on a paper whose supplements ABC does not convert
+  (outside WB, ZFIN and FB today), a ticked unconverted file is later reported as not
+  converted. AI Curation never copies ABC's group or size rules. Conversion on demand (P7d,
+  `DOCUMENT_SOURCE_REQUEST_SUPPLEMENT_CONVERSION`, off by default) adds its one condition to this
+  function.
+- `last_provider_observation` (per-paper listing only) is read from this paper's processing
+  jobs, newest first, from `metadata_json.supplements` (interface I1): the first entry for a
+  file decides; a `left_out` entry with a `PROVIDER_OBSERVATION_REASONS` code
+  (`provider_not_converted`, `provider_conversion_failed`, `not_converted_in_time`) gives the
+  observation and its time. An entry in another shape is a named error. ABC's free-text error is
+  never read or shown.

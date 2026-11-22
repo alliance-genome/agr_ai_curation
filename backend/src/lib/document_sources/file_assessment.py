@@ -11,19 +11,8 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import Enum
 
-
-class FileCheckReason(str, Enum):
-    """Why a file is refused. Values are stored; never rename one."""
-
-    TOO_LARGE = "too_large"                          # R1
-    INVALID_TEXT = "invalid_text"                    # R2
-    TABLE_CELLS_MISMATCH = "table_cells_mismatch"    # R4
-    TABLE_ROW_TOO_WIDE = "table_row_too_wide"        # R5
-    TABLE_STRAY_SEPARATOR = "table_stray_separator"  # R6
-    TITLE_COUNT = "title_count"                      # R7
-
+from src.lib.document_sources.file_reasons import FileReason
 
 # Bump when a check's code changes; thresholds are added to the version separately.
 # "2": the shared cell splitter now treats an even run of backslashes before a pipe as a
@@ -64,14 +53,14 @@ class FileCheckLimits:
 @dataclass(frozen=True, slots=True)
 class FileAssessment:
     refused: bool
-    reason: FileCheckReason | None = None
+    reason: FileReason | None = None
     measured_value: int | None = None
     limit_value: int | None = None
     # R3: set only when the readable text is below the note threshold.
     few_characters_count: int | None = None
 
 
-def _refused(reason: FileCheckReason, measured: int | None = None, limit: int | None = None) -> FileAssessment:
+def _refused(reason: FileReason, measured: int | None = None, limit: int | None = None) -> FileAssessment:
     return FileAssessment(refused=True, reason=reason, measured_value=measured, limit_value=limit)
 
 
@@ -81,11 +70,11 @@ def assess_converted_file(content: bytes, profile: FileProfile, limits: FileChec
     from src.lib.pipeline.table_chunking import is_table_separator_row, split_table_cells
 
     if len(content) > limits.max_bytes:
-        return _refused(FileCheckReason.TOO_LARGE, len(content), limits.max_bytes)
+        return _refused(FileReason.TOO_LARGE, len(content), limits.max_bytes)
     try:
         text = content.decode("utf-8")
     except UnicodeDecodeError:
-        return _refused(FileCheckReason.INVALID_TEXT)
+        return _refused(FileReason.INVALID_TEXT)
     bad_characters = sum(
         1 for character in text
         if character == "�"
@@ -93,7 +82,7 @@ def assess_converted_file(content: bytes, profile: FileProfile, limits: FileChec
         or ord(character) == 127
     )
     if bad_characters:
-        return _refused(FileCheckReason.INVALID_TEXT, bad_characters, 0)
+        return _refused(FileReason.INVALID_TEXT, bad_characters, 0)
 
     lines = text.splitlines()
     readable = 0
@@ -102,18 +91,18 @@ def assess_converted_file(content: bytes, profile: FileProfile, limits: FileChec
 
     def check_table(rows: list[str]) -> FileAssessment | None:
         if len(rows) < 2 or not is_table_separator_row(rows[1]):
-            return _refused(FileCheckReason.TABLE_CELLS_MISMATCH)
+            return _refused(FileReason.TABLE_CELLS_MISMATCH)
         width = len(split_table_cells(rows[0]))
         for row in rows[2:]:
             if is_table_separator_row(row):
-                return _refused(FileCheckReason.TABLE_STRAY_SEPARATOR)
+                return _refused(FileReason.TABLE_STRAY_SEPARATOR)
             cells = len(split_table_cells(row))
             if cells != width:
-                return _refused(FileCheckReason.TABLE_CELLS_MISMATCH, cells, width)
+                return _refused(FileReason.TABLE_CELLS_MISMATCH, cells, width)
         for row in [rows[0], *rows[2:]]:
             tokens = limits.count_tokens(row)
             if tokens > limits.row_token_limit:
-                return _refused(FileCheckReason.TABLE_ROW_TOO_WIDE, tokens, limits.row_token_limit)
+                return _refused(FileReason.TABLE_ROW_TOO_WIDE, tokens, limits.row_token_limit)
         return None
 
     for line in [*lines, ""]:
@@ -138,7 +127,7 @@ def assess_converted_file(content: bytes, profile: FileProfile, limits: FileChec
         readable += len("".join(stripped.split()))
 
     if profile.single_title_required and titles != 1:
-        return _refused(FileCheckReason.TITLE_COUNT, titles, 1)
+        return _refused(FileReason.TITLE_COUNT, titles, 1)
     return FileAssessment(
         refused=False,
         few_characters_count=readable if readable < limits.few_characters_below else None,

@@ -2,21 +2,34 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 from uuid import UUID
+
+from sqlalchemy import select
 
 from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.file_assessment import FileAssessment
 from src.lib.document_sources.file_assessment_store import store_assessment, stored_assessment
 from src.lib.document_sources.file_listing import (
     FileListing,
+    FileListingError,
+    ListingRoute,
+    ProviderObservation,
     current_file_check_limits,
     list_reference_files,
+)
+from src.lib.document_sources.file_reasons import (
+    PROVIDER_OBSERVATION_REASONS,
+    FileReason,
+    FileReasonGroupError,
 )
 from src.lib.document_sources.models import DocumentSourceProvider
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
+from src.models.sql.pdf_processing_job import PdfProcessingJob
 
 
 class FileListingUnavailable(RuntimeError):
@@ -25,6 +38,80 @@ class FileListingUnavailable(RuntimeError):
     def __init__(self, code: str):
         super().__init__(code)
         self.code = code
+
+
+class SupplementProgressMetadataError(FileListingError):
+    """A job's ``metadata_json.supplements`` (interface I1) is not in the written shape."""
+
+
+# Interface I1 (plan section 4.4): the states one chosen supplement can be in.
+_SUPPLEMENT_STATES = frozenset({"queued", "waiting", "adding", "added", "left_out"})
+
+
+def provider_observations_from_jobs(
+    job_metadata_newest_first: Iterable[Mapping[str, Any] | None],
+) -> dict[str, ProviderObservation]:
+    """The last thing the provider told this paper's imports, per provider file id.
+
+    Reads each job's ``metadata_json.supplements`` (I1), newest job first; the first
+    entry for a file decides. A ``left_out`` entry whose ``reason_code`` is a provider
+    observation gives the file's observation; any other first entry (added, still
+    waiting, left out by a check) gives none, so a file added later shows nothing.
+    Jobs without ``supplements`` (every job before P7b) are skipped. An entry in
+    another shape is a named error: our own imports write it.
+    """
+
+    decided: set[str] = set()
+    observations: dict[str, ProviderObservation] = {}
+    for metadata in job_metadata_newest_first:
+        if not metadata or "supplements" not in metadata:
+            continue
+        entries = metadata["supplements"]
+        if not isinstance(entries, list):
+            raise SupplementProgressMetadataError("metadata.supplements is not a list")
+        for entry in entries:
+            file_id, observation = _observation_from_entry(entry)
+            if file_id in decided:
+                continue
+            decided.add(file_id)
+            if observation is not None:
+                observations[file_id] = observation
+    return observations
+
+
+def _observation_from_entry(entry: object) -> tuple[str, ProviderObservation | None]:
+    if not isinstance(entry, Mapping):
+        raise SupplementProgressMetadataError("a supplements entry is not an object")
+    file_id = entry.get("provider_file_id")
+    state = entry.get("state")
+    code = entry.get("reason_code")
+    observed_at = entry.get("observed_at")
+    if not isinstance(file_id, str) or not file_id:
+        raise SupplementProgressMetadataError("a supplements entry has no provider_file_id")
+    if state not in _SUPPLEMENT_STATES:
+        raise SupplementProgressMetadataError(f"a supplements entry has an unknown state {state!r}")
+    if code is None:
+        return file_id, None
+    if not isinstance(code, str):
+        raise SupplementProgressMetadataError("a supplements entry's reason_code is not a string")
+    try:
+        reason = FileReason(code)
+    except ValueError:
+        raise SupplementProgressMetadataError(f"a supplements entry has an unknown reason_code {code!r}") from None
+    if state != "left_out" or reason not in PROVIDER_OBSERVATION_REASONS:
+        return file_id, None
+    if not isinstance(observed_at, str):
+        raise SupplementProgressMetadataError("a provider observation has no observed_at")
+    try:
+        when = datetime.fromisoformat(observed_at)
+    except ValueError:
+        raise SupplementProgressMetadataError("a provider observation's observed_at is not ISO-8601") from None
+    if when.tzinfo is None:
+        raise SupplementProgressMetadataError("a provider observation's observed_at has no time zone")
+    try:
+        return file_id, ProviderObservation(code=reason, observed_at=when)
+    except FileReasonGroupError as exc:
+        raise SupplementProgressMetadataError(str(exc)) from None
 
 
 def _stores(provider_id: str) -> tuple[Callable[..., FileAssessment | None], Callable[..., None]]:
@@ -51,6 +138,8 @@ async def _list(
     context: DocumentSourceRequestContext,
     files_in_paper: tuple[str, ...],
     *,
+    route: ListingRoute,
+    provider_observations: Mapping[str, ProviderObservation],
     expected_reference_id: str | None = None,
 ) -> FileListing:
     from src.lib.openai_agents.config import get_document_file_listing_check_limit
@@ -76,6 +165,8 @@ async def _list(
         check_limit=get_document_file_listing_check_limit(),
         load_stored=load,
         save_assessment=save,
+        route=route,
+        provider_observations=provider_observations,
     )
 
 
@@ -88,7 +179,9 @@ async def list_files_for_identifier(
     normalized = provider.normalize_identifier(identifier)
     if not normalized.is_valid or normalized.normalized is None:
         raise FileListingUnavailable("invalid_identifier")
-    return await _list(provider, normalized.normalized, context, ())
+    return await _list(
+        provider, normalized.normalized, context, (), route=ListingRoute.IDENTIFIER, provider_observations={},
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +190,7 @@ class _PaperSource:
     reference_id: str | None
     reference_curie: str | None
     file_ids: tuple[str, ...]
+    provider_observations: dict[str, ProviderObservation]
 
 
 def _paper_lookup(document_id: UUID, owner_user_id: int) -> _PaperSource:
@@ -110,11 +204,18 @@ def _paper_lookup(document_id: UUID, owner_user_id: int) -> _PaperSource:
             for identifier in (file_row.source_provider_source_file_id, file_row.source_provider_pdf_artifact_id)
             if identifier
         )
+        # This paper's jobs, newest first; jobs belong to the paper's owner.
+        job_metadata = session.execute(
+            select(PdfProcessingJob.metadata_json)
+            .where(PdfProcessingJob.document_id == document_id, PdfProcessingJob.user_id == owner_user_id)
+            .order_by(PdfProcessingJob.created_at.desc(), PdfProcessingJob.id.desc())
+        ).scalars()
         return _PaperSource(
             provider=paper.source_provider,
             reference_id=paper.source_provider_reference_id,
             reference_curie=paper.source_provider_reference_curie,
             file_ids=file_ids,
+            provider_observations=provider_observations_from_jobs(job_metadata),
         )
 
 
@@ -144,5 +245,6 @@ async def list_files_for_paper(
         raise FileListingUnavailable("paper_reference_incomplete")
     return await _list(
         provider, paper.reference_curie, context, paper.file_ids,
+        route=ListingRoute.PAPER, provider_observations=paper.provider_observations,
         expected_reference_id=paper.reference_id,
     )
