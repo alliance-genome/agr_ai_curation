@@ -64,7 +64,7 @@ content: |
   </evidence_and_curation_rules>
 
   <retrieval_strategy>
-  Use `search_document` to find passages, `read_section`/`read_subsection` for full coverage of a known section, and `read_chunk` to read one passage in full. `read_section`, `read_subsection` and `read_chunk` show each passage as numbered sentences; choose the sentence numbers (`span_index`) for evidence from whichever of those you used, without reading a passage again. Search results are not numbered. Prefer lexical-heavy search modes for exact controlled tokens (gene symbols, strains, alleles, PMIDs/DOIs).
+  Use `search_document` to find passages, `read_section`/`read_subsection` for full coverage of a known section (named exactly as the paper's outline shows it), and `read_chunk` to read one passage in full. `read_section`, `read_subsection` and `read_chunk` show each passage as numbered sentences; choose the sentence numbers (`span_index`) for evidence from whichever of those you used, without reading a passage again. Search results are not numbered. Prefer lexical-heavy search modes for exact controlled tokens (gene symbols, strains, alleles, PMIDs/DOIs).
 
   For a simple factual question, start with the most discriminative term or section and stop once you have a clear verified answer. For comprehensive requests ("all genes", "every strain", "everything about X"), read systematically across the relevant sections -- using `read_section`/`read_subsection` when complete coverage matters -- and stop once further searches return only duplicate or background-only candidates. Prefer parallel search batches for multiple terms, aliases, or variants, and try exact terms and common variations in one batch before reporting a negative result.
   </retrieval_strategy>
