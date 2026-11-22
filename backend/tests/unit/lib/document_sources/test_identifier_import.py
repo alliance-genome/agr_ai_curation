@@ -987,6 +987,9 @@ async def test_identifier_import_service_returns_partial_success_and_dispatches_
     added_records = [row for session in sessions for row in session.added]
     assert added_records
     assert added_records[0].main_file.display_mode == "local_pdf"
+    # Writer pin (P9a): a pending local PDF with a placeholder page count. The
+    # viewer's per-file routes serve it only once the file is ready.
+    assert (added_records[0].main_file.status, added_records[0].main_file.page_count) == ("pending", 1)
     assert added_records[0].document_kind == "library" and added_records[0].next_chunk_index == 0
     assert added_records[0].main_file.file_path.endswith("/provider-paper.pdf")
     assert added_records[0].main_file.source_import_status == "pending"

@@ -180,16 +180,15 @@ def split_table_cells(row: str) -> List[str]:
     return cells
 
 
-def table_row_search_text(row: str) -> str:
-    """The text a PDF shows for one stored table row: its cells joined by single spaces.
+def table_row_display_cells(row: str) -> List[str]:
+    """The cells of one stored table row as a reader sees them.
 
     Cells come from ``split_table_cells`` (the one shared splitter). In each cell
-    the escapes stored text keeps (``\\|`` and ``\\\\``) are undone, the cell is
-    trimmed, and empty cells are left out. Used only to search a PDF's text layer
-    for table-row evidence; the stored quote is never changed.
+    the escapes stored text keeps (``\\|`` and ``\\\\``) are undone and the cell is
+    trimmed. Empty cells are kept, so columns line up.
     """
 
-    parts = []
+    cells = []
     for cell in split_table_cells(row):
         unescaped: list[str] = []
         index = 0
@@ -200,10 +199,19 @@ def table_row_search_text(row: str) -> str:
             else:
                 unescaped.append(cell[index])
                 index += 1
-        text = "".join(unescaped).strip()
-        if text:
-            parts.append(text)
-    return " ".join(parts)
+        cells.append("".join(unescaped).strip())
+    return cells
+
+
+def table_row_search_text(row: str) -> str:
+    """The text a PDF shows for one stored table row: its cells joined by single spaces.
+
+    Cells come from ``table_row_display_cells``; empty cells are left out. Used only
+    to search a PDF's text layer for table-row evidence; the stored quote is never
+    changed.
+    """
+
+    return " ".join(cell for cell in table_row_display_cells(row) if cell)
 
 
 def is_table_separator_row(row: str) -> bool:
@@ -313,5 +321,6 @@ __all__ = [
     "normalize_table_row",
     "pack_table_rows",
     "split_table_cells",
+    "table_row_display_cells",
     "table_row_search_text",
 ]

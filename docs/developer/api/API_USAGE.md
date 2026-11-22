@@ -591,6 +591,52 @@ authentication and expose only documents owned by the current database user.
 Legacy documents without an owner are not readable; shared-source provenance
 does not grant access.
 
+### Per-file routes (a paper's files)
+
+A paper holds one or more files (its main paper and supplements). These routes
+use the same login and ownership rules; a file id is resolved only among the
+paper's own files, so a file of another paper returns 404.
+
+```bash
+curl http://localhost:8000/api/pdf-viewer/documents/<uuid>/files | jq
+curl -I http://localhost:8000/api/pdf-viewer/documents/<uuid>/files/<file-uuid>/content
+curl http://localhost:8000/api/pdf-viewer/documents/<uuid>/files/<file-uuid>/text | jq
+```
+
+- `files` lists every file in tab order: `file_id`, `role` (`main` or
+  `supplement`), `display_name`, `display_mode` (`local_pdf`,
+  `provider_pdf_proxy` or `text`), `status` (`pending`, `ready` or `failed`),
+  `tab_order`, `page_count` (set only for a ready PDF file; a pending file may
+  hold a placeholder count, which is never shown), `content_url` (set only for a
+  ready PDF file) and `text_url` (set only for a ready text file).
+- `content` serves a ready PDF file's stored bytes as `application/pdf`,
+  inline, and honours `Range` requests (206 with `Content-Range`). It returns
+  404 for a text file or a file that is not ready.
+- `text` returns a ready text file's display blocks, built from its processed
+  elements (the text after clean-up, before it is cut into pieces): `heading`
+  (with `level`), `paragraph`, `list_item`, `code`, and `table` (its `text` is
+  the stored table lines, separator line included; `rows` hold each row's exact
+  stored `line`, its `cells` and `is_header`). Every block carries the section
+  fields its stored pieces carry (`section_title`, `parent_section`,
+  `subsection`, `section_path`): the file's stored section map
+  (`hierarchy_metadata.sections`) is applied to its saved elements with the same
+  function indexing uses, and a file without a stored map keeps its elements'
+  own fields, exactly as its pieces did. A heading's `level` is its depth in the
+  file's own headings. It returns 404 for a PDF file or a file that is not
+  ready, and 500 for a stored section map of an unknown shape. What a viewer can rely on when locating a quote (an
+  exact slice of one stored piece):
+  - every row `line` is exactly one line of a stored piece; a table's rows can be
+    spread over several pieces, whole rows only;
+  - the block texts joined with a blank line (`"\n\n"`) contain every stored
+    piece exactly, so a quote can cross two or more blocks;
+  - except where an element longer than the chunk limit (1,500 characters) was
+    cut at a sentence boundary: there the piece holds a single space where the
+    block holds the original whitespace (for example two spaces after a full
+    stop), so a quote across that boundary is not found by exact match.
+
+Curation session summaries carry the same `files` list on `document`.
+Submissions and exports do not.
+
 ---
 
 ## Trace Review Claude API

@@ -1,6 +1,9 @@
 """API endpoints for PDF viewer metadata, access, and evidence localization."""
 
+import json
+import logging
 from datetime import datetime, timezone
+from pathlib import Path as FilePath
 from typing import List, NamedTuple
 from uuid import UUID
 
@@ -10,6 +13,17 @@ from pydantic import BaseModel, Field
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
+from src.lib.pdf_viewer.display_blocks import (
+    UnsupportedDisplayElementError,
+    file_display_blocks,
+)
+from src.lib.pipeline.hierarchy_resolution import StoredSectionMapError
+from src.lib.pdf_viewer.files import (
+    find_paper_file,
+    serves_pdf,
+    serves_text,
+    viewer_file_refs,
+)
 from src.lib.pdf_viewer.rapidfuzz_matcher import (
     MatchRange,
     PdfPageText,
@@ -19,13 +33,20 @@ from src.config import get_pdf_storage_path
 from src.api.auth import get_auth_dependency
 from src.api.documents import validate_user_file_path
 from src.models.sql.database import get_db
-from src.models.sql.pdf_document import DISPLAY_MODE_TEXT, PDFDocument as PdfDocumentModel
+from src.models.sql.pdf_document import (
+    DISPLAY_MODE_TEXT,
+    PDFDocument as PdfDocumentModel,
+    PDFDocumentFile,
+)
+from src.schemas.viewer_files import DisplayBlock, ViewerFileRef
 from src.services.document_access import (
     owned_documents_select,
     protected_pdf_url,
     require_owned_document,
 )
 from src.services.user_service import principal_from_claims, provision_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/pdf-viewer", tags=["PDF Viewer"])
 
@@ -74,6 +95,18 @@ class ViewerURLResponse(BaseModel):
         ...,
         description="False for a paper that holds supplements only; viewer_mode is then null",
     )
+
+
+class DocumentFilesResponse(BaseModel):
+    document_id: UUID
+    files: List[ViewerFileRef] = Field(..., description="Every file of the paper, in tab order")
+
+
+class FileTextResponse(BaseModel):
+    document_id: UUID
+    file_id: UUID
+    display_name: str
+    blocks: List[DisplayBlock] = Field(..., description="The file's text as it was cut into pieces")
 
 
 class DocumentListResponse(BaseModel):
@@ -281,6 +314,127 @@ def get_document_pdf_content(
         media_type="application/pdf",
         filename=record.filename,
         content_disposition_type="inline",
+    )
+
+
+def _owned_paper_file(
+    db: Session, document_id: UUID, file_id: UUID, user: dict
+) -> tuple[_OwnedDocumentAccess, PDFDocumentFile]:
+    """The caller's paper and one of its own files; a file of another paper is not found."""
+
+    access = _get_document(db, document_id, user)
+    file_row = find_paper_file(access.record, file_id)
+    if file_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File {file_id} not found in document {document_id}",
+        )
+    return access, file_row
+
+
+def _owned_stored_path(access: _OwnedDocumentAccess, relative_path: str) -> FilePath:
+    storage_root = get_pdf_storage_path()
+    return validate_user_file_path(
+        storage_root / relative_path,
+        storage_root,
+        access.owner_auth_sub,
+    )
+
+
+@router.get("/documents/{document_id}/files", response_model=DocumentFilesResponse)
+def list_document_files(
+    document_id: UUID = Path(..., description="UUID of the paper"),
+    db: Session = Depends(get_db),
+    user: dict = get_auth_dependency(),
+) -> DocumentFilesResponse:
+    """Every file of the paper, in tab order, with URLs for the files the viewer can show."""
+
+    record = _get_document(db, document_id, user).record
+    return DocumentFilesResponse(document_id=record.id, files=viewer_file_refs(record))
+
+
+@router.get("/documents/{document_id}/files/{file_id}/content", response_class=FileResponse)
+@router.head("/documents/{document_id}/files/{file_id}/content", include_in_schema=False)
+def get_document_file_content(
+    document_id: UUID = Path(..., description="UUID of the paper"),
+    file_id: UUID = Path(..., description="UUID of one of the paper's files"),
+    db: Session = Depends(get_db),
+    user: dict = get_auth_dependency(),
+) -> FileResponse:
+    """Serve one ready PDF file's stored bytes, with byte ranges, without exposing its storage path."""
+
+    access, file_row = _owned_paper_file(db, document_id, file_id, user)
+    not_available = HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"PDF not available for file {file_id}",
+    )
+    if not serves_pdf(file_row):
+        raise not_available
+    file_path = _owned_stored_path(access, file_row.file_path)
+    if not file_path.is_file():
+        logger.warning(
+            "Stored PDF missing for a ready file",
+            extra={"document_id": str(document_id), "file_id": str(file_id)},
+        )
+        raise not_available
+
+    return FileResponse(
+        path=file_path,
+        media_type="application/pdf",
+        filename=file_row.display_name,
+        content_disposition_type="inline",
+    )
+
+
+@router.get("/documents/{document_id}/files/{file_id}/text", response_model=FileTextResponse)
+def get_document_file_text(
+    document_id: UUID = Path(..., description="UUID of the paper"),
+    file_id: UUID = Path(..., description="UUID of one of the paper's files"),
+    db: Session = Depends(get_db),
+    user: dict = get_auth_dependency(),
+) -> FileTextResponse:
+    """One ready text file's display blocks, built from its stored processed elements."""
+
+    access, file_row = _owned_paper_file(db, document_id, file_id, user)
+    not_available = HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Text not available for file {file_id}",
+    )
+    if not serves_text(file_row):
+        raise not_available
+    if file_row.processed_json_path is None:
+        logger.warning(
+            "Processed elements not recorded for a ready text file",
+            extra={"document_id": str(document_id), "file_id": str(file_id)},
+        )
+        raise not_available
+    elements_path = _owned_stored_path(access, file_row.processed_json_path)
+    if not elements_path.is_file():
+        logger.warning(
+            "Processed elements missing for a ready text file",
+            extra={"document_id": str(document_id), "file_id": str(file_id)},
+        )
+        raise not_available
+
+    elements = json.loads(elements_path.read_text(encoding="utf-8"))
+    try:
+        blocks = file_display_blocks(elements, file_row.hierarchy_metadata)
+    except (UnsupportedDisplayElementError, StoredSectionMapError) as exc:
+        logger.warning(
+            "Processed elements of a text file cannot be shown: %s",
+            exc,
+            extra={"document_id": str(document_id), "file_id": str(file_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"File text could not be shown for file {file_id}",
+        ) from exc
+
+    return FileTextResponse(
+        document_id=access.record.id,
+        file_id=file_row.id,
+        display_name=file_row.display_name,
+        blocks=blocks,
     )
 
 

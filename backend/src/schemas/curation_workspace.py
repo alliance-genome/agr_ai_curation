@@ -23,6 +23,7 @@ from pydantic import (
 
 from src.schemas.domain_envelope import DomainEnvelopeStatus, validate_field_path_syntax
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
+from src.schemas.viewer_files import ViewerFileRef
 
 
 class EvidenceAnchorKind(str, Enum):
@@ -545,6 +546,16 @@ class CurationDocumentRef(CurationWorkspaceBaseModel):
         default=None,
         description="Whether that reference came from an import or a curator link",
     )
+
+
+class CurationSessionDocumentRef(CurationDocumentRef):
+    """The session's document with its files, for the inventory and the workspace viewer.
+
+    Submissions, their retry fingerprints and exports use ``CurationDocumentRef``,
+    without files, so a file joining the paper never changes them.
+    """
+
+    files: list[ViewerFileRef] = Field(description="Every file of the paper, in tab order")
 
 
 class CurationDateRange(CurationWorkspaceBaseModel):
@@ -1778,7 +1789,7 @@ class CurationSessionSummary(CurationWorkspaceBaseModel):
     session_id: str = Field(description="Session identifier")
     status: CurationSessionStatus = Field(description="Session lifecycle status")
     adapter: CurationAdapterRef = Field(description="Adapter/profile metadata")
-    document: CurationDocumentRef = Field(description="Document metadata")
+    document: CurationSessionDocumentRef = Field(description="Document metadata and files")
     flow_run_id: Optional[str] = Field(
         default=None,
         description="Flow-run identifier when the session came from a batch flow",
@@ -2838,6 +2849,7 @@ __all__ = [
     "CurationDocumentBootstrapAvailabilityResponse",
     "CurationDocumentBootstrapResponse",
     "CurationDocumentRef",
+    "CurationSessionDocumentRef",
     "CurationDraft",
     "CurationDraftField",
     "CurationDraftFieldChange",
