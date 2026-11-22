@@ -21,6 +21,7 @@ import {
   TEXT_SUPPLEMENT_BLOCKS,
   TEXT_SUPPLEMENT_FILE_ID,
   contentUrl,
+  mainPdfFileNotReady,
   textUrl,
 } from './viewerFilesFixtures'
 
@@ -203,6 +204,29 @@ describe('PdfViewer with a paper\'s files', () => {
     expect(screen.getByRole('textbox', { name: 'Find in PDF' })).toHaveValue('')
   })
 
+  it('says the main file is not available, instead of an empty pane, when nothing can be shown', async () => {
+    stubViewerFetch()
+    render(<PdfViewer />)
+    act(() => { showPaperFilesInViewer(DOCUMENT_ID, [mainPdfFileNotReady()]) })
+
+    expect(await screen.findByText('This paper\'s main file is not available to show.')).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'PDF drop zone' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument()
+  })
+
+  it('shows the supplements with a note when the main file is not available', async () => {
+    stubViewerFetch()
+    render(<PdfViewer />)
+    act(() => { showPaperFilesInViewer(DOCUMENT_ID, [mainPdfFileNotReady('failed'), ...FOUR_FILES_PAYLOAD.files.slice(1)]) })
+
+    expect(await screen.findByText('This paper\'s main file is not available to show.')).toBeInTheDocument()
+    expect(screen.getAllByRole('tab').map((tab) => tab.getAttribute('aria-label'))).toEqual([
+      'Table_S1.xlsx, file 1 of 2, converted text',
+      'Figure_S2.pdf, file 2 of 2',
+    ])
+    expect(await screen.findByText('Kept at two temperatures.')).toBeInTheDocument()
+  })
+
   describe('the files menu (Q15)', () => {
     function manyFiles(count: number): ViewerFile[] {
       return Array.from({ length: count }, (_, index) => ({
@@ -286,6 +310,61 @@ describe('PdfViewer with a paper\'s files', () => {
       fireEvent.click(within(banner).getByRole('button', { name: 'Close' }))
       await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
       expect(screen.queryByText('This evidence was saved before files were recorded')).not.toBeInTheDocument()
+    })
+
+    it('evidence with an explicit null file id is treated as saved before files were recorded', async () => {
+      stubViewerFetch()
+      await showFourFilePaper()
+
+      act(() => { dispatchPDFViewerNavigateEvidence(chatCommand({ file_id: null })) })
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('This evidence was saved before files were recorded')
+    })
+
+    it('a quote across a long element\'s sentence cut is reported as not found, with no highlight', async () => {
+      // P9a's one exception: the stored piece has one space where the block keeps two.
+      const longText = `${'A'.repeat(1500)}.  Strain XS0401 grew at 25 C.`
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === 'HEAD') return new Response(null, { status: 200 })
+        if (String(input) === textUrl(DOCUMENT_ID, TEXT_SUPPLEMENT_FILE_ID)) {
+          return jsonResponse({
+            ...TEXT_SUPPLEMENT_BLOCKS,
+            blocks: [{ ...TEXT_SUPPLEMENT_BLOCKS.blocks[2]!, text: longText }],
+          })
+        }
+        throw new Error(`Unexpected fetch: ${String(input)}`)
+      }))
+      await showFourFilePaper()
+
+      act(() => {
+        dispatchPDFViewerNavigateEvidence(chatCommand({
+          verified_quote: `${'A'.repeat(20)}. Strain XS0401 grew`,
+          section: 'Not a section of this file',
+          file_id: TEXT_SUPPLEMENT_FILE_ID,
+          file_name: 'Table_S1.xlsx',
+        }))
+      })
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('This quote could not be found in the file\'s text.')
+      expect(document.querySelector('[aria-current]')).toBeNull()
+    })
+
+    it('a quote not found in a text file shows the evidence\'s section, marked as such', async () => {
+      stubViewerFetch()
+      await showFourFilePaper()
+
+      act(() => {
+        dispatchPDFViewerNavigateEvidence(chatCommand({
+          verified_quote: 'A sentence that is not in this file.',
+          section: 'Sheet 1',
+          file_id: TEXT_SUPPLEMENT_FILE_ID,
+          file_name: 'Table_S1.xlsx',
+        }))
+      })
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('This quote could not be found in the file\'s text. Its section is shown instead.')
+      expect(document.querySelector('[data-highlight-kind="section"]')).toHaveTextContent('Sheet 1')
+      expect(screen.queryByRole('row', { current: true })).not.toBeInTheDocument()
     })
 
     it('evidence whose file is no longer part of the paper says so and opens nothing', async () => {

@@ -85,7 +85,7 @@ describe('PdfViewer when chat loads a text paper', () => {
           document_id: 'doc-text',
           file_id: textFile.file_id,
           display_name: 'provider-paper.md',
-          blocks: [{ kind: 'paragraph', text: 'Made-up paper text.', level: null, section_path: [], rows: null }],
+          blocks: [{ kind: 'paragraph', text: 'Made-up paper text.', level: null, section_title: null, parent_section: null, subsection: null, section_path: [], rows: null }],
         })
       }
       return jsonResponse({ filename: 'provider-paper.md', page_count: null })

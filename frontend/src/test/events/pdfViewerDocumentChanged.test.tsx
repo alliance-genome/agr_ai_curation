@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  FILES_NOT_READY_MESSAGE,
   HOME_PDF_VIEWER_OWNER,
+  MAIN_FILE_UNAVAILABLE_MESSAGE,
   onPDFDocumentChanged,
   onPDFViewerDocumentCleared,
   showPaperFilesInViewer,
@@ -13,6 +15,7 @@ import {
   PDF_SUPPLEMENT_FILE_ID,
   SUPPLEMENTS_ONLY_PAYLOAD,
   TEXT_SUPPLEMENT_FILE_ID,
+  mainPdfFileNotReady,
 } from '@/components/pdfViewer/viewerFilesFixtures'
 
 describe('pdf-viewer-document-changed event contract (paper files)', () => {
@@ -36,6 +39,7 @@ describe('pdf-viewer-document-changed event contract (paper files)', () => {
       PDF_SUPPLEMENT_FILE_ID,
     ])
     expect(detail.activeFileId).toBe(MAIN_FILE_ID)
+    expect(detail.mainFileUnavailable).toBe(false)
     expect(detail).not.toHaveProperty('viewerUrl')
     expect(detail).not.toHaveProperty('pageCount')
   })
@@ -76,7 +80,25 @@ describe('pdf-viewer-document-changed event contract (paper files)', () => {
 
     expect(shown).toBe(false)
     expect(changed).not.toHaveBeenCalled()
-    expect(cleared).toHaveBeenCalledWith({ ownerToken: HOME_PDF_VIEWER_OWNER })
+    expect(cleared).toHaveBeenCalledWith({ ownerToken: HOME_PDF_VIEWER_OWNER, notice: FILES_NOT_READY_MESSAGE })
+  })
+
+  it('says the main file is not available when it is not ready and nothing else can be shown', () => {
+    const cleared = vi.fn()
+    cleanups.push(onPDFViewerDocumentCleared((event) => cleared(event.detail)))
+
+    showPaperFilesInViewer(DOCUMENT_ID, [mainPdfFileNotReady('failed')])
+
+    expect(cleared).toHaveBeenCalledWith({ ownerToken: undefined, notice: MAIN_FILE_UNAVAILABLE_MESSAGE })
+  })
+
+  it('shows the supplements and flags the main file when it is not ready', () => {
+    const handler = vi.fn()
+    cleanups.push(onPDFDocumentChanged((event) => handler(event.detail)))
+
+    showPaperFilesInViewer(DOCUMENT_ID, [mainPdfFileNotReady(), ...FOUR_FILES_PAYLOAD.files.slice(1)])
+
+    expect(handler.mock.calls[0]![0]).toMatchObject({ activeFileId: TEXT_SUPPLEMENT_FILE_ID, mainFileUnavailable: true })
   })
 
   it('stops calling a listener once it is unregistered', () => {

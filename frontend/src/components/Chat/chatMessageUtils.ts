@@ -1,3 +1,4 @@
+import { isEvidenceRecord } from '@/features/curation/evidenceRecordGuard'
 import type { OutputSetAsideNotice } from '@/features/curation/setAside/setAsideSummary'
 import { debug } from '@/utils/env'
 import type { CurationWorkspaceLaunchTarget } from '@/features/curation/navigation/openCurationWorkspace'
@@ -69,22 +70,6 @@ export function humanizeAdapterKey(value: string): string {
     .replace(/\b\w/g, (char) => char.toUpperCase())
 }
 
-function isEvidenceRecord(value: unknown): value is EvidenceRecord {
-  if (!value || typeof value !== 'object') {
-    return false
-  }
-
-  const record = value as Record<string, unknown>
-
-  return (
-    typeof record.entity === 'string'
-    && typeof record.verified_quote === 'string'
-    && typeof record.page === 'number'
-    && Number.isFinite(record.page)
-    && typeof record.section === 'string'
-    && typeof record.chunk_id === 'string'
-  )
-}
 
 export function extractEvidenceRecords(value: unknown): EvidenceRecord[] {
   if (!Array.isArray(value)) {

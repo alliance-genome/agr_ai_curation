@@ -10,6 +10,8 @@ export interface ViewerDocument {
   /** Every file with a tab (a content or text URL), in tab order; never empty. */
   files: ViewerFile[]
   activeFileId: string
+  /** The paper has a main file the viewer cannot show (not ready, so no URL). */
+  mainFileUnavailable: boolean
   /** When the active file started loading; a new value reloads the PDF frame. */
   loadedAt: string
 }

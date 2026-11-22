@@ -35,6 +35,7 @@ import type { UploadDialogState } from './usePdfViewerUpload'
 import { TextFileView, VIEWER_FILE_PANEL_ID, viewerFileTabId } from './TextFileView'
 import type { TextNavigationRequest } from './viewerFileNavigation'
 import { isPdfFile, type ViewerFile } from './viewerFiles'
+import { MAIN_FILE_UNAVAILABLE_MESSAGE } from './pdfEvents'
 import { ViewerFileTabs } from './ViewerFileTabs'
 
 interface PdfViewerChromeProps {
@@ -42,6 +43,8 @@ interface PdfViewerChromeProps {
   activeFile: ViewerFile | null
   /** Polite announcement when evidence opened another file's tab. */
   fileAnnouncement: string
+  /** Shown instead of the drop zone when the loaded paper has nothing to show yet. */
+  idleNotice: string | null
   onSelectFile: (fileId: string) => void
   textNavigation: TextNavigationRequest | null
   onTextNavigationResult: (request: TextNavigationRequest, result: PdfViewerNavigationResult) => void
@@ -85,6 +88,7 @@ export function PdfViewerChrome({
   activeDocument,
   activeFile,
   fileAnnouncement,
+  idleNotice,
   onSelectFile,
   textNavigation,
   onTextNavigationResult,
@@ -203,6 +207,11 @@ export function PdfViewerChrome({
               activeFileId={activeDocument.activeFileId}
               onSelectFile={onSelectFile}
             />
+            {activeDocument.mainFileUnavailable ? (
+              <Alert severity="info" variant="outlined" sx={{ py: 0 }}>
+                {MAIN_FILE_UNAVAILABLE_MESSAGE}
+              </Alert>
+            ) : null}
             {navigationResult && (
               <>
                 <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
@@ -510,7 +519,15 @@ export function PdfViewerChrome({
           </Box>
         )}
 
-        {!activeDocument && (
+        {!activeDocument && idleNotice && (
+          <Box sx={{ position: 'absolute', inset: 0, zIndex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3 }}>
+            <Alert severity="info" sx={{ maxWidth: 640 }}>
+              {idleNotice}
+            </Alert>
+          </Box>
+        )}
+
+        {!activeDocument && !idleNotice && (
           <Box
             role="region"
             aria-label="PDF drop zone"

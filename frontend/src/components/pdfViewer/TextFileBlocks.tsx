@@ -66,12 +66,15 @@ export function TextTableBlock({ block, highlightedRowIndexes, firstHighlightRef
 export interface TextFileBlocksProps {
   blocks: readonly DisplayBlock[]
   location: TextQuoteLocation | null
+  /** The block shown as the evidence's section when its quote was not found; null otherwise. */
+  sectionBlockIndex: number | null
   /** Receives the first highlighted block or row. */
   firstHighlightRef: (element: HTMLElement | null) => void
 }
 
-export function TextFileBlocks({ blocks, location, firstHighlightRef }: TextFileBlocksProps) {
+export function TextFileBlocks({ blocks, location, sectionBlockIndex, firstHighlightRef }: TextFileBlocksProps) {
   const highlightStyle = useHighlightStyle()
+  const theme = useTheme()
   const spans = new Map((location?.blocks ?? []).map((span) => [span.blockIndex, span]))
   const firstBlockIndex = location?.blocks[0]?.blockIndex
 
@@ -83,6 +86,22 @@ export function TextFileBlocks({ blocks, location, firstHighlightRef }: TextFile
       listItems = []
     }
   }
+  // The evidence's section, shown when its quote was not found: marked and scrolled
+  // to, without a quote highlight.
+  const asSection = (blockIndex: number, content: ReactNode): ReactNode => (
+    blockIndex === sectionBlockIndex
+      ? (
+          <Box
+            ref={firstHighlightRef}
+            data-highlight-kind="section"
+            aria-current="location"
+            sx={{ outline: `2px dashed ${alpha(theme.palette.text.secondary, 0.7)}`, outlineOffset: 2 }}
+          >
+            {content}
+          </Box>
+        )
+      : content
+  )
 
   blocks.forEach((block, blockIndex) => {
     const span = spans.get(blockIndex)
@@ -90,13 +109,16 @@ export function TextFileBlocks({ blocks, location, firstHighlightRef }: TextFile
     if (block.kind === 'table') {
       flushList(`list-${blockIndex}`)
       nodes.push(
-        <TextTableBlock
-          key={blockIndex}
-          block={block}
-          highlightedRowIndexes={span?.rowIndexes ?? []}
-          firstHighlightRef={isFirst ? firstHighlightRef : undefined}
-          highlightStyle={highlightStyle}
-        />,
+        <Fragment key={blockIndex}>
+          {asSection(blockIndex, (
+            <TextTableBlock
+              block={block}
+              highlightedRowIndexes={span?.rowIndexes ?? []}
+              firstHighlightRef={isFirst ? firstHighlightRef : undefined}
+              highlightStyle={highlightStyle}
+            />
+          ))}
+        </Fragment>,
       )
       return
     }
@@ -105,32 +127,45 @@ export function TextFileBlocks({ blocks, location, firstHighlightRef }: TextFile
       : {}
     switch (block.kind) {
       case 'list_item':
-        listItems.push(<Box component="li" key={blockIndex} {...highlightProps}>{block.text}</Box>)
+        listItems.push(
+          <Box component="li" key={blockIndex} {...highlightProps}>{asSection(blockIndex, block.text)}</Box>,
+        )
         return
       case 'heading': {
         flushList(`list-${blockIndex}`)
         const level = Math.min((block.level ?? 1) + 2, 6)
         nodes.push(
-          <Typography
-            key={blockIndex}
-            component={`h${level}` as 'h3'}
-            variant="subtitle1"
-            ref={span && isFirst ? firstHighlightRef : undefined}
-            aria-current={span ? true : undefined}
-            sx={{ fontWeight: 700, mt: 1.5, ...(span ? highlightStyle : {}) }}
-          >
-            {block.text}
-          </Typography>,
+          <Fragment key={blockIndex}>
+            {asSection(blockIndex, (
+              <Typography
+                component={`h${level}` as 'h3'}
+                variant="subtitle1"
+                ref={span && isFirst ? firstHighlightRef : undefined}
+                aria-current={span ? true : undefined}
+                sx={{ fontWeight: 700, mt: 1.5, ...(span ? highlightStyle : {}) }}
+              >
+                {block.text}
+              </Typography>
+            ))}
+          </Fragment>,
         )
         return
       }
       case 'paragraph':
         flushList(`list-${blockIndex}`)
-        nodes.push(<Box component="p" key={blockIndex} {...highlightProps}>{block.text}</Box>)
+        nodes.push(
+          <Fragment key={blockIndex}>
+            {asSection(blockIndex, <Box component="p" {...highlightProps}>{block.text}</Box>)}
+          </Fragment>,
+        )
         return
       case 'code':
         flushList(`list-${blockIndex}`)
-        nodes.push(<Box component="pre" key={blockIndex} {...highlightProps}><code>{block.text}</code></Box>)
+        nodes.push(
+          <Fragment key={blockIndex}>
+            {asSection(blockIndex, <Box component="pre" {...highlightProps}><code>{block.text}</code></Box>)}
+          </Fragment>,
+        )
         return
     }
   })

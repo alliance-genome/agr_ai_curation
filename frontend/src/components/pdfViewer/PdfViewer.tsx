@@ -150,6 +150,8 @@ export function PdfViewer({
     useState<EvidenceNavigationCommand | null>(null)
   const [textNavigation, setTextNavigation] = useState<TextNavigationRequest | null>(null)
   const [fileAnnouncement, setFileAnnouncement] = useState('')
+  // Shown instead of the empty viewer when the loaded paper has nothing to show yet.
+  const [idleNotice, setIdleNotice] = useState<string | null>(null)
   const effectivePendingNavigation = pendingNavigation ?? eventPendingNavigation
   const viewerSessionStorageKey = useMemo(
     () => (storageUserId ? getChatLocalStorageKeys(storageUserId).pdfViewerSession : null),
@@ -213,6 +215,7 @@ export function PdfViewer({
     textNavigationRequestIdRef.current += 1
     setTextNavigation(null)
     setFileAnnouncement('')
+    setIdleNotice(null)
     setActiveDocument(null)
     setStatus(nextError ? 'error' : 'idle')
     setError(nextError)
@@ -1298,7 +1301,7 @@ export function PdfViewer({
         const current = activeViewerFile(activeDocument)
         const stillThere = files.find((file) => file.file_id === current.file_id)
         if (stillThere && stillThere.content_url === current.content_url && stillThere.text_url === current.text_url) {
-          setActiveDocument({ ...activeDocument, files })
+          setActiveDocument({ ...activeDocument, files, mainFileUnavailable: event.detail.mainFileUnavailable })
           if (!isPdfFile(stillThere) && status === 'loading') {
             // A chat load marked the viewer loading; a text file has nothing to wait for.
             setStatus('ready')
@@ -1311,6 +1314,7 @@ export function PdfViewer({
         documentId: event.detail.documentId,
         files,
         activeFileId: event.detail.activeFileId,
+        mainFileUnavailable: event.detail.mainFileUnavailable,
         loadedAt: new Date().toISOString(),
       }
       console.debug('[PDF DEBUG] beginDocumentLoad called with', nextDoc)
@@ -1318,6 +1322,7 @@ export function PdfViewer({
       evidencePageTextCorporaRef.current = new Map()
       fileViewerStatesRef.current = new Map()
       setFileAnnouncement('')
+      setIdleNotice(null)
       viewerStateRef.current = {
         ...DEFAULT_STATE,
         currentPage: event.detail.viewerState?.currentPage ?? DEFAULT_STATE.currentPage,
@@ -1367,6 +1372,7 @@ export function PdfViewer({
         return
       }
       resetViewerToIdle()
+      setIdleNotice(event.detail.notice ?? null)
     })
 
     return () => {
@@ -2120,6 +2126,7 @@ export function PdfViewer({
       activeDocument={activeDocument}
       activeFile={activeFile}
       fileAnnouncement={fileAnnouncement}
+      idleNotice={idleNotice}
       onSelectFile={handleSelectFile}
       textNavigation={textNavigation}
       onTextNavigationResult={handleTextNavigationResult}

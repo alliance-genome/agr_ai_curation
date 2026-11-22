@@ -87,18 +87,26 @@ export const SUPPLEMENTS_ONLY_PAYLOAD: ViewerFilesPayload = {
   ],
 }
 
+/** `_OWN_SECTIONS`: a file with no stored section map keeps its elements' own section fields. */
+const OWN_SECTIONS = {
+  section_title: 'Sheet 1',
+  parent_section: null,
+  subsection: null,
+  section_path: ['Sheet 1'],
+}
+
 /** `test_text_returns_the_files_display_blocks`. */
 export const TEXT_SUPPLEMENT_BLOCKS: ViewerTextPayload = {
   document_id: DOCUMENT_ID,
   file_id: TEXT_SUPPLEMENT_FILE_ID,
   display_name: 'Table_S1.xlsx',
   blocks: [
-    { kind: 'heading', text: 'Sheet 1', level: 1, section_path: ['Sheet 1'], rows: null },
+    { kind: 'heading', text: 'Sheet 1', level: 1, ...OWN_SECTIONS, rows: null },
     {
       kind: 'table',
       text: '| Strain | Temp |\n|---|---|\n| XS0401 | 25 C |',
       level: null,
-      section_path: ['Sheet 1'],
+      ...OWN_SECTIONS,
       rows: [
         { line: '| Strain | Temp |', cells: ['Strain', 'Temp'], is_header: true },
         { line: '| XS0401 | 25 C |', cells: ['XS0401', '25 C'], is_header: false },
@@ -108,7 +116,7 @@ export const TEXT_SUPPLEMENT_BLOCKS: ViewerTextPayload = {
       kind: 'paragraph',
       text: 'Kept at two temperatures.',
       level: null,
-      section_path: ['Sheet 1'],
+      ...OWN_SECTIONS,
       rows: null,
     },
   ],
@@ -155,4 +163,12 @@ export function singleMainTextFile(args: {
     content_url: null,
     text_url: textUrl(documentId, fileId),
   }
+}
+
+/**
+ * `test_a_pending_pdf_files_placeholder_page_count_is_not_shown`: a main PDF file that
+ * is not ready (production has papers like this) has no URL and no page count.
+ */
+export function mainPdfFileNotReady(status: 'pending' | 'failed' = 'pending'): ViewerFile {
+  return { ...FOUR_FILES_PAYLOAD.files[0]!, status, page_count: null, content_url: null }
 }

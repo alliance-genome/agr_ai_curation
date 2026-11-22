@@ -50,7 +50,7 @@ describe('PdfViewer on a curation session whose paper is text', () => {
           document_id: 'doc-text',
           file_id: textFile.file_id,
           display_name: 'paper-text.md',
-          blocks: [{ kind: 'paragraph', text: 'Made-up text paper.', level: null, section_path: [], rows: null }],
+          blocks: [{ kind: 'paragraph', text: 'Made-up text paper.', level: null, section_title: null, parent_section: null, subsection: null, section_path: [], rows: null }],
         }), { status: 200 })
       }
       return new Response(null, { status: 200 })

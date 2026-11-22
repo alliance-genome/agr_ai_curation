@@ -49,6 +49,10 @@ export interface DisplayBlock {
    */
   text: string
   level: number | null
+  /** The section names the block's stored pieces carry (the names evidence stores). */
+  section_title: string | null
+  parent_section: string | null
+  subsection: string | null
   section_path: string[]
   rows: DisplayTableRow[] | null
 }
@@ -208,6 +212,14 @@ export async function fetchViewerFiles(
 
 const BLOCK_KINDS: readonly DisplayBlockKind[] = ['heading', 'paragraph', 'list_item', 'code', 'table']
 
+function requireNullableName(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key]
+  if (value !== null && typeof value !== 'string') {
+    throw new ViewerFilesContractError(`Display block field "${key}" must be a name or null`)
+  }
+  return value
+}
+
 function parseDisplayTableRow(value: unknown): DisplayTableRow {
   if (!isRecord(value) || typeof value.line !== 'string' || typeof value.is_header !== 'boolean'
     || !Array.isArray(value.cells) || !value.cells.every((cell) => typeof cell === 'string')) {
@@ -232,11 +244,17 @@ function parseDisplayBlock(value: unknown): DisplayBlock {
   if (typeof value.text !== 'string') {
     throw new ViewerFilesContractError('A display block must have its text')
   }
+  const sections = {
+    section_title: requireNullableName(value, 'section_title'),
+    parent_section: requireNullableName(value, 'parent_section'),
+    subsection: requireNullableName(value, 'subsection'),
+    section_path: sectionPath as string[],
+  }
   if (kind === 'table') {
     if (!Array.isArray(value.rows)) {
       throw new ViewerFilesContractError('A table block has rows')
     }
-    return { kind, text: value.text, level, section_path: sectionPath as string[], rows: value.rows.map(parseDisplayTableRow) }
+    return { kind, text: value.text, level, ...sections, rows: value.rows.map(parseDisplayTableRow) }
   }
   if (value.rows !== null) {
     throw new ViewerFilesContractError('Only a table block has rows')
@@ -244,7 +262,7 @@ function parseDisplayBlock(value: unknown): DisplayBlock {
   if ((kind === 'heading') !== (level !== null)) {
     throw new ViewerFilesContractError('Only a heading has a level')
   }
-  return { kind, text: value.text, level, section_path: sectionPath as string[], rows: null }
+  return { kind, text: value.text, level, ...sections, rows: null }
 }
 
 export function parseViewerTextPayload(value: unknown): ViewerTextPayload {

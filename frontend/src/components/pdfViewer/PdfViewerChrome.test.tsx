@@ -11,6 +11,7 @@ const paperDocument: ViewerDocument = {
   documentId: 'doc-1',
   files: [singleMainPdfFile({ documentId: 'doc-1', displayName: 'paper.pdf', pageCount: 12 })],
   activeFileId: MAIN_FILE_ID,
+  mainFileUnavailable: false,
   loadedAt: '2026-04-27T00:00:00.000Z',
 }
 
@@ -28,6 +29,7 @@ const renderChrome = (overrides: Partial<Parameters<typeof PdfViewerChrome>[0]> 
     activeDocument: null,
     activeFile: null,
     fileAnnouncement: '',
+    idleNotice: null,
     onSelectFile: vi.fn(),
     textNavigation: null,
     onTextNavigationResult: vi.fn(),

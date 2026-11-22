@@ -1,3 +1,4 @@
+import { isEvidenceRecord } from '@/features/curation/evidenceRecordGuard'
 import { readCurationApiError } from '@/features/curation/services/api'
 import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
 import type { FileInfo } from '@/components/Chat/FileDownloadCard'
@@ -148,20 +149,6 @@ function readNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
-function isEvidenceRecord(value: unknown): value is EvidenceRecord {
-  if (!isRecord(value)) {
-    return false
-  }
-
-  return (
-    typeof value.entity === 'string' &&
-    typeof value.verified_quote === 'string' &&
-    typeof value.page === 'number' &&
-    Number.isFinite(value.page) &&
-    typeof value.section === 'string' &&
-    typeof value.chunk_id === 'string'
-  )
-}
 
 function extractEvidenceRecords(value: unknown): EvidenceRecord[] {
   if (!Array.isArray(value)) {

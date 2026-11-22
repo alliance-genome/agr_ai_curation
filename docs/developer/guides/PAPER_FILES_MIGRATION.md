@@ -64,7 +64,10 @@ document) and send it with `showPaperFilesInViewer` (`pdfEvents.ts`):
 Every file with a `content_url` (a ready PDF, main or supplement) or a `text_url`
 (a ready text file) gets a tab, in `tab_order`; a file still being added gets none.
 The main file opens first; a paper without a main file opens its first file with a
-URL; a paper with no such file clears the viewer. A text paper therefore shows its
+URL; a paper with no such file clears the viewer and says why ("This paper's main
+file is not available to show." when its main file is not ready, otherwise "This
+paper's files are still being added."). When the main file is not ready but other
+files are, their tabs show with the same main-file note. A text paper therefore shows its
 text tab and never leaves the previous PDF on screen. The page, scroll, pdf.js
 page-text corpus, PDF search, highlight and any waiting evidence navigation are
 kept per file (`PdfViewer.tsx`).
@@ -80,7 +83,13 @@ Evidence opens its own file first (`EvidenceNavigationCommand.fileId`):
 - a text file: the quote is located by exact copied text in the blocks' texts
   joined by a blank line, exactly as the server serves them (every stored piece
   is an exact slice of that joined text, so a quote may cross blocks); nothing is
-  normalised in the browser, and pdf.js and the fuzzy matcher are never called.
+  normalised or loosened in the browser, and pdf.js and the fuzzy matcher are never
+  called. When the quote is not found, the first block of the evidence's section is
+  marked (evidence `section` against the block's `parent_section`, or
+  `section_title` when that is null, and `subsection`), and the banner says the
+  quote was not found. The one known miss: a quote across a sentence cut inside an
+  element over 1,500 characters (the piece has one space where the block keeps the
+  original whitespace) takes this "not found" path.
 - evidence the viewer cannot show changes nothing but its banner (an alert that
   can be closed): no tab switch, no scroll, the current highlight stays.
 

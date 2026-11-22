@@ -5,7 +5,9 @@ import type { PdfViewerNavigationResult } from './pdfEvidenceNavigation'
 import {
   buildTextNavigationResult,
   commandQuote,
+  commandSection,
   locateQuoteInBlocks,
+  locateSectionInBlocks,
   type TextNavigationRequest,
   type TextQuoteLocation,
 } from './viewerFileNavigation'
@@ -48,6 +50,8 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
   const [loadState, setLoadState] = useState<TextLoadState>({ kind: 'loading' })
   const [reloadKey, setReloadKey] = useState(0)
   const [highlight, setHighlight] = useState<TextQuoteLocation | null>(null)
+  // The evidence's section, shown when its quote is not found.
+  const [sectionBlockIndex, setSectionBlockIndex] = useState<number | null>(null)
   const highlightedRef = useRef<HTMLElement | null>(null)
   // Each navigation request is located and reported once.
   const reportedRequestIdRef = useRef<number | null>(null)
@@ -56,6 +60,7 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
     const controller = new AbortController()
     setLoadState({ kind: 'loading' })
     setHighlight(null)
+    setSectionBlockIndex(null)
     fetchViewerText(file, controller.signal)
       .then((payload) => {
         if (!controller.signal.aborted) {
@@ -82,19 +87,22 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
       return
     }
     reportedRequestIdRef.current = navigation.requestId
-    const location = locateQuoteInBlocks(loadState.blocks, commandQuote(navigation.command))
+    const section = commandSection(navigation.command)
+    const location = locateQuoteInBlocks(loadState.blocks, commandQuote(navigation.command), section)
+    const sectionIndex = location ? null : locateSectionInBlocks(loadState.blocks, section)
     setHighlight(location)
-    onNavigationResult(navigation, buildTextNavigationResult(navigation, documentId, location))
+    setSectionBlockIndex(sectionIndex)
+    onNavigationResult(navigation, buildTextNavigationResult(navigation, documentId, location, sectionIndex))
   }, [documentId, file.file_id, loadState, navigation, onNavigationResult])
 
   useEffect(() => {
-    if (highlight && highlightedRef.current) {
+    if ((highlight || sectionBlockIndex !== null) && highlightedRef.current) {
       highlightedRef.current.scrollIntoView({
         block: 'center',
         behavior: prefersReducedMotion() ? 'auto' : 'smooth',
       })
     }
-  }, [highlight])
+  }, [highlight, sectionBlockIndex])
 
   const setHighlightedElement = useCallback((element: HTMLElement | null) => {
     highlightedRef.current = element
@@ -127,6 +135,7 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
       <TextFileBlocks
         blocks={loadState.blocks}
         location={highlight}
+        sectionBlockIndex={sectionBlockIndex}
         firstHighlightRef={setHighlightedElement}
       />
     )

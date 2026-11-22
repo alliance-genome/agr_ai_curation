@@ -7,6 +7,8 @@ export interface PDFViewerDocumentChangedDetail {
   files: ViewerFile[]
   /** The file to show; one of `files`. */
   activeFileId: string
+  /** The paper has a main file the viewer cannot show (not ready, so no URL). */
+  mainFileUnavailable: boolean
   ownerToken?: string
   viewerState?: {
     currentPage?: number
@@ -38,6 +40,10 @@ export function buildCurationPDFViewerOwner(sessionId: string): string {
   return `curation:${sessionId}`
 }
 
+/** Proposals, awaiting sign-off. */
+export const MAIN_FILE_UNAVAILABLE_MESSAGE = 'This paper\'s main file is not available to show.'
+export const FILES_NOT_READY_MESSAGE = 'This paper\'s files are still being added.'
+
 export interface PaperFilesViewerOptions {
   ownerToken?: string
   viewerState?: PDFViewerDocumentChangedDetail['viewerState']
@@ -55,8 +61,12 @@ export function showPaperFilesInViewer(
 ): boolean {
   const tabFiles = viewerTabFiles(files)
   const activeFileId = defaultActiveFileId(tabFiles)
+  const mainFileUnavailable = files.some((file) => file.role === 'main' && !tabFiles.includes(file))
   if (activeFileId === null) {
-    dispatchPDFViewerDocumentCleared(options?.ownerToken)
+    dispatchPDFViewerDocumentCleared(
+      options?.ownerToken,
+      mainFileUnavailable ? MAIN_FILE_UNAVAILABLE_MESSAGE : FILES_NOT_READY_MESSAGE,
+    )
     return false
   }
   window.dispatchEvent(
@@ -65,6 +75,7 @@ export function showPaperFilesInViewer(
         documentId,
         files: tabFiles,
         activeFileId,
+        mainFileUnavailable,
         ownerToken: options?.ownerToken,
         viewerState: options?.viewerState,
       },
@@ -124,16 +135,18 @@ export function onPDFViewerNavigateEvidence(
 
 export interface PDFViewerDocumentClearedDetail {
   ownerToken?: string
+  /** What to tell the curator instead of the empty viewer (a paper with nothing to show yet). */
+  notice?: string
 }
 
 /**
  * The active document has nothing for the viewer to show (unloaded, or no file of
  * the paper has a URL yet). The viewer ends any pending load and clears what it showed.
  */
-export function dispatchPDFViewerDocumentCleared(ownerToken?: string): void {
+export function dispatchPDFViewerDocumentCleared(ownerToken?: string, notice?: string): void {
   window.dispatchEvent(
     new CustomEvent<PDFViewerDocumentClearedDetail>('pdf-viewer-document-cleared', {
-      detail: { ownerToken },
+      detail: notice === undefined ? { ownerToken } : { ownerToken, notice },
     }),
   )
 }

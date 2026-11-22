@@ -174,7 +174,7 @@ describe('chatDocumentRehydration (paper files)', () => {
     })).resolves.toMatchObject({ activeFileId: null })
 
     expect(changed.listener).not.toHaveBeenCalled()
-    expect(cleared.detail()).toEqual({ ownerToken: 'home' })
+    expect(cleared.detail()).toEqual({ ownerToken: 'home', notice: 'This paper\'s files are still being added.' })
     expect(localStorage.getItem(storageKeys.pdfViewerSession)).toBeNull()
   })
 
