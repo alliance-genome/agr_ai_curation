@@ -1032,8 +1032,28 @@ def _filter_flow_templates(
 
 
 def validate_installed_flow_recipe_catalog(catalog: FlowRecipeCatalog) -> int:
-    """Validate package recipes at startup and return the compatible count."""
+    """Validate package recipes at startup and return the compatible count.
 
+    A recipe step naming an installed attachment-only validator can never be a
+    flow step, so the recipe would be skipped silently everywhere; it is a
+    named load error instead.
+    """
+
+    for contribution in catalog.contributions:
+        for recipe in contribution.manifest.recipes:
+            refused = [
+                step.agent_id
+                for step in recipe.steps
+                if step.agent_id in AGENT_REGISTRY
+                and not agent_allows_ordinary_flow_step(step.agent_id, AGENT_REGISTRY[step.agent_id])
+            ]
+            if refused:
+                raise FlowRecipeLoadError(
+                    f"Invalid flow recipe '{recipe.name}' from package "
+                    f"'{contribution.package_id}' at {contribution.source_path}: "
+                    f"steps {', '.join(refused)} are attachment-only validators, which "
+                    "run automatically on extraction steps and cannot be flow steps"
+                )
     return len(_filter_flow_templates(set(FLOW_AGENT_IDS), catalog))
 
 
