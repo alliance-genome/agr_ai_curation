@@ -84,6 +84,10 @@ class DocumentContext:
 
         if readable is not None:
             hierarchy = await cls._hierarchy_for(document_id, user_id, readable)
+        if hierarchy is not None:
+            # Files being added change without changing the readable files, so this
+            # count is taken for every run and never cached with the outline.
+            hierarchy = {**hierarchy, "files_being_added": readable.files_being_added}
 
         # Extract flat section names from hierarchy
         if hierarchy and hierarchy.get("sections"):

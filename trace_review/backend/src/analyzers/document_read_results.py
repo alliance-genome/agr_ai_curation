@@ -32,6 +32,8 @@ JOINED_CONTENT_SHAPE = "joined_content"
 NUMBERED_PASSAGES_SHAPE = "numbered_passages"
 
 SECTION_READ_RESULT_KEYS = {"read_section": "section", "read_subsection": "subsection"}
+# A section read the model can correct (0.12.0): the result holds a summary and one of these.
+SECTION_ANSWER_CODES = ("section_not_found", "section_ambiguous", "unknown_file")
 
 # Must match the application's model view renderer
 # (backend/src/lib/openai_agents/document_result_view.py).
@@ -174,6 +176,9 @@ def _numbered_display(result_key: str, section: Dict[str, Any]) -> Dict[str, Any
     display = {
         "shape": NUMBERED_PASSAGES_SHAPE,
         **_headings(result_key, section, section.get("requested_section")),
+        # Reads since 0.12.0 name the one file read; earlier reads listed every
+        # section name a part-name match covered.
+        "file": section.get("file"),
         "matched_sections": section.get("matched_sections") or [],
         "page_numbers": section.get("page_numbers") or [],
         "chunk_count": len(passages),

@@ -788,10 +788,10 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
     section = section_result.result["section"]
     assert section_result.result["summary"].startswith("Read all 2 chunks of 'Methods'.")
     assert {key: section[key] for key in (
-        "requested_section", "matched_sections", "page_numbers", "total_chunk_count",
+        "requested_section", "file", "page_numbers", "total_chunk_count",
         "text_contains", "matched_chunk_count",
     )} == {
-        "requested_section": "Methods", "matched_sections": ["Materials and Methods"],
+        "requested_section": "Methods", "file": "paper.pdf",
         "page_numbers": [3, 4], "total_chunk_count": 2, "text_contains": None,
         "matched_chunk_count": None,
     }
@@ -1287,10 +1287,17 @@ async def document_reference_scope(document_id, user_id):
     yield
 
 class _OneFile:
-    files = ("main",)
+    def __init__(self):
+        self.files = (self,)
 
     def contains(self, chunk_index):
-        return 0 <= chunk_index <= 99
+        return type(chunk_index) is int and 0 <= chunk_index <= 99
+
+    def file_for(self, chunk_index):
+        return self if self.contains(chunk_index) else None
+
+    def labelled(self):
+        return (("paper.pdf", self),)
 
     def ranges_text(self):
         return "0 to 99"

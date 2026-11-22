@@ -23,7 +23,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.lib.document_files.service import require_chunk_range
-from src.models.sql.pdf_document import FILE_ROLE_MAIN, FILE_STATUS_READY, PDFDocument, PDFDocumentFile
+from src.models.sql.pdf_document import (
+    DISPLAY_MODE_TEXT,
+    FILE_ROLE_MAIN,
+    FILE_STATUS_PENDING,
+    FILE_STATUS_READY,
+    PDFDocument,
+    PDFDocumentFile,
+)
 from src.models.sql.user import User
 
 
@@ -61,6 +68,44 @@ class ReadableFilesError(RuntimeError):
     """The paper's readable files could not be determined."""
 
 
+# How a file's kind is shown to the model, from its stored display mode and the
+# original's file extension (structural metadata, never the file's text).
+FILE_KIND_PDF = "PDF"
+FILE_KIND_TEXT = "text"
+_TEXT_FILE_KINDS = {"docx": "Word", "doc": "Word", "xlsx": "Excel", "xls": "Excel", "csv": "CSV"}
+
+
+def file_kind(display_mode: str, source_file_extension: str | None) -> str:
+    if display_mode != DISPLAY_MODE_TEXT:
+        return FILE_KIND_PDF
+    extension = (source_file_extension or "").lower().lstrip(".")
+    return _TEXT_FILE_KINDS.get(extension, FILE_KIND_TEXT)
+
+
+def file_labels(display_names: list[str]) -> list[str]:
+    """The name the model sees for each of a paper's files, given in tab order.
+
+    Numbered over ALL of the paper's files (any status), so a file's label does
+    not change when another file becomes ready during a run. A name shared by
+    several files gets " (2)", " (3)" ... on its later files, skipping any suffix
+    that is itself the name of another file, so every label names one file.
+    """
+
+    taken = set(display_names)
+    used: set[str] = set()
+    labels = []
+    for name in display_names:
+        label = name
+        if label in used:
+            number = 2
+            while f"{name} ({number})" in used | taken:
+                number += 1
+            label = f"{name} ({number})"
+        used.add(label)
+        labels.append(label)
+    return labels
+
+
 @dataclass(frozen=True, slots=True)
 class ReadableFile:
     file_id: str
@@ -68,9 +113,16 @@ class ReadableFile:
     role: str
     chunk_index_start: int
     chunk_index_end: int
+    kind: str
+    # The name the model sees and passes back as ``file`` (see ``file_labels``).
+    label: str
 
     def contains(self, chunk_index: int) -> bool:
         return self.chunk_index_start <= chunk_index <= self.chunk_index_end
+
+    @property
+    def chunk_count(self) -> int:
+        return self.chunk_index_end - self.chunk_index_start + 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +131,10 @@ class ReadableFiles:
 
     document_id: str
     files: tuple[ReadableFile, ...]
+    # Files of the paper being added right now (pending rows): never readable,
+    # only counted so the model can be told. A dead add's rows stop counting
+    # when the reconciler marks them failed. Not part of the fingerprint.
+    files_being_added: int = 0
 
     def contains(self, chunk_index: int) -> bool:
         return self.file_for(chunk_index) is not None
@@ -97,6 +153,24 @@ class ReadableFiles:
 
         return tuple((file.file_id, file.chunk_index_start, file.chunk_index_end) for file in self.files)
 
+    def labelled(self) -> tuple[tuple[str, ReadableFile], ...]:
+        """Each readable file with the name the model sees and passes back as ``file``, in tab order."""
+
+        return tuple((file.label, file) for file in self.files)
+
+    def label_of(self, file: ReadableFile) -> str:
+        return next(label for label, each in self.labelled() if each == file)
+
+    def by_label(self, label: str) -> ReadableFile | None:
+        return next((file for each, file in self.labelled() if each == label), None)
+
+    def only(self, file: ReadableFile) -> "ReadableFiles":
+        """The same paper with ``file`` as its only readable file."""
+
+        if file not in self.files:
+            raise ReadableFilesError("The file is not one of this paper's readable files")
+        return ReadableFiles(self.document_id, (file,), self.files_being_added)
+
     def ranges_text(self) -> str:
         """The readable ranges as the model is told them.
 
@@ -108,7 +182,7 @@ class ReadableFiles:
             only = ordered[0]
             return f"{only.chunk_index_start} to {only.chunk_index_end}"
         return ", ".join(
-            f"{file.chunk_index_start} to {file.chunk_index_end} ({file.display_name})" for file in ordered
+            f"{file.chunk_index_start} to {file.chunk_index_end} ({self.label_of(file)})" for file in ordered
         )
 
 
@@ -130,19 +204,28 @@ def readable_files_in_session(
     )
     if owned is None:
         raise ReadableFilesError(f"Document {document_id} is not a paper of this user")
-    statement = select(PDFDocumentFile).where(
-        PDFDocumentFile.document_id == paper_id,
-        PDFDocumentFile.status == FILE_STATUS_READY,
-    )
-    if scope is ReadingScope.MAIN_FILE_ONLY:
-        statement = statement.where(PDFDocumentFile.role == FILE_ROLE_MAIN)
-    rows = session.execute(statement.order_by(PDFDocumentFile.tab_order)).scalars().all()
+    # Every file of the paper, so labels are numbered the same way whatever is ready.
+    rows = session.execute(
+        select(PDFDocumentFile).where(PDFDocumentFile.document_id == paper_id)
+        .order_by(PDFDocumentFile.tab_order)
+    ).scalars().all()
+    labels = file_labels([row.display_name for row in rows])
+    in_scope = [
+        (row, label) for row, label in zip(rows, labels)
+        if scope is not ReadingScope.MAIN_FILE_ONLY or row.role == FILE_ROLE_MAIN
+    ]
     files = []
-    for row in rows:
+    for row, label in in_scope:
+        if row.status != FILE_STATUS_READY:
+            continue
         start, end = require_chunk_range(row)
-        files.append(ReadableFile(str(row.id), row.display_name, row.role, start, end))
+        files.append(ReadableFile(
+            str(row.id), row.display_name, row.role, start, end,
+            file_kind(row.display_mode, row.source_file_extension), label,
+        ))
+    being_added = sum(1 for row, _label in in_scope if row.status == FILE_STATUS_PENDING)
     # Keep the caller's spelling: read functions compare it with the documentId they filter on.
-    return ReadableFiles(str(document_id), tuple(files))
+    return ReadableFiles(str(document_id), tuple(files), being_added)
 
 
 def resolve_readable_files(document_id: str, owner_auth_sub: str) -> ReadableFiles:

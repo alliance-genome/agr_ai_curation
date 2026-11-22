@@ -215,6 +215,9 @@ function SectionContentDisplay({ section }: { section: SectionReadDisplay }) {
         {section.chunk_count && (
           <Chip label={`${section.chunk_count} chunks`} size="small" color="info" variant="outlined" />
         )}
+        {section.file && (
+          <Chip label={`File: ${section.file}`} size="small" variant="outlined" />
+        )}
         {section.matched_sections && section.matched_sections.length > 0 && (
           <Chip label={`Matched: ${section.matched_sections.join(', ')}`} size="small" variant="outlined" />
         )}
@@ -486,6 +489,11 @@ export function ToolCallsView({ data }: ToolCallsViewProps) {
             </Button>
           </ButtonGroup>
           <Chip label={`Total: ${data.total_count}`} color="primary" />
+          {data.section_answers && Object.entries(data.section_answers)
+            .filter(([, count]) => count > 0)
+            .map(([code, count]) => (
+              <Chip key={code} label={`${code}: ${count}`} color="warning" variant="outlined" />
+            ))}
         </Box>
       </Box>
 

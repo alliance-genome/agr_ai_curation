@@ -15,7 +15,9 @@ from .extraction_followup import FACTS as FOLLOWUP_FACTS
 # Also the cache key for every stored trace analysis (api/traces.py, api/claude.py):
 # bump it whenever any analyzer's output changes, so cached analyses are recomputed.
 # v2: tool_calls and pdf_citations read numbered section reads (ALL-1550).
-ANALYZER_SCHEMA_VERSION = "extraction_timeline_analyzer.v2"
+# v3: document_hierarchy reads the per-file outline; section reads show the file
+#     and the section answer codes (ALL-1460, P8c).
+ANALYZER_SCHEMA_VERSION = "extraction_timeline_analyzer.v3"
 EVENT_SCHEMA_VERSION = "extraction_trace_event.v1"
 EVIDENCE_REVISIONS_SCHEMA_VERSION = "evidence_revisions.v1"
 SUMMARY_TEXT_LIMIT = 500
