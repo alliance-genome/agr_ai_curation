@@ -26,7 +26,7 @@ import type {
   CurationWorkspace,
   CurationWorkspaceResponse,
 } from '@/features/curation/types'
-import { readCurationApiError } from './api'
+import { readCurationApiError, readCurationApiErrorCode } from './api'
 
 interface CurationWorkspaceRequestOptions {
   keepalive?: boolean
@@ -35,11 +35,14 @@ interface CurationWorkspaceRequestOptions {
 
 export class CurationWorkspaceRequestError extends Error {
   readonly status: number
+  /** The refusal's machine code (`detail.error`), or null when it has none. */
+  readonly code: string | null
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code: string | null) {
     super(message)
     this.name = 'CurationWorkspaceRequestError'
     this.status = status
+    this.code = code
   }
 }
 
@@ -64,9 +67,11 @@ async function fetchCurationWorkspaceJson<T>(
   })
 
   if (!response.ok) {
+    const code = await readCurationApiErrorCode(response.clone())
     throw new CurationWorkspaceRequestError(
       response.status,
       await readCurationApiError(response),
+      code,
     )
   }
 

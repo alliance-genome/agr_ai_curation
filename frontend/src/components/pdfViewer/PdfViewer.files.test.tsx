@@ -316,7 +316,8 @@ describe('PdfViewer with a paper\'s files', () => {
       stubViewerFetch()
       await showFourFilePaper()
 
-      act(() => { dispatchPDFViewerNavigateEvidence(chatCommand({ file_id: null })) })
+      // P8b never sends null (old records have no file_id key), but a null must not open anything either.
+      act(() => { dispatchPDFViewerNavigateEvidence(chatCommand({ file_id: null as unknown as string })) })
 
       expect(await screen.findByRole('alert')).toHaveTextContent('This evidence was saved before files were recorded')
     })

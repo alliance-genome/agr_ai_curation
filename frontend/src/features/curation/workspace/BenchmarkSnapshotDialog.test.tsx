@@ -236,9 +236,23 @@ describe('BenchmarkSnapshotDialog', () => {
     expect(serviceMocks.createCurationBenchmarkSnapshot).toHaveBeenLastCalledWith('session-1', 'env-1', { expected_revision: 5 })
   })
 
+  it('explains a refusal because the review quotes a supplement, by its code', async () => {
+    serviceMocks.createCurationBenchmarkSnapshot.mockRejectedValueOnce(
+      new CurationWorkspaceRequestError(422, 'Request failed', 'snapshot_quotes_supplement'),
+    )
+    renderDialog()
+    await screen.findByRole('combobox', { name: 'Benchmark destination' })
+    await userEvent.click(screen.getByRole('button', { name: 'Send snapshot' }))
+
+    expect(await screen.findByText(
+      'This review quotes a supplement. A Benchmark snapshot can only hold evidence from the main paper.',
+    )).toBeInTheDocument()
+    expect(screen.queryByText('Request failed')).not.toBeInTheDocument()
+  })
+
   it('explains stale revision and authorization failures', async () => {
     serviceMocks.createCurationBenchmarkSnapshot.mockRejectedValueOnce(
-      new CurationWorkspaceRequestError(409, 'conflict'),
+      new CurationWorkspaceRequestError(409, 'conflict', null),
     )
     const staleDialog = renderDialog()
     await screen.findByRole('combobox', { name: 'Benchmark destination' })
@@ -247,7 +261,7 @@ describe('BenchmarkSnapshotDialog', () => {
     staleDialog.unmount()
 
     serviceMocks.fetchBenchmarkDestinations.mockRejectedValueOnce(
-      new CurationWorkspaceRequestError(403, 'forbidden'),
+      new CurationWorkspaceRequestError(403, 'forbidden', null),
     )
     renderDialog()
     expect(await screen.findByText(/not authorized to send this snapshot/)).toBeInTheDocument()

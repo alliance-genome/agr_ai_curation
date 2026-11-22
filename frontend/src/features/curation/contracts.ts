@@ -89,7 +89,7 @@ export interface DomainEnvelopeEvidenceAnchorProjection {
   source_title?: string | null
   source_url?: string | null
   /** The file of the paper the evidence is in; absent on evidence saved before files were recorded. */
-  file_id?: string | null
+  file_id?: string
   anchor: EvidenceAnchor
   metadata: Record<string, unknown>
 }

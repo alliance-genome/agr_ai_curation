@@ -269,6 +269,31 @@ describe('curationWorkspaceService envelope review rows', () => {
     })
   })
 
+  it('carries a typed refusal\'s code without showing its server text', async () => {
+    // The backend's snapshot refusal (P8b): detail {error, message}.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse(
+        { detail: { error: 'snapshot_quotes_supplement', message: 'Server text, not shown.' } },
+        { status: 422 },
+      )),
+    )
+
+    const error = await createCurationBenchmarkSnapshot('session-1', 'env-1', { expected_revision: 1 })
+      .catch((requestError: unknown) => requestError)
+
+    expect(error).toMatchObject({ status: 422, code: 'snapshot_quotes_supplement', message: 'Request failed' })
+  })
+
+  it('has no code for a refusal without one', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ detail: 'Draft version conflict' }, { status: 409 })))
+
+    const error = await fetchDomainEnvelopeReviewRows({ envelope_id: 'env-gene', envelope_revision: 2 })
+      .catch((requestError: unknown) => requestError)
+
+    expect(error).toMatchObject({ status: 409, code: null })
+  })
+
   it('sends explicit envelope field patch operations unchanged', async () => {
     vi.stubGlobal(
       'fetch',

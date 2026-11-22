@@ -41,8 +41,15 @@ interface BenchmarkSnapshotDialogProps {
   sessionId: string
 }
 
+/** Proposal, awaiting sign-off (the backend's proposed text for `snapshot_quotes_supplement`). */
+const SNAPSHOT_QUOTES_SUPPLEMENT_MESSAGE =
+  'This review quotes a supplement. A Benchmark snapshot can only hold evidence from the main paper.'
+
 function requestErrorMessage(error: unknown): string {
   if (error instanceof CurationWorkspaceRequestError) {
+    if (error.code === 'snapshot_quotes_supplement') {
+      return SNAPSHOT_QUOTES_SUPPLEMENT_MESSAGE
+    }
     if (error.status === 401 || error.status === 403) {
       return 'You are not authorized to send this snapshot. Sign in again or ask an administrator for access.'
     }

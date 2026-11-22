@@ -378,8 +378,8 @@ export interface CurationDraft {
 
 export interface EvidenceSourceFragment {
   span_id?: string | null
-  file_id?: string | null
-  file_name?: string | null
+  file_id?: string
+  file_name?: string
   chunk_id?: string | null
   document_id?: string | null
   text?: string | null
@@ -417,8 +417,8 @@ export interface EvidenceRecord {
    * The file of the paper the quote is in. Every record written from 0.12.0 has it;
    * a record without it was saved before files were recorded.
    */
-  file_id?: string | null
-  file_name?: string | null
+  file_id?: string
+  file_name?: string
 }
 
 export interface CurationEvidenceRecord {
@@ -430,7 +430,7 @@ export interface CurationEvidenceRecord {
   is_primary: boolean
   anchor: EvidenceAnchor
   /** The file the anchor is in (beside the anchor); absent on evidence saved before files were recorded. */
-  file_id?: string | null
+  file_id?: string
   created_at: string
   updated_at: string
   warnings: string[]

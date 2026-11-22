@@ -67,7 +67,7 @@ describe('Record revalidation', () => {
   })
   it.each([
     new Error('Connection interrupted'),
-    new CurationWorkspaceRequestError(503, 'Service unavailable'),
+    new CurationWorkspaceRequestError(503, 'Service unavailable', null),
   ])('submits only B and reuses its command identity after %s', async (failure) => {
     vi.mocked(service.fetchCandidateReviewOperation).mockResolvedValue(null)
     vi.mocked(service.requestReview).mockRejectedValueOnce(failure).mockResolvedValueOnce(saved)
@@ -108,7 +108,7 @@ describe('Record revalidation', () => {
   it.each(['rejection', 'success'])('keeps the newer pending request after a late %s', async (outcome) => {
     vi.mocked(service.fetchCandidateReviewOperation).mockResolvedValue(null)
     const originalReply = async () => {
-      if (outcome === 'rejection') throw new CurationWorkspaceRequestError(422, 'Invalid instructions')
+      if (outcome === 'rejection') throw new CurationWorkspaceRequestError(422, 'Invalid instructions', null)
       return { ...saved, state: 'completed' }
     }
     let releaseOriginal!: () => void
