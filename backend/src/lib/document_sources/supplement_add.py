@@ -43,7 +43,7 @@ from src.lib.document_sources.file_listing import (
     current_file_check_limits,
     download_converted_text,
 )
-from src.lib.document_sources.file_reasons import ADD_REFUSAL_REASONS, FileReason
+from src.lib.document_sources.file_reasons import ADD_REFUSAL_REASONS, FileReason, SupplementState
 from src.lib.document_sources.models import DocumentSourceError, DocumentSourceProvider
 from src.lib.observability.cost_context import costed_document_processing
 from src.models.sql.pdf_document import (
@@ -663,7 +663,7 @@ def _supplement_entries(result: AddResult) -> list[dict[str, Any]]:
         {
             "provider_file_id": item.provider_file_id,
             "display_name": item.display_name,
-            "state": "added" if item.outcome == "added" else "left_out",
+            "state": (SupplementState.ADDED if item.outcome == "added" else SupplementState.LEFT_OUT).value,
             "reason_code": item.reason_code.value if item.reason_code else None,
             "observed_at": None,
             "file_id": str(item.file_id) if item.file_id else None,
