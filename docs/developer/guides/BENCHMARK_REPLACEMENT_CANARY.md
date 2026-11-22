@@ -1,6 +1,11 @@
 # Synthetic benchmark replacement canary
 
-Run from a fresh public checkout with Docker Compose available:
+GitHub Actions runs both canary tests in the **Benchmark Replacement Canary**
+job of the `Unit Tests` workflow (`.github/workflows/test.yml`). The job runs on
+pull requests targeting `main`, `develop`, or `integration/validation-review`
+and on pushes to `main` or `develop` when the workflow's path filters match.
+
+To run the same tests from a fresh checkout with Docker Compose, use
 
 ```bash
 bash scripts/testing/benchmark-replacement-canary.sh
@@ -71,7 +76,8 @@ running invocation recovery must record `interrupted_uncertain` without replay.
 The test reads results and progress without creating new work, and handoff
 uncertainty never triggers a second delivery automatically.
 
-The final JSON line is an aggregate test receipt; pytest failure is authoritative.
-The test is skipped in ordinary persistence runs and must be run explicitly via
-the wrapper. Existing focused authentication, lifecycle, worker, source-transfer,
-result-artifact and handoff tests remain the detailed contract coverage.
+The lifecycle test prints a JSON receipt. The wrapper exits with the pytest
+result for both tests. Ordinary persistence runs skip both tests. The dedicated
+CI job invokes the wrapper with `AI_CURATION_TEST_DOCKER_MODE=rootful`.
+Focused authentication, lifecycle, worker, source-transfer, result-artifact
+and handoff tests cover the individual contracts.
