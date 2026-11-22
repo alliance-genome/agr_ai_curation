@@ -143,6 +143,22 @@ class ReferenceImportDecision:
     def is_ready(self) -> bool:
         return self.status == ReferenceImportDecisionStatus.READY and self.selected is not None
 
+    @property
+    def waits_for_conversion(self) -> bool:
+        """The provider is still converting the selected main text; the import waits for it."""
+
+        return self.status == ReferenceImportDecisionStatus.CONVERSION_RUNNING and self.selected is not None
+
+    @property
+    def can_import(self) -> bool:
+        """Whether an import of this reference goes ahead; anything else ends it with this decision's error.
+
+        The one rule for the identifier import, its resolve step, and the file listing's
+        whole-paper check (``file_listing._paper_refusal``).
+        """
+
+        return self.is_ready or self.waits_for_conversion
+
 
 @dataclass(frozen=True, slots=True)
 class IdentifierImportItemResult:
@@ -837,13 +853,7 @@ class IdentifierImportService:
                 request_bearer_token=curator_token,
                 allow_conversion_request=False,
             )
-            wait_for_conversion = (
-                decision.status == ReferenceImportDecisionStatus.CONVERSION_RUNNING
-                and decision.selected is not None
-            )
-            if not decision.is_ready and not wait_for_conversion:
-                return self._error_result_from_decision(normalized, decision)
-            if decision.selected is None:
+            if not decision.can_import:
                 return self._error_result_from_decision(normalized, decision)
 
             source_provenance = _build_reference_source_provenance(decision)
@@ -931,13 +941,7 @@ class IdentifierImportService:
                 bearer_kind=document_source_context.bearer_kind,
                 request_bearer_token=curator_token,
             )
-            wait_for_conversion = (
-                decision.status == ReferenceImportDecisionStatus.CONVERSION_RUNNING
-                and decision.selected is not None
-            )
-            if not decision.is_ready and not wait_for_conversion:
-                return self._error_result_from_decision(normalized, decision)
-            if decision.selected is None:
+            if not decision.can_import:
                 return self._error_result_from_decision(normalized, decision)
 
             source_provenance = _build_reference_source_provenance(decision)
@@ -973,7 +977,7 @@ class IdentifierImportService:
                 source_provenance=source_provenance,
                 curator_token=curator_token,
                 bearer_kind=document_source_context.bearer_kind,
-                wait_for_conversion=wait_for_conversion,
+                wait_for_conversion=decision.waits_for_conversion,
             )
         except DocumentSourceAccessDenied as exc:
             logger.warning(

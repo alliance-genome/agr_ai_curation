@@ -12,6 +12,8 @@ from fastapi import BackgroundTasks
 from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.identifier_import import (
     IdentifierImportService,
+    ReferenceImportCandidate,
+    ReferenceImportDecision,
     ReferenceImportDecisionStatus,
     normalize_source_identifier,
     parse_source_identifier_batch,
@@ -1504,3 +1506,93 @@ async def test_identifier_import_service_cleans_phantom_hash_duplicate():
     assert cleanup_calls == [(session, existing.id)]
     assert session.deleted == [existing]
     assert session.commits == 1
+
+
+# The import, its resolve step and the file listing share one rule for "this paper can be imported".
+
+
+def _gate_decision(status):
+    reference = SourceReference(provider="fake_provider", reference_id="ref-123", reference_curie="AGRKB:123")
+    candidate = ReferenceImportCandidate(reference=reference, source_artifact=_source_artifact(artifact_id="pdf-1"))
+    return ReferenceImportDecision(
+        status=status, provider="fake_provider", identifier="AGRKB:123", reference=reference, selected=candidate,
+    )
+
+
+class _ReachedDuplicateCheck(Exception):
+    pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("can_import", [True, False])
+@pytest.mark.parametrize("step", ["import", "resolve"])
+async def test_the_import_and_the_listing_read_one_can_import_rule(monkeypatch, tmp_path, can_import, step):
+    """Flip ``ReferenceImportDecision.can_import`` alone: the import, its resolve step and the
+    listing's whole-paper check all follow it, so they cannot disagree."""
+
+    from fastapi import BackgroundTasks
+
+    from src.lib.document_sources.file_listing import ListingRoute, _paper_refusal
+    from src.lib.document_sources.file_reasons import FileReason
+
+    monkeypatch.setattr(ReferenceImportDecision, "can_import", property(lambda self: can_import))
+    # A status the rule would refuse on its own: only the shared predicate decides here.
+    decision = _gate_decision(ReferenceImportDecisionStatus.NO_SOURCE_ARTIFACT)
+
+    def duplicate_check(*_args, **_kwargs):
+        raise _ReachedDuplicateCheck()
+
+    sessions = []
+    service = IdentifierImportService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: _FakeSession(sessions),
+        storage_path_provider=lambda: tmp_path,
+        principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        provider_factory=_FakeProvider,
+        reference_import_selector=AsyncMock(return_value=decision),
+        find_existing_source_document_fn=duplicate_check,
+        import_batch_limit_provider=lambda: 10,
+    )
+    context = DocumentSourceRequestContext(
+        bearer_kind=ProviderBearerKind.CURATOR, provider_groups=("FBStaff",), authorized_group_ids=("FB",),
+        curator_token="curator-token",
+    )
+    call = (
+        service.import_identifiers(
+            background_tasks=BackgroundTasks(), identifiers="123", user={"sub": "user-1"},
+            document_source_context=context,
+        )
+        if step == "import"
+        else service.resolve_identifiers(identifiers="123", user={"sub": "user-1"}, document_source_context=context)
+    )
+    try:
+        result = await call
+        reached_duplicate_check = False
+        assert result.results[0].status == "error"
+    except _ReachedDuplicateCheck:
+        reached_duplicate_check = True
+
+    async def not_in_library(_decision):
+        return None
+
+    reason, _ = await _paper_refusal(decision, ListingRoute.IDENTIFIER, not_in_library)
+    assert reached_duplicate_check is can_import
+    assert (reason is None) is can_import
+    if not can_import:
+        assert reason is FileReason.PAPER_NOT_IMPORTABLE
+
+
+@pytest.mark.parametrize(
+    "status",
+    [value for name, value in vars(ReferenceImportDecisionStatus).items() if name.isupper()],
+)
+@pytest.mark.parametrize("selected", [True, False])
+def test_can_import_is_ready_or_still_converting_with_a_selected_main(status, selected):
+    decision = _gate_decision(status)
+    if not selected:
+        decision = ReferenceImportDecision(status=status, provider="fake_provider", identifier="AGRKB:123")
+    expected = selected and status in (
+        ReferenceImportDecisionStatus.READY, ReferenceImportDecisionStatus.CONVERSION_RUNNING,
+    )
+    assert decision.can_import is expected

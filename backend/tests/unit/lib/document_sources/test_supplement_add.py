@@ -446,3 +446,50 @@ async def test_a_paper_deleted_while_its_add_writes_loses_every_piece_the_add_st
     with pytest.raises(RuntimeError, match="made-up storage failure"):
         await _add(provider, [_chosen(20), _chosen(40)])
     assert storage.deleted_whole_paper == 1 and storage.deleted_ranges == []
+
+
+# Every element of a supplement has a non-empty section, and its stored piece carries it
+# (the guarantee evidence relies on; settled with b-p8b, option (a)).
+
+SECTION_CASES = {
+    "heading-less Word": b"# Made_up_S20\n\nMade-up legend text with no headings.\n\nA second made-up paragraph.\n",
+    "single-sheet Excel": b"# Made_up_S20\n\n## Sheet1\n\n| strain | score |\n| --- | --- |\n| s1 | 1 |\n",
+    "multi-sheet Excel": (
+        b"# Made_up_S20\n\n## Sheet1\n\n| strain | score |\n| --- | --- |\n| s1 | 1 |\n\n"
+        b"## Sheet2\n\n| gene | count |\n| --- | --- |\n| g1 | 3 |\n"
+    ),
+    "an empty sheet": (
+        b"# Made_up_S20\n\n## Sheet1\n\n| strain | score |\n| --- | --- |\n| s1 | 1 |\n\n## Empty\n"
+    ),
+    "a title-only file": b"# Made_up_S20\n",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", list(SECTION_CASES))
+async def test_every_element_and_every_stored_piece_has_a_section(monkeypatch, storage, case):
+    _, provider = _provider(ROWS, {**GOOD, "21": SECTION_CASES[case]})
+    _paper_lookup(monkeypatch)
+    result = await _add(provider, [_chosen(20)])
+
+    added = _by_id(result)["20"]
+    assert added.outcome == "added", added
+    elements = storage.saved_json[added.file_id]
+    assert elements
+    for element in elements:
+        assert element["parent_section"] and element["metadata"]["parent_section"], element
+        assert element["section_title"] and element["metadata"]["section_title"], element
+    ((_, chunks),) = storage.stored
+    assert chunks
+    for chunk in chunks:
+        assert chunk.parent_section and chunk.section_title, chunk
+
+
+def test_an_empty_display_name_for_text_before_any_heading_fails_loudly():
+    from src.lib.pipeline.pdfx_parser import markdown_to_pipeline_elements
+    from src.lib.pipeline.structural_sections import apply_structural_sections
+
+    with pytest.raises(ValueError, match="file's name"):
+        apply_structural_sections(
+            markdown_to_pipeline_elements("Made-up text.\n"), file_title_is_first_heading=True, fallback_section="",
+        )
