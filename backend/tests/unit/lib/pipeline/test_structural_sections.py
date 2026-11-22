@@ -86,3 +86,49 @@ def test_the_input_is_not_changed():
     before = [dict(element, metadata=dict(element["metadata"])) for element in elements]
     apply_structural_sections(elements, file_title_is_first_heading=True, fallback_section="Made_up_S1.xlsx")
     assert elements == before
+
+
+def test_the_fields_written_are_the_shared_apply_steps_fields():
+    """Same names as ``apply_section_hierarchy`` writes from an equivalent map (no repeated headings here).
+
+    The structural rule keys on each element's heading path, not on its heading text,
+    so a heading repeated under two sections, and text before any heading, still get
+    their own section; the shared map (keyed by heading text) cannot express those.
+    """
+
+    from src.lib.pipeline.hierarchy_resolution import SectionItem, apply_section_hierarchy, section_map
+
+    structural = apply_structural_sections(
+        markdown_to_pipeline_elements(WORD_WITH_HEADINGS), file_title_is_first_heading=True,
+        fallback_section="Made_up_S3.docx",
+    )
+    items = {}
+    for before, after in zip(markdown_to_pipeline_elements(WORD_WITH_HEADINGS), structural):
+        header = before["metadata"]["section_title"]
+        items[header] = SectionItem(
+            header=header, parent_section=after["parent_section"], subsection=after["subsection"],
+            is_top_level=after["is_top_level"],
+        )
+    shared = markdown_to_pipeline_elements(WORD_WITH_HEADINGS)
+    apply_section_hierarchy(shared, section_map(list(items.values())))
+
+    names = ("parent_section", "subsection", "is_top_level", "section_title", "section_path")
+    assert [{name: element[name] for name in names} for element in shared] == [
+        {name: element[name] for name in names} for element in structural
+    ]
+    assert [element["metadata"]["hierarchy_level"] for element in structural] == [
+        element["metadata"]["hierarchy_level"] for element in shared
+    ]
+
+
+def test_a_heading_repeated_under_two_sheets_stays_in_each_sheet():
+    elements = apply_structural_sections(
+        markdown_to_pipeline_elements(
+            "# Made_up_S5\n\n## Sheet1\n\n### Notes\n\nMade-up first notes.\n\n"
+            "## Sheet2\n\n### Notes\n\nMade-up second notes.\n"
+        ),
+        file_title_is_first_heading=True, fallback_section="Made_up_S5.xlsx",
+    )
+    by_text = {element["text"]: element for element in elements}
+    assert by_text["Made-up first notes."]["section_title"] == "Sheet1 > Notes"
+    assert by_text["Made-up second notes."]["section_title"] == "Sheet2 > Notes"

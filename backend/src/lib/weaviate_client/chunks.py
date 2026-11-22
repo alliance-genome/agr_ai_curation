@@ -1626,6 +1626,28 @@ def delete_chunk_range(document_id: str, user_id: str, *, start: int, end: int) 
     return int(result.successful)
 
 
+def delete_pieces_of_deleted_paper(document_id: str, user_id: str) -> int:
+    """Delete every piece filed under a paper id whose paper row no longer exists, in the owner's tenant.
+
+    Only for a paper that is already gone (no file of any other paper has its id).
+    Returns the number deleted.
+    """
+
+    if not user_id:
+        raise ValueError("user_id is required for tenant-scoped chunk deletion")
+    connection = get_connection()
+    if not connection:
+        raise RuntimeError("No Weaviate connection established")
+    from weaviate.classes.query import Filter
+
+    from ..weaviate_helpers import get_user_collections
+
+    with connection.session() as client:
+        chunk_collection, _ = get_user_collections(client, user_id)
+        result = chunk_collection.data.delete_many(where=Filter.by_property("documentId").equal(document_id))
+    return int(result.successful)
+
+
 def delete_chunks(document_id: str, user_id: str) -> Dict[str, Any]:
     """Delete all chunks for a document.
 

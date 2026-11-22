@@ -58,6 +58,8 @@ class _Storage:
     after_add: int = 0
     next_index: int = 30
     fail_store_on: int | None = None
+    paper_exists: bool = True
+    deleted_whole_paper: int = 0
 
 
 def _paper(**overrides) -> supplement_add._PaperState:
@@ -117,6 +119,12 @@ def storage(monkeypatch):
         record.deleted_ranges.extend(found)
 
     monkeypatch.setattr(supplement_add, "_delete_pieces", delete_pieces)
+    monkeypatch.setattr(supplement_add, "_paper_exists", lambda _doc: record.paper_exists)
+
+    async def delete_all(_doc, _subject):
+        record.deleted_whole_paper += 1
+
+    monkeypatch.setattr(supplement_add, "_delete_pieces_of_deleted_paper", delete_all)
     monkeypatch.setattr(supplement_add, "_delete_rows", lambda _doc, ids: record.deleted_rows.extend(ids))
     monkeypatch.setattr(supplement_add, "_remove_stored_files", lambda paths: record.removed_paths.extend(paths))
 
@@ -425,3 +433,16 @@ async def test_a_completed_add_records_each_files_outcome_on_its_job(monkeypatch
     assert entries[1]["state"] == "left_out" and entries[1]["reason_code"] == "title_count"
     # The paper's later listing reads these: an add's refusal is never a provider observation.
     assert file_listing_service.provider_observations_from_jobs([job["metadata"]]) == {}
+
+
+@pytest.mark.asyncio
+async def test_a_paper_deleted_while_its_add_writes_loses_every_piece_the_add_stored(monkeypatch, storage):
+    """The paper's rows went with it, so the add deletes every piece still filed under its id."""
+
+    storage.fail_store_on = 1
+    storage.paper_exists = False
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+    with pytest.raises(RuntimeError, match="made-up storage failure"):
+        await _add(provider, [_chosen(20), _chosen(40)])
+    assert storage.deleted_whole_paper == 1 and storage.deleted_ranges == []

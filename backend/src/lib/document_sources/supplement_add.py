@@ -535,12 +535,33 @@ async def _delete_pieces(document_id: UUID, subject: str, ranges: Sequence[tuple
 
 
 async def _undo(document_id: UUID, subject: str, file_ids: list[UUID], paths: list[str]) -> None:
-    """Remove what this add wrote: pieces in its ranges, its stored files, its rows."""
+    """Remove what this add wrote: pieces in its ranges, its stored files, its rows.
 
-    ranges = await asyncio.to_thread(_ranges, document_id, file_ids)
-    await _delete_pieces(document_id, subject, ranges)
+    When the paper itself was deleted while the add ran, its rows (and so the ranges)
+    are gone with it: every piece still filed under the paper's id is deleted instead,
+    since no other file can own them.
+    """
+
+    if await asyncio.to_thread(_paper_exists, document_id):
+        ranges = await asyncio.to_thread(_ranges, document_id, file_ids)
+        await _delete_pieces(document_id, subject, ranges)
+    else:
+        await _delete_pieces_of_deleted_paper(document_id, subject)
     await asyncio.to_thread(_remove_stored_files, paths)
     await asyncio.to_thread(_delete_rows, document_id, file_ids)
+
+
+def _paper_exists(document_id: UUID) -> bool:
+    from src.models.sql.database import SessionLocal
+
+    with SessionLocal() as session:
+        return session.get(PDFDocument, document_id) is not None
+
+
+async def _delete_pieces_of_deleted_paper(document_id: UUID, subject: str) -> None:
+    from src.lib.weaviate_client.chunks import delete_pieces_of_deleted_paper
+
+    await asyncio.to_thread(delete_pieces_of_deleted_paper, str(document_id), subject)
 
 
 async def _remove_leftovers(document_id: UUID, subject: str, leftovers: Sequence[_Leftover]) -> None:
