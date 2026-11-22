@@ -123,6 +123,10 @@ function sameIds(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((id, index) => id === right[index])
 }
 
+const MAIN_FILE_UNREACHABLE_MESSAGE = 'Unable to reach the PDF document. Please retry or re-upload.'
+/** Proposal, awaiting sign-off: a supplement's PDF that cannot be reached (no re-upload offered). */
+export const SUPPLEMENT_UNREACHABLE_MESSAGE = 'This supplement could not be loaded. Use Retry to try again.'
+
 export function PdfViewer({
   activeDocumentOwnerToken,
   storageUserId = null,
@@ -229,6 +233,7 @@ export function PdfViewer({
     }
     toolbarSearchQueryRef.current = ''
     idleResetErrorRef.current = nextError
+    documentLoadSignalPendingRef.current = false
     evidencePageTextCorporaRef.current = new Map()
     fileViewerStatesRef.current = new Map()
     textNavigationRequestIdRef.current += 1
@@ -1305,8 +1310,6 @@ export function PdfViewer({
         return
       }
 
-      // A new paper (or the same paper again) is a document load Home may be waiting on.
-      documentLoadSignalPendingRef.current = true
       let files: ViewerFile[]
       try {
         // Both addresses must be same-origin paths before the viewer uses them.
@@ -1329,6 +1332,8 @@ export function PdfViewer({
         })
         resetViewerToIdle(error instanceof Error ? error.message : String(error))
         loadStartRef.current = null
+        // A refused new paper is a failed document load Home is waiting on.
+        documentLoadSignalPendingRef.current = true
         signalLoadError(error instanceof Error ? error.message : String(error))
         return
       }
@@ -1379,6 +1384,9 @@ export function PdfViewer({
         scrollPosition: event.detail.viewerState?.scrollPosition ?? DEFAULT_STATE.scrollPosition,
         lastInteraction: new Date().toISOString(),
       }
+      // Home's load overlay waits on a real new load whose first file is a PDF; a text
+      // first file has no PDF load to signal, and later tabs never signal.
+      documentLoadSignalPendingRef.current = isPdfFile(activeViewerFile(nextDoc))
       beginDocumentLoad(nextDoc)
     })
 
@@ -1460,6 +1468,8 @@ export function PdfViewer({
   initialisePdfApplicationRef.current = initialisePdfApplication
   const signalLoadErrorRef = useRef(signalLoadError)
   signalLoadErrorRef.current = signalLoadError
+  const activeFileIsMainRef = useRef(false)
+  activeFileIsMainRef.current = activeFile?.role === 'main'
   const frameKey = activeDocument
     ? `${activeDocument.documentId}::${activeDocument.activeFileId}::${activeDocument.loadedAt}`
     : null
@@ -2027,10 +2037,12 @@ export function PdfViewer({
         }
       } catch (fetchError) {
         if (!cancelled) {
+          // A supplement cannot be re-uploaded by the curator; its pane says only that it could not be reached.
+          const message = activeFileIsMainRef.current ? MAIN_FILE_UNREACHABLE_MESSAGE : SUPPLEMENT_UNREACHABLE_MESSAGE
           setStatus('error')
-          setError('Unable to reach the PDF document. Please retry or re-upload.')
+          setError(message)
           loadStartRef.current = null
-          signalLoadErrorRef.current('Unable to reach the PDF document. Please retry or re-upload.')
+          signalLoadErrorRef.current(message)
         }
       } finally {
         window.clearTimeout(timeoutId)

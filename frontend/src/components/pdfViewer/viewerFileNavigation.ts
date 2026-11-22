@@ -302,6 +302,9 @@ export function locateEvidenceInBlocks(
 /** Proposal, awaiting sign-off: some fragments of the evidence were found and are highlighted, others not. */
 export const TEXT_EVIDENCE_PARTLY_FOUND_MESSAGE = 'Only part of this evidence was found in the file\'s text. The part that was found is highlighted.'
 
+/** Proposal, awaiting sign-off: the chip for a partial find, so it never reads "Exact quote". */
+export const TEXT_EVIDENCE_PARTLY_FOUND_CHIP = 'Partly found'
+
 /** Shown under the chips when a text quote is found (proposals, awaiting sign-off). */
 export const TEXT_QUOTE_FOUND_NOTE = 'The quote was found exactly in this text file.'
 export const TEXT_QUOTE_FOUND_AMONG_SEVERAL_NOTE = 'The quote appears more than once in this text file; the first place in the evidence\'s section (or in reading order) is highlighted.'
@@ -353,5 +356,6 @@ export function buildTextNavigationResult(
     attemptedQueries: queries,
     note: location.chosenAmongSeveral ? TEXT_QUOTE_FOUND_AMONG_SEVERAL_NOTE : TEXT_QUOTE_FOUND_NOTE,
     curatorMessage: partial ? TEXT_EVIDENCE_PARTLY_FOUND_MESSAGE : null,
+    chipLabel: partial ? TEXT_EVIDENCE_PARTLY_FOUND_CHIP : null,
   }
 }

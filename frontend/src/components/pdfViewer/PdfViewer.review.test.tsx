@@ -164,6 +164,9 @@ describe('P9b review fixes', () => {
         'Only part of this evidence was found in the file\'s text. The part that was found is highlighted.',
       )
       expect(screen.getAllByRole('row', { current: true })).toHaveLength(1)
+      // The chip says so too, so closing the banner leaves nothing misleading.
+      expect(screen.getByText('Partly found')).toBeInTheDocument()
+      expect(screen.queryByText('Exact quote')).not.toBeInTheDocument()
     })
   })
 
@@ -246,14 +249,20 @@ describe('P9b review fixes', () => {
     })
   })
 
-  it('F5: the blocks are not rendered again when unrelated state changes', () => {
+  it('F5: the blocks and the table are not rendered again when unrelated state changes', () => {
     let rowReads = 0
+    let headingReads = 0
     const rows = TEXT_SUPPLEMENT_BLOCKS.blocks[1]!.rows!
     const table: DisplayBlock = {
       ...TEXT_SUPPLEMENT_BLOCKS.blocks[1]!,
       get rows() { rowReads += 1; return rows },
     }
-    const blocks = [TEXT_SUPPLEMENT_BLOCKS.blocks[0]!, table]
+    // The heading is rendered by TextFileBlocks itself: its text is read only when the outer component renders.
+    const heading: DisplayBlock = {
+      ...TEXT_SUPPLEMENT_BLOCKS.blocks[0]!,
+      get text() { headingReads += 1; return 'Sheet 1' },
+    }
+    const blocks = [heading, table]
     const ref = () => undefined
     let bump: () => void = () => undefined
     function Parent() {
@@ -266,12 +275,12 @@ describe('P9b review fixes', () => {
       )
     }
     render(<Parent />)
-    const readsAfterFirstRender = rowReads
+    const readsAfterFirstRender = { rows: rowReads, heading: headingReads }
 
     act(() => { bump() })
     act(() => { bump() })
 
-    expect(rowReads).toBe(readsAfterFirstRender)
+    expect({ rows: rowReads, heading: headingReads }).toEqual(readsAfterFirstRender)
   })
 
   it('F6: a found text quote shows its note under the chips', async () => {
@@ -295,9 +304,57 @@ describe('P9b review fixes', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Figure_S2.pdf, file 3 of 3' }))
 
-    expect(await screen.findByText('Unable to reach the PDF document. Please retry or re-upload.')).toBeInTheDocument()
+    expect(await screen.findByText('This supplement could not be loaded. Use Retry to try again.')).toBeInTheDocument()
     window.removeEventListener(DOCUMENT_LOAD_ERROR_EVENT, listener)
     expect(errors).toEqual([])
+  })
+
+  describe('F7 remainder (re-check probes P1, P2)', () => {
+    function collectErrors() {
+      const errors: string[] = []
+      const listener = (event: Event) => errors.push(String((event as CustomEvent).detail?.message))
+      window.addEventListener(DOCUMENT_LOAD_ERROR_EVENT, listener)
+      return { errors, stop: () => window.removeEventListener(DOCUMENT_LOAD_ERROR_EVENT, listener) }
+    }
+
+    it('P1: a text main paper, then a PDF supplement that fails: no Home load error', async () => {
+      stubViewerFetch({ headStatus: (url) => (url.includes(PDF_SUPPLEMENT_FILE_ID) ? 404 : 200) })
+      const textMain = { ...FOUR_FILES_PAYLOAD.files[1]!, role: 'main' as const, tab_order: 0 }
+      await showFourFilePaper([textMain, FOUR_FILES_PAYLOAD.files[2]!])
+      await screen.findByText('Kept at two temperatures.')
+      const { errors, stop } = collectErrors()
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Figure_S2.pdf, file 2 of 2' }))
+
+      expect(await screen.findByText('This supplement could not be loaded. Use Retry to try again.')).toBeInTheDocument()
+      stop()
+      expect(errors).toEqual([])
+    })
+
+    it('P2: a loaded PDF paper sent again unchanged, then a failing PDF supplement: no Home load error', async () => {
+      stubViewerFetch({ headStatus: (url) => (url.includes(PDF_SUPPLEMENT_FILE_ID) ? 404 : 200) })
+      await showFourFilePaper()
+      installPdfApp(MAIN_PAGES)
+      await waitFor(() => expect(screen.getByRole('textbox', { name: 'Find in PDF' })).toBeEnabled())
+      act(() => { showPaperFilesInViewer(DOCUMENT_ID, structuredClone(FOUR_FILES_PAYLOAD.files), { ownerToken: HOME_PDF_VIEWER_OWNER }) })
+      const { errors, stop } = collectErrors()
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Figure_S2.pdf, file 3 of 3' }))
+
+      expect(await screen.findByText('This supplement could not be loaded. Use Retry to try again.')).toBeInTheDocument()
+      stop()
+      expect(errors).toEqual([])
+    })
+
+    it('a main PDF that cannot be reached still tells Home, with the main-file text', async () => {
+      stubViewerFetch({ headStatus: () => 404 })
+      const { errors, stop } = collectErrors()
+      await showFourFilePaper()
+
+      expect(await screen.findByText('Unable to reach the PDF document. Please retry or re-upload.')).toBeInTheDocument()
+      stop()
+      expect(errors).toEqual(['Unable to reach the PDF document. Please retry or re-upload.'])
+    })
   })
 
   it('F8: a main file\'s accessible name includes the visible "(main paper)"', async () => {

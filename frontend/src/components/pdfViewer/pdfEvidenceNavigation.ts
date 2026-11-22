@@ -100,6 +100,8 @@ export interface PdfViewerNavigationResult {
   fileId?: string | null
   /** Curator-facing text that replaces the generic banner message, when set. */
   curatorMessage?: string | null
+  /** Curator-facing chip text that replaces the locator-quality label, when set. */
+  chipLabel?: string | null
 }
 
 export type PdfEvidenceSpikeResult = PdfViewerNavigationResult

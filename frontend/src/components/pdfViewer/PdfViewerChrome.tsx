@@ -218,7 +218,7 @@ export function PdfViewerChrome({
                   <Chip
                     size="small"
                     color={getNavigationBadgeColor(navigationResult)}
-                    label={formatLocatorQualityLabel(navigationResult.locatorQuality)}
+                    label={navigationResult.chipLabel ?? formatLocatorQualityLabel(navigationResult.locatorQuality)}
                     sx={{
                       marginTop: 0.5,
                       ...(isCurationVariant && {
