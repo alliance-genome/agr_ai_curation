@@ -94,37 +94,55 @@ def test_format_hierarchy_for_prompt_returns_empty_when_missing_sections():
     assert format_hierarchy_for_prompt({"sections": []}) == ""
 
 
-def test_format_hierarchy_for_prompt_formats_top_level_and_subsections():
-    hierarchy = {
-        "sections": [
-            {
-                "name": "Methods",
-                "page_numbers": [2, 4],
-                "chunk_count": 3,
-                "subsections": [
-                    {"name": "Fly Strains", "page_numbers": [3], "chunk_count": 1}
-                ],
-            }
-        ],
-        "top_level_sections": ["Methods"],
+def _outline(*files):
+    """The shape get_document_sections_hierarchical returns: all sections, and each file's own."""
+    return {
+        "sections": [section for file in files for section in file["sections"]],
+        "top_level_sections": [section["name"] for file in files for section in file["sections"]],
+        "files": list(files),
     }
 
-    result = format_hierarchy_for_prompt(hierarchy)
+
+def _file(name, role, kind, start, end, sections):
+    return {"file_id": f"id-{name}", "name": name, "role": role, "kind": kind,
+            "chunk_index_start": start, "chunk_index_end": end, "chunk_count": end - start + 1,
+            "sections": sections, "top_level_sections": [section["name"] for section in sections]}
+
+
+METHODS = {"name": "Materials and Methods", "page_numbers": [2, 4], "chunk_count": 3,
+           "subsections": [{"name": "Fly strains", "page_numbers": [3], "chunk_count": 1}]}
+SHEET = {"name": "Sheet1", "page_numbers": [], "chunk_count": 19, "subsections": []}
+
+
+def test_a_one_file_paper_lists_one_file_then_its_exact_section_names():
+    result = format_hierarchy_for_prompt(_outline(_file("paper.pdf", "main", "PDF", 0, 41, [METHODS])))
 
     assert "## Document Structure" in result
-    assert "**Methods** (p.2-4, 3 chunks)" in result
-    assert "  └─ Fly Strains (p.3, 1 chunks)" in result
-    assert "**Top-level sections (in order):** Methods" in result
+    assert "This paper has 1 file. Each file lists its sections and subsections with their exact names" in result
+    assert "File 1 of 1: paper.pdf (main paper, PDF, 42 chunks, chunks 0 to 41)" in result
+    assert "**Materials and Methods** (p.2-4, 3 chunks)" in result
+    assert "  └─ Fly strains (p.3, 1 chunks)" in result
+    assert 'read_section("Methods")' not in result
+    assert "Top-level sections" not in result
 
 
-def test_format_hierarchy_for_prompt_uses_unknown_when_top_level_missing():
-    hierarchy = {
-        "sections": [{"name": "Introduction", "page_numbers": [], "chunk_count": 0}],
-    }
+def test_several_files_are_listed_in_tab_order_and_text_files_show_no_pages():
+    result = format_hierarchy_for_prompt(_outline(
+        _file("paper.pdf", "main", "PDF", 0, 41, [METHODS]),
+        _file("Table S1.xlsx", "supplement", "Excel", 42, 60, [SHEET]),
+    ))
 
-    result = format_hierarchy_for_prompt(hierarchy)
+    assert "This paper has 2 files." in result
+    assert result.index("File 1 of 2: paper.pdf") < result.index(
+        "File 2 of 2: Table S1.xlsx (supplement, Excel, 19 chunks, chunks 42 to 60)")
+    assert "**Sheet1** (19 chunks)" in result
+    assert 'add `file="<file name>"`' in result
 
-    assert "**Top-level sections (in order):** Unknown" in result
+
+def test_the_outline_never_says_files_are_still_being_added():
+    """That line waits for the owner's decision (O4)."""
+    result = format_hierarchy_for_prompt(_outline(_file("paper.pdf", "main", "PDF", 0, 41, [METHODS])))
+    assert "still being added" not in result
 
 
 def test_format_sections_for_prompt_returns_empty_when_no_sections():
@@ -145,12 +163,8 @@ def test_format_sections_for_prompt_formats_entries_with_defaults():
 
 
 def test_format_document_context_for_prompt_prefers_hierarchy():
-    hierarchy = {
-        "sections": [
-            {"name": "Results", "page_numbers": [8], "chunk_count": 2, "subsections": []}
-        ],
-        "top_level_sections": ["Results"],
-    }
+    hierarchy = _outline(_file("paper.pdf", "main", "PDF", 0, 1, [
+        {"name": "Results", "page_numbers": [8], "chunk_count": 2, "subsections": []}]))
     sections = [{"title": "Fallback", "page_numbers": [1], "chunk_count": 1}]
 
     context_text, structure_info = format_document_context_for_prompt(
@@ -165,22 +179,17 @@ def test_format_document_context_for_prompt_prefers_hierarchy():
 
 def test_document_context_is_exactly_the_section_list_for_a_paper_with_an_abstract():
     """A paper's Abstract section appears in the section list only, never as injected text."""
-    hierarchy = {
-        "sections": [
-            {"name": "Abstract", "page_numbers": [1], "chunk_count": 2, "subsections": []},
-            {"name": "Results", "page_numbers": [3, 5], "chunk_count": 4, "subsections": [
-                {"name": "Expression", "page_numbers": [4], "chunk_count": 1},
-            ]},
-        ],
-        "top_level_sections": ["Abstract", "Results"],
-        "abstract_section_title": "Abstract",
-    }
+    hierarchy = _outline(_file("paper.pdf", "main", "PDF", 0, 5, [
+        {"name": "Abstract", "page_numbers": [1], "chunk_count": 2, "subsections": []},
+        {"name": "Results", "page_numbers": [3, 5], "chunk_count": 4, "subsections": [
+            {"name": "Expression", "page_numbers": [4], "chunk_count": 1},
+        ]},
+    ]))
 
     context_text, structure_info = format_document_context_for_prompt(hierarchy=hierarchy)
 
     assert context_text == format_hierarchy_for_prompt(hierarchy)
     assert "**Abstract** (p.1, 2 chunks)" in context_text
-    assert "**Top-level sections (in order):** Abstract, Results" in context_text
     assert "Paper Abstract" not in context_text
     assert structure_info == "hierarchy with 2 sections"
     assert not hasattr(prompt_utils, "fetch_document_abstract")

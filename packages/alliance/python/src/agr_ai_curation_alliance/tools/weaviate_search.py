@@ -30,6 +30,7 @@ from agr_ai_curation_runtime.evidence_spans import (
 from agr_ai_curation_runtime.chunk_identity import resolve_chunk_identifier
 from agr_ai_curation_runtime.tool_result_bounds import parse_offset
 from agr_ai_curation_runtime.weaviate_chunks import (
+    get_document_sections_hierarchical,
     hybrid_search_chunks,
     get_chunk_by_index,
     get_chunk_neighbor_ids,
@@ -267,7 +268,7 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
         section_keywords: Optional[List[str]] = None,
         search_mode: SearchMode = "auto",
     ) -> ChunkSearchResult:
-        """Discovery tool: search the loaded PDF for relevant chunks.
+        """Discovery tool: search the paper's readable files for relevant chunks.
 
         Use returned chunk_index values with read_chunk for final evidence selection.
         Do not use search snippets as retained evidence.
@@ -600,12 +601,11 @@ class NumberedPassage(BaseModel):
 
 
 class NumberedSection(BaseModel):
-    """Every chunk the section request matched, or every matching one for text_contains."""
+    """Every chunk of the one section read, or every matching one for text_contains."""
 
     requested_section: str
     requested_subsection: Optional[str] = None
-    matched_sections: List[str]
-    matched_subsections: Optional[List[str]] = None
+    file: str
     page_numbers: List[int]
     total_chunk_count: int
     text_contains: Optional[str] = None
@@ -616,11 +616,19 @@ class NumberedSection(BaseModel):
 class SectionReadResult(BaseModel):
     summary: str
     section: Optional[NumberedSection]
+    error_code: Optional[str] = None
 
 
 class SubsectionReadResult(BaseModel):
     summary: str
     subsection: Optional[NumberedSection]
+    error_code: Optional[str] = None
+
+
+# A section request the model can correct: the run continues with the answer.
+SECTION_NOT_FOUND = "section_not_found"
+SECTION_AMBIGUOUS = "section_ambiguous"
+UNKNOWN_FILE = "unknown_file"
 
 
 def _best_effort_metadata(chunk: dict) -> dict:
@@ -678,15 +686,12 @@ def _validate_section_chunks(chunks: List[dict]) -> None:
             raise RuntimeError("Stored section chunk has invalid chunk_index") from exc
 
 
-def _distinct(values: List[Optional[str]]) -> List[str]:
-    return list(dict.fromkeys(value for value in values if value))
-
-
 async def _numbered_section_read(
     chunks: List[dict],
     *,
     requested_section: str,
     requested_subsection: Optional[str],
+    file: str,
     text_contains: Optional[str],
 ) -> NumberedSection:
     """Show every selected chunk whole and issue all of its spans in one transaction."""
@@ -720,11 +725,7 @@ async def _numbered_section_read(
     return NumberedSection(
         requested_section=requested_section,
         requested_subsection=requested_subsection,
-        matched_sections=_distinct([chunk.get("parent_section") for chunk in chunks]),
-        matched_subsections=(
-            _distinct([_chunk_subsection(chunk, _best_effort_metadata(chunk)) for chunk in chunks])
-            if requested_subsection is not None else None
-        ),
+        file=file,
         page_numbers=sorted({passage.page_number for passage in passages if passage.page_number}),
         total_chunk_count=len(chunks),
         text_contains=text_contains,
@@ -734,10 +735,6 @@ async def _numbered_section_read(
 
 
 def _section_summary(section: NumberedSection, label: str) -> str:
-    names = ", ".join(f"'{name}'" for name in section.matched_sections)
-    if section.matched_subsections:
-        subsections = ", ".join(f"'{name}'" for name in section.matched_subsections)
-        names = f"{names}; subsections {subsections}" if names else f"subsections {subsections}"
     if section.text_contains:
         shown = (
             f"{section.matched_chunk_count} of the {section.total_chunk_count} chunks of {label} "
@@ -745,11 +742,121 @@ def _section_summary(section: NumberedSection, label: str) -> str:
         )
     else:
         shown = f"Read all {section.total_chunk_count} chunks of {label}."
-    matched = f" Matched section names: {names}." if names else ""
     return (
-        f"{shown}{matched} Each passage lists numbered sentences; "
+        f"{shown} Each passage lists numbered sentences; "
         "pass its chunk_index and a sentence number (span_index) to record_evidence."
     )
+
+
+def _quoted(names: List[str]) -> str:
+    return ", ".join(f"'{name}'" for name in names)
+
+
+def _scope_or_answer(readable: Any, file: Optional[str]) -> tuple[Any, Optional[str]]:
+    """The files a section read may look in, or the unknown-file answer."""
+    if file is None:
+        return readable, None
+    target = readable.by_label(file)
+    if target is None:
+        names = ", ".join(label for label, _ in readable.labelled())
+        return None, f"There is no readable file named '{file}'. Readable files: {names}."
+    return readable.only(target), None
+
+
+def _files_holding(readable: Any, chunks: List[dict]) -> List[str]:
+    """The labels of the readable files the chunks belong to, in tab order."""
+    held = {readable.file_for(chunk.get("chunk_index")) for chunk in chunks}
+    if None in held:
+        raise RuntimeError("Section read returned a chunk outside the readable files")
+    return [label for label, file in readable.labelled() if file in held]
+
+
+async def _not_found_answer(
+    document_id: str, user_id: str, scope: Any, *, section: str, subsection: Optional[str], file: Optional[str],
+) -> str:
+    """Every exact name the request could have used, file by file, as stored."""
+    outline = await get_document_sections_hierarchical(document_id, user_id, readable=scope)
+    where = f"file '{file}'" if file is not None else "the readable files"
+    parts = []
+    for listed in outline["files"]:
+        if subsection is None:
+            names = [entry["name"] for entry in listed["sections"]]
+        else:
+            names = [
+                sub["name"] for entry in listed["sections"] if entry["name"] == section
+                for sub in entry["subsections"]
+            ]
+        if names:
+            parts.append(f"{listed['name']}: {_quoted(names)}")
+    if subsection is None:
+        missing = f"No section named '{section}' in {where}."
+        listing = "Section names, exactly as stored"
+    elif parts:
+        missing = f"No subsection '{subsection}' in section '{section}' in {where}."
+        listing = f"Subsection names of '{section}', exactly as stored"
+    else:
+        return await _not_found_answer(
+            document_id, user_id, scope, section=section, subsection=None, file=file,
+        )
+    return f"{missing} {listing}: {'; '.join(parts) if parts else 'none'}."
+
+
+async def _read_named_section(
+    *,
+    document_id: str,
+    user_id: str,
+    section: str,
+    subsection: Optional[str],
+    file: Optional[str],
+    text_contains: Optional[str],
+) -> tuple[Optional[NumberedSection], str, Optional[str]]:
+    """Read one section (or subsection) of one readable file by its exact stored name.
+
+    Returns (section, summary, error_code); the error answers let the model correct
+    the request with the names it needs.
+    """
+    readable = current_readable_files()
+    scope, unknown_file = _scope_or_answer(readable, file)
+    if unknown_file is not None:
+        return None, unknown_file, UNKNOWN_FILE
+    if subsection is None:
+        chunks = await get_chunks_by_parent_section(
+            document_id=document_id,
+            parent_section=section,
+            user_id=user_id,
+            readable=scope,
+        )
+    else:
+        chunks = await get_chunks_by_subsection(
+            document_id=document_id,
+            parent_section=section,
+            subsection=subsection,
+            user_id=user_id,
+            readable=scope,
+        )
+    # Incomplete stored rows fail as a source fault before anything else is decided.
+    _validate_section_chunks(chunks)
+    if not chunks:
+        answer = await _not_found_answer(
+            document_id, user_id, scope, section=section, subsection=subsection, file=file,
+        )
+        return None, answer, SECTION_NOT_FOUND
+    holding = _files_holding(readable, chunks)
+    if len(holding) > 1:
+        kind = "Section" if subsection is None else f"Subsection '{subsection}' of section"
+        return None, (
+            f"{kind} '{section}' is in more than one file: {', '.join(holding)}. "
+            "Call again with file set to one of these names."
+        ), SECTION_AMBIGUOUS
+    read = await _numbered_section_read(
+        chunks,
+        requested_section=section,
+        requested_subsection=subsection,
+        file=holding[0],
+        text_contains=text_contains,
+    )
+    label = f"'{section}'" if subsection is None else f"'{section} > {subsection}'"
+    return read, _section_summary(read, label), None
 
 
 def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["ToolCallTracker"] = None):
@@ -767,6 +874,7 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
     @function_tool(failure_error_function=_raise_document_read_error)
     async def read_section(
         section_name: str,
+        file: Optional[str] = None,
         text_contains: Optional[str] = None,
     ) -> SectionReadResult:
         """Read a whole section of the paper, numbered sentence by sentence.
@@ -791,12 +899,14 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
         chunk_index and the sentence number (span_index) to record_evidence;
         there is no need to read the passage again with read_chunk.
 
-        The section name is matched as part of a name: "Methods" also matches
-        "Materials and Methods" and "Supplementary Methods". The result lists every
-        section name that matched, so check it when several sections share a word.
+        The section name must be one of the names in the paper's outline, written
+        exactly as shown there. When the paper has several files and more than one
+        has a section of that name, also give the file's name from the outline.
 
         Args:
-            section_name: The section to read, as named in the paper's outline (e.g., "Materials and Methods", "Results").
+            section_name: The section to read, exactly as named in the paper's outline (for example "Materials and Methods").
+            file: The file the section is in, written exactly as in the outline. Needed only when several files have a
+                  section of that name.
             text_contains: Optional word or phrase (case does not matter). Only passages containing it are returned,
                            each one whole and numbered; the result says how many of the section's passages matched.
         """
@@ -804,41 +914,28 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
             tracker.record_call("read_section")
 
         logger.info(
-            "Reading section '%s' from document %s... (filtered=%s)",
-            section_name,
+            "Reading section from document %s... (file given=%s, filtered=%s)",
             document_id[:8],
+            file is not None,
             bool(text_contains),
         )
 
-        # Hierarchy-aware retrieval: LLM-resolved parentSection, every matching chunk.
-        chunks = await get_chunks_by_parent_section(
+        section, summary, error_code = await _read_named_section(
             document_id=document_id,
-            parent_section=section_name,
             user_id=user_id,
-            readable=current_readable_files(),
-        )
-
-        if not chunks:
-            logger.info("No content found for section: %s", section_name)
-            return SectionReadResult(
-                summary=f"No content found for section '{section_name}'.",
-                section=None
-            )
-
-        section = await _numbered_section_read(
-            chunks,
-            requested_section=section_name,
-            requested_subsection=None,
+            section=section_name,
+            subsection=None,
+            file=file,
             text_contains=text_contains,
         )
-        logger.info(
-            "Read %s/%s chunks from section '%s', pages %s",
-            len(section.passages),
-            section.total_chunk_count,
-            section_name,
-            section.page_numbers,
-        )
-        return SectionReadResult(summary=_section_summary(section, f"'{section_name}'"), section=section)
+        if section is not None:
+            logger.info(
+                "Read %s/%s chunks from one section, pages %s",
+                len(section.passages),
+                section.total_chunk_count,
+                section.page_numbers,
+            )
+        return SectionReadResult(summary=summary, section=section, error_code=error_code)
 
     return scoped_document_tool(read_section, document_id=document_id, user_id=user_id)
 
@@ -854,13 +951,14 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
     async def read_subsection(
         parent_section: str,
         subsection: str,
+        file: Optional[str] = None,
         text_contains: Optional[str] = None,
     ) -> SubsectionReadResult:
         """Read a whole subsection of the paper, numbered sentence by sentence.
 
         Returns every passage (chunk) the paper's outline places in the named
         subsection of a section, in reading order, however long it is. Use it for a
-        focused read of one part of a section, such as "Fly strains" in the Methods
+        focused read of one part of a section, such as the fly strains in the Methods
         or one figure legend.
 
         Each passage shows its chunk_index, page and subsection, then its text
@@ -878,18 +976,18 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
         number (span_index) to record_evidence; there is
         no need to read the passage again with read_chunk.
 
-        Both names are matched as part of a name, so "Strains" also matches
-        "Fly strains and genetics". The result lists every section and subsection
-        name that matched.
+        Both names must be written exactly as in the paper's outline. When the
+        paper has several files and more than one has that subsection, also give
+        the file's name from the outline.
 
-        Examples:
-            - read_subsection("Methods", "Fly Strains")
-            - read_subsection("Results", "Gene Expression Analysis")
-            - read_subsection("Discussion", "Limitations")
+        Example, with the names exactly as the outline shows them:
+            - read_subsection("Materials and Methods", "Fly strains")
 
         Args:
-            parent_section: The top-level section (e.g., "Methods", "Results").
-            subsection: The subsection within it (e.g., "Fly Strains", "Cell Culture").
+            parent_section: The top-level section, exactly as named in the outline.
+            subsection: The subsection within it, exactly as named in the outline.
+            file: The file the subsection is in, written exactly as in the outline. Needed only when several files
+                  have that subsection.
             text_contains: Optional word or phrase (case does not matter). Only passages containing it are returned,
                            each one whole and numbered; the result says how many of the subsection's passages matched.
         """
@@ -897,43 +995,27 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
             tracker.record_call("read_subsection")
 
         logger.info(
-            "Reading subsection '%s' in '%s' from document %s... (filtered=%s)",
-            subsection,
-            parent_section,
+            "Reading subsection from document %s... (file given=%s, filtered=%s)",
             document_id[:8],
+            file is not None,
             bool(text_contains),
         )
 
-        chunks = await get_chunks_by_subsection(
+        section, summary, error_code = await _read_named_section(
             document_id=document_id,
-            parent_section=parent_section,
-            subsection=subsection,
             user_id=user_id,
-            readable=current_readable_files(),
-        )
-
-        if not chunks:
-            return SubsectionReadResult(
-                summary=f"No content found for subsection '{subsection}' in '{parent_section}'.",
-                subsection=None
-            )
-
-        section = await _numbered_section_read(
-            chunks,
-            requested_section=parent_section,
-            requested_subsection=subsection,
+            section=parent_section,
+            subsection=subsection,
+            file=file,
             text_contains=text_contains,
         )
-        logger.info(
-            "Read %s/%s chunks from subsection '%s', pages %s",
-            len(section.passages),
-            section.total_chunk_count,
-            subsection,
-            section.page_numbers,
-        )
-        return SubsectionReadResult(
-            summary=_section_summary(section, f"'{parent_section} > {subsection}'"),
-            subsection=section,
-        )
+        if section is not None:
+            logger.info(
+                "Read %s/%s chunks from one subsection, pages %s",
+                len(section.passages),
+                section.total_chunk_count,
+                section.page_numbers,
+            )
+        return SubsectionReadResult(summary=summary, subsection=section, error_code=error_code)
 
     return scoped_document_tool(read_subsection, document_id=document_id, user_id=user_id)

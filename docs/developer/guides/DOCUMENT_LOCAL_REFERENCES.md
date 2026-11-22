@@ -78,6 +78,33 @@ files and removed files are never readable.
 - The document-context cache records the readable files each outline was built
   from; a run with other readable files builds its own.
 
+## Section names are exact, within one file
+
+`read_section(section_name, file=None)` and
+`read_subsection(parent_section, subsection, file=None)` read the pieces whose
+stored `parentSection` (and `subsection`) equal the requested names exactly
+(Q9): "Methods" does not read "Materials and Methods". The search index tokenizes
+these names by word, so its `equal` filter only narrows the read; the stored
+name is then compared exactly. `file` is a file name as the outline shows it
+(`ReadableFiles.labelled`: a second file with the same display name is shown as
+"name (2)", skipping any suffix another file really has). It is optional when
+the section is in one readable file. A request the model can correct returns
+`section: null` with a summary and an `error_code`, and the run continues:
+
+- `section_not_found`: every exact section name (or the section's subsection
+  names), file by file, as stored;
+- `section_ambiguous`: the files holding the section, asking for `file`;
+- `unknown_file`: the readable file names.
+
+The outline in agent prompts (`prompt_utils.format_hierarchy_for_prompt`) lists
+each readable file in tab order ("File n of m: name (role, kind, k chunks, chunks
+a to b)") with its sections and subsections by exact stored name.
+`get_document_sections_hierarchical` returns `files` beside the whole-paper
+`sections`. The outline is built at the start of a run: a file that becomes
+ready during the run is readable from the next tool call (its pieces appear in
+search results, and `read_section` with its name and the file works), but the
+outline the model was given does not list it.
+
 ## Selections that have not been read
 
 If `record_evidence` selects a chunk or span window that has not been issued in

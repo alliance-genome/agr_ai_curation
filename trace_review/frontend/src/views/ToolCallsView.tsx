@@ -215,6 +215,9 @@ function SectionContentDisplay({ section }: { section: SectionReadDisplay }) {
         {section.chunk_count && (
           <Chip label={`${section.chunk_count} chunks`} size="small" color="info" variant="outlined" />
         )}
+        {section.file && (
+          <Chip label={`File: ${section.file}`} size="small" variant="outlined" />
+        )}
         {section.matched_sections && section.matched_sections.length > 0 && (
           <Chip label={`Matched: ${section.matched_sections.join(', ')}`} size="small" variant="outlined" />
         )}

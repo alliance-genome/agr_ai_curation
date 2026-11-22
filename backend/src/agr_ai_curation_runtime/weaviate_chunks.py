@@ -32,6 +32,10 @@ async def get_chunk_neighbor_ids(*args: Any, **kwargs: Any) -> Any:
     return await _load_chunks_module().get_chunk_neighbor_ids(*args, **kwargs)
 
 
+async def get_document_sections_hierarchical(*args: Any, **kwargs: Any) -> Any:
+    return await _load_chunks_module().get_document_sections_hierarchical(*args, **kwargs)
+
+
 async def get_chunks_by_parent_section(*args: Any, **kwargs: Any) -> Any:
     return await _load_chunks_module().get_chunks_by_parent_section(*args, **kwargs)
 
@@ -45,6 +49,7 @@ __all__ = [
     "get_chunk_by_index",
     "get_chunk_neighbor_ids",
     "get_chunks_by_parent_section",
+    "get_document_sections_hierarchical",
     "get_chunks_by_subsection",
     "hybrid_search_chunks",
 ]

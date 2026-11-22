@@ -287,3 +287,40 @@ def test_the_evidence_resolution_fetch_skips_a_pending_file(stored_paper):
     pieces = chunk_reads.fetch_document_chunks_for_resolution(stored_paper["document_id"], TEST_USER_ID)
 
     assert [piece["chunk_index"] for piece in pieces] == [0, 1, 2, 3, 4]
+
+
+@pytest.mark.asyncio
+async def test_section_names_are_exact_although_the_index_matches_words(owner_id, weaviate_connection,
+                                                                        setup_collections, clean_chunks, monkeypatch):
+    """Weaviate's equal on a word-tokenized name also returns "Materials and Methods" for "Methods"."""
+    document_id = uuid4()
+    with SessionLocal.begin() as db:
+        db.add(PDFDocument(
+            id=document_id, user_id=owner_id, filename=f"{PREFIX}{document_id}.pdf",
+            status="completed", processing_completed_at=datetime.now(timezone.utc), next_chunk_index=3,
+        ))
+        db.flush()
+        db.add(_file(
+            document_id, role="main", display_name="main.pdf", status="ready", tab_order=0,
+            display_mode="local_pdf", file_path=f"o/{document_id}/main.pdf", page_count=1,
+            chunk_index_start=0, chunk_index_end=2, chunk_count=3, text_bytes=30,
+        ))
+    names = ["Materials and Methods", "Methods", "methods"]
+    await store_chunks_to_weaviate(
+        [{"chunk_index": index, "content": f"Piece {index}.", "element_type": "NarrativeText", "page_number": 1,
+          "section_title": name, "parent_section": name, "subsection": "Fly strains", "metadata": {}}
+         for index, name in enumerate(names)],
+        str(document_id), weaviate_connection, TEST_USER_ID, chunk_range=(0, 2),
+    )
+    monkeypatch.setattr(chunk_reads, "get_connection", lambda: weaviate_connection)
+    readable = resolve_readable_files(str(document_id), TEST_USER_ID)
+
+    methods = await chunk_reads.get_chunks_by_parent_section(str(document_id), "Methods", TEST_USER_ID, readable=readable)
+    full = await chunk_reads.get_chunks_by_parent_section(
+        str(document_id), "Materials and Methods", TEST_USER_ID, readable=readable)
+    strains = await chunk_reads.get_chunks_by_subsection(
+        str(document_id), "Methods", "Fly strains", TEST_USER_ID, readable=readable)
+
+    assert [chunk["chunk_index"] for chunk in methods] == [1]
+    assert [chunk["chunk_index"] for chunk in full] == [0]
+    assert [chunk["chunk_index"] for chunk in strains] == [1]

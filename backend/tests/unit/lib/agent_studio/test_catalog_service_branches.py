@@ -1076,12 +1076,16 @@ def test_runtime_context_has_section_list_but_no_abstract_for_paper_with_abstrac
     """No agent's built runtime context carries the paper's abstract, even if a caller still passes one."""
     from src.lib.openai_agents.prompt_utils import format_hierarchy_for_prompt
 
+    sections = [
+        {"name": "Abstract", "page_numbers": [1], "chunk_count": 1, "subsections": []},
+        {"name": "Results", "page_numbers": [2], "chunk_count": 3, "subsections": []},
+    ]
     hierarchy = {
-        "sections": [
-            {"name": "Abstract", "page_numbers": [1], "chunk_count": 1, "subsections": []},
-            {"name": "Results", "page_numbers": [2], "chunk_count": 3, "subsections": []},
-        ],
+        "sections": sections,
         "top_level_sections": ["Abstract", "Results"],
+        "files": [{"file_id": "main-file", "name": "Paper A.pdf", "role": "main", "kind": "PDF",
+                   "chunk_index_start": 0, "chunk_index_end": 3, "chunk_count": 4,
+                   "sections": sections, "top_level_sections": ["Abstract", "Results"]}],
     }
     runtime_context = catalog_service._build_runtime_context(
         runtime_kwargs={

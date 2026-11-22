@@ -174,6 +174,9 @@ def _numbered_display(result_key: str, section: Dict[str, Any]) -> Dict[str, Any
     display = {
         "shape": NUMBERED_PASSAGES_SHAPE,
         **_headings(result_key, section, section.get("requested_section")),
+        # Reads since 0.12.0 name the one file read; earlier reads listed every
+        # section name a part-name match covered.
+        "file": section.get("file"),
         "matched_sections": section.get("matched_sections") or [],
         "page_numbers": section.get("page_numbers") or [],
         "chunk_count": len(passages),

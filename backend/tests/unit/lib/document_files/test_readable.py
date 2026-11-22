@@ -76,3 +76,40 @@ def test_the_scope_reaches_tasks_and_threads_started_inside_it():
 
     with reading_scope(ReadingScope.MAIN_FILE_ONLY):
         assert asyncio.run(inside()) == (ReadingScope.MAIN_FILE_ONLY, ReadingScope.MAIN_FILE_ONLY)
+
+
+def test_files_sharing_a_name_get_numbered_labels_that_never_collide_with_a_real_name():
+    readable = ReadableFiles("doc-1", (
+        ReadableFile("a", "Table S1.xlsx", "supplement", 0, 1),
+        ReadableFile("b", "Table S1.xlsx (2)", "supplement", 2, 3),
+        ReadableFile("c", "Table S1.xlsx", "supplement", 4, 5),
+        ReadableFile("d", "Table S1.xlsx", "supplement", 6, 7),
+    ))
+
+    assert [(label, file.file_id) for label, file in readable.labelled()] == [
+        ("Table S1.xlsx", "a"), ("Table S1.xlsx (2)", "b"), ("Table S1.xlsx (3)", "c"), ("Table S1.xlsx (4)", "d"),
+    ]
+    assert readable.by_label("Table S1.xlsx (2)").file_id == "b"
+    assert readable.by_label("Table S1.xlsx (3)").file_id == "c"
+    assert readable.by_label("Table S1.xlsx (5)") is None
+    assert readable.ranges_text() == (
+        "0 to 1 (Table S1.xlsx), 2 to 3 (Table S1.xlsx (2)), 4 to 5 (Table S1.xlsx (3)), 6 to 7 (Table S1.xlsx (4))"
+    )
+
+
+def test_one_file_of_the_paper_can_be_read_on_its_own():
+    sheet = PAPER.by_label("Table S1.xlsx")
+
+    assert PAPER.only(sheet).files == (sheet,)
+    with pytest.raises(Exception, match="not one of this paper's readable files"):
+        PAPER.only(ReadableFile("x", "other.pdf", "supplement", 90, 99))
+
+
+@pytest.mark.parametrize("display_mode, extension, kind", [
+    ("local_pdf", None, "PDF"), ("provider_pdf_proxy", "pdf", "PDF"), ("text", "xlsx", "Excel"),
+    ("text", ".DOCX", "Word"), ("text", "csv", "text"), ("text", None, "text"),
+])
+def test_a_files_kind_comes_from_its_display_mode_and_extension(display_mode, extension, kind):
+    from src.lib.document_files.readable import file_kind
+
+    assert file_kind(display_mode, extension) == kind

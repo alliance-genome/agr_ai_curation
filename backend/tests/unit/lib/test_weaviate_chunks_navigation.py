@@ -341,22 +341,26 @@ async def test_hierarchy_helper(monkeypatch):
             "user-1", readable=single_file("11111111-1111-1111-1111-111111111111"),
         )
 
-    assert set(hierarchical) == {"sections", "top_level_sections"}
+    assert set(hierarchical) == {"sections", "top_level_sections", "files"}
     assert hierarchical["top_level_sections"] == ["Methods", "Results"]
+    [only] = hierarchical["files"]
+    assert (only["name"], only["role"], only["chunk_count"]) == ("paper.pdf", "main", 100_000)
+    assert only["sections"] == hierarchical["sections"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("missing", [None, "absent"])
-async def test_hierarchy_preserves_chunks_with_missing_metadata(monkeypatch, missing):
+async def test_hierarchy_preserves_chunks_with_missing_pages(monkeypatch, missing):
     _sync_to_thread(monkeypatch)
     collection = MagicMock()
-    unknown = {"parentSection": "Methods", "subsection": "Unknown pages"}
+    # Every listed piece has a piece number (the readable-range filter needs it); pages may be missing.
+    unknown = {"parentSection": "Methods", "subsection": "Unknown pages", "chunkIndex": 9}
     if missing is None:
-        unknown.update(pageNumber=None, chunkIndex=None)
+        unknown.update(pageNumber=None)
     collection.query.fetch_objects.return_value = SimpleNamespace(objects=[
-        SimpleNamespace(properties=unknown),
         SimpleNamespace(properties={"parentSection": "Methods", "subsection": "Known", "pageNumber": 3, "chunkIndex": 4}),
-        SimpleNamespace(properties={"parentSection": "Methods", "subsection": "Known", "pageNumber": None, "chunkIndex": None}),
+        SimpleNamespace(properties={"parentSection": "Methods", "subsection": "Known", "pageNumber": None, "chunkIndex": 5}),
+        SimpleNamespace(properties=unknown),
     ])
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), patch(
         "src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())
@@ -756,7 +760,7 @@ async def test_with_no_readable_file_reads_return_nothing_without_a_query(monkey
     assert await chunks.get_chunks_by_parent_section("doc-1", "Methods", "u", readable=nothing) == []
     assert await chunks.get_chunks_by_subsection("doc-1", "Methods", "Strains", "u", readable=nothing) == []
     assert await chunks.get_document_sections_hierarchical("doc-1", "u", readable=nothing) == {
-        "sections": [], "top_level_sections": [],
+        "sections": [], "top_level_sections": [], "files": [],
     }
     assert await chunks.get_chunks("doc-1", {"page": 1, "page_size": 5}, "u", readable=nothing) == {
         "chunks": [], "total": 0,
@@ -821,3 +825,76 @@ async def test_neighbors_stay_inside_the_pieces_own_file(monkeypatch, index, pre
         "next_chunk_id": None if following is None else f"id-{following}",
     }
     assert asked == [value for value in (previous, following) if value is not None]
+
+
+
+@pytest.mark.asyncio
+async def test_the_outline_lists_each_readable_file_with_its_own_sections(monkeypatch):
+    _sync_to_thread(monkeypatch)
+    collection = MagicMock()
+    collection.query.fetch_objects.return_value = SimpleNamespace(objects=[
+        SimpleNamespace(properties={"parentSection": "Materials and Methods", "subsection": None,
+                                    "pageNumber": 2, "chunkIndex": 0}),
+        SimpleNamespace(properties={"parentSection": "Sheet1", "subsection": None, "pageNumber": None,
+                                    "chunkIndex": 42}),
+        SimpleNamespace(properties={"parentSection": "Sheet1", "subsection": None, "pageNumber": None,
+                                    "chunkIndex": 61}),
+    ])
+    readable = files("doc-1", ("paper.pdf", 0, 41), ("Table S1.xlsx", 42, 60), ("Table S1.xlsx", 61, 70))
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())):
+        outline = await chunks.get_document_sections_hierarchical("doc-1", "u", readable=readable)
+
+    assert [(f["name"], f["role"], f["chunk_index_start"], f["chunk_count"]) for f in outline["files"]] == [
+        ("paper.pdf", "main", 0, 42), ("Table S1.xlsx", "supplement", 42, 19), ("Table S1.xlsx (2)", "supplement", 61, 10),
+    ]
+    assert [[s["name"] for s in f["sections"]] for f in outline["files"]] == [
+        ["Materials and Methods"], ["Sheet1"], ["Sheet1"],
+    ]
+    # Together, as before, for consumers of the whole outline.
+    assert [(s["name"], s["chunk_count"]) for s in outline["sections"]] == [("Materials and Methods", 1), ("Sheet1", 2)]
+
+
+@pytest.mark.asyncio
+async def test_a_listed_piece_outside_the_readable_files_is_an_error(monkeypatch):
+    _sync_to_thread(monkeypatch)
+    collection = MagicMock()
+    collection.query.fetch_objects.return_value = SimpleNamespace(objects=[
+        SimpleNamespace(properties={"parentSection": "Results", "subsection": None, "pageNumber": 1, "chunkIndex": 99}),
+    ])
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())):
+        with pytest.raises(ValueError, match="outside the readable files"):
+            await chunks.get_document_sections_hierarchical("doc-1", "u", readable=single_file("doc-1", 10))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("helper", ["parent", "subsection"])
+async def test_section_reads_keep_only_the_exact_stored_name(monkeypatch, helper):
+    """The store's equal filter is word-based; "Methods" must not return "Materials and Methods"."""
+    _sync_to_thread(monkeypatch)
+    objects = [SimpleNamespace(uuid=f"uuid-{index}", properties={
+        "content": f"P{index}", "chunkIndex": index, "parentSection": parent,
+        "subsection": sub, "pageNumber": 1,
+    }) for index, (parent, sub) in enumerate([
+        ("Materials and Methods", "Fly strains"), ("Methods", "Fly strains"), ("methods", "Fly strains"),
+        ("Methods", "Fly strains and genetics"),
+    ])]
+    collection, calls = _paging_store(objects)
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())):
+        if helper == "parent":
+            rows = await chunks.get_chunks_by_parent_section("doc-1", "Methods", "u", readable=single_file("doc-1"))
+        else:
+            rows = await chunks.get_chunks_by_subsection(
+                "doc-1", "Methods", "Fly strains", "u", readable=single_file("doc-1"))
+
+    assert [row["chunk_index"] for row in rows] == ([1, 3] if helper == "parent" else [1])
+    def leaves(filter_value):
+        nested = getattr(filter_value, "filters", None)
+        return [leaf for child in nested for leaf in leaves(child)] if nested else [filter_value]
+
+    sent = leaves(calls[0]["filters"])
+    assert [(f.target, f.value) for f in sent if f.target in ("parentSection", "subsection")] == (
+        [("parentSection", "Methods")] if helper == "parent"
+        else [("parentSection", "Methods"), ("subsection", "Fly strains")])

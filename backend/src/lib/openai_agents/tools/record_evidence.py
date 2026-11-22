@@ -1234,7 +1234,7 @@ def create_record_evidence_tool(
         object_type: str | None = None,
         validation_finding_id: str | None = None,
     ) -> dict[str, Any]:
-        """Record exact evidence selected from previously read PDF chunks.
+        """Record exact evidence selected from previously read passages.
 
         Backend verification copies exact source text; do not supply quote text.
         Multiple selections form one evidence record, in the supplied order.

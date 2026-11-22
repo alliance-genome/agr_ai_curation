@@ -23,7 +23,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.lib.document_files.service import require_chunk_range
-from src.models.sql.pdf_document import FILE_ROLE_MAIN, FILE_STATUS_READY, PDFDocument, PDFDocumentFile
+from src.models.sql.pdf_document import (
+    DISPLAY_MODE_TEXT,
+    FILE_ROLE_MAIN,
+    FILE_STATUS_READY,
+    PDFDocument,
+    PDFDocumentFile,
+)
 from src.models.sql.user import User
 
 
@@ -61,6 +67,20 @@ class ReadableFilesError(RuntimeError):
     """The paper's readable files could not be determined."""
 
 
+# How a file's kind is shown to the model, from its stored display mode and the
+# original's file extension (structural metadata, never the file's text).
+FILE_KIND_PDF = "PDF"
+FILE_KIND_TEXT = "text"
+_TEXT_FILE_KINDS = {"docx": "Word", "xlsx": "Excel"}
+
+
+def file_kind(display_mode: str, source_file_extension: str | None) -> str:
+    if display_mode != DISPLAY_MODE_TEXT:
+        return FILE_KIND_PDF
+    extension = (source_file_extension or "").lower().lstrip(".")
+    return _TEXT_FILE_KINDS.get(extension, FILE_KIND_TEXT)
+
+
 @dataclass(frozen=True, slots=True)
 class ReadableFile:
     file_id: str
@@ -68,9 +88,14 @@ class ReadableFile:
     role: str
     chunk_index_start: int
     chunk_index_end: int
+    kind: str = FILE_KIND_PDF
 
     def contains(self, chunk_index: int) -> bool:
         return self.chunk_index_start <= chunk_index <= self.chunk_index_end
+
+    @property
+    def chunk_count(self) -> int:
+        return self.chunk_index_end - self.chunk_index_start + 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +122,41 @@ class ReadableFiles:
 
         return tuple((file.file_id, file.chunk_index_start, file.chunk_index_end) for file in self.files)
 
+    def labelled(self) -> tuple[tuple[str, ReadableFile], ...]:
+        """Each file with the name the model sees and passes back as ``file``, in tab order.
+
+        A name shared by several files gets " (2)", " (3)" ... on its later files,
+        skipping any suffix that is itself the name of another file, so every
+        label names exactly one file.
+        """
+
+        taken = {file.display_name for file in self.files}
+        used: set[str] = set()
+        labelled = []
+        for file in self.files:
+            label = file.display_name
+            if label in used:
+                number = 2
+                while f"{file.display_name} ({number})" in used | taken:
+                    number += 1
+                label = f"{file.display_name} ({number})"
+            used.add(label)
+            labelled.append((label, file))
+        return tuple(labelled)
+
+    def label_of(self, file: ReadableFile) -> str:
+        return next(label for label, each in self.labelled() if each == file)
+
+    def by_label(self, label: str) -> ReadableFile | None:
+        return next((file for each, file in self.labelled() if each == label), None)
+
+    def only(self, file: ReadableFile) -> "ReadableFiles":
+        """The same paper with ``file`` as its only readable file."""
+
+        if file not in self.files:
+            raise ReadableFilesError("The file is not one of this paper's readable files")
+        return ReadableFiles(self.document_id, (file,))
+
     def ranges_text(self) -> str:
         """The readable ranges as the model is told them.
 
@@ -108,7 +168,7 @@ class ReadableFiles:
             only = ordered[0]
             return f"{only.chunk_index_start} to {only.chunk_index_end}"
         return ", ".join(
-            f"{file.chunk_index_start} to {file.chunk_index_end} ({file.display_name})" for file in ordered
+            f"{file.chunk_index_start} to {file.chunk_index_end} ({self.label_of(file)})" for file in ordered
         )
 
 
@@ -140,7 +200,10 @@ def readable_files_in_session(
     files = []
     for row in rows:
         start, end = require_chunk_range(row)
-        files.append(ReadableFile(str(row.id), row.display_name, row.role, start, end))
+        files.append(ReadableFile(
+            str(row.id), row.display_name, row.role, start, end,
+            file_kind(row.display_mode, row.source_file_extension),
+        ))
     # Keep the caller's spelling: read functions compare it with the documentId they filter on.
     return ReadableFiles(str(document_id), tuple(files))
 

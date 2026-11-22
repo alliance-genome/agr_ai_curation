@@ -400,3 +400,28 @@ class AnalysisCacheVersionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExactSectionReadTests(unittest.TestCase):
+    """Reads since 0.12.0 name the one file read instead of listing matched names."""
+
+    def test_the_file_read_is_shown(self):
+        section = {k: v for k, v in _numbered_section().items() if k != "matched_sections"}
+        section["requested_section"] = "Materials and Methods"
+        section["file"] = "Table S1.xlsx (2)"
+        payload = {"summary": "Read all 2 chunks of 'Materials and Methods'.", "section": section}
+
+        parsed = ToolResultParser.parse(str(payload), tool_name="read_section")["parsed"]["section"]
+
+        self.assertEqual(parsed["file"], "Table S1.xlsx (2)")
+        self.assertEqual(parsed["matched_sections"], [])
+        self.assertEqual(parsed["section_title"], "Materials and Methods")
+
+    def test_a_section_answer_keeps_its_summary(self):
+        payload = {"summary": "No section named 'Methods' in the readable files. Section names, exactly "
+                              "as stored: paper.pdf: 'Materials and Methods'.",
+                   "section": None, "error_code": "section_not_found"}
+
+        result = ToolResultParser.parse(str(payload), tool_name="read_section")
+
+        self.assertIn("No section named 'Methods'", json.dumps(result))

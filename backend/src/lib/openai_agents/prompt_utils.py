@@ -127,23 +127,24 @@ def inject_structured_output_instruction(
         return output_instruction + "\n" + instructions
 
 
-# Template for injecting hierarchical section structure into prompts
+# Template for injecting the paper's outline, file by file, into prompts
 HIERARCHY_TEMPLATE = """
 ## Document Structure
 
-This document has the following hierarchical structure:
+This paper has {file_count}. Each file lists its sections and subsections with their exact names; use these names, written exactly, with `read_section` and `read_subsection`.
 
 {hierarchy_text}
 
-**Top-level sections (in order):** {top_level_list}
-
-### How to use this hierarchy:
-- Use `read_section("Methods")` to read an entire top-level section
-- Use `read_subsection("Methods", "Fly Strains")` to read a specific subsection
+### How to use this outline:
+- Use `read_section("<a section name from the outline>")` to read an entire top-level section
+- Use `read_subsection("<section name>", "<subsection name>")` to read a specific subsection
+- When several files have a section of the same name, add `file="<file name>"`
 - `read_section`, `read_subsection` and `read_chunk` all show each passage as numbered sentences; to keep a sentence as evidence, pass the passage's `chunk_index` and the sentence number (`span_index`) to `record_evidence`
 - A passage already read with `read_section` or `read_subsection` does not need to be read again with `read_chunk`
 - The subsections are nested under their parent sections above
 """
+
+_FILE_ROLE_LABELS = {"main": "main paper", "supplement": "supplement"}
 
 # Fallback template for flat sections (no hierarchy available)
 SECTION_LIST_TEMPLATE = """
@@ -158,13 +159,34 @@ of a numbered sentence shown by `read_section`, `read_subsection` or
 `read_chunk(chunk_index)` to `record_evidence`.
 """
 
+
+def _size_label(pages: List[int], chunk_count: int) -> str:
+    """"p.2-3, 15 chunks", or "15 chunks" for a file without pages."""
+    if not pages:
+        return f"{chunk_count} chunks"
+    page_str = f"p.{pages[0]}" if len(pages) == 1 else f"p.{pages[0]}-{pages[-1]}"
+    return f"{page_str}, {chunk_count} chunks"
+
+
+def _section_lines(sections: List[Dict[str, Any]]) -> List[str]:
+    lines = []
+    for section in sections:
+        lines.append(f"**{section['name']}** ({_size_label(section['page_numbers'], section['chunk_count'])})")
+        for sub in section["subsections"]:
+            lines.append(f"  └─ {sub['name']} ({_size_label(sub['page_numbers'], sub['chunk_count'])})")
+    return lines
+
+
 def format_hierarchy_for_prompt(hierarchy: Dict[str, Any]) -> str:
     """
-    Format hierarchical structure for injection into an agent prompt.
+    Format the paper's outline, file by file, for injection into an agent prompt.
+
+    Every file of the run's readable files is listed in tab order with its role,
+    kind and chunk range, then its sections and subsections by their exact
+    stored names. Names are never shortened.
 
     Args:
-        hierarchy: Hierarchical structure from get_document_sections_hierarchical.
-                   Expected shape: {"sections": [...], "top_level_sections": [...]}
+        hierarchy: Outline from get_document_sections_hierarchical (with ``files``).
 
     Returns:
         Formatted string ready for prompt injection, or empty string if no hierarchy.
@@ -172,39 +194,20 @@ def format_hierarchy_for_prompt(hierarchy: Dict[str, Any]) -> str:
     if not hierarchy or not hierarchy.get("sections"):
         return ""
 
-    lines = []
-    for section in hierarchy.get("sections", []):
-        name = section.get("name", "Unknown")
-        pages = section.get("page_numbers", [])
-        chunk_count = section.get("chunk_count", 0)
-        subsections = section.get("subsections", [])
+    files = hierarchy["files"]
+    blocks = []
+    for number, listed in enumerate(files, start=1):
+        role = _FILE_ROLE_LABELS[listed["role"]]
+        header = (
+            f"File {number} of {len(files)}: {listed['name']} ({role}, {listed['kind']}, "
+            f"{listed['chunk_count']} chunks, chunks {listed['chunk_index_start']} to {listed['chunk_index_end']})"
+        )
+        blocks.append("\n".join([header, *_section_lines(listed["sections"])]))
 
-        if pages:
-            page_str = f"p.{pages[0]}" if len(pages) == 1 else f"p.{pages[0]}-{pages[-1]}"
-        else:
-            page_str = ""
-
-        # Top-level section
-        lines.append(f"**{name}** ({page_str}, {chunk_count} chunks)")
-
-        # Subsections indented
-        for sub in subsections:
-            sub_name = sub.get("name", "Unknown")
-            sub_pages = sub.get("page_numbers", [])
-            sub_chunks = sub.get("chunk_count", 0)
-
-            if sub_pages:
-                sub_page_str = f"p.{sub_pages[0]}" if len(sub_pages) == 1 else f"p.{sub_pages[0]}-{sub_pages[-1]}"
-            else:
-                sub_page_str = ""
-
-            lines.append(f"  └─ {sub_name} ({sub_page_str}, {sub_chunks} chunks)")
-
-    hierarchy_text = "\n".join(lines)
-    top_level = hierarchy.get("top_level_sections", [])
-    top_level_list = ", ".join(top_level) if top_level else "Unknown"
-
-    return HIERARCHY_TEMPLATE.format(hierarchy_text=hierarchy_text, top_level_list=top_level_list)
+    return HIERARCHY_TEMPLATE.format(
+        file_count="1 file" if len(files) == 1 else f"{len(files)} files",
+        hierarchy_text="\n\n".join(blocks),
+    )
 
 
 def format_sections_for_prompt(sections: List[Dict[str, Any]]) -> str:

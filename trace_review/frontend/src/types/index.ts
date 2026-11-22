@@ -50,6 +50,7 @@ export interface ConversationData {
 export interface SectionReadDisplay {
   shape?: 'joined_content' | 'numbered_passages';
   section_title: string;
+  file?: string | null;
   matched_sections?: string[];
   page_numbers: number[];
   chunk_count: number;

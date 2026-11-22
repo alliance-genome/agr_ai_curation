@@ -62,6 +62,7 @@ class DocumentHierarchyAnalyzer:
             "structure_type": hierarchy_info.get("structure_type", "unknown"),
             "top_level_sections": hierarchy_info.get("top_level_sections", []),
             "sections": hierarchy_info.get("sections", []),
+            "files": hierarchy_info.get("files", []),
             "raw_hierarchy_text": hierarchy_info.get("raw_text"),
             "chunk_count_total": hierarchy_info.get("chunk_count_total", 0)
         }
@@ -121,15 +122,16 @@ class DocumentHierarchyAnalyzer:
             "structure_type": "unknown",
             "top_level_sections": [],
             "sections": [],
+            "files": [],
             "raw_text": None,
             "chunk_count_total": 0
         }
 
-        # Look for hierarchy section - two patterns:
-        # 1. Full hierarchy: ## Document Structure\n\nThis document has the following hierarchical structure:
-        # 2. The section list itself ending with **Top-level sections
+        # The outline is listed file by file (0.12.0): "This paper has N files." then,
+        # for each file, "File n of m: name (role, kind, k chunks, chunks a to b)"
+        # followed by its section lines, up to "### How to use this outline:".
         hierarchy_match = re.search(
-            r'## Document Structure\s*\n+This document has the following hierarchical structure:\s*\n+(.*?)(?=\*\*Top-level sections|\n### How to use)',
+            r'## Document Structure\s*\n+This paper has [^\n]*\n+(.*?)(?=\n### How to use)',
             instructions,
             re.DOTALL
         )
@@ -145,7 +147,8 @@ class DocumentHierarchyAnalyzer:
             raw_text = hierarchy_match.group(1).strip()
             result["found"] = True
             result["raw_text"] = raw_text
-            result["sections"] = cls._parse_hierarchical_sections(raw_text)
+            result["files"] = cls._parse_files(raw_text)
+            result["sections"] = [section for file in result["files"] for section in file["sections"]]
 
             # Check for hierarchy resolution failure (only "Unknown" section)
             if len(result["sections"]) == 1 and result["sections"][0].get("name") == "Unknown":
@@ -154,20 +157,7 @@ class DocumentHierarchyAnalyzer:
             else:
                 result["structure_type"] = "hierarchy"
                 result["resolution_failed"] = False
-
-            # Extract top-level sections
-            top_level_match = re.search(
-                r'\*\*Top-level sections \(in order\):\*\*\s*(.+?)(?:\n|$)',
-                instructions
-            )
-            if top_level_match:
-                top_level_text = top_level_match.group(1).strip()
-                if top_level_text.lower() != "unknown":
-                    result["top_level_sections"] = [
-                        s.strip() for s in top_level_text.split(",")
-                    ]
-                else:
-                    result["top_level_sections"] = ["Unknown"]
+            result["top_level_sections"] = [section["name"] for section in result["sections"]]
 
         elif flat_match:
             raw_text = flat_match.group(1).strip()
@@ -184,6 +174,40 @@ class DocumentHierarchyAnalyzer:
                 result["chunk_count_total"] += sub.get("chunk_count", 0)
 
         return result
+
+    _FILE_LINE = re.compile(
+        r'^File (\d+) of (\d+): (.+) \((main paper|supplement), ([^,]+), (\d+) chunks, chunks (\d+) to (\d+)\)$'
+    )
+
+    @classmethod
+    def _parse_files(cls, raw_text: str) -> List[Dict]:
+        """Split the outline into its files, each with its own sections."""
+        files: List[Dict] = []
+        lines: List[str] = []
+
+        def close() -> None:
+            if files:
+                files[-1]["sections"] = cls._parse_hierarchical_sections("\n".join(lines))
+
+        for line in raw_text.split("\n"):
+            match = cls._FILE_LINE.match(line.strip())
+            if match:
+                close()
+                lines = []
+                files.append({
+                    "number": int(match.group(1)),
+                    "name": match.group(3),
+                    "role": match.group(4),
+                    "kind": match.group(5),
+                    "chunk_count": int(match.group(6)),
+                    "chunk_index_start": int(match.group(7)),
+                    "chunk_index_end": int(match.group(8)),
+                    "sections": [],
+                })
+            elif files:
+                lines.append(line)
+        close()
+        return files
 
     @classmethod
     def _parse_hierarchical_sections(cls, raw_text: str) -> List[Dict]:
