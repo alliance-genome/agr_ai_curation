@@ -1049,7 +1049,11 @@ class CurationEvidenceRecord(Base):
     # cannot be deleted (RESTRICT); paper delete removes anchors first.
     source_file_id: Mapped[UUID | None] = mapped_column(
         PostgresUUID(as_uuid=True),
-        ForeignKey("pdf_document_files.id", ondelete="RESTRICT"),
+        ForeignKey(
+            "pdf_document_files.id",
+            ondelete="RESTRICT",
+            name="fk_evidence_anchors_source_file_id",
+        ),
         nullable=True,
     )
     warnings: Mapped[list[str]] = mapped_column(
