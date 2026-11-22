@@ -30,6 +30,15 @@ from .flow_catalog import load_benchmark_flow_templates
 from .models import BenchmarkModelCatalogEntry, BenchmarkRouteCatalog, BenchmarkSuiteRoute
 
 
+# Authored chat now invokes a model and must have a frozen route like any
+# other specialist. Keep the existing non-chat terminal classification.
+RUNTIME_ONLY_AGENT_IDS = frozenset((SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS - {
+    "chat_output", "chat_output_formatter",
+}) | {
+    CURATION_PREP_AGENT_ID, CURATION_HANDOFF_AGENT_ID, "task_input",
+})
+
+
 def build_curator_route_catalog(
     session: Session, curator: BenchmarkCuratorContext, *,
     freeze_targets: set[tuple[str, str]] | None = None,
@@ -39,13 +48,7 @@ def build_curator_route_catalog(
     The caller owns the session. Admission constructs this only after determining
     that the idempotency key does not already have a durable outcome.
     """
-    # Authored chat now invokes a model and must have a frozen route like any
-    # other specialist. Keep the existing non-chat terminal classification.
-    runtime_only = (SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS - {
-        "chat_output", "chat_output_formatter",
-    }) | {
-        CURATION_PREP_AGENT_ID, CURATION_HANDOFF_AGENT_ID, "task_input",
-    }
+    runtime_only = RUNTIME_ONLY_AGENT_IDS
     all_visible = {
         agent.agent_key: agent for agent in list_agents_visible_to_user(
             session, curator.db_user_id, active_group_ids=curator.active_groups,

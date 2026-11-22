@@ -1,9 +1,9 @@
 schema_version: 2
-suite_id: flow-canary-gene-curation-v2
+suite_id: flow-canary-gene-extraction-v2
 cases:
   - case_id: synthetic-gene-flow-canary-1
-    user_query: "Run the configured Gene Curation flow against a synthetic no-match input and preserve the terminal flow status."
-    target: {kind: flow, id: Gene Curation}
+    user_query: "Run the configured Gene Extraction flow against a synthetic no-match input and preserve the terminal flow status."
+    target: {kind: flow, id: Gene Extraction}
     input:
       resolver: checked_in_fixture
       reference: cases/synthetic-gene-flow-canary-1/document.json
@@ -14,30 +14,35 @@ configurations:
     routes:
       supervisor: {provider: openai, model: gpt-5.6-sol, reasoning_effort: high}
       agent:pdf_extraction: {provider: openai, model: gpt-5.6-sol, reasoning_effort: high}
-      agent:gene_validation: {provider: openai, model: gpt-5.6-sol, reasoning_effort: high}
+      agent:gene_extractor: {provider: openai, model: gpt-5.6-sol, reasoning_effort: high}
+      validator:alliance_gene_reference_lookup: {provider: openai, model: gpt-5.6-sol, reasoning_effort: high}
       agent:chat_output: {provider: openai, model: gpt-5.6-sol, reasoning_effort: high}
   - configuration_id: all-terra
     routes:
       supervisor: {provider: openai, model: gpt-5.6-terra, reasoning_effort: high}
       agent:pdf_extraction: {provider: openai, model: gpt-5.6-terra, reasoning_effort: high}
-      agent:gene_validation: {provider: openai, model: gpt-5.6-terra, reasoning_effort: high}
+      agent:gene_extractor: {provider: openai, model: gpt-5.6-terra, reasoning_effort: high}
+      validator:alliance_gene_reference_lookup: {provider: openai, model: gpt-5.6-terra, reasoning_effort: high}
       agent:chat_output: {provider: openai, model: gpt-5.6-terra, reasoning_effort: high}
   - configuration_id: all-deepseek
     routes:
       supervisor: {provider: openrouter, model: deepseek/deepseek-v4-pro-0813}
       agent:pdf_extraction: {provider: openrouter, model: deepseek/deepseek-v4-pro-0813}
-      agent:gene_validation: {provider: openrouter, model: deepseek/deepseek-v4-pro-0813}
+      agent:gene_extractor: {provider: openrouter, model: deepseek/deepseek-v4-pro-0813}
+      validator:alliance_gene_reference_lookup: {provider: openrouter, model: deepseek/deepseek-v4-pro-0813}
       agent:chat_output: {provider: openrouter, model: deepseek/deepseek-v4-pro-0813}
   - configuration_id: all-gemini
     routes:
       supervisor: {provider: openrouter, model: google/gemini-3.7-flash}
       agent:pdf_extraction: {provider: openrouter, model: google/gemini-3.7-flash}
-      agent:gene_validation: {provider: openrouter, model: google/gemini-3.7-flash}
+      agent:gene_extractor: {provider: openrouter, model: google/gemini-3.7-flash}
+      validator:alliance_gene_reference_lookup: {provider: openrouter, model: google/gemini-3.7-flash}
       agent:chat_output: {provider: openrouter, model: google/gemini-3.7-flash}
   - configuration_id: all-qwen
     routes:
       supervisor: {provider: openrouter, model: qwen/qwen3.8-27b}
       agent:pdf_extraction: {provider: openrouter, model: qwen/qwen3.8-27b}
-      agent:gene_validation: {provider: openrouter, model: qwen/qwen3.8-27b}
+      agent:gene_extractor: {provider: openrouter, model: qwen/qwen3.8-27b}
+      validator:alliance_gene_reference_lookup: {provider: openrouter, model: qwen/qwen3.8-27b}
       agent:chat_output: {provider: openrouter, model: qwen/qwen3.8-27b}
 repetitions: 1

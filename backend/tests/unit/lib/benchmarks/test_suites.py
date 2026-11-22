@@ -96,36 +96,85 @@ def _checked_in_catalog():
     terra = BenchmarkSuiteRoute(
         provider="openai", model="gpt-5.6-terra", reasoning_effort="medium"
     )
-    flow_recipe_path = ALLIANCE_ROOT / "config" / "flow_recipes.yaml"
-    flow_recipe_data = yaml.safe_load(flow_recipe_path.read_text(encoding="utf-8"))
-    gene_curation = next(
-        recipe
-        for recipe in flow_recipe_data["recipes"]
-        if recipe["name"] == "Gene Curation"
-    )
-    flow_agents = [step["agent_id"] for step in gene_curation["steps"]]
+    flow_agents, flow_validators = _real_flow_route_ids()
     chat_output_definition = yaml.safe_load(
         (ALLIANCE_ROOT / "agents" / "chat_output" / "agent.yaml").read_text(
             encoding="utf-8"
         )
     )
     chat_output_alias = chat_output_definition["agent_id"]
+    flow_agent_ids = {
+        agent_id for agents in flow_agents.values() for agent_id in agents
+    } - {chat_output_alias}
+    validator_ids = {
+        binding for bindings in flow_validators.values() for binding in bindings
+    }
+    agent_defaults = {
+        agent_id: sol for agent_id in flow_agent_ids | {"chat_output"}
+    }
+    agent_defaults.update(
+        {"gene_validation": terra, "ontology_term_validation": terra}
+    )
     return build_route_catalog(
         models=models,
         supervisor_default=sol,
-        agent_defaults={
-            "pdf_extraction": sol,
-            "gene_validation": terra,
-            "chat_output": terra,
-            "ontology_term_validation": terra,
-        },
-        model_validator_defaults={},
+        agent_defaults=agent_defaults,
+        model_validator_defaults={binding: terra for binding in validator_ids},
         agent_targets={"gene_validation", "ontology_term_validation"},
-        flow_agents={"Gene Curation": flow_agents},
-        flow_model_validators={},
+        flow_agents=flow_agents,
+        flow_model_validators=flow_validators,
         agent_model_validators={},
         agent_aliases={chat_output_alias: "chat_output"},
     )
+
+
+def _real_flow_route_ids() -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
+    """Derive flow route slots from the recipes a real install offers.
+
+    Mirrors build_curator_route_catalog: the recipes come from the same
+    filtered loader, runtime-only agents have no model slot, and only
+    agent-backed scheduled validators get a validator slot.
+    """
+    from src.lib.agent_studio.flow_tools import build_flow_definition_from_recipe
+    from src.lib.benchmarks.flow_catalog import load_benchmark_flow_templates
+    from src.lib.benchmarks.runtime_catalog import RUNTIME_ONLY_AGENT_IDS
+    from src.lib.flows.validation_attachments import (
+        validation_schedule_from_node_data,
+    )
+
+    flow_agents: dict[str, tuple[str, ...]] = {}
+    flow_validators: dict[str, tuple[str, ...]] = {}
+    for recipe in load_benchmark_flow_templates(()):
+        definition = build_flow_definition_from_recipe(
+            steps=recipe["steps"], task_instructions=recipe["description"],
+        )
+        agents: set[str] = set()
+        validators: set[str] = set()
+        for node in definition.nodes:
+            if node.type not in ("agent", "output"):
+                continue
+            if node.data.agent_id not in RUNTIME_ONLY_AGENT_IDS:
+                agents.add(node.data.agent_id)
+            schedule = validation_schedule_from_node_data(node.data.model_dump())
+            validators.update(
+                validator["validator_binding_id"]
+                for validator in schedule["scheduled_validators"]
+                if validator.get("validator_agent_id")
+            )
+        flow_agents[recipe["name"]] = tuple(sorted(agents))
+        flow_validators[recipe["name"]] = tuple(sorted(validators))
+    return flow_agents, flow_validators
+
+
+def test_real_flow_catalog_offers_the_canary_flow_with_its_runtime_routes():
+    flow_agents, flow_validators = _real_flow_route_ids()
+
+    assert flow_agents["Gene Extraction"] == (
+        "chat_output", "gene_extractor", "pdf_extraction",
+    )
+    assert flow_validators["Gene Extraction"] == ("alliance_gene_reference_lookup",)
+    # Gene Curation used gene_validation as a step; a real install never offers it.
+    assert "Gene Curation" not in flow_agents
 
 
 def _payload() -> dict:
@@ -288,7 +337,7 @@ def test_every_checked_in_suite_is_v2_and_deterministic():
     suites = load_checked_in_suites(ROOT)
 
     assert {suite.suite_id for suite in suites} == {
-        "flow-canary-gene-curation-v2",
+        "flow-canary-gene-extraction-v2",
         "isolated-gene-agent-v2",
         "isolated-ontology-agent-v2",
     }
@@ -319,12 +368,13 @@ def test_every_checked_in_suite_is_v2_and_deterministic():
         assert first == second
         assert first.plan_digest == second.plan_digest
         assert all(cell.routes for cell in first.cells)
-        if suite.suite_id == "flow-canary-gene-curation-v2":
+        if suite.suite_id == "flow-canary-gene-extraction-v2":
             expected_slots = {
                 "supervisor",
                 "agent:chat_output",
-                "agent:gene_validation",
+                "agent:gene_extractor",
                 "agent:pdf_extraction",
+                "validator:alliance_gene_reference_lookup",
             }
             assert all(
                 set(configuration.routes) == expected_slots
