@@ -1207,6 +1207,7 @@ def _emit_specialist_evidence_summary_or_raise(
     canonical_payload = canonicalize_structured_result_payload(
         final_output,
         preferred_evidence_records=live_evidence_records,
+        payload_evidence="model_written",
     )
     authored_record_ids = set(authored_evidence_record_ids)
     canonical_record_ids = _evidence_reference_ids_from_payload(canonical_payload)
@@ -1306,6 +1307,7 @@ def _canonicalize_structured_output_text(
     canonical_payload = canonicalize_structured_result_payload(
         payload,
         preferred_evidence_records=preferred_evidence_records,
+        payload_evidence="model_written",
     )
     if not isinstance(canonical_payload, dict):
         return final_output
@@ -2427,6 +2429,7 @@ def _structured_specialist_finalization_feedback(
         canonical_payload = canonicalize_structured_result_payload(
             raw_payload,
             preferred_evidence_records=live_evidence_records,
+            payload_evidence="model_written",
         )
         if not isinstance(canonical_payload, dict):
             canonical_payload = validated.model_dump()

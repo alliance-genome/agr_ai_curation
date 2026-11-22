@@ -697,6 +697,7 @@ def stage_extraction_payload(
     canonical_payload = canonicalize_structured_result_payload(
         dict(payload),
         preferred_evidence_records=preferred_evidence_records,
+        payload_evidence="model_written",
     )
     workspace.apply_scope_metadata(
         document_id=_scope_value_from_payload(

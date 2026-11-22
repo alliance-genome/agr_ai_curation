@@ -285,6 +285,7 @@ async def test_pat_unc_tln_expression_records_backend_span_text_not_model_quote(
 
     canonical = canonicalize_structured_result_payload(
         payload,
+        payload_evidence="model_written",
         preferred_evidence_records=[evidence_record],
     )
 
@@ -406,6 +407,7 @@ async def test_span_evidence_workspace_lists_discards_replaces_and_finalizes_act
 
         canonical = canonicalize_structured_result_payload(
             _gene_expression_payload(active_record["evidence_record_id"]),
+            payload_evidence="model_written",
             preferred_evidence_records=workspace_records,
         )
 
@@ -433,6 +435,7 @@ async def test_active_validator_dispatch_receives_span_evidence_candidate_object
     active_record = await _record_pat_unc_tln_expression_evidence(document_id)
     canonical = canonicalize_structured_result_payload(
         _gene_expression_payload(active_record["evidence_record_id"]),
+        payload_evidence="model_written",
         preferred_evidence_records=[active_record],
     )
     retained_records = canonical["metadata"]["evidence_records"]

@@ -2,7 +2,7 @@ import hashlib
 import json
 import logging
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Tuple, get_args, get_origin
+from typing import Any, Dict, List, Literal, Optional, Tuple, get_args, get_origin
 
 from src.schemas.evidence_workspace import evidence_record_page, evidence_record_section
 
@@ -553,35 +553,29 @@ def _evidence_locator_key(record: Dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-# Provenance record_evidence writes; a copy of the same record can only repeat it.
+# Provenance only record_evidence writes (ALL-1460). A record in a model's
+# structured output can never create or change these on a recorded record.
 _RECORDED_PROVENANCE_FIELDS = (
     "verified_quote", "page", "section", "subsection", "figure_reference", "document_id",
     "file_id", "file_name", "chunk_id", "chunk_ids", "source_span_ids", "source_fragments",
 )
 
 
-def _keep_recorded_provenance(existing: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
-    """Keep a recorded evidence record's provenance when a copy of it replaces it (ALL-1460).
+def _model_copy_of_recorded(recorded: Dict[str, Any], copy: Dict[str, Any]) -> Dict[str, Any]:
+    """A model-written copy of a recorded record: recorded provenance, the copy's other fields."""
 
-    A record that names its file was written by record_evidence. A later record
-    with the same ID that names no file, or that cites the same spans (or none),
-    is a copy of it: it must not erase the file, the fragments, or a known page or
-    section. Only a record of different spans is a new recording and replaces the
-    provenance. Records saved before files were recorded are unchanged.
-    """
-
-    if not existing.get("file_id"):
-        return incoming
-    incoming_spans = incoming.get("source_span_ids")
-    new_recording = bool(incoming.get("file_id")) and incoming_spans not in (
-        None,
-        existing.get("source_span_ids"),
-    )
-    if new_recording:
-        return incoming
-    kept = {key: value for key, value in incoming.items() if key not in _RECORDED_PROVENANCE_FIELDS}
-    kept.update({key: existing[key] for key in _RECORDED_PROVENANCE_FIELDS if key in existing})
+    kept = {key: value for key, value in copy.items() if key not in _RECORDED_PROVENANCE_FIELDS}
+    kept.update({key: recorded[key] for key in _RECORDED_PROVENANCE_FIELDS if key in recorded})
     return kept
+
+
+def _names_a_file(record: Dict[str, Any]) -> bool:
+    if record.get("file_id") or record.get("file_name"):
+        return True
+    return any(
+        isinstance(fragment, dict) and (fragment.get("file_id") or fragment.get("file_name"))
+        for fragment in record.get("source_fragments") or []
+    )
 
 
 class _EvidenceRegistry:
@@ -593,6 +587,7 @@ class _EvidenceRegistry:
         self._id_by_exact_key: Dict[tuple[Any, ...], str] = {}
         self._ids_by_locator_key: Dict[tuple[Any, ...], List[str]] = {}
         self._canonical_id_by_input_id: Dict[str, str] = {}
+        self._recorded_ids: set[str] = set()
 
     def _forget_indexes_for_record(self, evidence_record_id: str, record: Dict[str, Any]) -> None:
         exact_key = _evidence_record_key(record)
@@ -624,7 +619,6 @@ class _EvidenceRegistry:
         normalized_record: Dict[str, Any],
     ) -> str:
         existing_record = self._records_by_id[evidence_record_id]
-        normalized_record = _keep_recorded_provenance(existing_record, normalized_record)
         if (
             "evidence_revision_history" not in normalized_record
             and existing_record.get("evidence_revision_history")
@@ -643,6 +637,44 @@ class _EvidenceRegistry:
             self._records.append(normalized_record)
         self._index_record(evidence_record_id, normalized_record)
         return evidence_record_id
+
+    def add_recorded(self, values: Any) -> None:
+        """Add record_evidence output; later recordings of an ID replace earlier ones."""
+
+        for evidence_record_id in self.add_many(values):
+            self._recorded_ids.add(evidence_record_id)
+
+    def add_model_written(self, values: Any) -> None:
+        """Add records a model wrote in its structured output (ALL-1460).
+
+        A copy of a recorded record keeps the recorded provenance and contributes
+        only its other fields. A record that matches no recorded evidence may not
+        name a file: it is dropped, with a warning, since only record_evidence
+        attributes evidence to a file.
+        """
+
+        if not isinstance(values, list):
+            return
+        for value in values:
+            record = _coerce_evidence_record_dict(value)
+            if not isinstance(record, dict):
+                continue
+            evidence_record_id = str(record.get("evidence_record_id") or "").strip()
+            if evidence_record_id in self._recorded_ids:
+                recorded = self._records_by_id[evidence_record_id]
+                self._replace_record_by_id(
+                    evidence_record_id,
+                    _model_copy_of_recorded(recorded, record),
+                )
+                continue
+            if _names_a_file(record):
+                logger.warning(
+                    "Dropped a model-written evidence record that names a file but was never "
+                    "recorded: evidence_record_id=%s",
+                    evidence_record_id or None,
+                )
+                continue
+            self.add(value)
 
     def add_many(
         self,
@@ -1126,8 +1158,15 @@ def canonicalize_structured_result_payload(
     value: Any,
     *,
     preferred_evidence_records: Any = None,
+    payload_evidence: Literal["model_written", "persisted"],
 ) -> Any:
-    """Collapse duplicate retained normalized items in structured extraction payloads."""
+    """Collapse duplicate retained normalized items in structured extraction payloads.
+
+    ``preferred_evidence_records`` are record_evidence output. ``payload_evidence``
+    says who wrote the payload's own evidence records: a model's structured output
+    (``model_written``: they can never change recorded provenance or attribute a
+    file) or a persisted, already canonical result (``persisted``).
+    """
 
     payload = _coerce_evidence_record_dict(value)
     if not isinstance(payload, dict):
@@ -1135,10 +1174,17 @@ def canonicalize_structured_result_payload(
 
     preferred_labels = _collect_preferred_labels(payload)
     registry = _EvidenceRegistry()
-    registry.add_many(preferred_evidence_records)
-    registry.add_many(payload.get("evidence_records"))
-    registry.add_many(_metadata_payload(payload).get("evidence_records"))
-    registry.add_many(_extraction_metadata_payload(payload).get("evidence_records"))
+    registry.add_recorded(preferred_evidence_records)
+    payload_record_lists = (
+        payload.get("evidence_records"),
+        _metadata_payload(payload).get("evidence_records"),
+        _extraction_metadata_payload(payload).get("evidence_records"),
+    )
+    for records in payload_record_lists:
+        if payload_evidence == "model_written":
+            registry.add_model_written(records)
+        else:
+            registry.add_many(records)
     canonical_payload = _canonicalize_nested_evidence_references(
         payload,
         registry=registry,
@@ -1234,7 +1280,9 @@ def _extract_object_payload_evidence_records(payload: Dict[str, Any]) -> List[Di
 def extract_evidence_records_from_structured_result(value: Any) -> List[Dict[str, Any]]:
     """Extract normalized evidence records from a structured extraction result."""
 
-    payload = _coerce_evidence_record_dict(canonicalize_structured_result_payload(value))
+    payload = _coerce_evidence_record_dict(
+        canonicalize_structured_result_payload(value, payload_evidence="persisted")
+    )
     if not isinstance(payload, dict):
         return []
 
