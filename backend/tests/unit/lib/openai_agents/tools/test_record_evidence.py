@@ -9,7 +9,7 @@ from uuid import NAMESPACE_URL, uuid5
 import pytest
 
 import src.lib.openai_agents.tools.record_evidence as record_evidence
-from tests.readable_files_support import single_file
+from tests.readable_files_support import files, single_file
 from src.lib.openai_agents.tools import evidence_workspace
 from src.lib.openai_agents.evidence_spans import build_evidence_spans
 from src.lib.openai_agents.evidence_summary import build_evidence_record_id
@@ -52,12 +52,13 @@ def _chunk(
     section: str = "Results",
     subsection: str | None = "Expression assays",
     doc_items: list[dict[str, object]] | None = None,
+    chunk_index: int = 0,
 ) -> dict[str, object]:
     # The shape get_chunk_by_id returns: the piece's paper and its piece number are always stored.
     return {
         "id": chunk_id,
         "document_id": "doc-1",
-        "chunk_index": 0,
+        "chunk_index": chunk_index,
         "text": text,
         "page_number": page_number,
         "parent_section": section,
@@ -208,6 +209,8 @@ async def test_record_evidence_copies_exact_span_text_and_tracks_call(monkeypatc
         "source_span_ids": [span_ids[1]],
         "verified_quote": "This sentence is exact evidence.",
         "document_id": "doc-12345678",
+        "file_id": "main-file",
+        "file_name": "paper.pdf",
         "chunk_id": chunk_id,
         "chunk_ids": [chunk_id],
         "source_fragments": [
@@ -215,6 +218,8 @@ async def test_record_evidence_copies_exact_span_text_and_tracks_call(monkeypatc
                 "span_id": span_ids[1],
                 "chunk_id": chunk_id,
                 "document_id": "doc-12345678",
+                "file_id": "main-file",
+                "file_name": "paper.pdf",
                 "text": "This sentence is exact evidence.",
                 "char_start": 51,
                 "char_end": 83,
@@ -792,3 +797,63 @@ async def test_record_evidence_does_not_invent_missing_chunk_page(monkeypatch):
     assert result["status"] == "verified"
     assert "page" not in result
     assert "page" not in result["source_fragments"][0]
+
+
+# ALL-1460 P8b: every record names the file whose piece range holds its piece.
+def _two_files():
+    return files("doc-1", ("paper.pdf", 0, 9), ("Table_S1.xlsx", 10, 14))
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_names_the_supplement_file_and_gives_no_page(monkeypatch):
+    chunk_id = _chunk_uuid("chunk-supplement-row")
+    chunk_text = "| abc-1 | 3 | 5 |"
+    span_id = _span_ids(chunk_id, chunk_text)[0]
+
+    async def _fake_get_chunk_by_id(**_kwargs):
+        # A converted spreadsheet piece: no page, piece 12 of the paper.
+        return _chunk(
+            chunk_id=chunk_id, text=chunk_text, page_number=None,
+            section="Sheet1", subsection=None, chunk_index=12,
+        )
+
+    monkeypatch.setattr(record_evidence, "current_readable_files", _two_files)
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = record_evidence._create_canonical_evidence_recorder("doc-1", "user-1")
+
+    result = await tool(entity="abc-1", span_ids=[span_id])
+
+    assert result["status"] == "verified"
+    assert (result["file_id"], result["file_name"]) == ("file-1", "Table_S1.xlsx")
+    assert "page" not in result
+    fragment = result["source_fragments"][0]
+    assert (fragment["file_id"], fragment["file_name"]) == ("file-1", "Table_S1.xlsx")
+    assert "page" not in fragment
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_refuses_sentences_from_two_files_in_one_record(monkeypatch):
+    main_chunk = _chunk_uuid("chunk-main-text")
+    sheet_chunk = _chunk_uuid("chunk-sheet-text")
+    main_text = "abc-1 was detected in the tested sample."
+    sheet_text = "| abc-1 | 3 | 5 |"
+    texts = {main_chunk: (main_text, 2), sheet_chunk: (sheet_text, 11)}
+
+    async def _fake_get_chunk_by_id(**kwargs):
+        text, chunk_index = texts[kwargs["chunk_id"]]
+        return _chunk(chunk_id=kwargs["chunk_id"], text=text, chunk_index=chunk_index)
+
+    monkeypatch.setattr(record_evidence, "current_readable_files", _two_files)
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = record_evidence._create_canonical_evidence_recorder("doc-1", "user-1")
+    sheet_span = _span_ids(sheet_chunk, sheet_text)[0]
+
+    result = await tool(
+        entity="abc-1",
+        span_ids=[_span_ids(main_chunk, main_text)[0], sheet_span],
+    )
+
+    assert result["status"] == "not_found"
+    assert result["resolution_failure"] == "spans_in_several_files"
+    assert result["failed_span_id"] == sheet_span
+    assert "evidence_record_id" not in result

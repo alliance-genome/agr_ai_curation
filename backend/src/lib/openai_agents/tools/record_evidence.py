@@ -60,6 +60,8 @@ _SOURCE_REVISION_FIELDS = (
     "source_span_ids",
     "source_fragments",
     "document_id",
+    "file_id",
+    "file_name",
     "chunk_id",
     "chunk_ids",
     "page",
@@ -88,6 +90,8 @@ class _ResolvedSpanFragment:
     chunk: dict[str, Any]
     chunk_id: str
     document_id: str
+    file_id: str
+    file_name: str
     page: int | None
     section: str | None
     subsection: str | None
@@ -100,6 +104,8 @@ class _ResolvedSpanFragment:
             "span_id": self.span.span_id,
             "chunk_id": self.chunk_id,
             "document_id": self.document_id,
+            "file_id": self.file_id,
+            "file_name": self.file_name,
             "text": self.span.text,
             "char_start": self.span.char_start,
             "char_end": self.span.char_end,
@@ -1044,12 +1050,16 @@ def _create_canonical_evidence_recorder(
                 )
 
             figure_resolution = _resolve_stored_figure_reference(chunk, span)
+            # The readable file whose piece range holds this piece (checked above).
+            source_file = current_readable_files().file_for(chunk["chunk_index"])
             fragments.append(
                 _ResolvedSpanFragment(
                     span=span,
                     chunk=chunk,
                     chunk_id=chunk_id,
                     document_id=document_id,
+                    file_id=source_file.file_id,
+                    file_name=source_file.display_name,
                     page=page,
                     section=section,
                     subsection=subsection,
@@ -1058,8 +1068,31 @@ def _create_canonical_evidence_recorder(
                 )
             )
 
-        verified_quote = "\n\n".join(fragment.span.text for fragment in fragments)
         first_fragment = fragments[0]
+        other_file_fragment = next(
+            (fragment for fragment in fragments if fragment.file_id != first_fragment.file_id),
+            None,
+        )
+        if other_file_fragment is not None:
+            # One evidence record names one file.
+            return _log_record_evidence_result(
+                _build_span_resolution_error_result(
+                    entity=normalized_entity,
+                    span_ids=normalized_span_ids,
+                    failed_span_id=other_file_fragment.span.span_id,
+                    failed_span_error=(
+                        "These sentences come from more than one file. Record the "
+                        "sentences of each file in a separate call"
+                    ),
+                    resolution_failure="spans_in_several_files",
+                    chunk_id=other_file_fragment.chunk_id,
+                    extra_fields=error_extra_fields,
+                    retry_instructions=None,
+                ),
+                document_id=document_id,
+                verification_method="spans_in_several_files",
+            )
+        verified_quote = "\n\n".join(fragment.span.text for fragment in fragments)
         chunk_ids = _unique_non_empty([fragment.chunk_id for fragment in fragments])
         figure_references = _unique_non_empty(
             [fragment.figure_reference for fragment in fragments]
@@ -1072,6 +1105,8 @@ def _create_canonical_evidence_recorder(
             "source_span_ids": normalized_span_ids,
             "verified_quote": verified_quote,
             "document_id": document_id,
+            "file_id": first_fragment.file_id,
+            "file_name": first_fragment.file_name,
             "chunk_id": first_fragment.chunk_id,
             "chunk_ids": chunk_ids,
             "source_fragments": [
