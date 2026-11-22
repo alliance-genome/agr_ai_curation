@@ -6130,3 +6130,87 @@ def test_submission_of_evidence_that_names_its_file_carries_the_file(db_session)
         select(SubmissionModel).where(SubmissionModel.session_id == UUID(seeded["session_id"]))
     ).one()
     assert persisted.payload["payload_json"]["candidates"][0]["evidence_anchors"][0]["file_id"] == file_id
+
+
+def test_fingerprint_of_evidence_that_names_its_file_is_stable_across_a_reload(db_session):
+    _, session_row, candidate, _ = _seed_anchor_with_file(db_session, quoted_file=True)
+
+    def fingerprint(current_candidate) -> str:
+        return submission_module._submission_intent_fingerprint(
+            db=db_session,
+            session_row=session_row,
+            adapter_key=REFERENCE_ADAPTER_KEY,
+            mode=SubmissionMode.DIRECT_SUBMIT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            ready_candidates=[current_candidate],
+            domain_context=None,
+        )
+
+    before = fingerprint(candidate)
+    candidate_id = candidate.id
+    db_session.expunge_all()
+    reloaded = db_session.get(CurationCandidate, candidate_id)
+    session_row = db_session.get(ReviewSessionModel, session_row.id)
+
+    assert reloaded is not candidate
+    assert fingerprint(reloaded) == before
+
+
+def test_fingerprint_of_a_projection_that_names_its_file_is_stable_across_a_reload(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={"artifact": {"accession_id": "A-1", "title": "Bronze astrolabe"}},
+        reviewed=False,
+        object_evidence_record_ids=["E1"],
+        envelope_metadata={
+            "evidence_records": [
+                {
+                    "evidence_record_id": "E1",
+                    "verified_quote": _TABLE_ROW_QUOTE,
+                    "page": None,
+                    "file_id": "6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c",
+                    "file_name": "Supplementary Table 2",
+                    "source_span_ids": ["s1"],
+                    "source_fragments": [
+                        {
+                            "text": _TABLE_ROW_QUOTE,
+                            "span_type": "table_row",
+                            "file_id": "6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c",
+                            "file_name": "Supplementary Table 2",
+                        },
+                    ],
+                }
+            ]
+        },
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    candidate = db_session.get(CurationCandidate, UUID(seeded["candidate_id"]))
+    domain_context = submission_module._build_domain_envelope_submission_context(
+        db=db_session,
+        candidates={seeded["candidate_id"]: candidate},
+        target_candidate_ids=[seeded["candidate_id"]],
+        user_id="user-1",
+    )
+    material = submission_module._non_envelope_candidate_submission_intent(candidate)
+    assert material["evidence_anchor_projections"][0]["file_id"] == (
+        "6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c"
+    )
+    before = _intent_fingerprint(db_session, session_row, candidate, domain_context)
+
+    db_session.expunge_all()
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    reloaded = db_session.get(CurationCandidate, UUID(seeded["candidate_id"]))
+    reloaded_context = submission_module._build_domain_envelope_submission_context(
+        db=db_session,
+        candidates={seeded["candidate_id"]: reloaded},
+        target_candidate_ids=[seeded["candidate_id"]],
+        user_id="user-1",
+    )
+
+    assert _intent_fingerprint(db_session, session_row, reloaded, reloaded_context) == before
