@@ -2184,6 +2184,17 @@ def test_provider_import_deadline_default_and_override(monkeypatch):
     assert get_document_source_import_timeout_seconds() == 900.0
 
 
+def test_provider_dead_wait_polls_default_floor_and_override(monkeypatch):
+    from src.lib.openai_agents.config import get_document_source_dead_wait_polls
+
+    monkeypatch.delenv("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", raising=False)
+    assert get_document_source_dead_wait_polls() == 3
+    monkeypatch.setenv("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", "5")
+    assert get_document_source_dead_wait_polls() == 5
+    monkeypatch.setenv("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", "0")
+    assert get_document_source_dead_wait_polls() == 1
+
+
 def test_provider_poll_interval_default_and_override(monkeypatch):
     from src.lib.openai_agents.config import get_document_source_poll_interval_seconds
 

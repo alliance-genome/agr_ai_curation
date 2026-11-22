@@ -490,6 +490,7 @@ def test_compose_forwards_document_file_converted_text_cap():
         # (KANBAN-1976 / ALL-1460, P7w).
         ("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", "3600"),
         ("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", "30"),
+        ("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", "3"),
     ],
 )
 def test_compose_forwards_provider_import_wait_settings(name, default):

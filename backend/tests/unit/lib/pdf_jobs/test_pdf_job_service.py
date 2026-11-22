@@ -670,22 +670,20 @@ def test_update_progress_moves_updated_at_even_when_nothing_else_changes(monkeyp
 def _dead_wait_defaults(monkeypatch):
     monkeypatch.delenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", raising=False)
     monkeypatch.delenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", raising=False)
 
 
-@pytest.mark.parametrize("stage", ["provider_conversion", "waiting_for_supplements"])
-def test_cancel_of_a_wait_that_stopped_polling_finalizes_at_once(monkeypatch, stage):
+def test_cancel_of_a_wait_that_stopped_polling_finalizes_at_once(monkeypatch):
     """A restart leaves the job active with no task; cancel must free the paper."""
 
     _dead_wait_defaults(monkeypatch)
     job = _build_job(status=PdfJobStatus.RUNNING.value)
-    job.current_stage = stage
+    job.current_stage = "provider_conversion"
     # Two minutes and ten seconds since the last poll; a living wait polls
     # at most every 30 s plus one 10 s ABC request.
     job.updated_at = datetime.now(timezone.utc) - timedelta(seconds=130)
-    document_status = "completed" if stage == "waiting_for_supplements" else "pending"
-    document = _build_document(job, status=document_status)
-    if document_status == "pending":
-        document.main_file.status = "pending"
+    document = _build_document(job, status="pending")
+    document.main_file.status = "pending"
     session = _FakeSession([job, document, job])
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
 
@@ -699,13 +697,9 @@ def test_cancel_of_a_wait_that_stopped_polling_finalizes_at_once(monkeypatch, st
     assert job.completed_at is not None
     assert job.message == "Processing cancelled by user request"
     assert response.metadata[PDF_PROCESSING_RECEIPT_KEY]["outcome"] == "cancelled"
-    if stage == "waiting_for_supplements":
-        # The main paper was already usable; it stays so.
-        assert document.status == "completed"
-    else:
-        # As after any cancelled import: failed in the Library, can be deleted or retried.
-        assert document.status == "failed"
-        assert document.main_file.status == "failed"
+    # As after any cancelled import: failed in the Library, can be deleted or retried.
+    assert document.status == "failed"
+    assert document.main_file.status == "failed"
     assert session.commit_calls == 1
 
 
@@ -713,7 +707,6 @@ def test_cancel_of_a_wait_that_stopped_polling_finalizes_at_once(monkeypatch, st
     ("stage", "seconds_since_last_poll"),
     [
         ("provider_conversion", 100),  # alive: within 3 x (30 s + 10 s)
-        ("waiting_for_supplements", 100),
         ("parsing", 3 * 3600),  # ingestion stages do not poll
         ("chunking", 3 * 3600),
     ],
@@ -737,7 +730,8 @@ def test_cancel_of_a_living_wait_or_a_non_polling_stage_only_sets_the_flag(
     assert session.commit_calls == 1
 
 
-def test_dead_wait_threshold_follows_the_declared_poll_and_request_settings(monkeypatch):
+def test_dead_wait_threshold_follows_the_declared_settings(monkeypatch):
+    monkeypatch.delenv("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", raising=False)
     monkeypatch.setenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", "5")
     monkeypatch.setenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", "10")
     job = _build_job(status=PdfJobStatus.RUNNING.value)
@@ -751,3 +745,18 @@ def test_dead_wait_threshold_follows_the_declared_poll_and_request_settings(monk
 
     # 3 x (5 s + 10 s) = 45 s < 50 s since the last poll.
     assert response.status == PdfJobStatus.CANCELLED.value
+
+
+def test_a_wider_dead_wait_margin_keeps_a_slow_living_wait_alive(monkeypatch):
+    _dead_wait_defaults(monkeypatch)
+    monkeypatch.setenv("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", "5")
+    job = _build_job(status=PdfJobStatus.RUNNING.value)
+    job.current_stage = "provider_conversion"
+    # Dead at the default 3 x (30 s + 10 s) = 120 s; alive at 5 x 40 s = 200 s.
+    job.updated_at = datetime.now(timezone.utc) - timedelta(seconds=150)
+    session = _FakeSession([job])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+
+    response = service_module.request_cancel(job_id=job.id, user_id=job.user_id)
+
+    assert response.status == PdfJobStatus.CANCEL_REQUESTED.value

@@ -177,6 +177,9 @@ Configured knobs:
   conversion from a cold machine takes about 12 minutes. KANBAN-1976 /
   ALL-1460 (P7w) raised it from 600 seconds, which failed such imports.
 - `DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS`: individual provider HTTP timeout.
+- `DOCUMENT_SOURCE_DEAD_WAIT_POLLS`: missed polls after which a cancel
+  finalizes a provider wait that no task is polling (default 3; see
+  Cancellation).
 - `DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES`: largest converted text, in
   downloaded bytes, read for one provider file (default 1,000,000).
 - `PDF_JOB_STALE_TIMEOUT_SECONDS`: stale durable-job reconciliation timeout
@@ -239,10 +242,10 @@ Cancellation is local to AI Curation. It stops local polling/download/ingestion
 when observed (at the next poll, at most one poll interval later) and marks the
 local job cancelled.
 
-A job in a polling stage (`provider_conversion`, `waiting_for_supplements`)
-whose last recorded activity is older than three times the poll interval plus
-the provider request timeout (120 seconds at the defaults) has no task polling
-it, typically after a backend restart. Cancelling it finalizes it at once: the
+A job in the polling stage `provider_conversion` whose last recorded activity
+is older than `DOCUMENT_SOURCE_DEAD_WAIT_POLLS` (default 3) times the poll
+interval plus the provider request timeout (120 seconds at the defaults) has no
+task polling it, typically after a backend restart. Cancelling it finalizes it at once: the
 job becomes `cancelled`, its paper is reconciled as after any cancelled import
 (a new paper becomes failed and can be deleted or imported again; a paper that
 was already usable stays usable). Jobs in other stages only get the cancel flag.

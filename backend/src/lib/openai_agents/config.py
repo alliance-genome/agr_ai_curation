@@ -2064,6 +2064,15 @@ def get_document_source_poll_interval_seconds() -> float:
     )
 
 
+def get_document_source_dead_wait_polls() -> int:
+    """Missed polls after which a cancel finalizes a provider wait no task is polling.
+
+    A living wait records activity at least once per poll interval plus one
+    provider request; this many of those without activity means it is dead.
+    """
+    return max(1, _get_env_int_with_fallback("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", 3))
+
+
 def get_document_source_import_timeout_seconds() -> float:
     """Main-paper import deadline, covering the provider's conversion and the ingestion.
 

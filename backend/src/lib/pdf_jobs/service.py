@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from src.lib.openai_agents.config import (
+    get_document_source_dead_wait_polls,
     get_document_source_poll_interval_seconds,
     get_document_source_request_timeout_seconds,
     get_pdf_document_error_message_max_chars,
@@ -62,11 +63,7 @@ _ACTIVE_STATUSES = {
 # poll interval and records it (``update_progress``). Only these can be told
 # dead from their last activity alone.
 PROVIDER_CONVERSION_STAGE = "provider_conversion"
-WAITING_FOR_SUPPLEMENTS_STAGE = "waiting_for_supplements"
-_POLLING_STAGES = frozenset({PROVIDER_CONVERSION_STAGE, WAITING_FOR_SUPPLEMENTS_STAGE})
-# A living poll records activity at least once per poll interval plus one
-# provider request; three of those without activity means no task is polling.
-_DEAD_POLL_INTERVALS = 3
+_POLLING_STAGES = frozenset({PROVIDER_CONVERSION_STAGE})
 # updated_at is mutable activity time, so equal creation times use a stable ID tie-break.
 _JOB_CREATION_ORDERING = (
     PdfProcessingJob.created_at.desc(),
@@ -791,7 +788,7 @@ def _polling_stopped(job: PdfProcessingJob, *, now: datetime) -> bool:
     """Whether a job in a polling stage has recorded no poll for too long."""
     if job.current_stage not in _POLLING_STAGES:
         return False
-    dead_after_seconds = _DEAD_POLL_INTERVALS * (
+    dead_after_seconds = get_document_source_dead_wait_polls() * (
         get_document_source_poll_interval_seconds()
         + get_document_source_request_timeout_seconds()
     )
