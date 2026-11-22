@@ -2056,12 +2056,33 @@ def get_document_source_import_batch_limit() -> int:
 
 # How long an import waits on the provider, and how often it asks. Each poll
 # is one provider request: at 30 s a one-hour wait is at most 121 requests.
+#
+# At most this many polls in one wait. ABC recycles a worker after about 1,000
+# requests (its gunicorn ``max_requests``), which reports the conversion that
+# worker was running as failed and so ends our import. That count includes
+# every other caller's requests to the same worker, so one wait stays under
+# half of it. It also covers a supplement wait of 3 hours at the 30 s poll
+# (360 polls).
+DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT = 400
+DOCUMENT_SOURCE_MIN_POLL_INTERVAL_SECONDS = 5.0
+# At 1 a living iteration (a poll plus two provider requests) can pass the threshold.
+DOCUMENT_SOURCE_MIN_DEAD_WAIT_POLLS = 2
+
+
+class DocumentSourceWaitSettingsError(RuntimeError):
+    """The provider wait settings would poll the provider unsafely; the deploy stops."""
+
+
 def get_document_source_poll_interval_seconds() -> float:
     """Status-poll interval for provider-backed document imports."""
-    return max(
-        0.1,
-        _get_env_float_with_fallback("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", 30.0),
-    )
+    name = "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS"
+    value = _get_env_float_with_fallback(name, 30.0)
+    if value < DOCUMENT_SOURCE_MIN_POLL_INTERVAL_SECONDS:
+        raise ValueError(
+            f"{name} is {value:g}; it must be at least "
+            f"{DOCUMENT_SOURCE_MIN_POLL_INTERVAL_SECONDS:g} seconds"
+        )
+    return value
 
 
 def get_document_source_dead_wait_polls() -> int:
@@ -2070,7 +2091,13 @@ def get_document_source_dead_wait_polls() -> int:
     A living wait records activity at least once per poll interval plus one
     provider request; this many of those without activity means it is dead.
     """
-    return max(1, _get_env_int_with_fallback("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", 3))
+    name = "DOCUMENT_SOURCE_DEAD_WAIT_POLLS"
+    value = _get_env_int_with_fallback(name, 3)
+    if value < DOCUMENT_SOURCE_MIN_DEAD_WAIT_POLLS:
+        raise ValueError(
+            f"{name} is {value}; it must be at least {DOCUMENT_SOURCE_MIN_DEAD_WAIT_POLLS}"
+        )
+    return value
 
 
 def get_document_source_import_timeout_seconds() -> float:
@@ -2082,6 +2109,28 @@ def get_document_source_import_timeout_seconds() -> float:
         1.0,
         _get_env_float_with_fallback("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", 3600.0),
     )
+
+
+def validate_document_source_wait_settings() -> None:
+    """Startup check: wait settings that would poll the provider unsafely fail the deploy.
+
+    An ``.env`` that still pins an old short poll interval, or a deadline raised
+    without the interval, stops here instead of exhausting the provider's workers.
+    """
+    try:
+        poll_seconds = get_document_source_poll_interval_seconds()
+        get_document_source_dead_wait_polls()
+    except ValueError as error:
+        raise DocumentSourceWaitSettingsError(str(error)) from error
+    deadline_seconds = get_document_source_import_timeout_seconds()
+    polls = deadline_seconds / poll_seconds
+    if polls > DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT:
+        raise DocumentSourceWaitSettingsError(
+            "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS / DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS "
+            f"({deadline_seconds:g} / {poll_seconds:g}) allows {polls:.0f} provider polls in "
+            f"one wait, more than {DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT}; raise the poll "
+            "interval or lower the deadline"
+        )
 
 
 def get_document_file_max_converted_text_bytes() -> int:

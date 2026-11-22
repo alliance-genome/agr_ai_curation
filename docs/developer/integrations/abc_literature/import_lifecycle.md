@@ -168,7 +168,12 @@ Configured knobs:
   (default 30 seconds). Every poll re-sends ABC's conversion request, which
   answers with the current state; ABC recycles a worker, restarting its running
   conversion, after about 1,000 requests, so the interval bounds how many
-  requests one wait sends (at most 121 in an hour at 30 seconds).
+  requests one wait sends (at most 121 in an hour at 30 seconds). Minimum 5
+  seconds. Start-up refuses settings whose deadline divided by this interval
+  exceeds 400 polls in one wait (`DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT`: under
+  half of ABC's roughly 1,000 requests per worker, which other callers share),
+  with a named error naming both settings; an `.env` still pinning the old 2
+  seconds stops the deploy instead of degrading imports.
 - `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS`: deadline for one provider
   conversion/import job of a main paper (default 3,600 seconds), covering the
   wait for ABC's conversion and then downloads, hierarchy and figure
@@ -178,8 +183,8 @@ Configured knobs:
   ALL-1460 (P7w) raised it from 600 seconds, which failed such imports.
 - `DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS`: individual provider HTTP timeout.
 - `DOCUMENT_SOURCE_DEAD_WAIT_POLLS`: missed polls after which a cancel
-  finalizes a provider wait that no task is polling (default 3; see
-  Cancellation).
+  finalizes a provider wait that no task is polling (default 3, minimum 2,
+  checked at start-up; see Cancellation).
 - `DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES`: largest converted text, in
   downloaded bytes, read for one provider file (default 1,000,000).
 - `PDF_JOB_STALE_TIMEOUT_SECONDS`: stale durable-job reconciliation timeout
@@ -249,6 +254,12 @@ task polling it, typically after a backend restart. Cancelling it finalizes it a
 job becomes `cancelled`, its paper is reconciled as after any cancelled import
 (a new paper becomes failed and can be deleted or imported again; a paper that
 was already usable stays usable). Jobs in other stages only get the cancel flag.
+If that task was in fact still finishing a poll, it checks before writing and
+stops without touching the paper (under the job-row lock for the source-field
+write), so nothing lands on a paper imported again meanwhile.
+
+Only the polling stage records activity on every poll; other stages (a local
+PDF's extraction, ingestion) record it only when something changes, as before.
 
 AI Curation does not attempt to cancel ABC Literature conversion work. Even when
 AI Curation initiated `conversion_request`, the ABC endpoint does not provide a

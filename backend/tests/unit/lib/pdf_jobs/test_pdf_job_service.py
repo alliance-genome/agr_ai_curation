@@ -760,3 +760,24 @@ def test_a_wider_dead_wait_margin_keeps_a_slow_living_wait_alive(monkeypatch):
     response = service_module.request_cancel(job_id=job.id, user_id=job.user_id)
 
     assert response.status == PdfJobStatus.CANCEL_REQUESTED.value
+
+
+def test_a_non_polling_stage_records_activity_only_when_something_changes(monkeypatch):
+    """The heartbeat is for provider waits, whose liveness is judged from it;
+    a local PDF's every-2-second extraction poll keeps today's behaviour."""
+
+    job = _build_job(status=PdfJobStatus.RUNNING.value)
+    job.current_stage = "parsing"
+    stale_mark = job.updated_at
+    session = _FakeSession([job])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+
+    service_module.update_progress(
+        job_id=job.id,
+        stage=job.current_stage,
+        progress_percentage=job.progress_percentage,
+        message=job.message,
+        status=PdfJobStatus.RUNNING.value,
+    )
+
+    assert job.updated_at == stale_mark

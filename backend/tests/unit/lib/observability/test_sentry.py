@@ -2105,6 +2105,7 @@ def test_pdf_conversion_timeouts_have_one_capture_owner_with_logging_enabled():
         service._sync_provider_conversion_sql_failure = AsyncMock()
         service._mark_failed_and_sync_tracker = AsyncMock()
         module.update_document_status = AsyncMock()
+        module.pdf_job_service.get_job_by_id = lambda **_kwargs: None
         request = SimpleNamespace(document_id="private-doc", user_id="private-user", job_id="private-job")
         async def run():
             await service.execute_provider_conversion(request)

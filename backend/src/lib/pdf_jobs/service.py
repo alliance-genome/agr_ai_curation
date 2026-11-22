@@ -895,11 +895,13 @@ def update_progress(
         now = datetime.now(timezone.utc)
         if job.started_at is None and job.status in {PdfJobStatus.RUNNING.value, PdfJobStatus.CANCEL_REQUESTED.value}:
             job.started_at = now
-        # Every call is activity, even when no other column changes (a long
-        # provider wait repeats the same answer): ``onupdate`` alone would not
-        # fire, and the stale sweep and the cancel rule would take a living
-        # job for a dead one.
-        job.updated_at = now
+        if job.current_stage in _POLLING_STAGES:
+            # A provider wait's every poll is activity, even when no other
+            # column changes (it repeats the same answer): ``onupdate`` alone
+            # would not fire, and the dead-wait cancel and the stale sweep
+            # would take a living wait for a dead one. Other stages keep
+            # ``onupdate`` (a write only when something changed).
+            job.updated_at = now
 
         session.commit()
         session.refresh(job)

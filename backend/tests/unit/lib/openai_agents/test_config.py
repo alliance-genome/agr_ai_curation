@@ -2191,8 +2191,68 @@ def test_provider_dead_wait_polls_default_floor_and_override(monkeypatch):
     assert get_document_source_dead_wait_polls() == 3
     monkeypatch.setenv("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", "5")
     assert get_document_source_dead_wait_polls() == 5
-    monkeypatch.setenv("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", "0")
-    assert get_document_source_dead_wait_polls() == 1
+    # At 1 a living iteration (a poll plus two provider requests) can pass the threshold.
+    monkeypatch.setenv("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", "1")
+    with pytest.raises(ValueError, match="DOCUMENT_SOURCE_DEAD_WAIT_POLLS"):
+        get_document_source_dead_wait_polls()
+
+
+def test_provider_poll_interval_has_a_five_second_minimum(monkeypatch):
+    from src.lib.openai_agents.config import get_document_source_poll_interval_seconds
+
+    monkeypatch.setenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", "2")
+    with pytest.raises(ValueError, match="DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS"):
+        get_document_source_poll_interval_seconds()
+
+
+@pytest.mark.parametrize(
+    ("env", "named"),
+    [
+        # An .env still pinning the old 2 s poll: refused, whatever the deadline.
+        ({"DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS": "2"}, "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS"),
+        # 3600 / 5 = 720 polls in one wait: more than 400.
+        ({"DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS": "5"}, "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS"),
+        ({"DOCUMENT_SOURCE_DEAD_WAIT_POLLS": "1"}, "DOCUMENT_SOURCE_DEAD_WAIT_POLLS"),
+    ],
+)
+def test_startup_refuses_document_source_wait_settings_that_would_hammer_the_provider(
+    monkeypatch, env, named
+):
+    from src.lib.openai_agents.config import (
+        DocumentSourceWaitSettingsError,
+        validate_document_source_wait_settings,
+    )
+
+    for key in (
+        "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS",
+        "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS",
+        "DOCUMENT_SOURCE_DEAD_WAIT_POLLS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    with pytest.raises(DocumentSourceWaitSettingsError, match=named):
+        validate_document_source_wait_settings()
+
+
+def test_startup_accepts_the_default_wait_settings_and_the_limit_itself(monkeypatch):
+    from src.lib.openai_agents.config import (
+        DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT,
+        validate_document_source_wait_settings,
+    )
+
+    for key in (
+        "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS",
+        "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS",
+        "DOCUMENT_SOURCE_DEAD_WAIT_POLLS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    validate_document_source_wait_settings()  # 3600 / 30 = 120 polls
+
+    assert DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT == 400
+    monkeypatch.setenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", "9")  # 3600 / 9 = 400
+    validate_document_source_wait_settings()
 
 
 def test_provider_poll_interval_default_and_override(monkeypatch):

@@ -14,6 +14,7 @@ from fastapi import BackgroundTasks
 from src.lib.document_sources.main_text import select_preferred_main_text_artifact
 from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
+    DocumentSourceError,
     DocumentSourceProvider,
     SourceAccessPolicy,
     SourceAccessScope,
@@ -1074,7 +1075,8 @@ async def test_execute_provider_conversion_polls_then_ingests_main_markdown(monk
         {"artifact_id": "markdown-88", "request_bearer_token": "curator-token"},
         {"artifact_id": "meta-valid", "request_bearer_token": "curator-token"},
     ]
-    assert len(job_statuses) == 1
+    # The replay guard, then the check before writing that no cancel finalized the job.
+    assert job_statuses == []
     assert ingested[0]["request"].source_provenance["converted_artifact_id"] == "markdown-88"
     assert ingested[0]["request"].provider_figure_metadata == (
         {
@@ -1845,6 +1847,7 @@ async def test_execute_provider_conversion_times_out_and_syncs_sql_failure(monke
     )
 
     monkeypatch.setattr(service_module, "get_document_source_import_timeout_seconds", lambda: 0.01)
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
     monkeypatch.setattr(
         UploadExecutionService,
         "_execute_provider_conversion_unbounded",
@@ -3322,3 +3325,144 @@ async def test_a_request_with_one_import_keeps_nothing_alive(monkeypatch):
     await background_tasks()
 
     assert touched == []
+
+
+# --- P7w review: a wait finalized by a dead-wait cancel writes nothing afterwards
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("late_answer", ["main_ready", "provider_error"])
+async def test_an_iteration_in_flight_when_its_job_was_finalized_writes_nothing(
+    monkeypatch, late_answer
+):
+    """The curator cancelled what looked like a dead wait (finalized at once)
+    while one poll was still in flight. Whatever that poll returns, it must not
+    write the paper's source fields or mark it failed: the paper may already be
+    imported again."""
+
+    clock = _VirtualClock()
+    provider = _ProviderReadyAt(clock, ready_at=float("inf"))
+    job = {"status": PdfJobStatus.PENDING.value}
+    outcomes = _record_job_outcomes(monkeypatch)
+    selections = []
+    ingested = []
+
+    async def _answer(reference, *, wait=False, request_bearer_token=None):
+        provider.conversion_requests.append({"reference": reference, "at": clock.now})
+        if len(provider.conversion_requests) == 1:
+            return SourceConversionResult(
+                provider="abc_literature", status=SourceConversionStatus.RUNNING,
+                reference_curie="AGRKB:101",
+            )
+        # Meanwhile the dead-wait cancel finalized the job.
+        job["status"] = PdfJobStatus.CANCELLED.value
+        if late_answer == "provider_error":
+            raise DocumentSourceError("ABC Literature conversion request failed")
+        return SourceConversionResult(
+            provider="abc_literature", status=SourceConversionStatus.RUNNING,
+            reference_curie="AGRKB:101", converted_classes=("converted_merged_main",),
+        )
+
+    async def _select(self, request, converted_artifact):
+        selections.append(converted_artifact.artifact_id)
+
+    async def _ingest(request, *, weaviate_client):
+        ingested.append(request.document_id)
+
+    provider.request_conversion = _answer
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "get_job_by_id",
+        lambda **_kwargs: SimpleNamespace(status=job["status"]),
+    )
+    monkeypatch.setattr(UploadExecutionService, "_sync_provider_conversion_sql_selection", _select)
+    monkeypatch.setattr(service_module, "asyncio", clock)
+    service = UploadExecutionService(
+        pipeline_tracker=_Tracker(),
+        document_source_provider_factory=lambda: provider,
+        provider_markdown_ingestion_fn=_ingest,
+    )
+
+    await service.execute_provider_conversion(_wait_request())
+
+    assert len(provider.conversion_requests) == 2
+    assert selections == []
+    assert ingested == []
+    assert outcomes["status"] == []
+    assert outcomes["sql_failures"] == []
+    assert outcomes["failed"] == []
+    assert outcomes["completed"] == []
+    assert provider.closed is True
+
+
+# --- P7w review: no bookkeeping outlives the request's tasks
+
+
+def _forget(service):
+    """The request's BackgroundTasks is gone (the caller dropped every reference)."""
+    import gc
+
+    gc.collect()
+    return dict(service._queues_by_job)
+
+
+@pytest.mark.asyncio
+async def test_queue_bookkeeping_is_dropped_when_the_first_task_raises(monkeypatch):
+    async def _unbounded(self, request):
+        raise RuntimeError("made-up failure outside the job's own handling")
+
+    monkeypatch.setattr(service_module.pdf_job_service, "touch_pending_jobs", lambda *, job_ids: 0)
+    monkeypatch.setattr(UploadExecutionService, "_execute_provider_conversion_unbounded", _unbounded)
+    service = UploadExecutionService(pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: _Provider())
+    background_tasks = BackgroundTasks()
+    for job_id in ("job-1", "job-2", "job-3"):
+        await service.dispatch_provider_conversion_execution(
+            background_tasks=background_tasks, request=_queued_request(job_id)
+        )
+
+    with pytest.raises(RuntimeError) as raised:
+        await background_tasks()  # Starlette skips job-2 and job-3
+    del raised, background_tasks
+
+    assert _forget(service) == {}
+
+
+@pytest.mark.asyncio
+async def test_queue_bookkeeping_is_dropped_when_the_request_task_is_cancelled(monkeypatch):
+    started = asyncio.Event()
+
+    async def _unbounded(self, request):
+        started.set()
+        await _real_sleep(60)
+
+    monkeypatch.setattr(service_module.pdf_job_service, "touch_pending_jobs", lambda *, job_ids: 0)
+    monkeypatch.setattr(UploadExecutionService, "_execute_provider_conversion_unbounded", _unbounded)
+    service = UploadExecutionService(pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: _Provider())
+    background_tasks = BackgroundTasks()
+    for job_id in ("job-1", "job-2", "job-3"):
+        await service.dispatch_provider_conversion_execution(
+            background_tasks=background_tasks, request=_queued_request(job_id)
+        )
+    running = asyncio.ensure_future(background_tasks())
+    await started.wait()
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError) as raised:
+        await running
+    del raised, running, background_tasks
+
+    assert _forget(service) == {}
+
+
+@pytest.mark.asyncio
+async def test_queue_bookkeeping_is_dropped_when_the_tasks_never_run():
+    """The endpoint failed after dispatching, so no task runs at all."""
+
+    service = UploadExecutionService(pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: _Provider())
+    background_tasks = BackgroundTasks()
+    for job_id in ("job-1", "job-2"):
+        await service.dispatch_provider_conversion_execution(
+            background_tasks=background_tasks, request=_queued_request(job_id)
+        )
+    del background_tasks
+
+    assert _forget(service) == {}
