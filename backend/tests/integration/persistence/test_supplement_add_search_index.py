@@ -479,3 +479,219 @@ async def test_a_paper_deleted_while_its_add_writes_keeps_no_piece_in_the_index(
     with pytest.raises(Exception):
         await _add(paper, owner_id, index, [_chosen(20)], job_id=UUID(job.job_id), checkpoint=delete_paper_mid_write)
     assert _indexes(index, str(paper)) == []
+
+
+@pytest.mark.asyncio
+async def test_the_real_stale_sweep_fails_a_dead_adds_rows_on_a_completed_paper(owner_id, index):
+    """A deploy-style stop: the process is gone mid-add and only the background sweep runs.
+
+    Afterwards the paper has no pending file rows, the structural fact the model's
+    "files are still being added" line keys on, and a new run reads its ready files.
+    """
+
+    from src.lib.pdf_jobs.recovery import reconcile_stale_jobs_once
+
+    paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    job = supplement_add.start_supplement_add(paper, owner_id, [_chosen(20)])
+
+    class ProcessGone(BaseException):
+        pass
+
+    async def stop(stage):
+        if stage == "finishing":
+            raise ProcessGone()
+
+    original_undo = supplement_add._undo
+    supplement_add._undo = AsyncMock()  # nothing runs after the process is gone
+    try:
+        with pytest.raises(ProcessGone):
+            await _add(paper, owner_id, index, [_chosen(20)], job_id=UUID(job.job_id), checkpoint=stop)
+    finally:
+        supplement_add._undo = original_undo
+    with SessionLocal.begin() as db:
+        stored_job = db.get(PdfProcessingJob, UUID(job.job_id))
+        stored_job.status = PdfJobStatus.RUNNING.value
+    assert [row.status for row in _rows(paper)] == ["ready", "pending"]
+
+    later = datetime.now(timezone.utc) + timedelta(hours=3)
+    cursor = reconcile_stale_jobs_once(now=later)
+    while cursor is not None:
+        cursor = reconcile_stale_jobs_once(after=cursor, now=later)
+
+    with SessionLocal() as db:
+        assert db.get(PdfProcessingJob, UUID(job.job_id)).status == PdfJobStatus.FAILED.value
+        pending = db.scalar(
+            select(PDFDocumentFile.id).where(
+                PDFDocumentFile.document_id == paper, PDFDocumentFile.status == "pending",
+            )
+        )
+    assert pending is None
+    assert [row.status for row in _rows(paper)] == ["ready", "failed"]
+    await _usable(paper, index, readable_ranges=[(0, 2)])
+    assert _deletable(paper, owner_id) is True
+
+
+# --- a delete and an add cannot interleave (paper_lock.py) ------------------------------------
+
+
+def _wire_delete(monkeypatch, owner_id, *, in_wipe=None, wipe_pause: float = 0.0):
+    """The real delete endpoint, with the paper's search-index object reported present.
+
+    The index wipe is the real helper's piece delete; ``in_wipe`` is set when the
+    delete is between its active-job check and its row delete.
+    """
+
+    import time
+
+    async def provision(_principal):
+        return type("User", (), {"id": owner_id})()
+
+    async def present(_sub, _document_id):
+        return {"document": {"processingStatus": "completed"}}
+
+    async def wipe(user_sub, document_id):
+        if in_wipe is not None:
+            in_wipe.set()
+        time.sleep(wipe_pause)
+        deleted = chunk_reads.delete_pieces_of_deleted_paper(document_id, user_sub)
+        return {"success": True, "chunks_deleted": deleted}
+
+    monkeypatch.setattr(documents_api, "provision_user_async", provision)
+    monkeypatch.setattr(documents_api, "get_document", present)
+    monkeypatch.setattr(documents_api, "delete_document", wipe)
+
+
+@pytest.mark.asyncio
+async def test_a_delete_with_no_add_running_deletes_the_paper_as_before(owner_id, index, monkeypatch):
+    paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    _wire_delete(monkeypatch, owner_id)
+
+    result = await documents_api.delete_document_endpoint(document_id=str(paper), user={"sub": TEST_USER_ID})
+
+    assert result.success is True
+    assert _rows(paper) == [] and _indexes(index, str(paper)) == []
+
+
+@pytest.mark.asyncio
+async def test_an_add_requested_while_the_paper_is_being_deleted_waits_and_then_finds_no_paper(
+    owner_id, index, monkeypatch,
+):
+    paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    in_wipe = threading.Event()
+    _wire_delete(monkeypatch, owner_id, in_wipe=in_wipe, wipe_pause=1.5)
+    outcome: dict = {}
+
+    def add_request() -> None:
+        in_wipe.wait(timeout=30)
+        try:
+            outcome["result"] = supplement_add.start_supplement_add(paper, owner_id, [_chosen(20)])
+        except HTTPException as refused:
+            outcome["result"] = refused
+        outcome["paper_existed_when_add_ran"] = _rows(paper) != []
+
+    adder = threading.Thread(target=add_request)
+    adder.start()
+    await documents_api.delete_document_endpoint(document_id=str(paper), user={"sub": TEST_USER_ID})
+    adder.join(timeout=30)
+
+    # The add waited for the whole delete: it never saw the paper half deleted, and wrote nothing.
+    assert isinstance(outcome["result"], HTTPException) and outcome["result"].status_code == 404
+    assert outcome["paper_existed_when_add_ran"] is False
+    with SessionLocal() as db:
+        assert db.scalar(select(PdfProcessingJob.id).where(PdfProcessingJob.document_id == paper)) is None
+    assert _indexes(index, str(paper)) == []
+
+
+@pytest.mark.asyncio
+async def test_a_delete_requested_while_an_add_creates_its_job_waits_and_then_refuses(owner_id, index, monkeypatch):
+    import time
+
+    from src.lib.document_files.paper_lock import lock_paper_for_add
+    from src.lib.pdf_jobs.service import create_job_in_session
+
+    paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    _wire_delete(monkeypatch, owner_id)
+    locked = threading.Event()
+    committed_at: dict = {}
+
+    def add_creating_its_job() -> None:
+        with SessionLocal() as session:
+            lock_paper_for_add(session, paper)
+            locked.set()
+            time.sleep(1.5)  # the add's job-creating transaction is still open
+            create_job_in_session(session, document_id=paper, user_id=owner_id)
+            committed_at["time"] = time.monotonic()
+
+    adder = threading.Thread(target=add_creating_its_job)
+    adder.start()
+    await asyncio.to_thread(locked.wait, 30)
+    with pytest.raises(HTTPException) as raised:
+        await documents_api.delete_document_endpoint(document_id=str(paper), user={"sub": TEST_USER_ID})
+    refused_at = time.monotonic()
+    adder.join(timeout=30)
+
+    assert raised.value.status_code == 409 and refused_at >= committed_at["time"]
+    assert [row.role for row in _rows(paper)] == ["main"] and _indexes(index, str(paper)) == [0, 1, 2]
+
+
+# --- awkward section names: repeated headings, text before any heading, symbol-only sheets ----
+
+
+AWKWARD = (
+    b"Made-up note before any heading.\n\n"
+    b"# Made_up_S20\n\n"
+    b"## a\n\n### Notes\n\n| strain | score |\n| --- | --- |\n| s1 | 1 |\n\n"
+    b"## (\n\n### Notes\n\n| gene | count |\n| --- | --- |\n| g1 | 3 |\n"
+)
+
+
+@pytest.mark.asyncio
+async def test_pieces_saved_json_and_viewer_blocks_carry_the_same_sections_for_awkward_names(owner_id, index):
+    import json
+
+    from src.config import get_pdf_storage_path
+
+    paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    job = supplement_add.start_supplement_add(paper, owner_id, [_chosen(20)])
+    await _add(paper, owner_id, index, [_chosen(20)], job_id=UUID(job.job_id), payloads={"21": AWKWARD})
+    (_, added) = _rows(paper)
+
+    fields = ("section_title", "parent_section", "subsection", "section_path")
+    saved = json.loads((get_pdf_storage_path() / added.processed_json_path).read_text(encoding="utf-8"))
+    saved_sections = [tuple(
+        tuple(element["metadata"][name]) if name == "section_path" else element["metadata"][name] for name in fields
+    ) for element in saved]
+    by_text = {element["text"]: element["metadata"] for element in saved}
+    assert by_text["Made-up note before any heading."]["parent_section"] == "Made_up_S20.xlsx"
+    tables = [element["metadata"] for element in saved if element["type"] == "Table"]
+    assert [table["section_title"] for table in tables] == ["a > Notes", "( > Notes"]
+
+    with SessionLocal() as db:
+        text = pdf_viewer.get_document_file_text(
+            document_id=paper, file_id=added.id, db=db, user={"sub": TEST_USER_ID},
+        )
+    block_sections = [
+        (block.section_title, block.parent_section, block.subsection, tuple(block.section_path))
+        for block in text.blocks
+    ]
+    assert set(block_sections) == set(saved_sections)
+
+    with index.session() as client:
+        collection = client.collections.get("DocumentChunk").with_tenant(TEST_TENANT_NAME)
+        stored = collection.query.fetch_objects(
+            filters=Filter.by_property("documentId").equal(str(paper))
+            & Filter.by_property("chunkIndex").greater_or_equal(added.chunk_index_start),
+            limit=100,
+        )
+    piece_sections = {
+        (obj.properties["sectionTitle"], obj.properties["parentSection"], obj.properties["subsection"],
+         tuple(obj.properties["sectionPath"]))
+        for obj in stored.objects
+    }
+    assert piece_sections <= set(saved_sections)
+    assert {("a > Notes", "a", "Notes", ("a", "Notes")), ("( > Notes", "(", "Notes", ("(", "Notes"))} <= piece_sections
+
+    readable = resolve_readable_files(str(paper), TEST_USER_ID)
+    for sheet in ("a", "("):
+        notes = await chunk_reads.get_chunks_by_subsection(str(paper), sheet, "Notes", TEST_USER_ID, readable=readable)
+        assert len(notes) == 1, sheet

@@ -632,6 +632,7 @@ def start_supplement_add(document_id: UUID, owner_user_id: int, files: Sequence[
     ``ActiveJobExistsError`` (409) when the paper already has an active job.
     """
 
+    from src.lib.document_files.paper_lock import lock_paper_for_add
     from src.lib.openai_agents.config import get_document_max_files_per_paper
     from src.lib.pdf_jobs.service import create_job_in_session
     from src.models.sql.database import SessionLocal
@@ -644,6 +645,9 @@ def start_supplement_add(document_id: UUID, owner_user_id: int, files: Sequence[
         raise SupplementAddRequestError("file_chosen_twice")
     max_files = get_document_max_files_per_paper()
     with SessionLocal() as session:
+        # Ordered against a delete of the same paper (paper_lock.py): a running delete
+        # finishes first, and the paper is then not found.
+        lock_paper_for_add(session, document_id)
         paper = require_owned_document(session, document_id, owner_user_id, for_update=True)
         live = sum(1 for row in paper.files if row.status != FILE_STATUS_FAILED)
         if live + len(files) > max_files:
