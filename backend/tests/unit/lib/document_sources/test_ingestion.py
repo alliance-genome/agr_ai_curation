@@ -213,6 +213,7 @@ async def test_shared_indexing_checks_owner_before_any_model_or_storage_work(mon
             owner_user_id=42,
             weaviate_client=object(),
             strategy=ChunkingStrategy.get_research_strategy(),
+            sectioning=ingestion.model_sections("isolated-document"),
         )
     hierarchy.assert_not_awaited()
     store.assert_not_awaited()
@@ -247,6 +248,7 @@ async def test_shared_indexing_checkpoint_failure_stops_next_stage(monkeypatch, 
             elements, document_id="isolated-document", file_id=FILE_ID, user_id="owner-1",
             owner_user_id=42, weaviate_client=object(),
             strategy=ChunkingStrategy.get_research_strategy(), stage_checkpoint=checkpoint,
+            sectioning=ingestion.model_sections("isolated-document"),
         )
     operations[stop_stage].assert_not_awaited()
     operations["vector_storage"].assert_not_awaited()
@@ -290,7 +292,7 @@ async def test_shared_indexing_reports_hierarchy_failure_and_continues(
 
     result = await ingestion.index_owned_document_elements(
         elements, document_id="doc-1", file_id=FILE_ID, user_id="owner-1", owner_user_id=42,
-        weaviate_client=client, strategy=strategy,
+        weaviate_client=client, strategy=strategy, sectioning=ingestion.model_sections("doc-1"),
     )
 
     assert result == 2
@@ -1000,7 +1002,7 @@ async def test_shared_indexing_offsets_chunks_into_the_reserved_range(monkeypatc
 
     count = await ingestion.index_owned_document_elements(
         elements, document_id="doc-1", file_id=FILE_ID, user_id="owner-1", owner_user_id=42,
-        weaviate_client=object(), strategy=strategy,
+        weaviate_client=object(), strategy=strategy, sectioning=ingestion.model_sections("doc-1"),
     )
 
     stored = store.await_args.args[0]
