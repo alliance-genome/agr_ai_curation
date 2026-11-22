@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { locateQuoteInBlocks, locateSectionInBlocks } from './viewerFileNavigation'
+import { locateEvidenceInBlocks, locateQuoteInBlocks, locateSectionInBlocks } from './viewerFileNavigation'
 import type { DisplayBlock } from './viewerFiles'
 import { TEXT_SUPPLEMENT_BLOCKS } from './viewerFilesFixtures'
 
@@ -100,6 +100,82 @@ describe('locateSectionInBlocks (the "quote not found" path)', () => {
 
   it('finds nothing for a section the file does not have, or for evidence with no section', () => {
     expect(locateSectionInBlocks(sectioned, { section: 'Results', subsection: null })).toBeNull()
-    expect(locateSectionInBlocks(sectioned, null)).toBeNull()
+    expect(locateSectionInBlocks(sectioned, { section: null, subsection: null })).toBeNull()
+  })
+})
+
+describe('locateEvidenceInBlocks (fragment by fragment, as the record_evidence writer stores them)', () => {
+  // The writer's record: verified_quote = fragment texts joined by "\n\n"; each
+  // fragment is an exact slice of one stored piece.
+  const twoRows = {
+    fragments: [
+      { text: '| Strain | Temp |', section: 'Sheet 1', subsection: null },
+      { text: '| XS0401 | 25 C |', section: 'Sheet 1', subsection: null },
+    ],
+    section: 'Sheet 1',
+    subsection: null,
+  }
+
+  it('finds a two-row Excel record whose joined quote is not in the file', () => {
+    const joined = '| Strain | Temp |\n\n| XS0401 | 25 C |'
+    expect(locateQuoteInBlocks(blocks, joined, null)).toBeNull()
+
+    expect(locateEvidenceInBlocks(blocks, twoRows, joined)).toEqual({
+      blocks: [{ blockIndex: 1, rowIndexes: [0, 1] }],
+      found: 2,
+      total: 2,
+      chosenAmongSeveral: false,
+    })
+  })
+
+  it('finds a two-sentence record whose sentences are separated by a space in the file', () => {
+    const prose = [paragraph('Worms were grown. They were kept at 25 C.', { section_title: 'Methods' })]
+    const target = {
+      fragments: [
+        { text: 'Worms were grown.', section: 'Methods', subsection: null },
+        { text: 'They were kept at 25 C.', section: 'Methods', subsection: null },
+      ],
+      section: 'Methods',
+      subsection: null,
+    }
+
+    expect(locateEvidenceInBlocks(prose, target, 'Worms were grown.\n\nThey were kept at 25 C.')).toMatchObject({
+      blocks: [{ blockIndex: 0, rowIndexes: null }],
+      found: 2,
+      total: 2,
+    })
+  })
+
+  it('reports a partial find: the found fragment is highlighted, the count says one is missing', () => {
+    const target = { ...twoRows, fragments: [twoRows.fragments[1]!, { text: '| XS9999 | 15 C |', section: 'Sheet 1', subsection: null }] }
+
+    expect(locateEvidenceInBlocks(blocks, target, '')).toMatchObject({
+      blocks: [{ blockIndex: 1, rowIndexes: [1] }],
+      found: 1,
+      total: 2,
+    })
+  })
+
+  it('locates the quote when the record has no fragments (a review-grid anchor)', () => {
+    expect(locateEvidenceInBlocks(blocks, { fragments: null, section: null, subsection: null }, 'two temperatures')).toMatchObject({
+      found: 1,
+      total: 1,
+    })
+  })
+
+  it('compares section names exactly, field by field: a name containing " > " is not split', () => {
+    const named = [
+      paragraph('Strain A grew.', { section_title: 'Growth', subsection: '25 C' }),
+      paragraph('Strain A grew.', { section_title: 'Growth > 25 C' }),
+    ]
+    const target = { fragments: [{ text: 'Strain A grew.', section: 'Growth > 25 C', subsection: null }], section: 'Growth > 25 C', subsection: null }
+
+    expect(locateEvidenceInBlocks(named, target, '').blocks).toEqual([{ blockIndex: 1, rowIndexes: null }])
+  })
+
+  it('takes the section title when the parent section is empty, as the backend does', () => {
+    const named = [paragraph('Intro.', { section_title: 'Methods', parent_section: '' })]
+
+    expect(locateSectionInBlocks(named, { section: 'Methods', subsection: null })).toBe(0)
   })
 })

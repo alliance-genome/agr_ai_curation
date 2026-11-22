@@ -13,7 +13,7 @@
  * exact slice of a piece, is found by plain substring search over that joined text.
  * No normalisation, no splitting, no similarity.
  */
-import type { EvidenceNavigationCommand } from '@/features/curation/evidence'
+import type { EvidenceNavigationCommand, TextEvidenceTarget } from '@/features/curation/evidence'
 import type { PdfViewerNavigationResult } from './pdfEvidenceNavigation'
 import type { DisplayBlock } from './viewerFiles'
 
@@ -22,6 +22,9 @@ export const EVIDENCE_WITHOUT_FILE_MESSAGE = 'This evidence was saved before fil
 
 /** Proposal, awaiting sign-off. */
 export const FILE_REMOVED_MESSAGE = 'This file is no longer part of the paper, so this evidence cannot be shown.'
+
+/** Proposal, awaiting sign-off. */
+export const FILE_NOT_READY_MESSAGE = 'This evidence\'s file is still being added to the paper, so it cannot be shown yet.'
 
 /** Proposal, awaiting sign-off. */
 export const TEXT_QUOTE_NOT_FOUND_MESSAGE = 'This quote could not be found in the file\'s text.'
@@ -78,18 +81,24 @@ function baseFileResult(
 export function buildEvidenceFileResult(
   command: EvidenceNavigationCommand,
   documentId: string | null,
-  kind: 'evidence-without-file' | 'file-removed',
+  kind: 'evidence-without-file' | 'file-removed' | 'file-not-ready',
 ): PdfViewerNavigationResult {
-  const message = kind === 'evidence-without-file' ? EVIDENCE_WITHOUT_FILE_MESSAGE : FILE_REMOVED_MESSAGE
+  const message = {
+    'evidence-without-file': EVIDENCE_WITHOUT_FILE_MESSAGE,
+    'file-removed': FILE_REMOVED_MESSAGE,
+    'file-not-ready': FILE_NOT_READY_MESSAGE,
+  }[kind]
   return {
     ...baseFileResult(command, documentId),
     status: kind,
     strategy: 'evidence-file',
     locatorQuality: 'unresolved',
     degraded: true,
-    note: kind === 'evidence-without-file'
-      ? 'The evidence names no file (saved before files were recorded); nothing was opened.'
-      : `The evidence names file ${command.fileId}, which is not one of the paper's files; nothing was opened.`,
+    note: {
+      'evidence-without-file': 'The evidence names no file (saved before files were recorded); nothing was opened.',
+      'file-removed': `The evidence names file ${command.fileId}, which is not one of the paper's files; nothing was opened.`,
+      'file-not-ready': `The evidence names file ${command.fileId}, which is not ready yet; nothing was opened.`,
+    }[kind],
     curatorMessage: message,
   }
 }
@@ -126,32 +135,39 @@ function tableRowOffsets(block: DisplayBlock): Array<{ start: number; end: numbe
   return offsets
 }
 
-/** The section an evidence record names, as evidence stores it. */
+/** The section an evidence record names, exactly as stored (never split or re-joined). */
 export interface EvidenceSection {
   /** The piece's parentSection, or its sectionTitle when it has none. */
   section: string
   subsection: string | null
 }
 
-/** The evidence's section from a navigation command, or null when it names none. */
-export function commandSection(command: EvidenceNavigationCommand): EvidenceSection | null {
-  const section = command.anchor.section_title?.trim() || null
-  if (!section) {
-    return null
+function firstNonEmpty(...values: Array<string | null>): string | null {
+  for (const value of values) {
+    const stripped = value?.trim() ?? ''
+    if (stripped) {
+      return stripped
+    }
   }
-  return { section, subsection: command.anchor.subsection_title?.trim() || null }
+  return null
 }
 
 /**
- * Whether a block sits in the evidence's section. Evidence stores a piece's
- * parentSection (or sectionTitle when there is none) and its subsection; the text
- * route gives each block exactly those names (P9a), so this is an exact comparison.
+ * Whether a block sits in the evidence's section. Evidence stores a piece's section
+ * as the first non-empty of its parentSection and sectionTitle (the backend's rule),
+ * and its subsection; the text route gives each block those same fields (P9a). The
+ * fields are compared one by one and exactly, so a name containing " > " is just a
+ * name: nothing is split or joined.
  */
 export function blockIsInSection(block: DisplayBlock, section: EvidenceSection): boolean {
-  if ((block.parent_section ?? block.section_title) !== section.section) {
+  if (firstNonEmpty(block.parent_section, block.section_title) !== section.section) {
     return false
   }
   return section.subsection === null || block.subsection === section.subsection
+}
+
+function evidenceSection(section: string | null, subsection: string | null): EvidenceSection | null {
+  return section === null ? null : { section, subsection }
 }
 
 function blockSpansFor(
@@ -220,8 +236,9 @@ export function locateQuoteInBlocks(
 /** The first block of the evidence's section, for the "quote not found" path; null when none. */
 export function locateSectionInBlocks(
   blocks: readonly DisplayBlock[],
-  section: EvidenceSection | null,
+  target: Pick<TextEvidenceTarget, 'section' | 'subsection'>,
 ): number | null {
+  const section = evidenceSection(target.section, target.subsection)
   if (section === null) {
     return null
   }
@@ -229,50 +246,112 @@ export function locateSectionInBlocks(
   return index >= 0 ? index : null
 }
 
-/** The navigation result for a text file, after locating the quote in its blocks. */
+export interface TextEvidenceLocation {
+  /** Every block (and table row) any located fragment covers, in reading order. */
+  blocks: TextQuoteBlockSpan[]
+  /** How many of the evidence's fragments were found, of how many. */
+  found: number
+  total: number
+  /** Some fragment appears more than once; one place was chosen for it. */
+  chosenAmongSeveral: boolean
+}
+
+function mergeSpans(spans: TextQuoteBlockSpan[]): TextQuoteBlockSpan[] {
+  const byBlock = new Map<number, TextQuoteBlockSpan>()
+  for (const span of spans) {
+    const existing = byBlock.get(span.blockIndex)
+    if (!existing) {
+      byBlock.set(span.blockIndex, { blockIndex: span.blockIndex, rowIndexes: span.rowIndexes && [...span.rowIndexes] })
+    } else if (existing.rowIndexes && span.rowIndexes) {
+      existing.rowIndexes = [...new Set([...existing.rowIndexes, ...span.rowIndexes])].sort((a, b) => a - b)
+    }
+  }
+  return [...byBlock.values()].sort((a, b) => a.blockIndex - b.blockIndex)
+}
+
+/**
+ * Where an evidence record sits in a text file's blocks.
+ *
+ * A record with stored fragments is located fragment by fragment: each fragment is an
+ * exact slice of one stored piece, while the record's quote joins them with a blank
+ * line that the file's text does not have between two rows or two sentences. Each
+ * fragment prefers its own section (else the record's). A record without fragments
+ * (a review-grid anchor) is located by its quote. Exact comparison only.
+ */
+export function locateEvidenceInBlocks(
+  blocks: readonly DisplayBlock[],
+  target: TextEvidenceTarget,
+  quote: string,
+): TextEvidenceLocation {
+  const recordSection = evidenceSection(target.section, target.subsection)
+  const pieces = target.fragments ?? (quote ? [{ text: quote, section: null, subsection: null }] : [])
+  const located = pieces.map((piece) => locateQuoteInBlocks(
+    blocks,
+    piece.text,
+    evidenceSection(piece.section, piece.subsection) ?? recordSection,
+  ))
+  const found = located.filter((location): location is TextQuoteLocation => location !== null)
+  return {
+    blocks: mergeSpans(found.flatMap((location) => location.blocks)),
+    found: found.length,
+    total: pieces.length,
+    chosenAmongSeveral: found.some((location) => location.chosenAmongSeveral),
+  }
+}
+
+/** Proposal, awaiting sign-off: some fragments of the evidence were found and are highlighted, others not. */
+export const TEXT_EVIDENCE_PARTLY_FOUND_MESSAGE = 'Only part of this evidence was found in the file\'s text. The part that was found is highlighted.'
+
+/** Shown under the chips when a text quote is found (proposals, awaiting sign-off). */
+export const TEXT_QUOTE_FOUND_NOTE = 'The quote was found exactly in this text file.'
+export const TEXT_QUOTE_FOUND_AMONG_SEVERAL_NOTE = 'The quote appears more than once in this text file; the first place in the evidence\'s section (or in reading order) is highlighted.'
+
+/** The navigation result for a text file, after locating the evidence in its blocks. */
 export function buildTextNavigationResult(
   request: TextNavigationRequest,
   documentId: string | null,
-  location: TextQuoteLocation | null,
+  location: TextEvidenceLocation,
   sectionBlockIndex: number | null,
 ): PdfViewerNavigationResult {
   const base = baseFileResult(request.command, documentId)
-  if (!location && sectionBlockIndex !== null) {
+  const attemptedQueries = (request.command.textEvidence.fragments ?? []).map((fragment) => fragment.text)
+  const queries = attemptedQueries.length > 0 ? attemptedQueries : (base.quote ? [base.quote] : [])
+  if (location.found === 0 && sectionBlockIndex !== null) {
     return {
       ...base,
       status: 'section-fallback',
       strategy: 'text-exact',
       locatorQuality: 'section_only',
       degraded: true,
-      attemptedQueries: base.quote ? [base.quote] : [],
-      note: 'The quote is not an exact part of this text file; the first block of the evidence\'s section is shown.',
+      attemptedQueries: queries,
+      note: 'The evidence is not an exact part of this text file; the first block of its section is shown.',
       curatorMessage: TEXT_QUOTE_SECTION_SHOWN_MESSAGE,
     }
   }
-  if (!location) {
+  if (location.found === 0) {
     return {
       ...base,
       status: 'not-found',
       strategy: 'text-exact',
       locatorQuality: 'unresolved',
       degraded: true,
-      attemptedQueries: base.quote ? [base.quote] : [],
-      note: 'The quote is not an exact part of any block of this text file.',
+      attemptedQueries: queries,
+      note: 'The evidence is not an exact part of this text file.',
       curatorMessage: TEXT_QUOTE_NOT_FOUND_MESSAGE,
     }
   }
+  const partial = location.found < location.total
   return {
     ...base,
     status: 'matched',
     strategy: 'text-exact',
     locatorQuality: 'exact_quote',
-    degraded: false,
+    degraded: partial,
     matchedQuery: base.quote,
-    matchesTotal: 1,
-    currentMatch: 1,
-    attemptedQueries: [base.quote],
-    note: location.chosenAmongSeveral
-      ? 'The quote appears more than once in this text file; the first place in the evidence\'s section (or in reading order) is highlighted.'
-      : 'The quote was found exactly in this text file.',
+    matchesTotal: location.found,
+    currentMatch: location.found,
+    attemptedQueries: queries,
+    note: location.chosenAmongSeveral ? TEXT_QUOTE_FOUND_AMONG_SEVERAL_NOTE : TEXT_QUOTE_FOUND_NOTE,
+    curatorMessage: partial ? TEXT_EVIDENCE_PARTLY_FOUND_MESSAGE : null,
   }
 }

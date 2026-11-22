@@ -5,7 +5,7 @@ import type {
   EvidenceSourceFragment,
 } from '../types'
 import type { EvidenceAnchor } from '../contracts'
-import type { EvidenceNavigationCommand } from './types'
+import type { EvidenceNavigationCommand, TextEvidenceFragment, TextEvidenceTarget } from './types'
 import {
   buildQuoteCentricEvidenceNavigationCommand,
   normalizeEvidenceNavigationText,
@@ -35,6 +35,41 @@ function buildChatEvidenceAnchorId(evidenceRecord: EvidenceRecord): string {
   ].join(':')
 }
 
+function rawName(value: string | null | undefined): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+/** The stored fragments with text, unchanged; null when the record has none. */
+function textEvidenceFragments(
+  fragments: readonly EvidenceSourceFragment[] | null | undefined,
+): TextEvidenceFragment[] | null {
+  const withText = (fragments ?? []).filter(
+    (fragment): fragment is EvidenceSourceFragment & { text: string } => (
+      typeof fragment.text === 'string' && fragment.text.length > 0
+    ),
+  )
+  if (withText.length === 0) {
+    return null
+  }
+  return withText.map((fragment) => ({
+    text: fragment.text,
+    section: rawName(fragment.section),
+    subsection: rawName(fragment.subsection),
+  }))
+}
+
+function buildTextEvidence(
+  fragments: readonly EvidenceSourceFragment[] | null | undefined,
+  section: string | null | undefined,
+  subsection: string | null | undefined,
+): TextEvidenceTarget {
+  return {
+    fragments: textEvidenceFragments(fragments),
+    section: rawName(section),
+    subsection: rawName(subsection),
+  }
+}
+
 export function deriveNavigationQuoteFromAnchor(
   anchor: Pick<
     EvidenceAnchor,
@@ -50,6 +85,7 @@ export function deriveNavigationQuoteFromAnchor(
 function buildAnchorContextNavigationCommand(args: {
   anchorId: string
   fileId: string | null
+  textEvidence: TextEvidenceTarget
   anchor: EvidenceAnchor
   mode: EvidenceNavigationCommand['mode']
 }): EvidenceNavigationCommand | null {
@@ -72,6 +108,7 @@ function buildAnchorContextNavigationCommand(args: {
   return {
     anchorId: args.anchorId,
     fileId: args.fileId,
+    textEvidence: args.textEvidence,
     anchor: {
       ...args.anchor,
       section_title: normalizedHierarchy.sectionTitle,
@@ -93,6 +130,11 @@ export function buildNavigationCommandFromChatEvidenceRecord(
   return buildQuoteCentricEvidenceNavigationCommand({
     anchorId: buildChatEvidenceAnchorId(evidenceRecord),
     fileId: evidenceRecord.file_id ?? null,
+    textEvidence: buildTextEvidence(
+      evidenceRecord.source_fragments,
+      evidenceRecord.section,
+      evidenceRecord.subsection,
+    ),
     anchor: {
       anchor_kind: 'snippet',
       locator_quality: 'exact_quote',
@@ -118,10 +160,17 @@ export function buildNavigationCommandFromCurationEvidenceRecord(
 ): EvidenceNavigationCommand | null {
   const quote = deriveNavigationQuoteFromAnchor(evidenceRecord.anchor)
   const fileId = evidenceRecord.file_id ?? null
+  // A review-grid anchor carries no fragments: a text file locates its quote.
+  const textEvidence = buildTextEvidence(
+    null,
+    evidenceRecord.anchor.section_title,
+    evidenceRecord.anchor.subsection_title,
+  )
   if (!quote) {
     return buildAnchorContextNavigationCommand({
       anchorId: evidenceRecord.anchor_id,
       fileId,
+      textEvidence,
       anchor: evidenceRecord.anchor,
       mode,
     })
@@ -130,6 +179,7 @@ export function buildNavigationCommandFromCurationEvidenceRecord(
   return buildQuoteCentricEvidenceNavigationCommand({
     anchorId: evidenceRecord.anchor_id,
     fileId,
+    textEvidence,
     anchor: evidenceRecord.anchor,
     quote,
     pageNumber: evidenceRecord.anchor.page_number ?? null,
@@ -175,11 +225,17 @@ export function buildNavigationCommandFromEnvelopeEvidenceProjection(
   }
   const quote = deriveNavigationQuoteFromEnvelopeEvidenceProjection(projection)
   const fileId = projection.file_id ?? null
+  const textEvidence = buildTextEvidence(
+    sourceRecordFragments(projection),
+    projection.section_title ?? projection.anchor.section_title,
+    projection.subsection_title ?? projection.anchor.subsection_title,
+  )
 
   if (!quote) {
     return buildAnchorContextNavigationCommand({
       anchorId: projection.anchor_id,
       fileId,
+      textEvidence,
       anchor,
       mode,
     })
@@ -188,6 +244,7 @@ export function buildNavigationCommandFromEnvelopeEvidenceProjection(
   return buildQuoteCentricEvidenceNavigationCommand({
     anchorId: projection.anchor_id,
     fileId,
+    textEvidence,
     anchor,
     quote,
     searchText: evidenceViewerSearchText(sourceRecordFragments(projection)),

@@ -21,6 +21,7 @@ import {
   buildCurationPDFViewerOwner,
   showPaperFilesInViewer,
 } from '@/components/pdfViewer/pdfEvents'
+import type { ViewerFile } from '@/components/pdfViewer/viewerFiles'
 import { usePersistentPdfWorkspaceLayout } from '@/components/pdfViewer/PersistentPdfWorkspaceLayout'
 import { buildManualCandidateDraft } from '@/features/curation/entityTags/workspaceEntityTags'
 import {
@@ -173,7 +174,13 @@ function CurationWorkspacePageContent({
   const runtimeWarning = autosave.warning ?? hydration.warning
   const workspaceDocument = workspace.session.document
   const workspaceDocumentId = workspaceDocument.document_id
-  const workspaceDocumentFiles = workspaceDocument.files
+  // The session object is replaced on autosave and submit; the paper's files are
+  // compared by value so the viewer is sent the paper again only when they change.
+  const workspaceDocumentFilesKey = JSON.stringify(workspaceDocument.files)
+  const workspaceDocumentFiles = useMemo(
+    () => JSON.parse(workspaceDocumentFilesKey) as ViewerFile[],
+    [workspaceDocumentFilesKey],
+  )
   const viewerOwnerToken = useMemo(
     () => buildCurationPDFViewerOwner(workspace.session.session_id),
     [workspace.session.session_id],

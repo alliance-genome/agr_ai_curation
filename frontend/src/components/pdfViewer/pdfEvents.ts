@@ -1,5 +1,5 @@
 import type { EvidenceNavigationCommand } from '@/features/curation/evidence'
-import { defaultActiveFileId, viewerTabFiles, type ViewerFile } from './viewerFiles'
+import { defaultActiveFileId, parseViewerFiles, viewerTabFiles, type ViewerFile } from './viewerFiles'
 
 export interface PDFViewerDocumentChangedDetail {
   documentId: string
@@ -9,6 +9,8 @@ export interface PDFViewerDocumentChangedDetail {
   activeFileId: string
   /** The paper has a main file the viewer cannot show (not ready, so no URL). */
   mainFileUnavailable: boolean
+  /** Files of the paper that exist but are not ready (no URL, so no tab). */
+  notReadyFileIds: string[]
   ownerToken?: string
   viewerState?: {
     currentPage?: number
@@ -56,9 +58,11 @@ export interface PaperFilesViewerOptions {
  */
 export function showPaperFilesInViewer(
   documentId: string,
-  files: readonly ViewerFile[],
+  servedFiles: readonly ViewerFile[],
   options?: PaperFilesViewerOptions,
 ): boolean {
+  // The one parser for both paths (chat restore and the curation session's files).
+  const files = parseViewerFiles(servedFiles)
   const tabFiles = viewerTabFiles(files)
   const activeFileId = defaultActiveFileId(tabFiles)
   const mainFileUnavailable = files.some((file) => file.role === 'main' && !tabFiles.includes(file))
@@ -76,6 +80,7 @@ export function showPaperFilesInViewer(
         files: tabFiles,
         activeFileId,
         mainFileUnavailable,
+        notReadyFileIds: files.filter((file) => !tabFiles.includes(file)).map((file) => file.file_id),
         ownerToken: options?.ownerToken,
         viewerState: options?.viewerState,
       },

@@ -78,7 +78,7 @@ import {
   type ViewerTelemetry,
 } from './pdfViewerTypes'
 import { usePdfViewerUpload } from './usePdfViewerUpload'
-import { isPdfFile, type ViewerFile } from './viewerFiles'
+import { fileDisplayLabel, isPdfFile, type ViewerFile } from './viewerFiles'
 import {
   buildEvidenceFileResult,
   openedFileAnnouncement,
@@ -103,6 +103,25 @@ export type {
 export type { PdfViewerProps } from './pdfViewerTypes'
 
 const PDFJS_FIND_STATE_NOT_FOUND = 1
+
+/** Whether two tab lists show the same files the same way (a refreshed list from the server). */
+function sameViewerFiles(left: readonly ViewerFile[], right: readonly ViewerFile[]): boolean {
+  return left.length === right.length && left.every((file, index) => {
+    const other = right[index]!
+    return file.file_id === other.file_id
+      && file.role === other.role
+      && file.display_name === other.display_name
+      && file.display_mode === other.display_mode
+      && file.status === other.status
+      && file.tab_order === other.tab_order
+      && file.content_url === other.content_url
+      && file.text_url === other.text_url
+  })
+}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index])
+}
 
 export function PdfViewer({
   activeDocumentOwnerToken,
@@ -160,7 +179,7 @@ export function PdfViewer({
   const activeFile: ViewerFile | null = activeDocument ? activeViewerFile(activeDocument) : null
   const activeFileIsPdf = activeFile !== null && isPdfFile(activeFile)
   const activeFilePageCount = activeFile?.page_count ?? null
-  const activeFileName = activeFile?.display_name ?? null
+  const activeFileName = activeFile ? fileDisplayLabel(activeFile) : null
   const evidencePageTextCacheKey = activeDocument && activeFileIsPdf
     ? `${activeDocument.documentId}:${activeDocument.activeFileId}`
     : null
@@ -240,7 +259,14 @@ export function PdfViewer({
   /**
    * Signal terminal document load states to the Home overlay.
    */
+  // Home's load overlay follows the paper's first file only: a later tab (a PDF
+  // supplement) that fails shows its error in its own pane, never Home's backdrop.
+  const documentLoadSignalPendingRef = useRef(false)
   const signalLoadComplete = useCallback(() => {
+    if (!documentLoadSignalPendingRef.current) {
+      return
+    }
+    documentLoadSignalPendingRef.current = false
     completeDocumentLoad({
       documentId: activeDocument?.documentId,
       filename: activeFileName ?? undefined,
@@ -249,6 +275,10 @@ export function PdfViewer({
   }, [activeDocument?.documentId, activeFileName])
 
   const signalLoadError = useCallback((message: string) => {
+    if (!documentLoadSignalPendingRef.current) {
+      return
+    }
+    documentLoadSignalPendingRef.current = false
     failDocumentLoad({
       documentId: activeDocument?.documentId,
       filename: activeFileName ?? undefined,
@@ -873,6 +903,7 @@ export function PdfViewer({
       ({
         anchor: buildEvidenceSpikeAnchor(input),
         fileId: activeDocument?.activeFileId ?? null,
+        textEvidence: { fragments: null, section: input.sectionTitle ?? null, subsection: null },
         searchText: input.quote?.trim() || null,
         pageNumber: input.pageNumber ?? null,
         sectionTitle: input.sectionTitle ?? null,
@@ -1199,7 +1230,7 @@ export function PdfViewer({
       }
       setFileAnnouncement('')
     } else {
-      setFileAnnouncement(openedFileAnnouncement(nextFile.display_name))
+      setFileAnnouncement(openedFileAnnouncement(fileDisplayLabel(nextFile)))
     }
     const pendingKeyToKeep = reason === 'curator' ? handledNavigationKeyRef.current : null
     beginDocumentLoad({
@@ -1274,13 +1305,20 @@ export function PdfViewer({
         return
       }
 
+      // A new paper (or the same paper again) is a document load Home may be waiting on.
+      documentLoadSignalPendingRef.current = true
       let files: ViewerFile[]
       try {
-        files = event.detail.files.map((file) => (
-          file.content_url === null
-            ? file
-            : { ...file, content_url: normalizePdfViewerDocumentUrl(file.content_url, window.location.origin) }
-        ))
+        // Both addresses must be same-origin paths before the viewer uses them.
+        files = event.detail.files.map((file) => ({
+          ...file,
+          content_url: file.content_url === null
+            ? null
+            : normalizePdfViewerDocumentUrl(file.content_url, window.location.origin),
+          text_url: file.text_url === null
+            ? null
+            : normalizePdfViewerDocumentUrl(file.text_url, window.location.origin),
+        }))
         if (!files.some((file) => file.file_id === event.detail.activeFileId)) {
           throw new Error('The document change names an active file that is not one of its files.')
         }
@@ -1301,7 +1339,18 @@ export function PdfViewer({
         const current = activeViewerFile(activeDocument)
         const stillThere = files.find((file) => file.file_id === current.file_id)
         if (stillThere && stillThere.content_url === current.content_url && stillThere.text_url === current.text_url) {
-          setActiveDocument({ ...activeDocument, files, mainFileUnavailable: event.detail.mainFileUnavailable })
+          const unchanged = sameViewerFiles(activeDocument.files, files)
+            && activeDocument.mainFileUnavailable === event.detail.mainFileUnavailable
+            && sameIds(activeDocument.notReadyFileIds, event.detail.notReadyFileIds)
+          if (!unchanged) {
+            setActiveDocument({
+              ...activeDocument,
+              // Keep the page count pdf.js found for the file on screen.
+              files: files.map((file) => (file.file_id === current.file_id ? { ...file, page_count: current.page_count } : file)),
+              mainFileUnavailable: event.detail.mainFileUnavailable,
+              notReadyFileIds: event.detail.notReadyFileIds,
+            })
+          }
           if (!isPdfFile(stillThere) && status === 'loading') {
             // A chat load marked the viewer loading; a text file has nothing to wait for.
             setStatus('ready')
@@ -1315,6 +1364,7 @@ export function PdfViewer({
         files,
         activeFileId: event.detail.activeFileId,
         mainFileUnavailable: event.detail.mainFileUnavailable,
+        notReadyFileIds: event.detail.notReadyFileIds,
         loadedAt: new Date().toISOString(),
       }
       console.debug('[PDF DEBUG] beginDocumentLoad called with', nextDoc)
@@ -1403,6 +1453,17 @@ export function PdfViewer({
     }
   }, [])
 
+  // The latest handlers, read by the frame's listeners: a refreshed file list must
+  // not re-run them (that would re-initialise pdf.js, reset the zoom and signal a
+  // second load).
+  const initialisePdfApplicationRef = useRef(initialisePdfApplication)
+  initialisePdfApplicationRef.current = initialisePdfApplication
+  const signalLoadErrorRef = useRef(signalLoadError)
+  signalLoadErrorRef.current = signalLoadError
+  const frameKey = activeDocument
+    ? `${activeDocument.documentId}::${activeDocument.activeFileId}::${activeDocument.loadedAt}`
+    : null
+
   useEffect(() => {
     if (!iframeRef.current) {
       console.debug('[PDF DEBUG] iframeRef null in load listener effect')
@@ -1410,16 +1471,11 @@ export function PdfViewer({
     }
     const iframe = iframeRef.current
 
-    console.debug('[PDF DEBUG] Attaching load/error listeners to iframe', {
-      iframeSrc: iframe?.src,
-      activeDocument,
-    })
-
     const handleLoad = () => {
       console.debug('[PDF DEBUG] iframe load event triggered', {
         iframeSrc: iframe?.src,
       })
-      initialisePdfApplication()
+      initialisePdfApplicationRef.current()
     }
 
     const handleError = () => {
@@ -1429,22 +1485,22 @@ export function PdfViewer({
       setStatus('error')
       setError('Failed to load the PDF viewer frame.')
       loadStartRef.current = null
-      signalLoadError('Failed to load the PDF viewer frame.')
+      signalLoadErrorRef.current('Failed to load the PDF viewer frame.')
     }
 
     iframe.addEventListener('load', handleLoad)
     iframe.addEventListener('error', handleError)
 
-    if (activeDocument && (iframe.contentWindow as any)?.PDFViewerApplication?.eventBus) {
+    if (frameKey && (iframe.contentWindow as any)?.PDFViewerApplication?.eventBus) {
       // Recover when the iframe finished loading before this effect reattached listeners.
-      initialisePdfApplication()
+      initialisePdfApplicationRef.current()
     }
 
     return () => {
       iframe.removeEventListener('load', handleLoad)
       iframe.removeEventListener('error', handleError)
     }
-  }, [activeDocument, initialisePdfApplication, viewerSrc, signalLoadError])
+  }, [frameKey, viewerSrc])
 
   useEffect(() => {
     if (activeDocument) {
@@ -1525,7 +1581,7 @@ export function PdfViewer({
       finishWithoutSearch(isHover ? null : buildEvidenceFileResult(
         effectivePendingNavigation,
         activeDocument.documentId,
-        'file-removed',
+        activeDocument.notReadyFileIds.includes(targetFileId) ? 'file-not-ready' : 'file-removed',
       ))
       return
     }
@@ -1953,7 +2009,7 @@ export function PdfViewer({
   ])
 
   useEffect(() => {
-    if (!activeDocument || !activeContentUrl) return
+    if (!frameKey || !activeContentUrl) return
 
     let cancelled = false
     const controller = new AbortController()
@@ -1974,7 +2030,7 @@ export function PdfViewer({
           setStatus('error')
           setError('Unable to reach the PDF document. Please retry or re-upload.')
           loadStartRef.current = null
-          signalLoadError('Unable to reach the PDF document. Please retry or re-upload.')
+          signalLoadErrorRef.current('Unable to reach the PDF document. Please retry or re-upload.')
         }
       } finally {
         window.clearTimeout(timeoutId)
@@ -1988,7 +2044,7 @@ export function PdfViewer({
       controller.abort()
       window.clearTimeout(timeoutId)
     }
-  }, [activeContentUrl, activeDocument, signalLoadError])
+  }, [activeContentUrl, frameKey])
 
   const handleRetry = useCallback(() => {
     if (!activeDocument) return

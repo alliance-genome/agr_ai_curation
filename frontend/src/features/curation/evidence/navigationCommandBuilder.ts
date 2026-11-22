@@ -1,5 +1,5 @@
 import type { EvidenceAnchor } from '../contracts'
-import type { EvidenceNavigationCommand } from './types'
+import type { EvidenceNavigationCommand, TextEvidenceTarget } from './types'
 import { normalizeEvidenceSectionHierarchy } from './navigationPresentation'
 
 function normalizeText(value: string | null | undefined): string | null {
@@ -21,6 +21,7 @@ type QuoteCentricAnchorInput = Omit<
 export function buildQuoteCentricEvidenceNavigationCommand(args: {
   anchorId: string
   fileId: string | null
+  textEvidence: TextEvidenceTarget
   anchor: QuoteCentricAnchorInput
   quote: string
   /** What the viewer searches the PDF for; the quote itself unless it differs (table rows). */
@@ -51,6 +52,7 @@ export function buildQuoteCentricEvidenceNavigationCommand(args: {
   return {
     anchorId: args.anchorId,
     fileId: args.fileId,
+    textEvidence: args.textEvidence,
     anchor,
     searchText,
     pageNumber: args.pageNumber ?? anchor.page_number ?? null,

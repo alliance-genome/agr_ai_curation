@@ -54,6 +54,8 @@ export type PdfEvidenceSpikeStatus =
   | 'evidence-without-file'
   // Evidence naming a file that is no longer part of the paper: nothing is opened.
   | 'file-removed'
+  // Evidence naming a file of the paper that is not ready yet: nothing is opened.
+  | 'file-not-ready'
 
 export type PdfEvidenceSpikeStrategy =
   | PdfEvidenceSpikeCandidateReason

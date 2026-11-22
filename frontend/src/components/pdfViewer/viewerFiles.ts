@@ -87,6 +87,14 @@ function requireString(record: Record<string, unknown>, key: string): string {
   return value
 }
 
+function requireText(record: Record<string, unknown>, key: string): string {
+  const value = record[key]
+  if (typeof value !== 'string') {
+    throw new ViewerFilesContractError(`Viewer file field "${key}" must be a string`)
+  }
+  return value
+}
+
 function requireNullableString(record: Record<string, unknown>, key: string): string | null {
   const value = record[key]
   if (value === null) {
@@ -109,6 +117,14 @@ function requireOneOf<T extends string>(
     throw new ViewerFilesContractError(`Viewer file field "${key}" has an unknown value`)
   }
   return match
+}
+
+/** Proposal, awaiting sign-off: the label of a file the backend serves with an empty name. */
+export const UNNAMED_FILE_LABEL = 'Unnamed file'
+
+/** The name the viewer shows for a file. */
+export function fileDisplayLabel(file: Pick<ViewerFile, 'display_name'>): string {
+  return file.display_name || UNNAMED_FILE_LABEL
 }
 
 export function isPdfDisplayMode(mode: ViewerFileDisplayMode): boolean {
@@ -135,7 +151,8 @@ export function parseViewerFile(value: unknown): ViewerFile {
   const file: ViewerFile = {
     file_id: requireString(value, 'file_id'),
     role: requireOneOf(value, 'role', ROLES),
-    display_name: requireString(value, 'display_name'),
+    // The backend may serve an empty name (a file stored without one); the viewer shows a neutral label.
+    display_name: requireText(value, 'display_name'),
     display_mode: requireOneOf(value, 'display_mode', DISPLAY_MODES),
     status: requireOneOf(value, 'status', STATUSES),
     tab_order: tabOrder,
@@ -272,24 +289,25 @@ export function parseViewerTextPayload(value: unknown): ViewerTextPayload {
   return {
     document_id: requireString(value, 'document_id'),
     file_id: requireString(value, 'file_id'),
-    display_name: requireString(value, 'display_name'),
+    // The backend may serve an empty name (a file stored without one); the viewer shows a neutral label.
+    display_name: requireText(value, 'display_name'),
     blocks: value.blocks.map(parseDisplayBlock),
   }
 }
 
 export async function fetchViewerText(
-  file: ViewerFile,
+  file: { fileId: string; textUrl: string | null },
   signal?: AbortSignal,
 ): Promise<ViewerTextPayload> {
-  if (file.text_url === null) {
-    throw new ViewerFilesContractError(`File ${file.file_id} has no text to show`)
+  if (file.textUrl === null) {
+    throw new ViewerFilesContractError(`File ${file.fileId} has no text to show`)
   }
-  const response = await fetch(file.text_url, { credentials: 'same-origin', signal })
+  const response = await fetch(file.textUrl, { credentials: 'same-origin', signal })
   if (!response.ok) {
     throw new Error(`Failed to fetch the file's text (${response.status})`)
   }
   const payload = parseViewerTextPayload(await response.json())
-  if (payload.file_id !== file.file_id) {
+  if (payload.file_id !== file.fileId) {
     throw new ViewerFilesContractError('The text payload names a different file')
   }
   return payload

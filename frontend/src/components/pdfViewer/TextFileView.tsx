@@ -5,11 +5,10 @@ import type { PdfViewerNavigationResult } from './pdfEvidenceNavigation'
 import {
   buildTextNavigationResult,
   commandQuote,
-  commandSection,
-  locateQuoteInBlocks,
+  locateEvidenceInBlocks,
   locateSectionInBlocks,
   type TextNavigationRequest,
-  type TextQuoteLocation,
+  type TextQuoteBlockSpan,
 } from './viewerFileNavigation'
 import { fetchViewerText, type DisplayBlock, type ViewerFile } from './viewerFiles'
 import { TextFileBlocks } from './TextFileBlocks'
@@ -47,9 +46,11 @@ function prefersReducedMotion(): boolean {
  * copied text only (see viewerFileNavigation.ts).
  */
 export function TextFileView({ documentId, file, navigation, onNavigationResult }: TextFileViewProps) {
+  const fileId = file.file_id
+  const textUrl = file.text_url
   const [loadState, setLoadState] = useState<TextLoadState>({ kind: 'loading' })
   const [reloadKey, setReloadKey] = useState(0)
-  const [highlight, setHighlight] = useState<TextQuoteLocation | null>(null)
+  const [highlight, setHighlight] = useState<TextQuoteBlockSpan[] | null>(null)
   // The evidence's section, shown when its quote is not found.
   const [sectionBlockIndex, setSectionBlockIndex] = useState<number | null>(null)
   const highlightedRef = useRef<HTMLElement | null>(null)
@@ -61,7 +62,7 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
     setLoadState({ kind: 'loading' })
     setHighlight(null)
     setSectionBlockIndex(null)
-    fetchViewerText(file, controller.signal)
+    fetchViewerText({ fileId, textUrl }, controller.signal)
       .then((payload) => {
         if (!controller.signal.aborted) {
           setLoadState({ kind: 'ready', blocks: payload.blocks })
@@ -71,29 +72,31 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
         if (controller.signal.aborted) {
           return
         }
-        console.warn('Unable to load a text file for the viewer', { fileId: file.file_id, error })
+        console.warn('Unable to load a text file for the viewer', { fileId, error })
         setLoadState({ kind: 'error' })
       })
     return () => controller.abort()
-  }, [file, reloadKey])
+    // Keyed on the file's id and text address only: a refreshed file list with the
+    // same file must not fetch again or drop the highlight.
+  }, [fileId, textUrl, reloadKey])
 
   useEffect(() => {
     if (
       !navigation
-      || navigation.fileId !== file.file_id
+      || navigation.fileId !== fileId
       || loadState.kind !== 'ready'
       || reportedRequestIdRef.current === navigation.requestId
     ) {
       return
     }
     reportedRequestIdRef.current = navigation.requestId
-    const section = commandSection(navigation.command)
-    const location = locateQuoteInBlocks(loadState.blocks, commandQuote(navigation.command), section)
-    const sectionIndex = location ? null : locateSectionInBlocks(loadState.blocks, section)
-    setHighlight(location)
+    const { textEvidence } = navigation.command
+    const location = locateEvidenceInBlocks(loadState.blocks, textEvidence, commandQuote(navigation.command))
+    const sectionIndex = location.found > 0 ? null : locateSectionInBlocks(loadState.blocks, textEvidence)
+    setHighlight(location.found > 0 ? location.blocks : null)
     setSectionBlockIndex(sectionIndex)
     onNavigationResult(navigation, buildTextNavigationResult(navigation, documentId, location, sectionIndex))
-  }, [documentId, file.file_id, loadState, navigation, onNavigationResult])
+  }, [documentId, fileId, loadState, navigation, onNavigationResult])
 
   useEffect(() => {
     if ((highlight || sectionBlockIndex !== null) && highlightedRef.current) {
@@ -134,7 +137,7 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
     content = (
       <TextFileBlocks
         blocks={loadState.blocks}
-        location={highlight}
+        highlightedBlocks={highlight}
         sectionBlockIndex={sectionBlockIndex}
         firstHighlightRef={setHighlightedElement}
       />

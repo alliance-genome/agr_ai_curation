@@ -1,6 +1,8 @@
 export type {
   EvidenceChipProps,
   EvidenceNavigationCommand,
+  TextEvidenceFragment,
+  TextEvidenceTarget,
   EvidenceNavigationState,
 } from './types'
 export { default as EvidenceChip } from './EvidenceChip'

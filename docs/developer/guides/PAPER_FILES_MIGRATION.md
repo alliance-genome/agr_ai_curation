@@ -80,16 +80,24 @@ Evidence opens its own file first (`EvidenceNavigationCommand.fileId`):
   opens;
 - a PDF file: today's quote search, against that file's own pages only. Evidence
   without a page never falls back to a page;
-- a text file: the quote is located by exact copied text in the blocks' texts
-  joined by a blank line, exactly as the server serves them (every stored piece
+- a text file: a record with stored fragments is located fragment by fragment
+  (each fragment is an exact slice of one stored piece; the record's quote joins
+  them with a blank line the file does not have between rows or sentences), and
+  the union is highlighted; when only some fragments are found, the banner says
+  so. A record without fragments (a review-grid anchor) is located by its quote.
+  Each is searched in the blocks' texts joined by a blank line, exactly as the
+  server serves them (every stored piece
   is an exact slice of that joined text, so a quote may cross blocks); nothing is
   normalised or loosened in the browser, and pdf.js and the fuzzy matcher are never
   called. When the quote is not found, the first block of the evidence's section is
-  marked (evidence `section` against the block's `parent_section`, or
-  `section_title` when that is null, and `subsection`), and the banner says the
+  marked (evidence `section` against the first non-empty of the block's
+  `parent_section` and `section_title`, and `subsection`, field by field; a name
+  containing " > " is never split), and the banner says the
   quote was not found. The one known miss: a quote across a sentence cut inside an
   element over 1,500 characters (the piece has one space where the block keeps the
   original whitespace) takes this "not found" path.
+- evidence naming a file of the paper that is not ready yet says so (not
+  "removed");
 - evidence the viewer cannot show changes nothing but its banner (an alert that
   can be closed): no tab switch, no scroll, the current highlight stays.
 

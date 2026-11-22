@@ -117,6 +117,7 @@ describe('useEvidenceNavigation', () => {
     expect(result.current.pendingNavigation).toEqual({
       anchorId: evidence.anchor_id,
       fileId: null,
+      textEvidence: expect.objectContaining({ fragments: null }),
       anchor: expect.objectContaining({
         ...evidence.anchor,
         normalized_text: 'Search text for anchor-1',
@@ -154,6 +155,7 @@ describe('useEvidenceNavigation', () => {
     expect(result.current.pendingNavigation).toEqual({
       anchorId: hoveredEvidence.anchor_id,
       fileId: null,
+      textEvidence: expect.objectContaining({ fragments: null }),
       anchor: expect.objectContaining({
         ...hoveredEvidence.anchor,
         normalized_text: 'Search text for anchor-2',
@@ -173,6 +175,7 @@ describe('useEvidenceNavigation', () => {
     expect(result.current.pendingNavigation).toEqual({
       anchorId: selectedEvidence.anchor_id,
       fileId: null,
+      textEvidence: expect.objectContaining({ fragments: null }),
       anchor: expect.objectContaining({
         ...selectedEvidence.anchor,
         normalized_text: 'Search text for anchor-1',
@@ -233,6 +236,7 @@ describe('useEvidenceNavigation', () => {
     expect(result.current.pendingNavigation).toEqual({
       anchorId: evidence.anchor_id,
       fileId: null,
+      textEvidence: expect.objectContaining({ fragments: null }),
       anchor: expect.objectContaining({
         ...evidence.anchor,
         normalized_text: 'Search text for anchor-1',
@@ -366,6 +370,7 @@ describe('useEvidenceNavigation', () => {
     expect(result.current.pendingNavigation).toEqual({
       anchorId: evidence.anchor_id,
       fileId: null,
+      textEvidence: expect.objectContaining({ fragments: null }),
       anchor: expect.objectContaining({
         locator_quality: 'exact_quote',
         sentence_text: 'crb accumulated to a higher molar abundance in mutant fly eyes.',
@@ -403,6 +408,7 @@ describe('useEvidenceNavigation', () => {
     expect(result.current.pendingNavigation).toEqual({
       anchorId: evidence.anchor_id,
       fileId: null,
+      textEvidence: expect.objectContaining({ fragments: null }),
       anchor: expect.objectContaining({
         ...evidence.anchor,
         subsection_title: null,

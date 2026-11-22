@@ -90,7 +90,7 @@ async function showFourFilePaper() {
   act(() => {
     showPaperFilesInViewer(DOCUMENT_ID, filesWithTabs(), { ownerToken: HOME_PDF_VIEWER_OWNER })
   })
-  await screen.findByRole('tab', { name: 'made-up-paper.pdf, file 1 of 3' })
+  await screen.findByRole('tab', { name: 'made-up-paper.pdf (main paper), file 1 of 3' })
 }
 
 function chatCommand(overrides: Partial<Parameters<typeof buildNavigationCommandFromChatEvidenceRecord>[0]>): EvidenceNavigationCommand {
@@ -131,7 +131,7 @@ describe('PdfViewer with a paper\'s files', () => {
 
     const tabs = screen.getAllByRole('tab')
     expect(tabs.map((tab) => tab.getAttribute('aria-label'))).toEqual([
-      'made-up-paper.pdf, file 1 of 3',
+      'made-up-paper.pdf (main paper), file 1 of 3',
       'Table_S1.xlsx, file 2 of 3, converted text',
       'Figure_S2.pdf, file 3 of 3',
     ])
@@ -261,7 +261,7 @@ describe('PdfViewer with a paper\'s files', () => {
 
       const items = await screen.findAllByRole('menuitem')
       expect(items.map((item) => item.getAttribute('aria-label'))).toEqual(
-        Array.from({ length: 7 }, (_, index) => `Table_S${index + 1}.xlsx, file ${index + 1} of 7, converted text`),
+        Array.from({ length: 7 }, (_, index) => `Table_S${index + 1}.xlsx${index === 0 ? ' (main paper)' : ''}, file ${index + 1} of 7, converted text`),
       )
       await user.click(items[6]!)
 
@@ -281,7 +281,7 @@ describe('PdfViewer with a paper\'s files', () => {
 
       expect(await screen.findAllByText('This evidence was saved before files were recorded')).not.toHaveLength(0)
       expect(fuzzyMatchPdfEvidenceQuote).not.toHaveBeenCalled()
-      expect(screen.getByRole('tab', { name: 'made-up-paper.pdf, file 1 of 3' })).toHaveAttribute('aria-selected', 'true')
+      expect(screen.getByRole('tab', { name: 'made-up-paper.pdf (main paper), file 1 of 3' })).toHaveAttribute('aria-selected', 'true')
     })
 
     it('the Q4 banner is announced, can be closed, and changes nothing else in the viewer', async () => {
@@ -477,7 +477,7 @@ describe('PdfViewer with a paper\'s files', () => {
       })
 
       // Before the supplement's PDF has loaded, the curator goes back to the main paper.
-      fireEvent.click(screen.getByRole('tab', { name: 'made-up-paper.pdf, file 1 of 3' }))
+      fireEvent.click(screen.getByRole('tab', { name: 'made-up-paper.pdf (main paper), file 1 of 3' }))
       installPdfApp(MAIN_PAGES)
       await waitFor(() => expect(screen.getByRole('textbox', { name: 'Find in PDF' })).toBeEnabled())
 

@@ -1,8 +1,8 @@
-import { Fragment, type ReactNode } from 'react'
+import { Fragment, memo, useMemo, type ReactNode } from 'react'
 import { Box, Typography } from '@mui/material'
 import { alpha, useTheme } from '@mui/material/styles'
 
-import type { TextQuoteLocation } from './viewerFileNavigation'
+import type { TextQuoteBlockSpan } from './viewerFileNavigation'
 import type { DisplayBlock } from './viewerFiles'
 
 /**
@@ -20,10 +20,10 @@ export interface HighlightStyle {
 
 export function useHighlightStyle(): HighlightStyle {
   const theme = useTheme()
-  return {
+  return useMemo(() => ({
     backgroundColor: alpha(theme.palette.success.main, 0.22),
     outline: `2px solid ${alpha(theme.palette.success.main, 0.9)}`,
-  }
+  }), [theme])
 }
 
 export interface TextTableBlockProps {
@@ -35,7 +35,15 @@ export interface TextTableBlockProps {
   highlightStyle: HighlightStyle
 }
 
-export function TextTableBlock({ block, highlightedRowIndexes, firstHighlightRef, highlightStyle }: TextTableBlockProps) {
+const NO_ROWS: readonly number[] = []
+
+/** Memoised: a large sheet renders again only when its rows or its highlight change. */
+export const TextTableBlock = memo(function TextTableBlock({
+  block,
+  highlightedRowIndexes,
+  firstHighlightRef,
+  highlightStyle,
+}: TextTableBlockProps) {
   const firstHighlighted = highlightedRowIndexes[0]
   return (
     <table>
@@ -61,22 +69,29 @@ export function TextTableBlock({ block, highlightedRowIndexes, firstHighlightRef
       </tbody>
     </table>
   )
-}
+})
 
 export interface TextFileBlocksProps {
   blocks: readonly DisplayBlock[]
-  location: TextQuoteLocation | null
+  /** The blocks (and rows) the located evidence covers; null when none. */
+  highlightedBlocks: readonly TextQuoteBlockSpan[] | null
   /** The block shown as the evidence's section when its quote was not found; null otherwise. */
   sectionBlockIndex: number | null
   /** Receives the first highlighted block or row. */
   firstHighlightRef: (element: HTMLElement | null) => void
 }
 
-export function TextFileBlocks({ blocks, location, sectionBlockIndex, firstHighlightRef }: TextFileBlocksProps) {
+/** Memoised: a viewer state change unrelated to the text does not render the blocks again. */
+export const TextFileBlocks = memo(function TextFileBlocks({
+  blocks,
+  highlightedBlocks,
+  sectionBlockIndex,
+  firstHighlightRef,
+}: TextFileBlocksProps) {
   const highlightStyle = useHighlightStyle()
   const theme = useTheme()
-  const spans = new Map((location?.blocks ?? []).map((span) => [span.blockIndex, span]))
-  const firstBlockIndex = location?.blocks[0]?.blockIndex
+  const spans = new Map((highlightedBlocks ?? []).map((span) => [span.blockIndex, span]))
+  const firstBlockIndex = highlightedBlocks?.[0]?.blockIndex
 
   const nodes: ReactNode[] = []
   let listItems: ReactNode[] = []
@@ -113,7 +128,7 @@ export function TextFileBlocks({ blocks, location, sectionBlockIndex, firstHighl
           {asSection(blockIndex, (
             <TextTableBlock
               block={block}
-              highlightedRowIndexes={span?.rowIndexes ?? []}
+              highlightedRowIndexes={span?.rowIndexes ?? NO_ROWS}
               firstHighlightRef={isFirst ? firstHighlightRef : undefined}
               highlightStyle={highlightStyle}
             />
@@ -171,4 +186,4 @@ export function TextFileBlocks({ blocks, location, sectionBlockIndex, firstHighl
   })
   flushList('list-end')
   return <>{nodes}</>
-}
+})

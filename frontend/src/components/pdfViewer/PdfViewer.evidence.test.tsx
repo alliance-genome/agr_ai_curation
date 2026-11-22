@@ -840,6 +840,7 @@ const buildNavigationCommand = (
 ): EvidenceNavigationCommand => ({
   anchorId: 'anchor-1',
   fileId: MAIN_FILE_ID,
+  textEvidence: { fragments: null, section: 'Results', subsection: 'Quantification' },
   anchor: {
     anchor_kind: 'snippet',
     locator_quality: 'exact_quote',

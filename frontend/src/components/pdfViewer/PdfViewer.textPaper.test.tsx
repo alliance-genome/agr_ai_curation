@@ -102,7 +102,7 @@ describe('PdfViewer when chat loads a text paper', () => {
 
     await waitFor(() => expect(screen.queryByText('Loading PDF...')).not.toBeInTheDocument())
     expect(screen.queryByText('previous.pdf')).not.toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'provider-paper.md, file 1 of 1, converted text' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'provider-paper.md (main paper), file 1 of 1, converted text' })).toBeInTheDocument()
     expect(await screen.findByText('Made-up paper text.')).toBeInTheDocument()
   })
 })

@@ -2,7 +2,7 @@ import { useState, type MouseEvent } from 'react'
 import { Box, Button, Menu, MenuItem, Tab, Tabs } from '@mui/material'
 
 import { VIEWER_FILE_PANEL_ID, viewerFileTabId } from './TextFileView'
-import { isPdfFile, type ViewerFile } from './viewerFiles'
+import { fileDisplayLabel, isPdfFile, type ViewerFile } from './viewerFiles'
 
 /** Above this many files the strip gains an "All files (N)" menu (Q15, 21 Nov 2026). */
 export const FILES_MENU_THRESHOLD = 6
@@ -11,8 +11,10 @@ export const FILES_MENU_THRESHOLD = 6
 const MAIN_PAPER_SUFFIX = '(main paper)'
 const TEXT_MARKER = 'Text'
 
+/** Starts with the visible label (name and "(main paper)"), so a voice command naming what is seen finds the tab. */
 function fileAccessibleName(file: ViewerFile, position: number, total: number): string {
-  const base = `${file.display_name}, file ${position} of ${total}`
+  const visible = file.role === 'main' ? `${fileDisplayLabel(file)} ${MAIN_PAPER_SUFFIX}` : fileDisplayLabel(file)
+  const base = `${visible}, file ${position} of ${total}`
   return isPdfFile(file) ? base : `${base}, converted text`
 }
 
@@ -24,10 +26,10 @@ function FileLabel({ file }: { file: ViewerFile }) {
     >
       <Box
         component="span"
-        title={file.display_name}
+        title={fileDisplayLabel(file)}
         sx={{ maxWidth: '24ch', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
       >
-        {file.display_name}
+        {fileDisplayLabel(file)}
       </Box>
       {file.role === 'main' ? <Box component="span">{MAIN_PAPER_SUFFIX}</Box> : null}
       {!isPdfFile(file) ? (
