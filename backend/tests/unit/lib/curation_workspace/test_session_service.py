@@ -828,6 +828,8 @@ def _create_domain_envelope_submission_session(
     allow_title_override: bool = False,
     title_binding_allows_opt_out: bool = False,
     reviewed: bool = True,
+    envelope_metadata: dict | None = None,
+    object_evidence_record_ids: list[str] | None = None,
 ) -> dict[str, str]:
     loaded_pack = _loaded_museum_pack(
         tmp_path,
@@ -881,10 +883,12 @@ def _create_domain_envelope_submission_session(
                 object_refs=object_refs or [],
                 metadata=object_metadata or {},
                 definition_state=object_definition_state,
+                evidence_record_ids=object_evidence_record_ids or [],
             ),
             *(additional_objects or []),
         ],
         validation_findings=validation_findings or [],
+        metadata=dict(envelope_metadata or {}),
     )
     if reviewed:
         envelope.metadata.update(
@@ -5759,3 +5763,173 @@ def test_submission_does_not_invent_approval_for_historical_envelope(db_session,
     readiness = response.submission.readiness[0]
     assert not readiness.ready
     assert any(blocker.code == "domain_envelope.machine_review_pending" for blocker in readiness.blockers)
+
+
+# Table-row evidence is served with a read-time search_text (PR #1096). The submission
+# intent fingerprint and the persisted submission payload must be built from the stored
+# record only. Made-up row.
+_TABLE_ROW_QUOTE = "| XS1 | 3 | 5 | 4.0 |"
+
+
+def _table_row_envelope_session(db_session, *, tmp_path, monkeypatch, reviewed: bool):
+    return _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={"artifact": {"accession_id": "A-1", "title": "Bronze astrolabe"}},
+        reviewed=reviewed,
+        object_evidence_record_ids=["E1"],
+        envelope_metadata={
+            "evidence_records": [
+                {
+                    "evidence_record_id": "E1",
+                    "verified_quote": _TABLE_ROW_QUOTE,
+                    "page": 3,
+                    "source_span_ids": ["s1"],
+                    "source_fragments": [
+                        {"text": _TABLE_ROW_QUOTE, "span_type": "table_row"},
+                    ],
+                }
+            ]
+        },
+    )
+
+
+def _intent_fingerprint(db_session, session_row, candidate, domain_context) -> str:
+    return submission_module._submission_intent_fingerprint(
+        db=db_session,
+        session_row=session_row,
+        adapter_key=REFERENCE_ADAPTER_KEY,
+        mode=SubmissionMode.DIRECT_SUBMIT,
+        target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ready_candidates=[candidate],
+        domain_context=domain_context,
+    )
+
+
+def _serve_stored_records_only(monkeypatch) -> None:
+    """Switch off the read-time decoration, so payloads hold the stored record alone."""
+    from copy import deepcopy
+
+    from src.lib.domain_packs import materialization as materialization_module
+
+    monkeypatch.setattr(
+        materialization_module,
+        "with_fragment_search_texts",
+        lambda value: deepcopy(value),
+    )
+
+
+def _served_fragments(candidate) -> list[dict]:
+    served = serializer_module._candidate_payload(candidate).model_dump(mode="json")
+    return [
+        fragment
+        for projection in served["evidence_anchor_projections"]
+        for fragment in projection["metadata"]["source_record"].get("source_fragments", [])
+    ]
+
+
+def test_blocked_envelope_candidate_fingerprint_is_the_same_with_or_without_served_search_text(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _table_row_envelope_session(
+        db_session, tmp_path=tmp_path, monkeypatch=monkeypatch, reviewed=False
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    candidate = db_session.get(CurationCandidate, UUID(seeded["candidate_id"]))
+    domain_context = submission_module._build_domain_envelope_submission_context(
+        db=db_session,
+        candidates={seeded["candidate_id"]: candidate},
+        target_candidate_ids=[seeded["candidate_id"]],
+        user_id="user-1",
+    )
+    # The blocker sends this candidate down the non-envelope intent.
+    assert domain_context.object_contexts[seeded["candidate_id"]].blockers
+    assert (
+        submission_module._domain_envelope_object_context_for_submission(candidate, domain_context)
+        is None
+    )
+    assert [fragment.get("search_text") for fragment in _served_fragments(candidate)] == [
+        "XS1 3 5 4.0"
+    ]
+
+    with_served_search_text = _intent_fingerprint(
+        db_session, session_row, candidate, domain_context
+    )
+    material = submission_module._non_envelope_candidate_submission_intent(candidate)
+    stored_record = db_session.get(DomainEnvelopeModel, seeded["envelope_id"]).envelope_json[
+        "metadata"
+    ]["evidence_records"][0]
+    assert material["evidence_anchor_projections"][0]["metadata"]["source_record"] == stored_record
+
+    _serve_stored_records_only(monkeypatch)
+    assert all("search_text" not in fragment for fragment in _served_fragments(candidate))
+    from_stored_record = _intent_fingerprint(db_session, session_row, candidate, domain_context)
+
+    assert with_served_search_text == from_stored_record
+
+
+def test_envelope_candidate_without_its_envelope_row_gets_no_fingerprint(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _table_row_envelope_session(
+        db_session, tmp_path=tmp_path, monkeypatch=monkeypatch, reviewed=True
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    candidate = db_session.get(CurationCandidate, UUID(seeded["candidate_id"]))
+    # The candidate points at an envelope that has no stored row.
+    candidate.envelope_id = "museum-envelope-missing"
+    db_session.commit()
+    db_session.expire(candidate)
+    domain_context = submission_module._build_domain_envelope_submission_context(
+        db=db_session,
+        candidates={seeded["candidate_id"]: candidate},
+        target_candidate_ids=[seeded["candidate_id"]],
+        user_id="user-1",
+    )
+    context = domain_context.object_contexts[seeded["candidate_id"]]
+    assert context.envelope_row is None
+    assert [blocker.code for blocker in context.blockers] == ["domain_envelope.not_found"]
+
+    # The non-envelope fallback refuses a candidate whose envelope row is gone: no
+    # fingerprint is computed over a partial payload, with or without search text.
+    with pytest.raises(HTTPException) as exc:
+        _intent_fingerprint(db_session, session_row, candidate, domain_context)
+    assert exc.value.status_code == 500
+
+
+def test_persisted_submission_payload_holds_no_served_search_text(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _table_row_envelope_session(
+        db_session, tmp_path=tmp_path, monkeypatch=monkeypatch, reviewed=True
+    )
+    candidate = db_session.get(CurationCandidate, UUID(seeded["candidate_id"]))
+    assert [fragment.get("search_text") for fragment in _served_fragments(candidate)] == [
+        "XS1 3 5 4.0"
+    ]
+
+    response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionExecuteRequest(
+            session_id=seeded["session_id"],
+            idempotency_key=str(uuid4()),
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+        actor_claims={"sub": "user-1"},
+    )
+    assert response.submission.status == CurationSubmissionStatus.ACCEPTED
+
+    persisted = db_session.scalars(
+        select(SubmissionModel).where(SubmissionModel.session_id == UUID(seeded["session_id"]))
+    ).one()
+    persisted_text = json.dumps(persisted.payload)
+    assert json.dumps(_TABLE_ROW_QUOTE)[1:-1] in persisted_text
+    assert "search_text" not in persisted_text
