@@ -2325,6 +2325,22 @@ def test_document_file_converted_text_cap_default_and_override(monkeypatch):
     assert get_document_file_max_converted_text_bytes() == 250_000
 
 
+def test_paper_file_and_text_limits_default_and_override(monkeypatch):
+    from src.lib.openai_agents.config import (
+        get_document_max_files_per_paper,
+        get_document_paper_max_text_bytes,
+    )
+
+    monkeypatch.delenv("DOCUMENT_MAX_FILES_PER_PAPER", raising=False)
+    monkeypatch.delenv("DOCUMENT_PAPER_MAX_TEXT_BYTES", raising=False)
+    assert get_document_max_files_per_paper() == 20
+    assert get_document_paper_max_text_bytes() == 2_000_000
+    monkeypatch.setenv("DOCUMENT_MAX_FILES_PER_PAPER", "11")
+    monkeypatch.setenv("DOCUMENT_PAPER_MAX_TEXT_BYTES", "1500000")
+    assert get_document_max_files_per_paper() == 11
+    assert get_document_paper_max_text_bytes() == 1_500_000
+
+
 def test_inspect_results_object_pages_are_env_configured(monkeypatch):
     from src.lib.openai_agents.config import (
         get_inspect_results_object_max_page_size,
