@@ -22,6 +22,18 @@ from src.models.document import ProcessingStatus
 from src.models.pipeline import PipelineStatus, ProcessingStage
 from src.schemas.documents import DocumentUpdateRequest
 
+
+@pytest.fixture(autouse=True)
+def _no_database_paper_lock(monkeypatch):
+    """These tests use fake sessions; the per-paper delete lock is tested against Postgres
+    (tests/integration/persistence/test_supplement_add_search_index.py)."""
+
+    from contextlib import nullcontext
+
+    monkeypatch.setattr(
+        "src.lib.document_files.paper_lock.paper_delete_lock", lambda _document_id: nullcontext(),
+    )
+
 _FILE_FIELDS = (
     "file_path", "file_hash", "file_size", "page_count", "pdfx_json_path", "processed_json_path",
     "hierarchy_metadata", "source_provider_source_file_id", "source_provider_converted_artifact_id",

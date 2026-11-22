@@ -168,7 +168,7 @@ def listing(monkeypatch):
         return FileListing(
             provider="made_up_provider", reference_id="101", reference_curie="MADE:101", main_status="ready",
             files=tuple(_supplement_entry(item, in_paper) for item in (20, 40)), not_shown_count=0,
-            duplicate_copies_count=0, check_version="made-up",
+            duplicate_copies_count=0, check_version="made-up", existing_document_id=None,
         )
 
     monkeypatch.setattr(file_listing_service, "list_files_for_paper", list_files_for_paper)
