@@ -1,0 +1,427 @@
+"""Adding converted text supplements to an existing paper (P7c1), with fakes for storage.
+
+Listing rows are ABC ``show_all`` shapes through the real Alliance adapter (as in
+``test_file_listing``); converted texts are in the shape ABC's Office converter
+writes (one top-level title, one second-level heading per sheet). The database,
+the search index and the disk are fakes recording what the add asks of them; the
+persistence tests cover the real rows. All values are made up.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+from unittest.mock import AsyncMock
+from uuid import UUID, uuid4
+
+import pytest
+
+from src.lib.document_sources import file_listing_service, supplement_add
+from src.lib.document_sources.access import DocumentSourceRequestContext
+from src.lib.document_sources.file_reasons import FileReason
+from src.lib.document_sources.models import ProviderBearerKind
+from src.lib.document_sources.supplement_add import AddResult, ChosenFile, SupplementAddError
+from tests.unit.lib.document_sources.test_abc_literature_provider import (
+    _abc_reference_record,
+    _abc_show_all_main_pdf,
+    _abc_show_all_row,
+    provider_from_fake,
+)
+from tests.unit.lib.document_sources.test_file_listing import _Client, _limits, _pair, _Store
+
+DOCUMENT_ID = uuid4()
+JOB_ID = uuid4()
+CONTEXT = DocumentSourceRequestContext(
+    provider_groups=("WB",), authorized_group_ids=("WB",), bearer_kind=ProviderBearerKind.CURATOR,
+    curator_token="curator-token",
+)
+
+
+def _workbook(title: str, *sheets: str) -> bytes:
+    body = "".join(
+        f"## {sheet}\n\nMade-up rows of {sheet}.\n\n| strain | score |\n| --- | --- |\n| s1 | 1 |\n\n" for sheet in sheets
+    )
+    return f"# {title}\n\n{body}".encode()
+
+
+@dataclass
+class _Storage:
+    """What the add asked the database, the search index and the disk to do."""
+
+    inserted: list[Any] = field(default_factory=list)
+    stored: list[tuple[UUID, list[Any]]] = field(default_factory=list)
+    ready: dict[UUID, int] = field(default_factory=dict)
+    deleted_rows: list[UUID] = field(default_factory=list)
+    deleted_ranges: list[tuple[int, int]] = field(default_factory=list)
+    saved_json: dict[UUID, list[dict]] = field(default_factory=dict)
+    removed_paths: list[str] = field(default_factory=list)
+    after_add: int = 0
+    next_index: int = 30
+    fail_store_on: int | None = None
+
+
+def _paper(**overrides) -> supplement_add._PaperState:
+    values = dict(
+        owner_subject="owner-subject", status="completed", file_count=1, ready_text_bytes=1_000,
+        next_tab_order=1, leftovers=(),
+    )
+    values.update(overrides)
+    return supplement_add._PaperState(**values)
+
+
+@pytest.fixture
+def storage(monkeypatch):
+    record = _Storage()
+    store = _Store()
+    monkeypatch.setattr(file_listing_service, "_stores", lambda _provider: (store.load, store.save))
+    monkeypatch.setattr(file_listing_service, "current_file_check_limits", _limits)
+    monkeypatch.setattr(supplement_add, "current_file_check_limits", _limits)
+    monkeypatch.setattr(supplement_add, "_paper_state", lambda *_: _paper())
+
+    async def save_markdown(*, markdown, file_id, user_id):
+        return f"{user_id}/source_markdown/{file_id}.md"
+
+    async def save_json(*, elements, file_id, user_id):
+        record.saved_json[file_id] = elements
+        return f"{user_id}/processed_json/{file_id}.json"
+
+    from src.lib.document_sources import ingestion
+
+    monkeypatch.setattr(ingestion, "_save_source_markdown", save_markdown)
+    monkeypatch.setattr(ingestion, "_save_processed_json", save_json)
+    monkeypatch.setattr(supplement_add, "_insert_rows", lambda _doc, rows: record.inserted.extend(rows))
+
+    ranges: dict[UUID, tuple[int, int]] = {}
+
+    def reserve(_document_id, file_id, count):
+        start = record.next_index
+        record.next_index += count
+        ranges[file_id] = (start, start + count - 1)
+        return start
+
+    async def store_to_weaviate(chunks, document_id, client, user_id, *, chunk_range):
+        if record.fail_store_on is not None and len(record.stored) == record.fail_store_on:
+            raise RuntimeError("made-up storage failure")
+        record.stored.append((chunk_range, chunks))
+
+    monkeypatch.setattr("src.lib.document_files.service.reserve_file_chunk_range", reserve)
+    monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", store_to_weaviate)
+    monkeypatch.setattr(
+        "src.lib.document_files.service.mark_files_ready", lambda items: record.ready.update(items),
+    )
+    monkeypatch.setattr(
+        supplement_add, "_ranges", lambda _doc, ids: [ranges[file_id] for file_id in ids if file_id in ranges],
+    )
+
+    async def delete_pieces(_doc, _subject, found):
+        record.deleted_ranges.extend(found)
+
+    monkeypatch.setattr(supplement_add, "_delete_pieces", delete_pieces)
+    monkeypatch.setattr(supplement_add, "_delete_rows", lambda _doc, ids: record.deleted_rows.extend(ids))
+    monkeypatch.setattr(supplement_add, "_remove_stored_files", lambda paths: record.removed_paths.extend(paths))
+
+    async def after_add(*_):
+        record.after_add += 1
+
+    monkeypatch.setattr(supplement_add, "_after_add", after_add)
+    hierarchy = AsyncMock(side_effect=AssertionError("the hierarchy model is never called for a supplement"))
+    figures = AsyncMock(side_effect=AssertionError("no supplement piece reaches the figure locators"))
+    monkeypatch.setattr("src.lib.pipeline.hierarchy_resolution.resolve_document_hierarchy", hierarchy)
+    monkeypatch.setattr("src.lib.pipeline.figure_locator_resolution.resolve_figure_locators", figures)
+    return record
+
+
+def _provider(rows, payloads):
+    client = _Client(payloads)
+    client.show_reference_payload = _abc_reference_record()
+    client.show_referencefiles_payload = rows  # type: ignore[assignment]
+    return client, provider_from_fake(client)
+
+
+def _paper_lookup(monkeypatch, file_ids=("10",)):
+    monkeypatch.setattr(
+        file_listing_service, "_paper_lookup",
+        lambda *_: file_listing_service._PaperSource(
+            provider="abc_literature", reference_id="101", reference_curie="AGRKB:101", file_ids=file_ids,
+            provider_observations={},
+        ),
+    )
+
+
+def _chosen(original_id: int, *, converted_id: int | None = None, md5_suffix="") -> ChosenFile:
+    converted = converted_id if converted_id is not None else original_id + 1
+    return ChosenFile(
+        provider_file_id=str(original_id), md5=f"md5-{original_id}{md5_suffix}", converted_md5=f"md5-{converted}",
+    )
+
+
+async def _add(provider, files, checkpoint=None) -> AddResult:
+    return await supplement_add.add_files_to_paper(
+        DOCUMENT_ID, 7, CONTEXT, files, job_id=JOB_ID, provider=provider, weaviate_client=object(),
+        stage_checkpoint=checkpoint or AsyncMock(),
+    )
+
+
+def _by_id(result: AddResult):
+    return {item.provider_file_id: item for item in result.files}
+
+
+ROWS = [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), *_pair(30, "WB"), *_pair(40, "WB")]
+GOOD = {
+    "21": _workbook("Made_up_S20", "Sheet1"),
+    "31": b"# One\n\n# Two\n",  # an Office file must have exactly one top-level title (R7)
+    "41": _workbook("Made_up_S40", "Sheet1", "Sheet2"),
+}
+
+
+@pytest.mark.asyncio
+async def test_a_refused_second_file_of_three_is_left_out_and_the_other_two_are_added(monkeypatch, storage):
+    client, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+    result = await _add(provider, [_chosen(40), _chosen(30), _chosen(20)])
+
+    outcomes = _by_id(result)
+    assert [item.provider_file_id for item in result.files] == ["20", "30", "40"]  # listing order
+    assert outcomes["30"].outcome == "left_out" and outcomes["30"].reason_code is FileReason.TITLE_COUNT
+    assert outcomes["20"].outcome == outcomes["40"].outcome == "added"
+    assert [row.tab_order for row in storage.inserted] == [1, 2]
+    assert [row.display_name for row in storage.inserted] == ["Made_up_S20.xlsx", "Made_up_S40.xlsx"]
+    assert set(storage.ready) == {outcomes["20"].file_id, outcomes["40"].file_id}
+    assert storage.after_add == 1 and storage.deleted_rows == []
+    # An add sends no conversion request.
+    assert not [name for name, _ in client.calls if name == "request_referencefile_conversion"]
+
+
+@pytest.mark.asyncio
+async def test_rows_have_the_full_supplement_shape(monkeypatch, storage):
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+    await _add(provider, [_chosen(20)])
+
+    row = storage.inserted[0]
+    assert (row.role, row.status, row.display_mode, row.page_count) == ("supplement", "pending", "text", None)
+    assert row.source_provider_source_file_id == "20" and row.source_provider_converted_artifact_id == "21"
+    assert row.file_path == row.source_markdown_path == f"owner-subject/source_markdown/{row.id}.md"
+    assert row.processed_json_path == f"owner-subject/processed_json/{row.id}.json"
+    assert row.file_size == len(GOOD["21"]) and len(row.file_hash) == 64
+    assert row.source_md5 == "md5-20" and len(row.source_converted_artifact_sha256) == 64
+    assert row.source_access_group_ids == ["WB"] and row.source_import_status == "processing"
+
+
+@pytest.mark.asyncio
+async def test_two_sheets_give_two_sections_and_the_saved_json_matches_the_stored_pieces(monkeypatch, storage):
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+    result = await _add(provider, [_chosen(40)])
+
+    file_id = _by_id(result)["40"].file_id
+    saved_sections = {element["parent_section"] for element in storage.saved_json[file_id]}
+    # The file's own title heading is a section named after it; each sheet is its own section.
+    assert saved_sections == {"Made_up_S40", "Sheet1", "Sheet2"}
+    (_, chunks), = storage.stored
+    stored_sections = {chunk.parent_section for chunk in chunks}
+    assert stored_sections <= saved_sections and {"Sheet1", "Sheet2"} <= stored_sections
+
+
+@pytest.mark.asyncio
+async def test_an_abstract_heading_in_a_supplement_is_only_a_section_of_that_file(monkeypatch, storage):
+    payload = b"# Made_up_S20\n\n## Abstract\n\nMade-up text under a heading called Abstract.\n"
+    _, provider = _provider(ROWS, {**GOOD, "21": payload})
+    _paper_lookup(monkeypatch)
+    result = await _add(provider, [_chosen(20)])
+
+    file_id = _by_id(result)["20"].file_id
+    assert {element["parent_section"] for element in storage.saved_json[file_id]} == {"Made_up_S20", "Abstract"}
+    assert storage.after_add == 1  # the paper's piece count; nothing else of the paper changes
+
+
+@pytest.mark.asyncio
+async def test_unconverted_changed_unlisted_and_already_added_files_are_left_out(monkeypatch, storage):
+    rows = [
+        *ROWS,
+        _abc_show_all_row(50, "WB", file_class="supplement", file_extension="xlsx", display_name="Made_up_S50"),
+    ]
+    _, provider = _provider(rows, GOOD)
+    _paper_lookup(monkeypatch, file_ids=("10", "40"))
+    result = await _add(provider, [
+        _chosen(50, converted_id=51), _chosen(20, md5_suffix="-changed"), _chosen(99), _chosen(40), _chosen(10),
+    ])
+
+    reasons = {item.provider_file_id: item.reason_code for item in result.files}
+    assert reasons == {
+        "50": FileReason.FILE_NOT_TICKABLE,
+        "20": FileReason.FILE_CHANGED_SINCE_LISTED,
+        "99": FileReason.FILE_NOT_IN_REFERENCE,
+        "40": FileReason.ALREADY_IN_PAPER,
+        "10": FileReason.ALREADY_IN_PAPER,
+    }
+    assert storage.inserted == []
+
+
+@pytest.mark.asyncio
+async def test_the_paper_total_counts_the_main_file_and_later_smaller_files_can_still_fit(monkeypatch, storage):
+    monkeypatch.setenv("DOCUMENT_PAPER_MAX_TEXT_BYTES", "1100")
+    big = _workbook("Made_up_S20", *[f"Sheet{index}" for index in range(8)])
+    small = _workbook("Made_up_S40", "Sheet1")
+    _, provider = _provider(ROWS, {**GOOD, "21": big, "41": small})
+    _paper_lookup(monkeypatch)
+    result = await _add(provider, [_chosen(20), _chosen(40)])
+
+    outcomes = _by_id(result)
+    assert outcomes["20"].reason_code is FileReason.PAPER_TEXT_LIMIT
+    assert outcomes["20"].limit_value == 1100 and outcomes["20"].measured_value > 1100
+    assert outcomes["40"].outcome == "added"
+
+
+@pytest.mark.asyncio
+async def test_the_file_count_includes_files_already_in_the_paper(monkeypatch, storage):
+    monkeypatch.setenv("DOCUMENT_MAX_FILES_PER_PAPER", "2")
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+    result = await _add(provider, [_chosen(20), _chosen(40)])
+
+    outcomes = _by_id(result)
+    assert outcomes["20"].outcome == "added"
+    assert (outcomes["40"].reason_code, outcomes["40"].measured_value, outcomes["40"].limit_value) == (
+        FileReason.PAPER_FILE_LIMIT, 3, 2,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_download_over_the_cap_is_r1s_too_large(monkeypatch, storage):
+    from tests.unit.lib.document_sources.test_file_listing import _http_error
+
+    _, provider = _provider(ROWS, {**GOOD, "21": _http_error(413)})
+    _paper_lookup(monkeypatch)
+    result = await _add(provider, [_chosen(20)])
+    assert _by_id(result)["20"].reason_code is FileReason.TOO_LARGE
+
+
+@pytest.mark.asyncio
+async def test_a_write_failure_removes_this_adds_pieces_files_and_rows_only(monkeypatch, storage):
+    storage.fail_store_on = 1
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+    with pytest.raises(RuntimeError, match="made-up storage failure"):
+        await _add(provider, [_chosen(20), _chosen(40)])
+
+    inserted_ids = [row.id for row in storage.inserted]
+    assert storage.deleted_rows == inserted_ids
+    # Only the first file's range was stored; both reserved ranges are deleted, nothing below 30.
+    assert storage.deleted_ranges and min(start for start, _ in storage.deleted_ranges) == 30
+    assert len(storage.removed_paths) == 4
+    assert storage.ready == {} and storage.after_add == 0
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_while_writing_removes_this_adds_rows(monkeypatch, storage):
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+
+    async def checkpoint(stage):
+        if stage == "finishing":
+            raise RuntimeError("made-up cancel")
+
+    with pytest.raises(RuntimeError, match="made-up cancel"):
+        await _add(provider, [_chosen(20)], checkpoint=checkpoint)
+    assert storage.deleted_rows == [row.id for row in storage.inserted] and storage.ready == {}
+
+
+@pytest.mark.asyncio
+async def test_rows_left_failed_by_a_dead_add_are_removed_first(monkeypatch, storage):
+    leftover = supplement_add._Leftover(
+        file_id=uuid4(), chunk_index_start=12, chunk_index_end=15, paths=("owner-subject/source_markdown/x.md",),
+    )
+    monkeypatch.setattr(supplement_add, "_paper_state", lambda *_: _paper(leftovers=(leftover,)))
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+    await _add(provider, [_chosen(20)])
+
+    assert storage.deleted_ranges == [(12, 15)]
+    assert storage.deleted_rows == [leftover.file_id]
+    assert storage.removed_paths == ["owner-subject/source_markdown/x.md"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["processing", "failed", "pending"])
+async def test_files_are_added_only_to_a_finished_paper(monkeypatch, storage, status):
+    monkeypatch.setattr(supplement_add, "_paper_state", lambda *_: _paper(status=status))
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+    with pytest.raises(SupplementAddError) as raised:
+        await _add(provider, [_chosen(20)])
+    assert raised.value.code == "paper_not_completed"
+
+
+@pytest.mark.asyncio
+async def test_a_merged_reference_stops_the_add_before_any_download(monkeypatch, storage):
+    client = _Client(GOOD)
+    client.show_reference_payload = dict(_abc_reference_record(), reference_id=999)
+    client.show_referencefiles_payload = ROWS  # type: ignore[assignment]
+    _paper_lookup(monkeypatch)
+    with pytest.raises(file_listing_service.FileListingUnavailable) as raised:
+        await _add(provider_from_fake(client), [_chosen(20)])
+    assert raised.value.code == "paper_reference_mismatch"
+    assert not [name for name, _ in client.calls if name == "download_referencefile"]
+
+
+@pytest.mark.asyncio
+async def test_when_every_file_is_left_out_the_job_fails_and_one_warning_names_no_file(monkeypatch):
+    left_out = AddResult(files=(
+        supplement_add.FileOutcome("20", "left_out", FileReason.TOO_LARGE, limit_value=40, display_name="Secret_Name.xlsx"),
+        supplement_add.FileOutcome("30", "left_out", FileReason.TITLE_COUNT, measured_value=2, limit_value=1),
+    ))
+    monkeypatch.setattr(supplement_add, "add_files_to_paper", AsyncMock(return_value=left_out))
+    provider = AsyncMock()
+    monkeypatch.setattr("src.lib.document_sources.registry.get_configured_document_source_provider", lambda: provider)
+    monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda: object())
+    reports = []
+    monkeypatch.setattr(
+        "src.lib.observability.runtime.report_runtime_exception",
+        lambda exc, **kwargs: reports.append((exc, kwargs)),
+    )
+    failed = []
+    monkeypatch.setattr("src.lib.pdf_jobs.service.mark_failed", lambda **kwargs: failed.append(kwargs))
+
+    await supplement_add.run_supplement_add_job(supplement_add.SupplementAddJobRequest(
+        job_id=JOB_ID, document_id=DOCUMENT_ID, user_id="owner-subject", owner_user_id=7, context=CONTEXT,
+        files=(_chosen(20), _chosen(30)),
+    ))
+
+    (exc, kwargs), = reports
+    assert kwargs["level"] == "warning" and kwargs["operation"] == "supplement_add_nothing_added"
+    assert [item["reason_code"] for item in kwargs["context"]["refusals"]] == ["too_large", "title_count"]
+    assert "Secret_Name" not in repr(kwargs) and "Secret_Name" not in str(exc)
+    assert "20" not in [item["artifact_id_hash"] for item in kwargs["context"]["refusals"]]
+    (job,), = [failed]
+    assert job["metadata"]["supplements"][0]["reason_code"] == "too_large"
+    provider.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_completed_add_records_each_files_outcome_on_its_job(monkeypatch):
+    added_id = uuid4()
+    result = AddResult(files=(
+        supplement_add.FileOutcome("20", "added", file_id=added_id, display_name="Made_up_S20.xlsx"),
+        supplement_add.FileOutcome("30", "left_out", FileReason.TITLE_COUNT, measured_value=2, limit_value=1),
+    ))
+    monkeypatch.setattr(supplement_add, "add_files_to_paper", AsyncMock(return_value=result))
+    monkeypatch.setattr("src.lib.document_sources.registry.get_configured_document_source_provider", lambda: AsyncMock())
+    monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda: object())
+    completed = []
+    monkeypatch.setattr("src.lib.pdf_jobs.service.mark_completed", lambda **kwargs: completed.append(kwargs))
+
+    await supplement_add.run_supplement_add_job(supplement_add.SupplementAddJobRequest(
+        job_id=JOB_ID, document_id=DOCUMENT_ID, user_id="owner-subject", owner_user_id=7, context=CONTEXT,
+        files=(_chosen(20), _chosen(30)),
+    ))
+
+    (job,) = completed
+    entries = job["metadata"]["supplements"]
+    assert entries[0] == {
+        "provider_file_id": "20", "display_name": "Made_up_S20.xlsx", "state": "added", "reason_code": None,
+        "observed_at": None, "file_id": str(added_id), "measured_value": None, "limit_value": None,
+    }
+    assert entries[1]["state"] == "left_out" and entries[1]["reason_code"] == "title_count"
+    # The paper's later listing reads these: an add's refusal is never a provider observation.
+    assert file_listing_service.provider_observations_from_jobs([job["metadata"]]) == {}

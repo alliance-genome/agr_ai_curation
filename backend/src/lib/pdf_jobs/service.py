@@ -250,7 +250,8 @@ def _reconcile_terminal_document(session, job: PdfProcessingJob) -> bool:
     if latest_job is None or latest_job.id != job.id:
         return False
 
-    if document.status in TERMINAL_PROCESSING_STATUSES:
+    pending_files = [file_row for file_row in document.files if file_row.status == FILE_STATUS_PENDING]
+    if document.status in TERMINAL_PROCESSING_STATUSES and not pending_files:
         return False
 
     terminal_message = job.error_message or job.message
@@ -258,6 +259,15 @@ def _reconcile_terminal_document(session, job: PdfProcessingJob) -> bool:
         raise ValueError(f"Terminal job {job.id} has no failure message to reconcile")
     if job.completed_at is None:
         raise ValueError(f"Terminal job {job.id} has no completed_at to reconcile")
+
+    if document.status in TERMINAL_PROCESSING_STATUSES:
+        # Files being added to a finished paper (P7c1): they cannot outlive the
+        # failed or cancelled add as pending. The paper and its other files stay as
+        # they are; the next add on the paper deletes these rows and their pieces.
+        for file_row in pending_files:
+            file_row.status = FILE_STATUS_FAILED
+            file_row.error_message = terminal_message[:get_pdf_document_error_message_max_chars()]
+        return True
 
     mapped_status = PDF_JOB_STATUS_TO_PROCESSING_STATUS[job.status]
     document.status = mapped_status
@@ -531,28 +541,41 @@ def create_job(*, document_id: UUID | str, user_id: int, filename: Optional[str]
     """
     session = SessionLocal()
     try:
-        job = PdfProcessingJob(
-            document_id=_to_uuid(document_id),
-            user_id=user_id,
-            filename=filename,
-            status=PdfJobStatus.PENDING.value,
-            current_stage="pending",
-            progress_percentage=0,
-            message="Queued for background processing",
-            cancel_requested=False,
-        )
-        session.add(job)
-        try:
-            session.commit()
-        except IntegrityError as exc:
-            session.rollback()
-            if _violates_constraint(exc, ONE_ACTIVE_JOB_PER_PAPER_INDEX):
-                raise ActiveJobExistsError(document_id) from exc
-            raise
-        session.refresh(job)
-        return _to_response(job)
+        return create_job_in_session(session, document_id=document_id, user_id=user_id, filename=filename)
     finally:
         session.close()
+
+
+def create_job_in_session(
+    session, *, document_id: UUID | str, user_id: int, filename: Optional[str] = None,
+) -> PdfJobResponse:
+    """Create a paper's job in ``session`` and commit it.
+
+    A caller adding a job to an existing paper locks the paper row in the same
+    session first (``SELECT ... FOR UPDATE``), so stale-job recovery cannot decide
+    about the paper between that lock and this insert. A second active job raises
+    ``ActiveJobExistsError`` after rolling the session back.
+    """
+    job = PdfProcessingJob(
+        document_id=_to_uuid(document_id),
+        user_id=user_id,
+        filename=filename,
+        status=PdfJobStatus.PENDING.value,
+        current_stage="pending",
+        progress_percentage=0,
+        message="Queued for background processing",
+        cancel_requested=False,
+    )
+    session.add(job)
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        if _violates_constraint(exc, ONE_ACTIVE_JOB_PER_PAPER_INDEX):
+            raise ActiveJobExistsError(document_id) from exc
+        raise
+    session.refresh(job)
+    return _to_response(job)
 
 
 def get_job(*, job_id: UUID | str, user_id: int, reconcile_stale: bool = True) -> Optional[PdfJobResponse]:

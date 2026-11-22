@@ -1596,6 +1596,36 @@ async def get_document_sections_hierarchical(
     return await asyncio.to_thread(_fetch)
 
 
+def delete_chunk_range(document_id: str, user_id: str, *, start: int, end: int) -> int:
+    """Delete one file's pieces: ``documentId`` and ``start <= chunkIndex <= end``, in the owner's tenant.
+
+    Only that range is touched, so another file's pieces of the same paper stay.
+    Returns the number deleted.
+    """
+
+    if not user_id:
+        raise ValueError("user_id is required for tenant-scoped chunk deletion")
+    if type(start) is not int or type(end) is not int or start < 0 or end < start:
+        raise ValueError("A piece range needs 0 <= start <= end")
+    connection = get_connection()
+    if not connection:
+        raise RuntimeError("No Weaviate connection established")
+    from weaviate.classes.query import Filter
+
+    from ..weaviate_helpers import get_user_collections
+
+    with connection.session() as client:
+        chunk_collection, _ = get_user_collections(client, user_id)
+        result = chunk_collection.data.delete_many(
+            where=(
+                Filter.by_property("documentId").equal(document_id)
+                & Filter.by_property("chunkIndex").greater_or_equal(start)
+                & Filter.by_property("chunkIndex").less_or_equal(end)
+            )
+        )
+    return int(result.successful)
+
+
 def delete_chunks(document_id: str, user_id: str) -> Dict[str, Any]:
     """Delete all chunks for a document.
 

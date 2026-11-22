@@ -157,6 +157,9 @@ class ListedFile:
     not_tickable_reason: FileReason | None
     # Per-paper listing only; ``None`` for files no import of this paper chose or that were added.
     last_provider_observation: ProviderObservation | None
+    # The provider's own records, for an import or add of this entry; never sent to the browser.
+    source_artifact: SourceArtifact
+    converted_artifact: SourceArtifact | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -431,6 +434,8 @@ async def list_reference_files(
             tickable=paper_reason is None and not main_in_paper,
             not_tickable_reason=paper_reason or (FileReason.ALREADY_IN_PAPER if main_in_paper else None),
             last_provider_observation=None,
+            source_artifact=source,
+            converted_artifact=converted,
         ))
 
     candidates: dict[str, _Candidate] = {}
@@ -563,6 +568,8 @@ async def list_reference_files(
                 (provider_observations[file_id] for file_id in copy_ids if file_id in provider_observations),
                 None,
             ),
+            source_artifact=original,
+            converted_artifact=candidate.converted,
         ))
 
     return FileListing(

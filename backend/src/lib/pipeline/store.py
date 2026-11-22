@@ -611,7 +611,8 @@ async def update_document_metadata(
 ) -> None:
     """Update the paper's document object with its summed chunk count and status.
 
-    Called once, after every file of a new paper is stored.
+    Called once after every file of a new paper is stored, and after files are
+    added to an existing paper.
 
     Args:
         document_id: Document UUID

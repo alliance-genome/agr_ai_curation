@@ -88,6 +88,7 @@ from ..models.sql.pdf_document import (
     PDFDocumentFile,
 )
 from ..models.sql.pdf_processing_job import PdfJobStatus
+from ..schemas.document_files import AddFilesRequest
 from ..schemas.documents import DocumentUpdateRequest, DocumentUpdateResponse
 from ..services.document_access import require_owned_document
 from ..services.processing_status_policy import (
@@ -1919,6 +1920,61 @@ async def list_document_source_files_for_paper(
             document_uuid, owner_user_id=db_user.id, provider=provider, context=context,
         )
     )
+
+
+@router.post("/documents/{document_id}/files", status_code=202)
+async def add_files_to_paper_endpoint(
+    payload: AddFilesRequest,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    document_id: str = Path(..., description="Document ID"),
+    user: dict[str, Any] = get_auth_dependency(),
+):
+    """Add converted supplements from the paper's provider file listing (codes only).
+
+    Starts one job; the files are checked and added in the background, and each
+    file's outcome is in the job's ``metadata.supplements``. Owner only.
+    """
+    from ..lib.document_sources.supplement_add import (
+        ChosenFile,
+        SupplementAddJobRequest,
+        SupplementAddRequestError,
+        run_supplement_add_job,
+        start_supplement_add,
+    )
+    from ..lib.observability.background_tasks import add_observed_background_task
+    from ..lib.pdf_jobs.service import ActiveJobExistsError
+
+    if not external_document_source_import_enabled():
+        raise HTTPException(status_code=503, detail={"error": "document_source_import_disabled"})
+    document_uuid = _parse_document_uuid(document_id)
+    db_user = await provision_user_async(principal_from_claims(user))
+    context = await _document_source_context_or_503(request=request, user=user)
+    if not (context.curator_token or "").strip():
+        raise HTTPException(status_code=409, detail={"error": "document_source_curator_token_unavailable"})
+    files = tuple(
+        ChosenFile(provider_file_id=item.provider_file_id, md5=item.md5, converted_md5=item.converted_md5)
+        for item in payload.files
+    )
+    try:
+        job = await asyncio.to_thread(start_supplement_add, document_uuid, db_user.id, files)
+    except SupplementAddRequestError as refused:
+        raise HTTPException(
+            status_code=422, detail={"error": refused.code, "limit_value": refused.limit_value},
+        ) from None
+    except ActiveJobExistsError:
+        raise HTTPException(status_code=409, detail={"error": "import_in_progress"}) from None
+    add_observed_background_task(
+        background_tasks,
+        run_supplement_add_job,
+        SupplementAddJobRequest(
+            job_id=uuid.UUID(job.job_id), document_id=document_uuid, user_id=db_user.auth_sub,
+            owner_user_id=db_user.id, context=context, files=files,
+        ),
+        task_name="supplement_add",
+        tags={"document_id": str(document_uuid), "job_id": job.job_id},
+    )
+    return job
 
 
 @router.get("/documents/{document_id}/status")

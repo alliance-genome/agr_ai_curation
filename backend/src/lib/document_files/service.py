@@ -155,6 +155,31 @@ def mark_file_ready(file_id: UUID, *, text_bytes: int) -> None:
         file_row.text_bytes = text_bytes
 
 
+def mark_files_ready(text_bytes_by_file: Mapping[UUID, int]) -> None:
+    """Record several stored files as readable together, in one transaction (an add's files)."""
+
+    from src.models.sql.database import SessionLocal
+
+    if not text_bytes_by_file:
+        raise DocumentFileError("No files to mark ready")
+    with SessionLocal() as session, session.begin():
+        for file_id in sorted(text_bytes_by_file, key=str):
+            text_bytes = text_bytes_by_file[file_id]
+            if type(text_bytes) is not int or text_bytes < 0:
+                raise DocumentFileError("A ready file needs a measured text size")
+            file_row = session.get(PDFDocumentFile, file_id, with_for_update=True)
+            if file_row is None:
+                raise DocumentFileError(f"File {file_id} does not exist")
+            if file_row.status != FILE_STATUS_PENDING:
+                raise DocumentFileError(f"File {file_id} is not pending")
+            require_chunk_range(file_row)
+            file_row.status = FILE_STATUS_READY
+            if file_row.source_import_status is not None:
+                file_row.source_import_status = "completed"
+            file_row.error_message = None
+            file_row.text_bytes = text_bytes
+
+
 def mark_file_failed(file_id: UUID, *, error_message: str) -> None:
     _update_file(file_id, status=FILE_STATUS_FAILED, import_status="failed", error_message=error_message)
 
