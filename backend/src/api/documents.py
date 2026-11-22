@@ -1891,9 +1891,12 @@ async def list_document_source_files_by_identifier(
 
     if not external_document_source_import_enabled():
         raise HTTPException(status_code=503, detail={"error": "document_source_import_disabled"})
+    db_user = await provision_user_async(principal_from_claims(user))
     context = await _document_source_context_or_503(request=request, user=user)
     return await _file_listing_response(
-        lambda provider: list_files_for_identifier(identifier, provider=provider, context=context)
+        lambda provider: list_files_for_identifier(
+            identifier, owner_user_id=db_user.id, provider=provider, context=context,
+        )
     )
 
 

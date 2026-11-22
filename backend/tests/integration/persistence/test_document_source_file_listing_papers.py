@@ -65,11 +65,16 @@ def owners():
 def captured(monkeypatch):
     calls = {}
 
-    async def listed(provider, lookup, context, files_in_paper, *, expected_reference_id=None):
-        calls.update(lookup=lookup, files=set(files_in_paper), expected=expected_reference_id)
+    async def listed(provider, lookup, context, files_in_paper, *, route, provider_observations,
+                     owner_user_id, expected_reference_id=None):
+        calls.update(
+            lookup=lookup, files=set(files_in_paper), expected=expected_reference_id, route=route.value,
+            observations=dict(provider_observations),
+        )
         return FileListing(
             provider=PROVIDER, reference_id="55", reference_curie="MADEUP:55", main_status="ready",
             files=(), not_shown_count=0, duplicate_copies_count=0, check_version="v",
+            existing_document_id=None,
         )
 
     monkeypatch.setattr(file_listing_service, "_list", listed)
@@ -86,7 +91,9 @@ async def _list_for(document_id, owner_id):
 async def test_an_imported_paper_is_listed_by_its_curie_with_its_file_ids(owners, captured):
     owner, _ = owners
     await _list_for(_add_paper(owner), owner)
-    assert captured == {"lookup": "MADEUP:55", "files": {"10", "11"}, "expected": "55"}
+    assert captured == {
+        "lookup": "MADEUP:55", "files": {"10", "11"}, "expected": "55", "route": "paper", "observations": {},
+    }
 
 
 @pytest.mark.asyncio

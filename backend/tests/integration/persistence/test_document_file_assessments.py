@@ -11,8 +11,9 @@ from alembic.config import Config
 from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError
 
-from src.lib.document_sources.file_assessment import FileAssessment, FileCheckReason
+from src.lib.document_sources.file_assessment import FileAssessment
 from src.lib.document_sources.file_assessment_store import store_assessment, stored_assessment
+from src.lib.document_sources.file_reasons import FileReason, FileReasonGroupError
 from src.models.sql.database import SessionLocal
 from src.models.sql.document_file_assessment import DocumentFileAssessment
 
@@ -39,7 +40,7 @@ def _key(file_id, **overrides):
 
 
 def test_a_stored_result_is_reused_only_for_the_same_file_md5_and_version(file_id):
-    refused = FileAssessment(refused=True, reason=FileCheckReason.TABLE_ROW_TOO_WIDE, measured_value=900, limit_value=800)
+    refused = FileAssessment(refused=True, reason=FileReason.TABLE_ROW_TOO_WIDE, measured_value=900, limit_value=800)
     with SessionLocal.begin() as db:
         store_assessment(db, **_key(file_id), assessment=refused)
     with SessionLocal() as db:
@@ -66,3 +67,14 @@ def test_a_refusal_needs_a_reason_and_a_pass_has_none(file_id):
     with pytest.raises(IntegrityError):
         with SessionLocal.begin() as db:
             db.add(DocumentFileAssessment(**_key(file_id), result="ok", reason_code="too_large"))
+
+
+def test_a_stored_code_that_is_not_a_check_reason_is_a_named_error(file_id):
+    refused = FileAssessment(refused=True, reason=FileReason.TITLE_COUNT, measured_value=2, limit_value=1)
+    with SessionLocal.begin() as db:
+        store_assessment(db, **_key(file_id), assessment=refused)
+        db.query(DocumentFileAssessment).filter_by(provider_file_id=file_id).update(
+            {"reason_code": FileReason.PROVIDER_NOT_CONVERTED.value}
+        )
+    with SessionLocal() as db, pytest.raises(FileReasonGroupError):
+        stored_assessment(db, **_key(file_id))
