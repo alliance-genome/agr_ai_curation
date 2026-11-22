@@ -136,6 +136,10 @@ Timeout, polling, retry, and stale recovery are defined in
 - do not persist or return bearer credentials;
 - use `wait=false` in production import flows;
 - keep polling bounded by `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS`;
+- poll at `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS` and never send the request
+  again after a final answer (`converted`, `failed`, `no_sources`): after
+  ABC's one-hour hold on a failed job, or at once after an inline Office
+  failure, the same request starts a new conversion;
 - stop local work on cancellation when observed;
 - do not attempt to cancel ABC conversion, because ABC exposes no cancellation
   contract for this endpoint.

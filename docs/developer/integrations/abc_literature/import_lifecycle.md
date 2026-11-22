@@ -164,10 +164,18 @@ main-paper imports do not pass a limit; file listing and supplement import
 
 Configured knobs:
 
-- `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS`: provider-conversion poll interval.
+- `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS`: provider-conversion poll interval
+  (default 30 seconds). Every poll re-sends ABC's conversion request, which
+  answers with the current state; ABC recycles a worker, restarting its running
+  conversion, after about 1,000 requests, so the interval bounds how many
+  requests one wait sends (at most 121 in an hour at 30 seconds).
 - `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS`: deadline for one provider
-  conversion/import job (default 600 seconds), including downloads, hierarchy
-  and figure classification, and vector storage.
+  conversion/import job of a main paper (default 3,600 seconds), covering the
+  wait for ABC's conversion and then downloads, hierarchy and figure
+  classification, and vector storage. ABC needs about 5 minutes to start its
+  extraction machine and allows itself 30 minutes per file; a median main
+  conversion from a cold machine takes about 12 minutes. KANBAN-1976 /
+  ALL-1460 (P7w) raised it from 600 seconds, which failed such imports.
 - `DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS`: individual provider HTTP timeout.
 - `DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES`: largest converted text, in
   downloaded bytes, read for one provider file (default 1,000,000).
@@ -183,9 +191,16 @@ failed. The job remains active while writes drain, so the normal active-job guar
 continue to block deletion and re-embedding. This drain can extend elapsed time past
 the configured deadline; it does not convert a timeout into a successful import.
 
-Existing deployment overrides remain authoritative: a deployment explicitly set to
-300 seconds must update its environment to use the proposed 600-second budget.
-Longer deadlines also delay subsequent papers in sequential import batches.
+Existing deployment overrides remain authoritative: a deployment whose `.env`
+still sets `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=600` or
+`DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=2` (both were written uncommented in
+`.env.example` before KANBAN-1976) keeps the old values until the release
+changes them. Longer deadlines also delay subsequent papers in sequential
+import batches: one request's identifiers run one after another.
+
+While a main paper waits, it stays in progress in the Library and cannot be
+deleted, imported again or given files (one active job per paper); the jobs
+panel shows ABC's progress messages, refreshed at each poll.
 
 Retry policy:
 
@@ -207,11 +222,26 @@ Stale-job recovery:
 - Active stale jobs are reconciled by the existing PDF job service.
 - Stale `cancel_requested` becomes `cancelled`.
 - Other stale active jobs become `failed` with a stale-inactivity message.
+- Every `update_progress` call records activity (`updated_at`), even when the
+  provider's answer is unchanged, so a living wait polls itself fresh and is
+  never stale.
+- A backend restart or deploy ends a wait (the in-process task dies); the job
+  stays active until the curator cancels it or the stale sweep fails it. The
+  wait is not resumed.
 
 ## Cancellation
 
 Cancellation is local to AI Curation. It stops local polling/download/ingestion
-when observed and marks the local job cancelled.
+when observed (at the next poll, at most one poll interval later) and marks the
+local job cancelled.
+
+A job in a polling stage (`provider_conversion`, `waiting_for_supplements`)
+whose last recorded activity is older than three times the poll interval plus
+the provider request timeout (120 seconds at the defaults) has no task polling
+it, typically after a backend restart. Cancelling it finalizes it at once: the
+job becomes `cancelled`, its paper is reconciled as after any cancelled import
+(a new paper becomes failed and can be deleted or imported again; a paper that
+was already usable stays usable). Jobs in other stages only get the cancel flag.
 
 AI Curation does not attempt to cancel ABC Literature conversion work. Even when
 AI Curation initiated `conversion_request`, the ABC endpoint does not provide a
