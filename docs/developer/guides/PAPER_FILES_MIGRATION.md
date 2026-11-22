@@ -77,9 +77,12 @@ Evidence opens its own file first (`EvidenceNavigationCommand.fileId`):
   opens;
 - a PDF file: today's quote search, against that file's own pages only. Evidence
   without a page never falls back to a page;
-- a text file: the quote is located by exact copied text in the file's display
-  blocks (a table-row quote equals the row's stored line); pdf.js and the fuzzy
-  matcher are never called.
+- a text file: the quote is located by exact copied text in the blocks' texts
+  joined by a blank line, exactly as the server serves them (every stored piece
+  is an exact slice of that joined text, so a quote may cross blocks); nothing is
+  normalised in the browser, and pdf.js and the fuzzy matcher are never called.
+- evidence the viewer cannot show changes nothing but its banner (an alert that
+  can be closed): no tab switch, no scroll, the current highlight stays.
 
 ## A paper without a main file
 

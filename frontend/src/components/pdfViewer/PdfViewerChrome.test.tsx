@@ -31,6 +31,7 @@ const renderChrome = (overrides: Partial<Parameters<typeof PdfViewerChrome>[0]> 
     onSelectFile: vi.fn(),
     textNavigation: null,
     onTextNavigationResult: vi.fn(),
+    onDismissNavigationResult: vi.fn(),
     status: 'idle',
     error: null,
     retryKey: 0,

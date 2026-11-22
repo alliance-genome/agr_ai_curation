@@ -56,6 +56,18 @@ describe('parseViewerFilesPayload', () => {
     expect(() => parseViewerFile(pdfFile)).toThrow(ViewerFilesContractError)
   })
 
+  it('accepts a PDF file still being added with no page count (the payload hides the placeholder)', () => {
+    const pendingPdf = { ...FOUR_FILES_PAYLOAD.files[2], status: 'pending', page_count: null, content_url: null }
+
+    expect(parseViewerFile(pendingPdf).page_count).toBeNull()
+  })
+
+  it('rejects a page count on a PDF file that is not ready', () => {
+    const pendingPdf = { ...FOUR_FILES_PAYLOAD.files[2], status: 'pending', content_url: null }
+
+    expect(() => parseViewerFile(pendingPdf)).toThrow(ViewerFilesContractError)
+  })
+
   it('rejects a payload whose files are out of tab order', () => {
     const shuffled = {
       ...FOUR_FILES_PAYLOAD,

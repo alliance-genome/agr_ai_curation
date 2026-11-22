@@ -45,6 +45,8 @@ interface PdfViewerChromeProps {
   onSelectFile: (fileId: string) => void
   textNavigation: TextNavigationRequest | null
   onTextNavigationResult: (request: TextNavigationRequest, result: PdfViewerNavigationResult) => void
+  /** Closes the navigation banner (the result chips and message go with it). */
+  onDismissNavigationResult: () => void
   status: ViewerStatus
   error: string | null
   retryKey: number
@@ -86,6 +88,7 @@ export function PdfViewerChrome({
   onSelectFile,
   textNavigation,
   onTextNavigationResult,
+  onDismissNavigationResult,
   status,
   error,
   retryKey,
@@ -497,7 +500,11 @@ export function PdfViewerChrome({
               zIndex: 3,
             }}
           >
-            <Alert severity={getNavigationBannerSeverity(navigationResult)} variant="filled">
+            <Alert
+              severity={getNavigationBannerSeverity(navigationResult)}
+              variant="filled"
+              onClose={onDismissNavigationResult}
+            >
               {navigationBannerMessage}
             </Alert>
           </Box>

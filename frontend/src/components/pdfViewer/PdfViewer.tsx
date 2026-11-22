@@ -1491,10 +1491,11 @@ export function PdfViewer({
 
     const usesEventNavigation =
       pendingNavigation === null && eventPendingNavigation === effectivePendingNavigation
+    // Evidence the viewer cannot show changes nothing on screen but the banner:
+    // no tab switch, no scroll, and the current highlight stays.
     const finishWithoutSearch = (result: PdfViewerNavigationResult | null) => {
       handledNavigationKeyRef.current = navigationKey
       if (result) {
-        setEvidenceHighlight(null)
         commitNavigationResult(result)
       }
       if (usesEventNavigation) {
@@ -2106,6 +2107,10 @@ export function PdfViewer({
     dispatchPdfSearch(viewerUiState.searchQuery, { type: 'again', findPrevious: true })
   }, [dispatchPdfSearch, viewerUiState.searchQuery])
 
+  const handleDismissNavigationResult = useCallback(() => {
+    commitNavigationResult(null)
+  }, [commitNavigationResult])
+
   const navigationBannerMessage = navigationResult
     ? getNavigationBannerMessage(navigationResult, evidenceHighlight)
     : null
@@ -2118,6 +2123,7 @@ export function PdfViewer({
       onSelectFile={handleSelectFile}
       textNavigation={textNavigation}
       onTextNavigationResult={handleTextNavigationResult}
+      onDismissNavigationResult={handleDismissNavigationResult}
       status={status}
       error={error}
       retryKey={retryKey}

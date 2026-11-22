@@ -260,6 +260,34 @@ describe('PdfViewer with a paper\'s files', () => {
       expect(screen.getByRole('tab', { name: 'made-up-paper.pdf, file 1 of 3' })).toHaveAttribute('aria-selected', 'true')
     })
 
+    it('the Q4 banner is announced, can be closed, and changes nothing else in the viewer', async () => {
+      stubViewerFetch()
+      await showFourFilePaper()
+      fireEvent.click(screen.getByRole('tab', { name: 'Table_S1.xlsx, file 2 of 3, converted text' }))
+      act(() => {
+        dispatchPDFViewerNavigateEvidence(chatCommand({
+          verified_quote: '| XS0401 | 25 C |',
+          file_id: TEXT_SUPPLEMENT_FILE_ID,
+          file_name: 'Table_S1.xlsx',
+        }))
+      })
+      await screen.findByRole('row', { current: true })
+      const scrolls = vi.mocked(Element.prototype.scrollIntoView).mock.calls.length
+
+      act(() => { dispatchPDFViewerNavigateEvidence(chatCommand({})) })
+
+      const banner = await screen.findByRole('alert')
+      expect(banner).toHaveTextContent('This evidence was saved before files were recorded')
+      // No tab switch, no scroll, and the earlier highlight stays.
+      expect(screen.getByRole('tab', { name: 'Table_S1.xlsx, file 2 of 3, converted text' })).toHaveAttribute('aria-selected', 'true')
+      expect(vi.mocked(Element.prototype.scrollIntoView).mock.calls.length).toBe(scrolls)
+      expect(screen.getByRole('row', { current: true })).toBeInTheDocument()
+
+      fireEvent.click(within(banner).getByRole('button', { name: 'Close' }))
+      await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+      expect(screen.queryByText('This evidence was saved before files were recorded')).not.toBeInTheDocument()
+    })
+
     it('evidence whose file is no longer part of the paper says so and opens nothing', async () => {
       stubViewerFetch()
       await showFourFilePaper()

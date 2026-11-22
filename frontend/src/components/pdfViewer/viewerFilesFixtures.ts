@@ -96,7 +96,7 @@ export const TEXT_SUPPLEMENT_BLOCKS: ViewerTextPayload = {
     { kind: 'heading', text: 'Sheet 1', level: 1, section_path: ['Sheet 1'], rows: null },
     {
       kind: 'table',
-      text: null,
+      text: '| Strain | Temp |\n|---|---|\n| XS0401 | 25 C |',
       level: null,
       section_path: ['Sheet 1'],
       rows: [

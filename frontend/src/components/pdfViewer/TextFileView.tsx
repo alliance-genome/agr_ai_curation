@@ -1,6 +1,5 @@
-import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Alert, Box, Button, CircularProgress, Stack, Typography } from '@mui/material'
-import { alpha, useTheme } from '@mui/material/styles'
 
 import type { PdfViewerNavigationResult } from './pdfEvidenceNavigation'
 import {
@@ -11,6 +10,7 @@ import {
   type TextQuoteLocation,
 } from './viewerFileNavigation'
 import { fetchViewerText, type DisplayBlock, type ViewerFile } from './viewerFiles'
+import { TextFileBlocks } from './TextFileBlocks'
 
 export const VIEWER_FILE_PANEL_ID = 'viewer-file-panel'
 
@@ -45,7 +45,6 @@ function prefersReducedMotion(): boolean {
  * copied text only (see viewerFileNavigation.ts).
  */
 export function TextFileView({ documentId, file, navigation, onNavigationResult }: TextFileViewProps) {
-  const theme = useTheme()
   const [loadState, setLoadState] = useState<TextLoadState>({ kind: 'loading' })
   const [reloadKey, setReloadKey] = useState(0)
   const [highlight, setHighlight] = useState<TextQuoteLocation | null>(null)
@@ -83,11 +82,7 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
       return
     }
     reportedRequestIdRef.current = navigation.requestId
-    const location = locateQuoteInBlocks(
-      loadState.blocks,
-      commandQuote(navigation.command),
-      navigation.command.sectionTitle,
-    )
+    const location = locateQuoteInBlocks(loadState.blocks, commandQuote(navigation.command))
     setHighlight(location)
     onNavigationResult(navigation, buildTextNavigationResult(navigation, documentId, location))
   }, [documentId, file.file_id, loadState, navigation, onNavigationResult])
@@ -104,11 +99,6 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
   const setHighlightedElement = useCallback((element: HTMLElement | null) => {
     highlightedRef.current = element
   }, [])
-
-  const highlightSx = {
-    backgroundColor: alpha(theme.palette.success.main, 0.22),
-    outline: `2px solid ${alpha(theme.palette.success.main, 0.9)}`,
-  }
 
   let content: ReactNode
   if (loadState.kind === 'loading') {
@@ -133,7 +123,13 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
       </Alert>
     )
   } else {
-    content = renderBlocks(loadState.blocks, highlight, setHighlightedElement, highlightSx)
+    content = (
+      <TextFileBlocks
+        blocks={loadState.blocks}
+        location={highlight}
+        firstHighlightRef={setHighlightedElement}
+      />
+    )
   }
 
   return (
@@ -158,83 +154,4 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
       {content}
     </Box>
   )
-}
-
-type HighlightSx = Record<string, string>
-
-function renderBlocks(
-  blocks: DisplayBlock[],
-  highlight: TextQuoteLocation | null,
-  setHighlightedElement: (element: HTMLElement | null) => void,
-  highlightSx: HighlightSx,
-): ReactNode {
-  const nodes: ReactNode[] = []
-  let listItems: ReactNode[] = []
-  const flushList = (key: string) => {
-    if (listItems.length > 0) {
-      nodes.push(<ul key={key}>{listItems}</ul>)
-      listItems = []
-    }
-  }
-
-  blocks.forEach((block, blockIndex) => {
-    const isHighlightedBlock = highlight?.blockIndex === blockIndex && highlight.rowIndex === null
-    const highlightProps = isHighlightedBlock
-      ? { ref: setHighlightedElement, 'aria-current': true as const, sx: highlightSx }
-      : {}
-    if (block.kind === 'list_item') {
-      listItems.push(
-        <Box component="li" key={blockIndex} {...highlightProps}>{block.text}</Box>,
-      )
-      return
-    }
-    flushList(`list-${blockIndex}`)
-    switch (block.kind) {
-      case 'heading': {
-        const level = Math.min((block.level ?? 1) + 2, 6)
-        nodes.push(
-          <Typography key={blockIndex} component={`h${level}` as 'h3'} variant="subtitle1" sx={{ fontWeight: 700, mt: 1.5, ...(isHighlightedBlock ? highlightSx : {}) }} ref={isHighlightedBlock ? setHighlightedElement : undefined} aria-current={isHighlightedBlock ? true : undefined}>
-            {block.text}
-          </Typography>,
-        )
-        break
-      }
-      case 'paragraph':
-        nodes.push(<Box component="p" key={blockIndex} {...highlightProps}>{block.text}</Box>)
-        break
-      case 'code':
-        nodes.push(
-          <Box component="pre" key={blockIndex} {...highlightProps}><code>{block.text}</code></Box>,
-        )
-        break
-      case 'table':
-        nodes.push(
-          <table key={blockIndex}>
-            <tbody>
-              {(block.rows ?? []).map((row, rowIndex) => {
-                const isHighlightedRow = highlight?.blockIndex === blockIndex && highlight.rowIndex === rowIndex
-                return (
-                  <Box
-                    component="tr"
-                    key={rowIndex}
-                    ref={isHighlightedRow ? setHighlightedElement : undefined}
-                    aria-current={isHighlightedRow ? true : undefined}
-                    sx={isHighlightedRow ? highlightSx : undefined}
-                  >
-                    {row.cells.map((cell, cellIndex) => (
-                      <Fragment key={cellIndex}>
-                        {row.is_header ? <th scope="col">{cell}</th> : <td>{cell}</td>}
-                      </Fragment>
-                    ))}
-                  </Box>
-                )
-              })}
-            </tbody>
-          </table>,
-        )
-        break
-    }
-  })
-  flushList('list-end')
-  return nodes
 }

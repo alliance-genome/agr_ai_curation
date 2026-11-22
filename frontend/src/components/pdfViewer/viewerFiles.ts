@@ -18,7 +18,7 @@ export interface ViewerFile {
   display_mode: ViewerFileDisplayMode
   status: ViewerFileStatus
   tab_order: number
-  /** Pages of a PDF file; null for a text file. */
+  /** Pages of a ready PDF file; null for a text file or a file that is not ready. */
   page_count: number | null
   /** The file's PDF bytes; only for a ready PDF file. */
   content_url: string | null
@@ -42,8 +42,12 @@ export interface DisplayTableRow {
 
 export interface DisplayBlock {
   kind: DisplayBlockKind
-  /** The block's exact text; null for a table. */
-  text: string | null
+  /**
+   * The element's text as stored before cutting into pieces; for a table, its lines
+   * (separator line included) joined by line breaks. Every stored piece is an exact
+   * slice of the blocks' texts joined by a blank line ("\n\n").
+   */
+  text: string
   level: number | null
   section_path: string[]
   rows: DisplayTableRow[] | null
@@ -137,8 +141,9 @@ export function parseViewerFile(value: unknown): ViewerFile {
   }
 
   const pdf = isPdfFile(file)
-  if (pdf ? file.page_count === null : file.page_count !== null) {
-    throw new ViewerFilesContractError('A PDF file must have a page count and a text file must not')
+  const readyPdf = pdf && file.status === 'ready'
+  if (readyPdf ? file.page_count === null : file.page_count !== null) {
+    throw new ViewerFilesContractError('Only a ready PDF file has a page count, and it always has one')
   }
   if (file.content_url !== null && (!pdf || file.status !== 'ready')) {
     throw new ViewerFilesContractError('Only a ready PDF file has a content URL')
@@ -224,14 +229,17 @@ function parseDisplayBlock(value: unknown): DisplayBlock {
   if (level !== null && (typeof level !== 'number' || !Number.isInteger(level) || level < 1)) {
     throw new ViewerFilesContractError('A display block\'s level must be a whole number of 1 or more, or null')
   }
-  if (kind === 'table') {
-    if (value.text !== null || !Array.isArray(value.rows)) {
-      throw new ViewerFilesContractError('A table block has rows and no text')
-    }
-    return { kind, text: null, level, section_path: sectionPath as string[], rows: value.rows.map(parseDisplayTableRow) }
+  if (typeof value.text !== 'string') {
+    throw new ViewerFilesContractError('A display block must have its text')
   }
-  if (typeof value.text !== 'string' || value.rows !== null) {
-    throw new ViewerFilesContractError('A text block has text and no rows')
+  if (kind === 'table') {
+    if (!Array.isArray(value.rows)) {
+      throw new ViewerFilesContractError('A table block has rows')
+    }
+    return { kind, text: value.text, level, section_path: sectionPath as string[], rows: value.rows.map(parseDisplayTableRow) }
+  }
+  if (value.rows !== null) {
+    throw new ViewerFilesContractError('Only a table block has rows')
   }
   if ((kind === 'heading') !== (level !== null)) {
     throw new ViewerFilesContractError('Only a heading has a level')

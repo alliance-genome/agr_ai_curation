@@ -8,9 +8,10 @@
  * - otherwise the file's tab is shown and the quote is located inside that file only.
  *
  * Locating a quote in a text file is exact copied-text matching (AGENTS.md section 8
- * allows it for highlighting): the display blocks hold the text exactly as it was cut
- * into pieces, so a prose quote is an exact substring of a block and a table-row quote
- * equals a row's stored line. No normalisation, no splitting, no similarity.
+ * allows it for highlighting): every stored piece is an exact slice of the display
+ * blocks' texts joined by a blank line (P9a's guarantee), so a quote, which is an
+ * exact slice of a piece, is found by plain substring search over that joined text.
+ * No normalisation, no splitting, no similarity.
  */
 import type { EvidenceNavigationCommand } from '@/features/curation/evidence'
 import type { PdfViewerNavigationResult } from './pdfEvidenceNavigation'
@@ -90,54 +91,83 @@ export function buildEvidenceFileResult(
   }
 }
 
-export interface TextQuoteLocation {
+/** One block the located quote covers, and for a table the rows it covers. */
+export interface TextQuoteBlockSpan {
   blockIndex: number
-  /** The table row, for a table block; null for prose. */
-  rowIndex: number | null
-  /** More than one place held the quote; the first in the evidence's section (or in reading order) was chosen. */
+  /** Indexes of the table rows the quote covers; null for a block that is not a table. */
+  rowIndexes: number[] | null
+}
+
+export interface TextQuoteLocation {
+  /** The quote's place in the blocks' texts joined by a blank line. */
+  start: number
+  end: number
+  /** The blocks (and table rows) the quote covers, in reading order. */
+  blocks: TextQuoteBlockSpan[]
+  /** The quote appears more than once; the first place in reading order is shown. */
   chosenAmongSeveral: boolean
 }
 
+/** The separator the server's guarantee uses: every stored piece is an exact slice of the joined texts. */
+export const TEXT_BLOCK_SEPARATOR = '\n\n'
+
+/** Where each row line of a table block sits inside the block's text (its lines joined by "\n"). */
+function tableRowOffsets(block: DisplayBlock): Array<{ start: number; end: number }> {
+  const offsets: Array<{ start: number; end: number }> = []
+  let cursor = 0
+  for (const row of block.rows ?? []) {
+    const start = block.text.indexOf(row.line, cursor)
+    if (start < 0) {
+      throw new Error('A table row line is not part of its table block\'s text')
+    }
+    offsets.push({ start, end: start + row.line.length })
+    cursor = start + row.line.length
+  }
+  return offsets
+}
+
 /**
- * Where a quote sits in a text file's blocks, by exact copied text, or null.
+ * Where a quote sits in a text file's blocks, or null.
  *
- * Several matches: the first whose section path contains the evidence's section
- * name exactly, otherwise the first in reading order.
+ * Exact comparison against the text exactly as the server serves it (the text the
+ * pieces were cut from, already cleaned up on the server); nothing is normalised in
+ * the browser. A quote can cross blocks, so the blocks' texts are searched joined by
+ * a blank line. Several places: the first in reading order (the blocks' section
+ * paths are not yet the sections evidence names, so they are not used).
  */
 export function locateQuoteInBlocks(
   blocks: readonly DisplayBlock[],
   quote: string,
-  sectionTitle: string | null,
 ): TextQuoteLocation | null {
   if (!quote) {
     return null
   }
-  const matches: Array<{ blockIndex: number; rowIndex: number | null; sectionPath: string[] }> = []
-  blocks.forEach((block, blockIndex) => {
-    if (block.kind === 'table') {
-      block.rows?.forEach((row, rowIndex) => {
-        if (row.line === quote) {
-          matches.push({ blockIndex, rowIndex, sectionPath: block.section_path })
-        }
-      })
-      return
-    }
-    if (block.text !== null && block.text.includes(quote)) {
-      matches.push({ blockIndex, rowIndex: null, sectionPath: block.section_path })
-    }
-  })
-  if (matches.length === 0) {
+  const joined = blocks.map((block) => block.text).join(TEXT_BLOCK_SEPARATOR)
+  const start = joined.indexOf(quote)
+  if (start < 0) {
     return null
   }
-  const inSection = sectionTitle === null
-    ? undefined
-    : matches.find((match) => match.sectionPath.includes(sectionTitle))
-  const chosen = inSection ?? matches[0]!
-  return {
-    blockIndex: chosen.blockIndex,
-    rowIndex: chosen.rowIndex,
-    chosenAmongSeveral: matches.length > 1,
-  }
+  const end = start + quote.length
+  const chosenAmongSeveral = joined.indexOf(quote, start + 1) >= 0
+
+  const spans: TextQuoteBlockSpan[] = []
+  let blockStart = 0
+  blocks.forEach((block, blockIndex) => {
+    const blockEnd = blockStart + block.text.length
+    if (start < blockEnd && end > blockStart) {
+      if (block.kind === 'table') {
+        const rowIndexes = tableRowOffsets(block)
+          .map((offset, rowIndex) => ({ rowIndex, start: blockStart + offset.start, end: blockStart + offset.end }))
+          .filter((row) => start < row.end && end > row.start)
+          .map((row) => row.rowIndex)
+        spans.push({ blockIndex, rowIndexes })
+      } else {
+        spans.push({ blockIndex, rowIndexes: null })
+      }
+    }
+    blockStart = blockEnd + TEXT_BLOCK_SEPARATOR.length
+  })
+  return { start, end, blocks: spans, chosenAmongSeveral }
 }
 
 /** The navigation result for a text file, after locating the quote in its blocks. */
@@ -170,7 +200,7 @@ export function buildTextNavigationResult(
     currentMatch: 1,
     attemptedQueries: [base.quote],
     note: location.chosenAmongSeveral
-      ? 'The quote appears more than once in this text file; the first place in the evidence\'s section (or in reading order) is highlighted.'
+      ? 'The quote appears more than once in this text file; the first place in reading order is highlighted.'
       : 'The quote was found exactly in this text file.',
   }
 }
