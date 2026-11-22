@@ -8,7 +8,7 @@ capabilities:
   - name: "DOID lookup"
     description: "Retrieve disease information by DOID identifier"
     example_query: "What is DOID:14330?"
-    example_result: "Returns Parkinson's disease with definition and relationships"
+    example_result: "Returns Parkinson's disease with its definition and synonyms"
   - name: "Synonym search"
     description: "Find diseases by synonym names when the exact term is not found"
     example_query: "Look up Alzheimers dementia"
@@ -18,11 +18,9 @@ data_sources:
     description: "The Alliance's curated copy of the Disease Ontology — official disease names, their IDs, definitions, and synonyms."
     species_supported: null
     data_types: ["disease terms", "DOIDs", "definitions", "synonyms"]
-note: "The disease term itself is confirmed automatically by the ontology term check in the disease pack. This agent runs only as a domain-pack validation attachment; clone it in the Agent Workshop when you want a custom disease check with a changed prompt or different tools."
+note: "The disease term itself is confirmed automatically by the ontology term check in the disease pack. No domain pack attaches this agent and AI Chat cannot call it; clone it in the Agent Workshop when you want a custom disease lookup with a changed prompt or different tools."
 use_when:
-  - "After any extractor that names a disease, on papers that assert a gene, allele, or model to disease link."
-  - "When you have a disease name, synonym, or DOID and want the official term and its definition."
-  - "Before curation handoff, so disease IDs are settled."
+  - "When you want a custom agent, cloned from this one, that looks up a disease name, synonym, or DOID and returns the official term and its definition."
 avoid_when:
   - "For gene to disease associations; use the Gene Validation Agent."
   - "For parent or child disease terms and obsolete history; use the Ontology Term Resolver Agent."

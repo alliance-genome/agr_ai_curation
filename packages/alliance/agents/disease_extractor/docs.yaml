@@ -14,9 +14,9 @@ capabilities:
     example_query: "What gene-disease relationships are reported?"
     example_result: "Returns association types with evidence (e.g., LRRK2 is_implicated_in Parkinson's disease)"
   - name: "Hands diseases to the validator"
-    description: "Retains paper wording, the subject kind, relation, provider and supporting quote. Active specialist validators check their assigned fields: the Disease Validation Agent confirms the disease term, and subject validation routes separately to the gene, allele or affected-genomic-model validator. Unresolved checks remain visible for review."
+    description: "Retains paper wording, the subject kind, relation, provider and supporting quote. Active specialist validators check their assigned fields: the Ontology Term Resolver Agent confirms the disease term and the evidence codes, and subject validation routes separately to the gene, allele or affected-genomic-model validator. Unresolved checks remain visible for review."
     example_query: "Extract the diseases and pass them on for confirmation"
-    example_result: "Returns each proposed disease, its relationship, provider, and subject, with the supporting quote, ready for the Disease Validation Agent to confirm"
+    example_result: "Returns each proposed disease, its relationship, provider, and subject, with the supporting quote, ready for the Ontology Term Resolver Agent to confirm the disease term"
 data_sources:
   - name: "PDF Document Search (Weaviate)"
     description: "Hybrid semantic/keyword plus lexical-heavy search modes over uploaded PDF documents"

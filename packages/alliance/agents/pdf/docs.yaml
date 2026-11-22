@@ -27,6 +27,5 @@ avoid_when:
   - "To confirm any identifier against a database; use a validation agent."
   - "For content inside figures beyond their captions."
 limitations:
-  - "Document must be loaded in Weaviate before use"
-  - "Very large tables may be truncated"
+  - "A paper must be loaded and processed before this agent can read it"
   - "Figure analysis is limited to captions only"

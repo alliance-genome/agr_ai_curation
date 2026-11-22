@@ -54,7 +54,7 @@ avoid_when:
   - "To get ontology terms validated; the domain pack already runs this check automatically on every term an extractor supplies."
   - "For gene symbols; use the Gene Validation Agent."
   - "For chemicals; use the Chemical Ontology Agent."
-  - "For fixed pick-list values such as evidence codes; use the Controlled Vocabulary Validation Agent."
+  - "For fixed pick-list values such as relations or qualifiers; use the Controlled Vocabulary Validation Agent."
   - "To pull terms out of a paper; that is an extractor's job."
 limitations:
   - "Cannot create new ontology terms; only resolves existing terms."

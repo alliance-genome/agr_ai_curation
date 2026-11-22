@@ -122,7 +122,7 @@ must not be used to infer a custom agent's pinned settings.
 
 For stale selected-field export layouts, both validation and AI guidance name the
 actual **Choose output fields** button on the file output step, followed by confirming
-fields and saving the flow. Other422 causes still require their own validation evidence.
+fields and saving the flow. Other 422 causes still require their own validation evidence.
 
 ### Run inspection and notification confirmations (0.9.8)
 

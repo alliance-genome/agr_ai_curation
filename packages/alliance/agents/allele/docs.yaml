@@ -25,7 +25,7 @@ data_sources:
 note: "Validation runs automatically. This check runs on every allele an extractor produces, including the allele a disease record is about, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools."
 use_when:
   - "When you want a custom allele check: a changed prompt, different tools, or a stricter or looser match than the automatic check."
-  - "When you have an allele symbol or ID and want to confirm it exists and see the gene it belongs to."
+  - "When you want a custom check, cloned from this one, that confirms an allele symbol or ID exists and shows the gene it belongs to."
   - "When you want to review how alleles in extracted records are confirmed against Alliance records."
 avoid_when:
   - "To get alleles validated in a flow; the domain pack already runs this check automatically on every allele an extractor produces."

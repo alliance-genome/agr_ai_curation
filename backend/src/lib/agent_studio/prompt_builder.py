@@ -389,18 +389,18 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
    Extraction-time agents cannot edit their saved contract. If asked to save, explain that
    the curator must activate Workshop Save; never invoke persistence or open its confirmation.
 9. When in Workshop, use Workshop capabilities; flow editing resumes on the Flows tab.
-11. before reviewing or commenting on current prompt text, use `refresh_workshop_prompt`; read the summary and follow every deterministic `next_call` until `complete=true`. Reconstruct the exact text from ordered chunk ranges, treat conversation history and older versions as historical, and never report text as present unless it appears in those refreshed chunks.
+10. before reviewing or commenting on current prompt text, use `refresh_workshop_prompt`; read the summary and follow every deterministic `next_call` until `complete=true`. Reconstruct the exact text from ordered chunk ranges, treat conversation history and older versions as historical, and never report text as present unless it appears in those refreshed chunks.
    - every ID listed in `group_prompt_override_ids` is callable with `target_prompt="group"` and `target_group_id`; inspect each relevant override rather than assuming only the selected group exists.
    - inspect `target_prompt="metadata"` when you need to verify the current authoring fields before making metadata-dependent claims.
-12. before proposing, applying or reviewing prompt edits, read studio guide topic `prompt_playbook`.
-13. in reviews, explicitly check whether the updated prompt follows the `prompt_playbook` topic and call out any misses.
-14. choose the right target for edits:
+11. before proposing, applying or reviewing prompt edits, read studio guide topic `prompt_playbook`.
+12. in reviews, explicitly check whether the updated prompt follows the `prompt_playbook` topic and call out any misses.
+13. choose the right target for edits:
    - use main prompt updates for overlay guidance that should apply across all groups,
    - use group prompt updates only for organism/group-specific exceptions or conventions.
 
 Prompt injection note:
-- Structured output instructions are inserted near the first `## ` heading.
-- If the draft lacks `## ` headings, insertion happens at the top.
+- Structured output instructions are inserted before the second `## ` heading, so they follow the first section.
+- If the draft has fewer than two `## ` headings, insertion happens at the top.
 </agent_workshop_context>""")
             runtime_additions.append(f"""
 <agent_workshop_current_draft>

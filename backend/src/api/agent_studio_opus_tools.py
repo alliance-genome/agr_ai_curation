@@ -302,7 +302,7 @@ after the curator saves manual edits or asks whether a typo, schema issue, or
 prompt-quality concern is fixed. Treat older chat history and version snapshots
 as historical after this tool returns. Omit start for a content-free identity,
 hash, length, and freshness summary. Then follow next_call with its prompt_hash,
-start, and max_chars until complete=true to reconstruct the exact prompt. Pair
+start, and max_chars until complete=true to reconstruct the exact prompt.
 Use target_prompt="metadata" to inspect exact current authoring fields. Pair this
 with get_tool_inventory and get_tool_details before advising on
 document/evidence tool instructions.
