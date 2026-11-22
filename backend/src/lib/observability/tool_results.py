@@ -52,7 +52,7 @@ def classify_tool_result(output: Any, *, studio: bool = False) -> ToolOutcome:
     if (
         (
             (value.get("status") == "needs_source_read"
-             and value.get("error_code") == "unissued_document_selection")
+             and value.get("error_code") in ("unissued_document_selection", "unreadable_document_selection"))
             or (value.get("status") == "invalid_arguments"
                 and value.get("error_code") == "invalid_tool_arguments")
         )

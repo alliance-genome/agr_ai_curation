@@ -85,7 +85,8 @@ Mixed issued/unissued selections cannot alter an existing evidence record.
 A selection whose `chunk_index` is not part of a readable file now (its file was
 removed or is no longer ready since it was read) returns `status:
 needs_source_read`, `error_code: unreadable_document_selection`, `saved: false`,
-the selection, and the readable ranges. Nothing is looked up or saved.
+the selection, and the readable ranges. Nothing is looked up or saved. Like an
+unissued selection, it is unsuccessful in tool telemetry without a Sentry event.
 
 This is a source-read precondition, not evidence that retrieval failed. The
 rejection remains unsuccessful in tool telemetry without generating a new Sentry
