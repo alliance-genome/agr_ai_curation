@@ -7,6 +7,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -170,11 +171,17 @@ class DeterministicEvidenceAnchorResolver:
     def __init__(
         self,
         *,
+        source_file_id: UUID,
+        chunk_index_range: tuple[int, int],
         session_factory: SessionFactory = SessionLocal,
         user_id_resolver: UserIdResolver | None = None,
         chunk_loader: ChunkLoader | None = None,
         resolve_against_document: bool = False,
     ) -> None:
+        # The evidence's own file: only its pieces (chunk_index_range, inclusive)
+        # are searched, and every resolved record names it.
+        self._source_file_id = source_file_id
+        self._chunk_index_range = chunk_index_range
         self._session_factory = session_factory
         self._user_id_resolver = user_id_resolver or self._resolve_user_id
         self._chunk_loader = chunk_loader or _default_chunk_loader
@@ -220,6 +227,7 @@ class DeterministicEvidenceAnchorResolver:
             resolved_records.append(
                 PreparedEvidenceRecordInput(
                     source=CurationEvidenceSource.EXTRACTED,
+                    source_file_id=self._source_file_id,
                     field_keys=field_keys,
                     field_group_keys=_field_group_keys(field_keys),
                     is_primary=(
@@ -265,7 +273,13 @@ class DeterministicEvidenceAnchorResolver:
                 "Evidence resolution could not load PDFX chunks for this document."
             )
 
-        return _PreparedDocument.from_chunks(_coerce_resolution_chunks(raw_chunks)), None
+        first_index, last_index = self._chunk_index_range
+        file_chunks = [
+            raw_chunk
+            for raw_chunk in raw_chunks
+            if first_index <= _required_chunk_index(raw_chunk) <= last_index
+        ]
+        return _PreparedDocument.from_chunks(_coerce_resolution_chunks(file_chunks)), None
 
     def _resolve_evidence_record(
         self,
@@ -941,6 +955,15 @@ def _canonicalize_character(value: str) -> str | None:
     if value in DOUBLE_QUOTE_CHARACTERS:
         return '"'
     return value
+
+
+def _required_chunk_index(raw_chunk: Mapping[str, Any]) -> int:
+    """The piece number every stored piece has; a piece without one is a named error."""
+
+    chunk_index = raw_chunk.get("chunk_index")
+    if not isinstance(chunk_index, int) or isinstance(chunk_index, bool):
+        raise ValueError(f"Resolution chunk {raw_chunk.get('id')!r} has no chunk_index")
+    return chunk_index
 
 
 def _coerce_resolution_chunks(raw_chunks: Sequence[Mapping[str, Any]]) -> list[_ResolutionChunk]:

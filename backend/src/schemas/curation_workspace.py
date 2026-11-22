@@ -2478,6 +2478,12 @@ class CurationEvidenceResolveRequest(CurationWorkspaceBaseModel):
     anchor: EvidenceAnchor = Field(
         description="Anchor payload to resolve or enrich against workspace context",
     )
+    file_id: str = Field(
+        description=(
+            "The paper file to resolve the evidence in (pdf_document_files id); "
+            "only that file's text is searched"
+        ),
+    )
     replace_existing: bool = Field(
         default=False,
         description="Whether matching existing evidence should be replaced",
@@ -2505,6 +2511,9 @@ class CurationManualEvidenceCreateRequest(CurationWorkspaceBaseModel):
         description="Field-group identifiers linked to the manual evidence",
     )
     anchor: EvidenceAnchor = Field(description="Manual evidence anchor payload")
+    file_id: str = Field(
+        description="The paper file this evidence quotes (pdf_document_files id)",
+    )
     is_primary: bool = Field(default=False)
 
 
@@ -2532,11 +2541,27 @@ class CurationEvidenceRecomputeRequest(CurationWorkspaceBaseModel):
     )
 
 
+class CurationEvidenceNotRecomputed(CurationWorkspaceBaseModel):
+    """One evidence anchor that recompute left unchanged, and why."""
+
+    anchor_id: str = Field(description="Evidence anchor identifier")
+    code: Literal["saved_before_files_were_recorded"] = Field(
+        description=(
+            "Why it was left unchanged: saved_before_files_were_recorded means the "
+            "anchor has no file, so there is no file to search"
+        ),
+    )
+
+
 class CurationEvidenceRecomputeResponse(CurationWorkspaceBaseModel):
     """Response contract for bulk evidence re-resolution."""
 
     session: CurationReviewSession = Field(description="Updated session payload")
     updated_evidence_records: list[CurationEvidenceRecord] = Field(default_factory=list)
+    not_recomputed: list[CurationEvidenceNotRecomputed] = Field(
+        default_factory=list,
+        description="Evidence anchors left unchanged, each with a code",
+    )
     action_log_entry: CurationActionLogEntry = Field(
         description="Action-log entry emitted by the recompute mutation",
     )

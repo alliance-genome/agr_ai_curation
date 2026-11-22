@@ -10,6 +10,10 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from src.lib.curation_workspace.evidence_files import (
+    file_chunk_index_range,
+    require_paper_file,
+)
 from src.lib.curation_workspace.evidence_resolver import (
     DeterministicEvidenceAnchorResolver,
 )
@@ -35,10 +39,12 @@ from src.lib.curation_workspace.session_service import (
     get_session_detail,
     normalize_uuid,
 )
+from src.models.sql.pdf_document import PDFDocumentFile
 from src.schemas.curation_prep import CurationPrepCandidate
 from src.schemas.curation_workspace import (
     CurationActionType,
     CurationActorType,
+    CurationEvidenceNotRecomputed,
     CurationEvidenceRecomputeRequest,
     CurationEvidenceRecomputeResponse,
     CurationEvidenceResolveRequest,
@@ -78,15 +84,31 @@ def recompute_evidence(
     now = datetime.now(timezone.utc)
 
     updated_rows: list[EvidenceRecordModel] = []
+    not_recomputed: list[CurationEvidenceNotRecomputed] = []
     changed_field_keys: list[str] = []
 
     for candidate in target_candidates:
         candidate_updated = False
 
         for evidence_row in list(candidate.evidence_anchors):
+            if evidence_row.source_file_id is None:
+                # Saved before files were recorded: there is no file to search, and
+                # nothing saved before 0.12.0 is changed.
+                not_recomputed.append(
+                    CurationEvidenceNotRecomputed(
+                        anchor_id=str(evidence_row.id),
+                        code="saved_before_files_were_recorded",
+                    )
+                )
+                continue
             resolved_anchor, warnings = _resolve_anchor_against_document(
                 db,
                 document_id=str(session.document_id),
+                file_row=require_paper_file(
+                    db,
+                    document_id=session.document_id,
+                    file_id=str(evidence_row.source_file_id),
+                ),
                 anchor=EvidenceAnchor.model_validate(evidence_row.anchor or {}),
                 adapter_key=candidate.adapter_key,
                 field_path=(evidence_row.field_keys or [None])[0],
@@ -130,6 +152,7 @@ def recompute_evidence(
         action_metadata={
             "candidate_ids": [str(candidate.id) for candidate in target_candidates],
             "updated_count": len(updated_rows),
+            "not_recomputed_count": len(not_recomputed),
             "force": request.force,
         },
     )
@@ -139,6 +162,7 @@ def recompute_evidence(
     response = CurationEvidenceRecomputeResponse(
         session=get_session_detail(db, session.id, owner_sub=current_user_id),
         updated_evidence_records=[build_evidence_record(row) for row in updated_rows],
+        not_recomputed=not_recomputed,
         action_log_entry=build_action_log_entry(action_log_row),
     )
     return response
@@ -170,6 +194,7 @@ def create_manual_evidence(
         )
 
     _ensure_field_keys_exist(candidate, field_keys)
+    file_row = require_paper_file(db, document_id=session.document_id, file_id=request.file_id)
 
     now = datetime.now(timezone.utc)
     if request.is_primary and field_keys:
@@ -182,6 +207,7 @@ def create_manual_evidence(
         field_group_keys=field_group_keys,
         is_primary=request.is_primary,
         anchor=request.anchor.model_dump(mode="json"),
+        source_file_id=file_row.id,
         warnings=[],
         created_at=now,
         updated_at=now,
@@ -257,10 +283,12 @@ def resolve_evidence(
     if field_key is not None:
         _ensure_field_keys_exist(candidate, [field_key])
 
+    file_row = require_paper_file(db, document_id=session.document_id, file_id=request.file_id)
     now = datetime.now(timezone.utc)
     resolved_anchor, warnings = _resolve_anchor_against_document(
         db,
         document_id=str(session.document_id),
+        file_row=file_row,
         anchor=request.anchor,
         adapter_key=candidate.adapter_key,
         field_path=field_key,
@@ -288,6 +316,7 @@ def resolve_evidence(
             field_group_keys=[],
             is_primary=is_primary,
             anchor=resolved_anchor.model_dump(mode="json"),
+            source_file_id=file_row.id,
             warnings=list(warnings),
             created_at=now,
             updated_at=now,
@@ -308,6 +337,7 @@ def resolve_evidence(
     else:
         evidence_row.source = CurationEvidenceSource.RECOMPUTED
         evidence_row.anchor = resolved_anchor.model_dump(mode="json")
+        evidence_row.source_file_id = file_row.id
         evidence_row.warnings = list(warnings)
         evidence_row.updated_at = now
         db.add(evidence_row)
@@ -530,6 +560,7 @@ def _resolve_anchor_against_document(
     db: Session,
     *,
     document_id: str,
+    file_row: PDFDocumentFile,
     anchor: EvidenceAnchor,
     adapter_key: str,
     field_path: str | None,
@@ -542,6 +573,8 @@ def _resolve_anchor_against_document(
             current_user_id=current_user_id,
         ),
         resolve_against_document=True,
+        chunk_index_range=file_chunk_index_range(file_row),
+        source_file_id=file_row.id,
     )
     resolved_field_path = field_path or "workspace.evidence"
     prep_candidate = CurationPrepCandidate.model_validate(

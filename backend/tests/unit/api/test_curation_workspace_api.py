@@ -890,6 +890,7 @@ async def test_post_manual_evidence_delegates_to_service(monkeypatch):
         candidate_id="candidate-1",
         field_keys=["gene.symbol"],
         anchor=_anchor(),
+        file_id="6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c",
         is_primary=True,
     )
     db = MagicMock()
@@ -929,6 +930,7 @@ async def test_post_manual_evidence_rolls_back_post_mutation_failure(monkeypatch
                 candidate_id="candidate-1",
                 field_keys=["gene.symbol"],
                 anchor=_anchor(),
+                file_id="6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c",
                 is_primary=True,
             ),
             user={"sub": "user-1"},
@@ -1486,6 +1488,7 @@ async def test_post_evidence_resolve_delegates_to_service(monkeypatch):
         candidate_id="candidate-1",
         field_key="gene.symbol",
         anchor=_anchor(),
+        file_id="6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c",
         replace_existing=True,
     )
     db = MagicMock()

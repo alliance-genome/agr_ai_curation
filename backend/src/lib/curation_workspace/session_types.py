@@ -46,6 +46,9 @@ class PreparedEvidenceRecordInput:
     """Deterministic evidence-anchor payload ready for persistence."""
 
     source: CurationEvidenceSource
+    # The paper file the evidence quotes (pdf_document_files id); every anchor
+    # written since 0.12.0 has one.
+    source_file_id: UUID
     field_keys: list[str] = field(default_factory=list)
     field_group_keys: list[str] = field(default_factory=list)
     is_primary: bool = False

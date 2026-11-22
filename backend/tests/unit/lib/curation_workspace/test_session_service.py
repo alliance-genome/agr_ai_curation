@@ -479,6 +479,7 @@ def _create_review_session(
 def _build_manual_candidate_request(
     *,
     session_id: str,
+    file_id: str | None,
     source: CurationCandidateSource = CurationCandidateSource.MANUAL,
 ) -> CurationManualCandidateCreateRequest:
     timestamp = _now()
@@ -557,6 +558,7 @@ def _build_manual_candidate_request(
                     "table_reference": None,
                     "chunk_ids": [],
                 },
+                "file_id": file_id,
                 "created_at": timestamp,
                 "updated_at": timestamp,
                 "warnings": [],
@@ -1129,7 +1131,9 @@ def test_create_manual_candidate_persists_candidate_updates_session_and_logs_act
     response = module.create_manual_candidate(
         db_session,
         str(session_row.id),
-        _build_manual_candidate_request(session_id=str(session_row.id)),
+        _build_manual_candidate_request(
+            session_id=str(session_row.id), file_id=str(document.main_file.id)
+        ),
         actor_claims={"sub": "user-1", "email": "user-1@example.org"},
     )
 
@@ -1190,7 +1194,9 @@ def test_manual_candidate_persists_and_serializes_selected_session_receipt(db_se
     ))
     db_session.flush()
     db_session.expire(session, ["execution_revisions"])
-    request = _build_manual_candidate_request(session_id=str(session.id)).model_copy(
+    request = _build_manual_candidate_request(
+        session_id=str(session.id), file_id=str(document.main_file.id)
+    ).model_copy(
         update={"agent_revision_id": receipt.agent_revision_id},
     )
     response = module.create_manual_candidate(db_session, session.id, request, actor_claims={"sub": "user-1"})
@@ -1220,6 +1226,7 @@ def test_create_manual_candidate_rejects_non_manual_source(db_session):
             str(session_row.id),
             _build_manual_candidate_request(
                 session_id=str(session_row.id),
+                file_id=str(document.main_file.id),
                 source=CurationCandidateSource.IMPORTED,
             ),
             actor_claims={"sub": "user-1"},
@@ -6214,3 +6221,52 @@ def test_fingerprint_of_a_projection_that_names_its_file_is_stable_across_a_relo
     )
 
     assert _intent_fingerprint(db_session, session_row, reloaded, reloaded_context) == before
+
+
+
+def test_manual_candidate_evidence_must_name_a_file_of_the_paper(db_session):
+    document = _create_document(db_session)
+    extraction_result = _create_extraction_result(
+        db_session, document_id=str(document.id), label="alpha"
+    )
+    session_row = _create_session_for_extraction(
+        db_session,
+        document_id=str(document.id),
+        extraction_result_id=extraction_result.id,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        module.create_manual_candidate(
+            db_session,
+            str(session_row.id),
+            _build_manual_candidate_request(session_id=str(session_row.id), file_id=None),
+            actor_claims={"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "file_id is required: evidence names the paper file it quotes"
+
+
+def test_manual_candidate_evidence_stores_its_file(db_session):
+    document = _create_document(db_session)
+    extraction_result = _create_extraction_result(
+        db_session, document_id=str(document.id), label="alpha"
+    )
+    session_row = _create_session_for_extraction(
+        db_session,
+        document_id=str(document.id),
+        extraction_result_id=extraction_result.id,
+    )
+
+    response = module.create_manual_candidate(
+        db_session,
+        str(session_row.id),
+        _build_manual_candidate_request(
+            session_id=str(session_row.id), file_id=str(document.main_file.id)
+        ),
+        actor_claims={"sub": "user-1"},
+    )
+
+    stored = db_session.scalars(select(EvidenceRecordModel)).one()
+    assert stored.source_file_id == document.main_file.id
+    assert response.candidate.evidence_anchors[0].file_id == str(document.main_file.id)
