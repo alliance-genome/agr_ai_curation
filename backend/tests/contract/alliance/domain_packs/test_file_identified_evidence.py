@@ -366,3 +366,67 @@ def test_section_less_file_evidence_exports_from_the_gene_envelope(monkeypatch):
     record, = build_gene_mention_evidence_export(envelope)["records"]
 
     assert (record["evidence"]["page"], record["evidence"]["section"]) == (None, None)
+
+
+_PACK_IDS = {
+    "gene": lambda: gene_tests.GENE_DOMAIN_PACK_ID,
+    "allele": lambda: allele_tests.ALLELE_DOMAIN_PACK_ID,
+    "phenotype": lambda: phenotype_tests.PHENOTYPE_DOMAIN_PACK_ID,
+    "disease": lambda: disease_tests.DISEASE_DOMAIN_PACK_ID,
+}
+_BUILDER_MODULES = {
+    "gene": gene_tests, "allele": allele_tests, "phenotype": phenotype_tests, "disease": disease_tests,
+}
+
+
+def _structural_findings(pack: str, *, without_section: bool, drop_file_id: bool, monkeypatch):
+    from agr_ai_curation_alliance.domain_packs import load_alliance_domain_pack_registry
+    from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
+
+    module = _BUILDER_MODULES[pack]
+    evidence_record_id = module._evidence_records()[0]["evidence_record_id"]
+    monkeypatch.setattr(
+        module, "_evidence_records",
+        lambda: _page_less_records_from(module, evidence_record_id, without_section=without_section),
+    )
+    result = module._materialize_one_candidate()
+    assert result.ok, result.summary()
+    metadata = dict(result.payload["metadata"])
+    if drop_file_id:
+        metadata["evidence_records"] = [
+            {key: value for key, value in record.items() if key != "file_id"}
+            for record in metadata["evidence_records"]
+        ]
+    envelope = DomainEnvelope(
+        envelope_id=f"{pack}-structural", domain_pack_id=_PACK_IDS[pack](),
+        extracted_objects=result.payload["curatable_objects"], metadata=metadata,
+    )
+    pack_metadata = load_alliance_domain_pack_registry().get_pack(_PACK_IDS[pack]())
+    return run_domain_envelope_structural_checks(envelope, pack_metadata).appended_findings
+
+
+@pytest.mark.parametrize("pack", ["gene", "allele", "phenotype", "disease"])
+def test_structural_checks_let_a_file_identified_quote_lack_page_and_section(pack, monkeypatch):
+    findings = _structural_findings(pack, without_section=True, drop_file_id=False, monkeypatch=monkeypatch)
+
+    assert [
+        finding.field_ref.field_path for finding in findings
+        if finding.code == "domain_pack.required_field_missing"
+        and finding.field_ref.field_path in ("page", "section")
+    ] == []
+
+
+def test_the_gene_page_and_section_finding_without_a_file_never_blocks_submission(monkeypatch):
+    # Without a file id the gene pack's required page/section still give their
+    # finding (today's rule), and it is an error finding that no readiness gate reads.
+    from src.lib.curation_workspace.session_submission_service import _finding_blocks_readiness
+
+    findings = _structural_findings("gene", without_section=True, drop_file_id=True, monkeypatch=monkeypatch)
+    missing = {
+        finding.field_ref.field_path: finding for finding in findings
+        if finding.code == "domain_pack.required_field_missing"
+    }
+
+    assert set(missing) == {"page", "section"}
+    assert all(finding.severity.value == "error" for finding in missing.values())
+    assert not any(_finding_blocks_readiness(finding) for finding in missing.values())

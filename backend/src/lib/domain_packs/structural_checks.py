@@ -17,6 +17,9 @@ from src.schemas.domain_envelope import (
     field_path_exists,
 )
 
+from src.lib.domain_packs.evidence_snapshot import evidence_records
+from src.schemas.evidence_workspace import evidence_record_page, evidence_record_section
+
 from .not_validatable import is_not_validatable, not_validatable_object_keys
 from .registry import LoadedDomainPack
 from .validation_findings import append_validation_findings_to_envelope
@@ -93,6 +96,8 @@ def _required_field_findings(
                 continue
             if field_path_exists(domain_object.payload, field_definition.field_path):
                 continue
+            if _locator_may_be_empty(envelope, domain_object, field_definition):
+                continue
             policy = registry.policy_for(
                 domain_object.object_type,
                 field_definition.field_path,
@@ -141,6 +146,45 @@ def _required_field_findings(
                 )
             )
     return findings
+
+
+# Evidence-locator fields that the one evidence rule lets be empty when the
+# evidence names its file (ALL-1460): a page for a file without page numbers, a
+# section for text before a file's first heading.
+_FILE_OPTIONAL_LOCATOR_RULES = {
+    "page": evidence_record_page,
+    "section": evidence_record_section,
+}
+
+
+def _locator_may_be_empty(
+    envelope: DomainEnvelope,
+    domain_object: CuratableObjectEnvelope,
+    field_definition: Any,
+) -> bool:
+    """A required evidence-locator field may be absent when its evidence names a file.
+
+    Structural: keyed on the field's ``evidence_locator_field`` metadata and the
+    stored ``file_id`` of the object's evidence record, the same rule as
+    ``evidence_record_page`` / ``evidence_record_section`` everywhere else.
+    """
+
+    rule = _FILE_OPTIONAL_LOCATOR_RULES.get(field_definition.field_path)
+    if rule is None or field_definition.metadata.get("evidence_locator_field") is not True:
+        return False
+    evidence_ids = set(domain_object.evidence_record_ids)
+    payload_evidence_id = domain_object.payload.get("evidence_record_id")
+    if isinstance(payload_evidence_id, str):
+        evidence_ids.add(payload_evidence_id)
+    records = [
+        record
+        for record in evidence_records({"metadata": envelope.metadata})
+        if record.get("evidence_record_id") in evidence_ids
+    ]
+    return bool(records) and all(
+        rule({field_definition.field_path: None, "file_id": record.get("file_id")})[0]
+        for record in records
+    )
 
 
 def _field_definition_details(
