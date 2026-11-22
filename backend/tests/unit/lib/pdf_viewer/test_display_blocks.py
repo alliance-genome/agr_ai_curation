@@ -7,13 +7,17 @@ compared. Made-up content only.
 """
 
 import asyncio
+import copy
+import json
 
 import pytest
 
 from src.lib.pdf_viewer.display_blocks import (
     UnsupportedDisplayElementError,
     build_display_blocks,
+    file_display_blocks,
 )
+from src.lib.pipeline import hierarchy_resolution as hierarchy
 from src.lib.pipeline.chunk import chunk_parsed_document
 from src.lib.pipeline.pdfx_parser import markdown_to_pipeline_elements
 from src.lib.pipeline.table_chunking import table_row_display_cells, table_row_search_text
@@ -80,6 +84,7 @@ def test_blocks_keep_kinds_levels_and_section_paths_in_reading_order():
         ("Sheet 2", 2),
     ]
     assert blocks[3].section_path == ["Supplementary Table S1", "Sheet 1"]
+    assert (blocks[3].section_title, blocks[3].parent_section, blocks[3].subsection) == ("Sheet 1", None, None)
     assert all(block.level is None for block in blocks if block.kind != "heading")
     assert all(block.rows is None for block in blocks if block.kind != "table")
     # A table's text is its stored lines, separator included, as the chunker lays it out.
@@ -219,3 +224,132 @@ def test_a_quote_can_cross_two_blocks_inside_one_piece():
     assert quote in piece.content
     assert all(quote not in block.text for block in blocks)
     assert quote in _joined(blocks)
+
+
+# --- section names equal the stored pieces' ----------------------------------------
+
+_SECTION_FIELDS = ("section_title", "parent_section", "subsection", "section_path")
+
+
+def _assert_blocks_carry_their_pieces_sections(blocks, pieces):
+    """Every non-heading block inside a piece has that piece's section fields.
+
+    Headings are left out: a piece of stacked headings carries its innermost heading's
+    fields, as the chunker decides.
+    """
+
+    compared = 0
+    for piece in pieces:
+        for block in blocks:
+            if block.kind == "heading" or block.text not in piece.content:
+                continue
+            assert tuple(getattr(block, field) for field in _SECTION_FIELDS) == tuple(
+                getattr(piece, field) for field in _SECTION_FIELDS
+            ), (block.text[:30], piece.content[:30])
+            compared += 1
+    return compared
+
+
+def _index_like_the_pipeline(markdown):
+    """Save elements before hierarchy, resolve, cut pieces; return what is stored."""
+
+    elements = markdown_to_pipeline_elements(markdown)
+    saved_json = json.dumps(elements)
+    resolved, metadata = asyncio.run(hierarchy.resolve_document_hierarchy(elements))
+    return json.loads(saved_json), (metadata.model_dump() if metadata else None), _pieces(resolved)
+
+
+def test_a_three_level_main_paper_with_a_stored_map_shows_its_pieces_sections(monkeypatch):
+    from tests.unit.pipeline.test_hierarchy_piece_sections_pinned import (
+        THREE_LEVEL_PAPER,
+        fixed_classifier,
+    )
+
+    fixed_classifier(monkeypatch)
+    saved, stored_map, pieces = _index_like_the_pipeline(THREE_LEVEL_PAPER)
+
+    blocks = file_display_blocks(saved, stored_map)
+
+    assert stored_map is not None
+    assert _assert_blocks_carry_their_pieces_sections(blocks, pieces) >= 6
+    fly_strains = next(block for block in blocks if block.text.startswith("Flies were raised"))
+    assert fly_strains.parent_section == "2 Materials and methods"
+    assert fly_strains.subsection == "2.1 Fly strains"
+    # Heading levels still follow the file's own headings, four deep.
+    assert [block.level for block in blocks if block.kind == "heading"] == [1, 2, 2, 2, 3, 4, 3, 2]
+
+
+def test_a_main_paper_with_no_stored_map_shows_its_elements_own_sections(monkeypatch):
+    """The hierarchy step answered nothing: pieces keep the elements' own fields, and so do blocks."""
+
+    from tests.unit.pipeline.test_hierarchy_piece_sections_pinned import THREE_LEVEL_PAPER
+
+    async def _no_answer(_section_info):
+        return ([], None)
+
+    monkeypatch.setattr(hierarchy, "_call_llm_for_hierarchy", _no_answer)
+    saved, stored_map, pieces = _index_like_the_pipeline(THREE_LEVEL_PAPER)
+
+    blocks = file_display_blocks(saved, stored_map)
+
+    assert stored_map is None
+    assert _assert_blocks_carry_their_pieces_sections(blocks, pieces) >= 6
+    stock_table = next(block for block in blocks if block.kind == "table")
+    assert stock_table.section_path == [
+        "Made-up paper on wing growth", "2 Materials and methods", "2.1 Fly strains", "2.1.1 Stock list",
+    ]
+
+
+def test_a_supplement_sectioned_before_saving_shows_its_pieces_sections():
+    """P7c1's shape: sections written onto the elements before the processed JSON is saved,
+    and no map stored on the file (agreed with the P7c1 builder)."""
+
+    markdown = (
+        "# Supplementary Information\n\n## Supplementary Methods\n\n### Fly husbandry\n\n"
+        "Flies were kept at 25 C.\n\n## Table S1\n\n| Stock | Genotype |\n|---|---|\n| BL1 | made-up |\n"
+    )
+    elements = markdown_to_pipeline_elements(markdown)
+    structural_map = hierarchy.section_map(
+        [
+            hierarchy.SectionItem(
+                header="Supplementary Information", parent_section="Supplementary Information",
+                subsection=None, is_top_level=True,
+            ),
+            hierarchy.SectionItem(
+                header="Supplementary Methods", parent_section="Supplementary Methods",
+                subsection=None, is_top_level=True,
+            ),
+            hierarchy.SectionItem(
+                header="Fly husbandry", parent_section="Supplementary Methods",
+                subsection="Fly husbandry", is_top_level=False,
+            ),
+            hierarchy.SectionItem(
+                header="Table S1", parent_section="Table S1", subsection=None, is_top_level=True,
+            ),
+        ]
+    )
+    hierarchy.apply_section_hierarchy(elements, structural_map)
+    saved = copy.deepcopy(elements)
+    pieces = _pieces(elements)
+
+    blocks = file_display_blocks(saved, None)
+
+    assert _assert_blocks_carry_their_pieces_sections(blocks, pieces) >= 2
+    husbandry = next(block for block in blocks if block.text.startswith("Flies were kept"))
+    assert (husbandry.section_title, husbandry.section_path) == (
+        "Supplementary Methods > Fly husbandry", ["Supplementary Methods", "Fly husbandry"],
+    )
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        {},
+        {"sections": "not a list"},
+        {"sections": [{"header": "Methods"}]},
+        {"sections": [{"header": "Methods", "parent_section": "Methods", "is_top_level": "maybe"}]},
+    ],
+)
+def test_a_stored_map_of_an_unknown_shape_is_a_named_error(stored):
+    with pytest.raises(hierarchy.StoredSectionMapError):
+        file_display_blocks(_elements(), stored)

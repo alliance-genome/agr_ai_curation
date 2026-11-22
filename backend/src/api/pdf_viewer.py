@@ -15,8 +15,9 @@ from sqlalchemy.orm import Session
 
 from src.lib.pdf_viewer.display_blocks import (
     UnsupportedDisplayElementError,
-    build_display_blocks,
+    file_display_blocks,
 )
+from src.lib.pipeline.hierarchy_resolution import StoredSectionMapError
 from src.lib.pdf_viewer.files import (
     find_paper_file,
     serves_pdf,
@@ -417,8 +418,8 @@ def get_document_file_text(
 
     elements = json.loads(elements_path.read_text(encoding="utf-8"))
     try:
-        blocks = build_display_blocks(elements)
-    except UnsupportedDisplayElementError as exc:
+        blocks = file_display_blocks(elements, file_row.hierarchy_metadata)
+    except (UnsupportedDisplayElementError, StoredSectionMapError) as exc:
         logger.warning(
             "Processed elements of a text file cannot be shown: %s",
             exc,

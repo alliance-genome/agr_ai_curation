@@ -393,12 +393,18 @@ def test_text_returns_the_files_display_blocks(storage):
         "file_id": str(TEXT_ID),
         "display_name": "Table_S1.xlsx",
         "blocks": [
-            {"kind": "heading", "text": "Sheet 1", "level": 1, "section_path": ["Sheet 1"], "rows": None},
+            {
+                "kind": "heading",
+                "text": "Sheet 1",
+                "level": 1,
+                **_OWN_SECTIONS,
+                "rows": None,
+            },
             {
                 "kind": "table",
                 "text": "| Strain | Temp |\n|---|---|\n| XS0401 | 25 C |",
                 "level": None,
-                "section_path": ["Sheet 1"],
+                **_OWN_SECTIONS,
                 "rows": [
                     {"line": "| Strain | Temp |", "cells": ["Strain", "Temp"], "is_header": True},
                     {"line": "| XS0401 | 25 C |", "cells": ["XS0401", "25 C"], "is_header": False},
@@ -408,11 +414,49 @@ def test_text_returns_the_files_display_blocks(storage):
                 "kind": "paragraph",
                 "text": "Kept at two temperatures.",
                 "level": None,
-                "section_path": ["Sheet 1"],
+                **_OWN_SECTIONS,
                 "rows": None,
             },
         ],
     }
+
+
+# A file with no stored section map keeps its elements' own section fields.
+_OWN_SECTIONS = {
+    "section_title": "Sheet 1",
+    "parent_section": None,
+    "subsection": None,
+    "section_path": ["Sheet 1"],
+}
+
+
+def test_text_applies_the_files_stored_section_map(storage):
+    files = _four_files()
+    files[1].hierarchy_metadata = {
+        "sections": [
+            {"header": "Sheet 1", "parent_section": "Table S1", "subsection": "Sheet 1", "is_top_level": False}
+        ],
+        "top_level_sections": ["Table S1"],
+        "created_at": "2026-11-22T00:00:00+00:00",
+        "model_used": "made-up-model",
+    }
+
+    response = _client(_paper(files=files)).get(_text_url(TEXT_ID))
+
+    paragraph = response.json()["blocks"][2]
+    assert (
+        paragraph["section_title"], paragraph["parent_section"], paragraph["subsection"], paragraph["section_path"]
+    ) == ("Table S1 > Sheet 1", "Table S1", "Sheet 1", ["Table S1", "Sheet 1"])
+
+
+def test_text_with_a_stored_section_map_of_an_unknown_shape_is_a_named_error(storage):
+    files = _four_files()
+    files[1].hierarchy_metadata = {"sections": [{"header": "Sheet 1"}]}
+
+    response = _client(_paper(files=files)).get(_text_url(TEXT_ID))
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == f"File text could not be shown for file {TEXT_ID}"
 
 
 @pytest.mark.parametrize("file_id", [MAIN_ID, PDF_SUPPLEMENT_ID])

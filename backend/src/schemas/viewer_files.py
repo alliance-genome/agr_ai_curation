@@ -57,6 +57,9 @@ class DisplayBlock(BaseModel):
             "(separator line included) joined by line breaks"
         )
     )
-    level: int | None = Field(ge=1, description="A heading's depth in its section path")
-    section_path: list[str] = Field(description="The headings this block sits under")
+    level: int | None = Field(ge=1, description="A heading's depth in the file's own heading structure")
+    section_title: str | None = Field(description="The section title its pieces carry")
+    parent_section: str | None = Field(description="The top-level section its pieces carry")
+    subsection: str | None = Field(description="The subsection its pieces carry")
+    section_path: list[str] = Field(description="The section path its pieces carry")
     rows: list[DisplayTableRow] | None = Field(description="A table's rows; none otherwise")

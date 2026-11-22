@@ -616,8 +616,14 @@ curl http://localhost:8000/api/pdf-viewer/documents/<uuid>/files/<file-uuid>/tex
   elements (the text after clean-up, before it is cut into pieces): `heading`
   (with `level`), `paragraph`, `list_item`, `code`, and `table` (its `text` is
   the stored table lines, separator line included; `rows` hold each row's exact
-  stored `line`, its `cells` and `is_header`). It returns 404 for a PDF file or
-  a file that is not ready. What a viewer can rely on when locating a quote (an
+  stored `line`, its `cells` and `is_header`). Every block carries the section
+  fields its stored pieces carry (`section_title`, `parent_section`,
+  `subsection`, `section_path`): the file's stored section map
+  (`hierarchy_metadata.sections`) is applied to its saved elements with the same
+  function indexing uses, and a file without a stored map keeps its elements'
+  own fields, exactly as its pieces did. A heading's `level` is its depth in the
+  file's own headings. It returns 404 for a PDF file or a file that is not
+  ready, and 500 for a stored section map of an unknown shape. What a viewer can rely on when locating a quote (an
   exact slice of one stored piece):
   - every row `line` is exactly one line of a stored piece; a table's rows can be
     spread over several pieces, whole rows only;
