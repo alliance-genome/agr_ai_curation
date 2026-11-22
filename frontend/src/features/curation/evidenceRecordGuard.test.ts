@@ -33,6 +33,15 @@ describe('isEvidenceRecord', () => {
     })).toBe(true)
   })
 
+  it('mirrors the backend\'s exact rules: a blank file id is no file; without one, a positive whole page and a non-blank section', () => {
+    expect(isEvidenceRecord({ ...base, page: null, section: null, file_id: '   ' })).toBe(false)
+    expect(isEvidenceRecord({ ...base, page: 0 })).toBe(false)
+    expect(isEvidenceRecord({ ...base, page: 2.5 })).toBe(false)
+    expect(isEvidenceRecord({ ...base, page: true })).toBe(false)
+    expect(isEvidenceRecord({ ...base, page: 3, section: '  ' })).toBe(false)
+    expect(isEvidenceRecord({ ...base, page: null, section: '  ', file_id: 'aaaaaaaa-0000-0000-0000-000000000002' })).toBe(true)
+  })
+
   it('drops a section-less record without a file', () => {
     expect(isEvidenceRecord({ ...base, page: 3, section: null })).toBe(false)
   })

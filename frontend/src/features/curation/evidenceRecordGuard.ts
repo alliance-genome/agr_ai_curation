@@ -9,19 +9,25 @@ import type { EvidenceRecord } from './types'
  * and always a page and a section. A page-less or section-less record without a
  * file is malformed.
  */
+function isNonBlank(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
 export function isEvidenceRecord(value: unknown): value is EvidenceRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return false
   }
   const record = value as Record<string, unknown>
-  const namesFile = typeof record.file_id === 'string'
-  const hasPage = typeof record.page === 'number' && Number.isFinite(record.page)
-  const hasSection = typeof record.section === 'string'
+  // Mirrors the backend's evidence_record_page and evidence_record_section (#1109).
+  const namesFile = isNonBlank(record.file_id)
+  const hasPage = typeof record.page === 'number' && Number.isInteger(record.page) && record.page > 0
+  const hasSection = isNonBlank(record.section)
+  const sectionEmpty = record.section === null || (typeof record.section === 'string' && !hasSection)
   return (
     typeof record.entity === 'string'
     && typeof record.verified_quote === 'string'
     && (hasPage || (namesFile && record.page === null))
-    && (hasSection || (namesFile && record.section === null))
+    && (hasSection || (namesFile && sectionEmpty))
     && typeof record.chunk_id === 'string'
   )
 }
