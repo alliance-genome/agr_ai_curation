@@ -814,6 +814,8 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
         if "wg expression" in candidate.text
     )
 
+    from tests.readable_files_support import single_file
+    monkeypatch.setattr(record_evidence, "current_readable_files", lambda: single_file("doc-1"))
     evidence = await record_evidence._create_canonical_evidence_recorder(
         "doc-1",
         "user-1",

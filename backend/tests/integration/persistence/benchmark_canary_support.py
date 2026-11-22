@@ -167,11 +167,15 @@ class CanaryProvider:
         monkeypatch.setattr("src.lib.pipeline.figure_locator_resolution.resolve_figure_locators", figures)
 
     async def stream(self, **kwargs):
+        import asyncio
+        from src.lib.document_files.readable import resolve_readable_files
         from src.lib.weaviate_client.chunks import get_chunk_by_index
         selected = kwargs["agent"].selected
         assert kwargs["doc_context"] is not None
         assert selected["db_user_id"] is not None
-        chunk = await get_chunk_by_index(chunk_index=0, user_id=kwargs["user_id"], document_id=kwargs["document_id"])
+        readable = await asyncio.to_thread(resolve_readable_files, kwargs["document_id"], kwargs["user_id"])
+        chunk = await get_chunk_by_index(chunk_index=0, user_id=kwargs["user_id"], document_id=kwargs["document_id"],
+                                         readable=readable)
         assert chunk and "Synthetic replacement canary evidence." in str(chunk)
         provider, model = selected["model_provider_override"], selected["model_id_override"]
         slot = selected["benchmark_route_slot"]

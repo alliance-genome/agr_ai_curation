@@ -13,6 +13,7 @@ import pytest
 
 
 import agr_ai_curation_alliance.tools.weaviate_search as weaviate_search
+from tests.readable_files_support import single_file
 import src.lib.openai_agents.tools.evidence_workspace as evidence_workspace
 import src.lib.openai_agents.tools.record_evidence as record_evidence
 from src.lib.domain_packs.loader import load_domain_pack_metadata
@@ -41,6 +42,8 @@ def identity_function_tool(monkeypatch):
 
     from unittest.mock import AsyncMock
     monkeypatch.setattr(weaviate_search, "scoped_document_tool", lambda tool, **kwargs: tool)
+    monkeypatch.setattr(weaviate_search, "current_readable_files", lambda: single_file("doc-12345678"))
+    monkeypatch.setattr(record_evidence, "current_readable_files", lambda: single_file("doc-12345678"))
     monkeypatch.setattr(weaviate_search, "retain_issued_spans", AsyncMock())
     monkeypatch.setattr(weaviate_search, "function_tool", _identity_function_tool)
     monkeypatch.setattr(record_evidence, "function_tool", _identity_function_tool)

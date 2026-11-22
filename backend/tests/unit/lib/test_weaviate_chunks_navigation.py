@@ -9,6 +9,7 @@ import pytest
 
 import src.lib.weaviate_client.chunks as chunks
 from src.lib.bedrock_reranker import RerankProviderError
+from tests.readable_files_support import files, single_file
 
 
 def _connection_with_client(client):
@@ -105,7 +106,7 @@ async def test_hybrid_search_chunks_runs_full_path_with_mmr(monkeypatch, caplog)
             apply_reranking=False,
             apply_mmr=True,
             section_keywords=["methods"],
-            strategy="lexical",
+            strategy="lexical", readable=single_file("doc-1"),
         )
 
     assert len(results) == 2
@@ -196,7 +197,7 @@ async def test_hybrid_search_chunks_applies_backend_reranking(monkeypatch):
             user_id="user-1",
             limit=2,
             apply_reranking=True,
-            apply_mmr=False,
+            apply_mmr=False, readable=single_file("doc-1"),
         )
 
     assert [chunk["id"] for chunk in results] == ["u2", "u1"]
@@ -259,7 +260,7 @@ async def test_hybrid_search_chunks_surfaces_configured_rerank_failure(
                 limit=1,
                 apply_reranking=True,
                 apply_mmr=False,
-                strategy="hybrid_lexical_first",
+                strategy="hybrid_lexical_first", readable=single_file("doc-1"),
             )
 
     assert exc_info.value is failure
@@ -292,7 +293,7 @@ async def test_hybrid_search_chunks_clamps_bm25_minimum_match_to_query_terms(
             user_id="user-1",
             apply_reranking=False,
             apply_mmr=False,
-            strategy="lexical",
+            strategy="lexical", readable=single_file("doc-1"),
         )
 
     operator = chunk_collection.query.hybrid.call_args.kwargs["bm25_operator"]
@@ -304,11 +305,11 @@ async def test_hybrid_search_chunks_guardrails(monkeypatch):
     _sync_to_thread(monkeypatch)
 
     with pytest.raises(ValueError):
-        await chunks.hybrid_search_chunks("doc-1", "query", user_id="")
+        await chunks.hybrid_search_chunks("doc-1", "query", user_id="", readable=single_file("doc-1"))
 
     monkeypatch.setattr(chunks, "get_connection", lambda: None)
     with pytest.raises(RuntimeError, match="No Weaviate connection established"):
-        await chunks.hybrid_search_chunks("doc-1", "query", user_id="user-1")
+        await chunks.hybrid_search_chunks("doc-1", "query", user_id="user-1", readable=single_file("doc-1"))
 
 
 @pytest.mark.asyncio
@@ -337,7 +338,7 @@ async def test_hierarchy_helper(monkeypatch):
     ):
         hierarchical = await chunks.get_document_sections_hierarchical(
             "11111111-1111-1111-1111-111111111111",
-            "user-1",
+            "user-1", readable=single_file("11111111-1111-1111-1111-111111111111"),
         )
 
     assert set(hierarchical) == {"sections", "top_level_sections"}
@@ -360,7 +361,7 @@ async def test_hierarchy_preserves_chunks_with_missing_metadata(monkeypatch, mis
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), patch(
         "src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())
     ):
-        result = await chunks.get_document_sections_hierarchical("doc-1", "user-1")
+        result = await chunks.get_document_sections_hierarchical("doc-1", "user-1", readable=single_file("doc-1"))
     section = result["sections"][0]
     assert section["chunk_count"] == 3
     assert section["page_numbers"] == [3]
@@ -417,12 +418,12 @@ async def test_parent_and_subsection_chunk_helpers(monkeypatch):
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), patch(
         "src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())
     ):
-        parent_rows = await chunks.get_chunks_by_parent_section("doc-1", "Methods", "user-1")
+        parent_rows = await chunks.get_chunks_by_parent_section("doc-1", "Methods", "user-1", readable=single_file("doc-1"))
         subsection_rows = await chunks.get_chunks_by_subsection(
             "doc-1",
             parent_section="Methods",
             subsection="Fly Strains",
-            user_id="user-1",
+            user_id="user-1", readable=single_file("doc-1"),
         )
 
     assert len(parent_rows) == 1
@@ -459,9 +460,9 @@ async def test_section_helpers_page_until_every_matching_chunk_is_read(monkeypat
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), \
          patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())):
         if helper == "parent":
-            rows = await chunks.get_chunks_by_parent_section("doc-1", "Methods", "user-1")
+            rows = await chunks.get_chunks_by_parent_section("doc-1", "Methods", "user-1", readable=single_file("doc-1"))
         else:
-            rows = await chunks.get_chunks_by_subsection("doc-1", "Methods", "Fly Strains", "user-1")
+            rows = await chunks.get_chunks_by_subsection("doc-1", "Methods", "Fly Strains", "user-1", readable=single_file("doc-1"))
 
     assert [row["chunk_index"] for row in rows] == list(range(count))
     assert [row["id"] for row in rows] == [f"uuid-{index}" for index in range(count)]
@@ -483,7 +484,7 @@ async def test_section_reads_page_by_the_configured_store_page_size(monkeypatch,
     collection, calls = _paging_store(objects)
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), \
          patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())):
-        rows = await chunks.get_chunks_by_parent_section("doc-1", "Methods", "user-1")
+        rows = await chunks.get_chunks_by_parent_section("doc-1", "Methods", "user-1", readable=single_file("doc-1"))
 
     assert [row["chunk_index"] for row in rows] == list(range(count))
     assert [call["offset"] for call in calls] == list(range(0, count + 1, 7))
@@ -506,9 +507,9 @@ async def test_every_page_repeats_the_filter_and_a_total_order_sort(monkeypatch,
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), \
          patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())):
         if helper == "parent":
-            await chunks.get_chunks_by_parent_section("doc-1", "Methods", "user-1")
+            await chunks.get_chunks_by_parent_section("doc-1", "Methods", "user-1", readable=single_file("doc-1"))
         else:
-            await chunks.get_chunks_by_subsection("doc-1", "Methods", "Fly Strains", "user-1")
+            await chunks.get_chunks_by_subsection("doc-1", "Methods", "Fly Strains", "user-1", readable=single_file("doc-1"))
 
     assert len(calls) == 3
     assert all(call["filters"] is calls[0]["filters"] for call in calls)
@@ -529,7 +530,7 @@ async def test_section_outline_counts_every_chunk_of_a_document_over_five_hundre
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), \
          patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())):
         outline = await chunks.get_document_sections_hierarchical(
-            "11111111-1111-1111-1111-111111111111", "user-1",
+            "11111111-1111-1111-1111-111111111111", "user-1", readable=single_file("11111111-1111-1111-1111-111111111111"),
         )
 
     assert [(section["name"], section["chunk_count"]) for section in outline["sections"]] == [
@@ -598,7 +599,7 @@ async def test_preparation_dispatch_failure_never_calls_connection_on_loop(monke
     monkeypatch.setattr(chunks, "get_connection", forbidden)
     monkeypatch.setattr(asyncio, "to_thread", unavailable)
     with pytest.raises(RuntimeError, match="can't start new thread"):
-        await getattr(chunks, name)(document_id="doc", user_id="user", **kwargs)
+        await getattr(chunks, name)(document_id="doc", user_id="user", readable=single_file("doc"), **kwargs)
 
 
 @pytest.mark.asyncio
@@ -648,7 +649,9 @@ async def test_cold_connection_and_query_yield_and_worker_closes(monkeypatch, na
     collection.query.fetch_objects.return_value = SimpleNamespace(objects=[])
     monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", lambda *args: (collection, None))
     token = owner.set("run-a")
-    task = asyncio.create_task(getattr(chunks, name)(document_id="11111111-1111-1111-1111-111111111111", user_id="user", **kwargs))
+    document_id = "11111111-1111-1111-1111-111111111111"
+    task = asyncio.create_task(getattr(chunks, name)(
+        document_id=document_id, user_id="user", readable=single_file(document_id), **kwargs))
     try:
         await asyncio.wait_for(entered.wait(), 5)
         assert not task.done()  # Observer progresses while synchronous connect waits.
@@ -669,7 +672,7 @@ async def test_cold_connection_and_query_yield_and_worker_closes(monkeypatch, na
 @pytest.mark.parametrize("index", [True, False, "42", -1, 1.5, None])
 async def test_local_chunk_index_requires_actual_nonnegative_integer(index):
     with pytest.raises(ValueError, match="non-negative integer"):
-        await chunks.get_chunk_by_index(chunk_index=index, user_id="alice", document_id="doc-a")
+        await chunks.get_chunk_by_index(chunk_index=index, user_id="alice", document_id="doc-a", readable=single_file("doc-a"))
 
 
 @pytest.mark.asyncio
@@ -688,10 +691,10 @@ async def test_local_chunk_index_never_selects_first_duplicate(monkeypatch, coun
     monkeypatch.setattr(chunks, "get_chunk_by_id", fetch)
     if count == 2:
         with pytest.raises(ValueError, match="ambiguous"):
-            await chunks.get_chunk_by_index(chunk_index=42, user_id="alice", document_id="doc-a")
+            await chunks.get_chunk_by_index(chunk_index=42, user_id="alice", document_id="doc-a", readable=single_file("doc-a"))
         fetch.assert_not_called()
     else:
-        result = await chunks.get_chunk_by_index(chunk_index=42, user_id="alice", document_id="doc-a")
+        result = await chunks.get_chunk_by_index(chunk_index=42, user_id="alice", document_id="doc-a", readable=single_file("doc-a"))
         assert result == (fetch.return_value if count else None)
         if count:
             fetch.assert_awaited_once_with(chunk_id="chunk-0", user_id="alice", document_id="doc-a")
@@ -703,39 +706,118 @@ async def test_local_chunk_index_never_selects_first_duplicate(monkeypatch, coun
     assert [f.value for f in args["filters"].filters] == ["doc-a", 42]
 
 
+def _ranges(filter_value):
+    """(start, end) of each readable range in a readable_pieces_filter, in order."""
+    from weaviate.collections.classes.filters import _FilterOr
+
+    document, in_ranges = filter_value.filters
+    assert (document.target, document.value) == ("documentId", "doc-1")
+    ranges = in_ranges.filters if isinstance(in_ranges, _FilterOr) else [in_ranges]
+    return [tuple(bound.value for bound in each.filters) for each in ranges]
+
+
+def test_the_readable_filter_keeps_to_each_readable_files_range():
+    readable = files("doc-1", ("paper.pdf", 0, 41), ("Table S1.xlsx", 42, 60), ("Data S3.docx", 70, 75))
+
+    assert _ranges(chunks.readable_pieces_filter("doc-1", readable)) == [(0, 41), (42, 60), (70, 75)]
+    assert _ranges(chunks.readable_pieces_filter("doc-1", single_file("doc-1", 42))) == [(0, 41)]
+
+
+def test_no_readable_file_means_nothing_to_read_and_another_papers_value_is_refused():
+    assert chunks.readable_pieces_filter("doc-1", files("doc-1")) is None
+    with pytest.raises(ValueError, match="another document"):
+        chunks.readable_pieces_filter("doc-1", single_file("doc-2"))
+    with pytest.raises(TypeError, match="ReadableFiles"):
+        chunks.readable_pieces_filter("doc-1", [(0, 41)])
+
+
 @pytest.mark.asyncio
-async def test_count_document_chunks_counts_every_stored_chunk_of_the_document(monkeypatch):
+async def test_hybrid_search_searches_only_the_readable_ranges(monkeypatch):
     _sync_to_thread(monkeypatch)
     collection = MagicMock()
-    collection.aggregate.over_all.return_value = SimpleNamespace(total_count=349)
-    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), \
-         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())) as collections:
-        count = await chunks.count_document_chunks(user_id="user-1", document_id="doc-1")
-
-    assert count == 349
-    collections.assert_called_once()
-    assert collections.call_args.args[1] == "user-1"
-    kwargs = collection.aggregate.over_all.call_args.kwargs
-    assert kwargs["total_count"] is True
-    assert kwargs["filters"] == chunks.Filter.by_property("documentId").equal("doc-1")
-    collection.query.fetch_objects.assert_not_called()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("total", [None, -1, "349", True])
-async def test_count_document_chunks_rejects_a_malformed_store_count(monkeypatch, total):
-    _sync_to_thread(monkeypatch)
-    collection = MagicMock()
-    collection.aggregate.over_all.return_value = SimpleNamespace(total_count=total)
+    collection.query.hybrid.return_value = SimpleNamespace(objects=[])
+    readable = files("doc-1", ("paper.pdf", 0, 41), ("Table S1.xlsx", 50, 60))
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), \
          patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())):
-        with pytest.raises(TypeError, match="chunk count"):
-            await chunks.count_document_chunks(user_id="user-1", document_id="doc-1")
+        await chunks.hybrid_search_chunks(
+            "doc-1", "a long enough query for hybrid search", user_id="user-1",
+            apply_reranking=False, apply_mmr=False, readable=readable,
+        )
+
+    assert _ranges(collection.query.hybrid.call_args.kwargs["filters"]) == [(0, 41), (50, 60)]
 
 
 @pytest.mark.asyncio
-async def test_count_document_chunks_requires_document_and_user_scope():
-    with pytest.raises(ValueError, match="scope"):
-        await chunks.count_document_chunks(user_id="", document_id="doc-1")
-    with pytest.raises(ValueError, match="scope"):
-        await chunks.count_document_chunks(user_id="user-1", document_id="")
+async def test_with_no_readable_file_reads_return_nothing_without_a_query(monkeypatch):
+    monkeypatch.setattr(chunks, "get_connection", lambda: pytest.fail("no query without a readable file"))
+    nothing = files("doc-1")
+
+    assert await chunks.hybrid_search_chunks("doc-1", "query text", user_id="u", readable=nothing) == []
+    assert await chunks.get_chunks_by_parent_section("doc-1", "Methods", "u", readable=nothing) == []
+    assert await chunks.get_chunks_by_subsection("doc-1", "Methods", "Strains", "u", readable=nothing) == []
+    assert await chunks.get_document_sections_hierarchical("doc-1", "u", readable=nothing) == {
+        "sections": [], "top_level_sections": [],
+    }
+    assert await chunks.get_chunks("doc-1", {"page": 1, "page_size": 5}, "u", readable=nothing) == {
+        "chunks": [], "total": 0,
+    }
+    assert await chunks.get_chunk_by_index(chunk_index=0, user_id="u", document_id="doc-1", readable=nothing) is None
+    assert await chunks.get_existing_chunk_indexes(
+        chunk_indexes=[0, 1], user_id="u", document_id="doc-1", readable=nothing) == set()
+
+
+@pytest.mark.asyncio
+async def test_an_index_outside_every_readable_file_is_never_looked_up(monkeypatch):
+    monkeypatch.setattr(chunks, "get_connection", lambda: pytest.fail("no query outside the readable ranges"))
+    readable = files("doc-1", ("paper.pdf", 0, 41), ("Table S1.xlsx", 50, 60))
+
+    for index in (42, 49, 61):
+        assert await chunks.get_chunk_by_index(
+            chunk_index=index, user_id="u", document_id="doc-1", readable=readable) is None
+    assert await chunks.get_existing_chunk_indexes(
+        chunk_indexes=[45, 61], user_id="u", document_id="doc-1", readable=readable) == set()
+
+
+@pytest.mark.asyncio
+async def test_existing_index_check_asks_only_about_readable_indexes(monkeypatch):
+    _sync_to_thread(monkeypatch)
+    collection = MagicMock()
+    collection.query.fetch_objects.return_value = SimpleNamespace(objects=[
+        SimpleNamespace(properties={"documentId": "doc-1", "chunkIndex": 3})])
+    readable = files("doc-1", ("paper.pdf", 0, 41), ("Table S1.xlsx", 50, 60))
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())):
+        found = await chunks.get_existing_chunk_indexes(
+            chunk_indexes=[3, 45], user_id="u", document_id="doc-1", readable=readable)
+
+    assert found == {3}
+    asked = collection.query.fetch_objects.call_args.kwargs["filters"].filters[1]
+    assert (asked.target, asked.value) == ("chunkIndex", 3)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("index, previous, following", [
+    (0, None, 1), (41, 40, None), (50, None, 51), (60, 59, None), (45, None, None),
+])
+async def test_neighbors_stay_inside_the_pieces_own_file(monkeypatch, index, previous, following):
+    _sync_to_thread(monkeypatch)
+    asked = []
+
+    def fetch_objects(**kwargs):
+        wanted = kwargs["filters"].filters[1].value
+        asked.append(wanted)
+        return SimpleNamespace(objects=[SimpleNamespace(uuid=f"id-{wanted}", properties={})])
+
+    collection = MagicMock()
+    collection.query.fetch_objects.side_effect = fetch_objects
+    readable = files("doc-1", ("paper.pdf", 0, 41), ("Table S1.xlsx", 50, 60))
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())):
+        neighbors = await chunks.get_chunk_neighbor_ids(
+            document_id="doc-1", user_id="u", chunk_index=index, readable=readable)
+
+    assert neighbors == {
+        "previous_chunk_id": None if previous is None else f"id-{previous}",
+        "next_chunk_id": None if following is None else f"id-{following}",
+    }
+    assert asked == [value for value in (previous, following) if value is not None]

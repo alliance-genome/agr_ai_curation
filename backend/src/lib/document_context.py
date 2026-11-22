@@ -55,8 +55,10 @@ class DocumentContext:
     ) -> "DocumentContext":
         """Fetch document context with caching.
 
-        Checks the cache first, then fetches from Weaviate if needed.
-        The cache is keyed by (user_id, document_id) with 10-minute TTL.
+        Resolves the run's readable files first; the hierarchy lists only their
+        pieces. Checks the cache first, then fetches from Weaviate if needed. A
+        cache entry is used only for the same (user_id, document_id) and the same
+        readable files, within its TTL.
 
         Args:
             document_id: UUID of the PDF document
@@ -66,35 +68,22 @@ class DocumentContext:
         Returns:
             DocumentContext with hierarchy and sections populated
         """
-        from .document_cache import get_cached_metadata, metadata_cache_fill
-        from .weaviate_client.chunks import get_document_sections_hierarchical
-        from .openai_agents.config import get_document_context_stage_timeout_seconds
+        from .document_files.readable import resolve_readable_files
 
         hierarchy = None
         sections = None
+        # The outline lists the run's readable files only. Like the outline itself,
+        # it is optional context: a failure is reported and the run goes on
+        # without an outline (each tool call resolves its own readable files).
+        readable = None
+        try:
+            readable = await asyncio.to_thread(resolve_readable_files, document_id, user_id)
+        except Exception:
+            # CancelledError is deliberately not caught.
+            _report_preparation_failure("readable_files")
 
-        # Check cache first
-        cached = get_cached_metadata(user_id, document_id)
-        if cached:
-            hierarchy = cached.hierarchy
-            logger.info(
-                f"[DocumentContext] Cache hit for document {document_id[:8]}... "
-                f"({len(hierarchy.get('sections', []) if hierarchy else [])} sections)"
-            )
-        else:
-            # Cache miss - fetch from Weaviate
-            logger.info('[DocumentContext] Cache miss, fetching from Weaviate: %s...', document_id[:8])
-
-            # Independent fills keep each request's contextvars and LLM costs local.
-            # The lease is revoked by invalidation and released on cancellation.
-            with metadata_cache_fill(user_id, document_id) as publish:
-                try:
-                    async with asyncio.timeout(get_document_context_stage_timeout_seconds()):
-                        hierarchy = await get_document_sections_hierarchical(document_id, user_id)
-                except Exception:
-                    # CancelledError is deliberately not caught.
-                    _report_preparation_failure("hierarchy")
-                publish(hierarchy)
+        if readable is not None:
+            hierarchy = await cls._hierarchy_for(document_id, user_id, readable)
 
         # Extract flat section names from hierarchy
         if hierarchy and hierarchy.get("sections"):
@@ -112,6 +101,38 @@ class DocumentContext:
             hierarchy=hierarchy,
             sections=sections,
         )
+
+    @staticmethod
+    async def _hierarchy_for(document_id: str, user_id: str, readable: Any) -> Optional[Dict[str, Any]]:
+        """The outline of the readable files, from the cache or from Weaviate."""
+        from .document_cache import get_cached_metadata, metadata_cache_fill
+        from .weaviate_client.chunks import get_document_sections_hierarchical
+        from .openai_agents.config import get_document_context_stage_timeout_seconds
+
+        cached = get_cached_metadata(user_id, document_id, readable.fingerprint)
+        if cached:
+            hierarchy = cached.hierarchy
+            logger.info(
+                f"[DocumentContext] Cache hit for document {document_id[:8]}... "
+                f"({len(hierarchy.get('sections', []) if hierarchy else [])} sections)"
+            )
+            return hierarchy
+
+        logger.info('[DocumentContext] Cache miss, fetching from Weaviate: %s...', document_id[:8])
+        hierarchy = None
+        # Independent fills keep each request's contextvars and LLM costs local.
+        # The lease is revoked by invalidation and released on cancellation.
+        with metadata_cache_fill(user_id, document_id, readable.fingerprint) as publish:
+            try:
+                async with asyncio.timeout(get_document_context_stage_timeout_seconds()):
+                    hierarchy = await get_document_sections_hierarchical(
+                        document_id, user_id, readable=readable,
+                    )
+            except Exception:
+                # CancelledError is deliberately not caught.
+                _report_preparation_failure("hierarchy")
+            publish(hierarchy)
+        return hierarchy
 
     def to_agent_kwargs(self) -> Dict[str, Any]:
         """Convert to kwargs dict for unified agent builder calls.

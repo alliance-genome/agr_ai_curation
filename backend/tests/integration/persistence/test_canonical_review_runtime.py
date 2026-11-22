@@ -23,6 +23,15 @@ from tests.validation_review_runtime_support import CanonicalReviewer, Canonical
 from tests.pdf_document_test_support import new_paper
 
 
+def _ready_with_one_piece(document) -> None:
+    """A completed paper as the backend leaves it: its main file ready, owning piece 0."""
+    main = document.main_file
+    main.status = "ready"
+    main.chunk_index_start, main.chunk_index_end, main.chunk_count = 0, 0, 1
+    main.text_bytes = 58
+    document.next_chunk_index = 1
+
+
 @pytest.fixture
 def canonical_models(monkeypatch, tmp_path):
     from src.lib.agent_studio.catalog_service import get_agent_by_id as real_get_agent_by_id
@@ -293,6 +302,7 @@ async def _canonical_producer_scenario(
         document = db.get(PDFDocument, UUID(item.scope.document_id))
         document.status = "completed"
         document.processing_completed_at = datetime.now(timezone.utc)
+        _ready_with_one_piece(document)
     monkeypatch.setattr(weaviate_search, "get_chunk_by_index", AsyncMock(return_value=chunk))
     monkeypatch.setattr(weaviate_search, "get_chunk_neighbor_ids",
                         AsyncMock(return_value={"previous_chunk_id": None, "next_chunk_id": None}))
@@ -660,7 +670,8 @@ async def test_canonical_batch_processes_two_documents_serially_without_replay(
         second_id = UUID(document_ids[1])
         db.add(new_paper(id=second_id, user_id=owner_id, filename="batch-second.pdf",
             file_path=f"{second_id}/batch-second.pdf", file_hash=second_id.hex * 2,
-            file_size=1024, page_count=1, status="completed"))
+            file_size=1024, page_count=1, status="completed", next_chunk_index=1,
+            chunk_index_start=0, chunk_index_end=0, chunk_count=1, text_bytes=58))
 
     scenarios = {}
     for document_id in document_ids:
@@ -669,8 +680,9 @@ async def test_canonical_batch_processes_two_documents_serially_without_replay(
         scenarios[document_id] = await _canonical_producer_scenario(
             item, canonical_models, monkeypatch, tmp_path, "flow", prepare_only=True)
 
-    async def chunk_by_index(*, chunk_index, user_id, document_id):
+    async def chunk_by_index(*, chunk_index, user_id, document_id, readable):
         assert chunk_index == 0 and user_id == planned.scope.owner_id
+        assert readable.contains(chunk_index)
         return scenarios[document_id].chunk
 
     async def chunk_by_id(chunk_id, user_id, *, document_id=None):
@@ -814,6 +826,7 @@ async def test_canonical_saved_profile_uses_pinned_agent_and_real_generic_builde
         document = db.get(PDFDocument, UUID(scope.document_id))
         document.status = "completed"
         document.processing_completed_at = datetime.now(timezone.utc)
+        _ready_with_one_piece(document)
         owner_id = document.user_id
         _, revision = generic_profile_service.create_profile(db, owner_id, raw)
         saved = SavedAgent(agent_key="ca_" + uuid4().hex, user_id=owner_id, name="Canonical saved extractor",

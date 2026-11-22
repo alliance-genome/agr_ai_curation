@@ -11,6 +11,10 @@ from src.lib.document_sources.figure_metadata import (
     PROVIDER_FIGURE_SUBSECTION_PREFIX,
 )
 from src.lib.packages.package_runner_entrypoint import _build_tool_context
+from tests.readable_files_support import files, single_file
+
+# What the source binding of each tool call may read; reset for every test.
+_READABLE: dict = {}
 
 
 class _Tracker:
@@ -33,6 +37,8 @@ def identity_function_tool(monkeypatch):
     # durable source binding are covered in test_document_references.py.
     monkeypatch.setattr(weaviate_search, "scoped_document_tool", lambda tool, **kwargs: tool)
     monkeypatch.setattr(weaviate_search, "retain_issued_spans", AsyncMock())
+    _READABLE["value"] = single_file("doc-12345678")
+    monkeypatch.setattr(weaviate_search, "current_readable_files", lambda: _READABLE["value"])
 
 
 def test_search_tool_schema_exposes_search_mode_enum(monkeypatch):
@@ -196,6 +202,7 @@ async def test_read_chunk_tool_returns_raw_content_neighbors_and_deterministic_s
             "chunk_index": 1,
             "user_id": "user-1",
             "document_id": "doc-12345678",
+            "readable": _READABLE["value"],
         }
         return {
             "id": "chunk-2",
@@ -212,6 +219,7 @@ async def test_read_chunk_tool_returns_raw_content_neighbors_and_deterministic_s
             "document_id": "doc-12345678",
             "user_id": "user-1",
             "chunk_index": 1,
+            "readable": _READABLE["value"],
         }
         return {
             "previous_chunk_id": "chunk-1",
@@ -318,29 +326,27 @@ async def test_read_chunk_tool_raises_when_backend_chunk_id_missing(monkeypatch)
 
 
 def _missing_chunk_store(monkeypatch, *, chunk_count):
-    """A store that finds no chunk at the requested index and holds ``chunk_count`` chunks."""
-    counted = []
+    """A store that finds no chunk at the requested index, for a one-file paper of
+    ``chunk_count`` pieces (no readable file when it has none). Returns the lookups made."""
+    looked_up = []
 
-    async def _fake_get_chunk_by_index(**_kwargs):
+    async def _fake_get_chunk_by_index(**kwargs):
+        looked_up.append(kwargs["chunk_index"])
         return None
-
-    async def _fake_count_document_chunks(**kwargs):
-        counted.append(kwargs)
-        return chunk_count
 
     async def _no_neighbors(**_kwargs):
         raise AssertionError("a missing chunk must not be navigated")
 
+    _READABLE["value"] = single_file("doc-12345678", chunk_count) if chunk_count else files("doc-12345678")
     monkeypatch.setattr(weaviate_search, "get_chunk_by_index", _fake_get_chunk_by_index)
-    monkeypatch.setattr(weaviate_search, "count_document_chunks", _fake_count_document_chunks)
     monkeypatch.setattr(weaviate_search, "get_chunk_neighbor_ids", _no_neighbors)
-    return counted
+    return looked_up
 
 
 @pytest.mark.asyncio
 async def test_read_chunk_past_the_end_returns_the_valid_range_to_the_model(monkeypatch):
     """The November 6 case: a 349-chunk document (indexes 0 to 348) and read_chunk(349)."""
-    counted = _missing_chunk_store(monkeypatch, chunk_count=349)
+    looked_up = _missing_chunk_store(monkeypatch, chunk_count=349)
     retain = AsyncMock()
     monkeypatch.setattr(weaviate_search, "retain_issued_spans", retain)
     tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
@@ -353,7 +359,7 @@ async def test_read_chunk_past_the_end_returns_the_valid_range_to_the_model(monk
     )
     assert result.chunk is None
     assert result.error_code == "invalid_result_cursor"
-    assert counted == [{"user_id": "user-1", "document_id": "doc-12345678"}]
+    assert looked_up == []  # outside the readable range: no store lookup
     retain.assert_not_awaited()
 
 
@@ -391,15 +397,15 @@ async def test_read_chunk_missing_chunk_inside_the_document_still_fails(
 
 
 @pytest.mark.asyncio
-async def test_read_chunk_missing_chunk_with_failed_count_still_fails(monkeypatch):
+async def test_read_chunk_without_its_readable_files_still_fails(monkeypatch):
     from agents import function_tool  # pyright: ignore[reportMissingImports]
 
     _missing_chunk_store(monkeypatch, chunk_count=0)
 
-    async def _count_boom(**_kwargs):
-        raise RuntimeError("count blew up")
+    def _no_binding():
+        raise RuntimeError("readable files unavailable")
 
-    monkeypatch.setattr(weaviate_search, "count_document_chunks", _count_boom)
+    monkeypatch.setattr(weaviate_search, "current_readable_files", _no_binding)
     monkeypatch.setattr(weaviate_search, "function_tool", function_tool)
     tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
     payload = {"chunk_index": 349}
@@ -408,7 +414,7 @@ async def test_read_chunk_missing_chunk_with_failed_count_still_fails(monkeypatc
         await tool.on_invoke_tool(
             _build_tool_context(tool.name, payload), json.dumps(payload)
         )
-    assert str(caught.value.__cause__) == "count blew up"
+    assert str(caught.value.__cause__) == "readable files unavailable"
 
 
 def _sdk_read_chunk_tool(monkeypatch):
@@ -482,25 +488,66 @@ def test_read_chunk_schema_keeps_chunk_index_a_required_strict_integer(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_read_chunk_found_chunk_does_not_count_the_document(monkeypatch):
-    async def _fake_get_chunk_by_index(**_kwargs):
-        return {"id": "chunk-1", "text": "Exact raw chunk text.", "chunk_index": 0}
+async def test_read_chunk_reads_and_navigates_within_the_readable_files(monkeypatch):
+    seen = {}
 
-    async def _fake_get_chunk_neighbor_ids(**_kwargs):
+    async def _fake_get_chunk_by_index(**kwargs):
+        seen["read"] = kwargs["readable"]
+        return {"id": "chunk-1", "text": "Exact raw chunk text.", "chunk_index": 12}
+
+    async def _fake_get_chunk_neighbor_ids(**kwargs):
+        seen["neighbors"] = kwargs["readable"]
         return {"previous_chunk_id": None, "next_chunk_id": None}
 
-    async def _no_count(**_kwargs):
-        raise AssertionError("a found chunk must not cost a count query")
-
+    _READABLE["value"] = files("doc-12345678", ("paper.pdf", 0, 11), ("Table S1.xlsx", 12, 13))
     monkeypatch.setattr(weaviate_search, "get_chunk_by_index", _fake_get_chunk_by_index)
     monkeypatch.setattr(weaviate_search, "get_chunk_neighbor_ids", _fake_get_chunk_neighbor_ids)
-    monkeypatch.setattr(weaviate_search, "count_document_chunks", _no_count)
     tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
 
-    result = await tool(0)
+    result = await tool(12)
 
     assert result.chunk is not None
     assert result.error_code is None
+    assert seen == {"read": _READABLE["value"], "neighbors": _READABLE["value"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunk_index", [14, 19, 22])
+async def test_read_chunk_in_a_gap_or_past_the_last_file_names_each_readable_file(monkeypatch, chunk_index):
+    looked_up = _missing_chunk_store(monkeypatch, chunk_count=12)
+    _READABLE["value"] = files(
+        "doc-12345678", ("paper.pdf", 0, 11), ("Table S1.xlsx", 12, 13), ("Data S2.docx", 20, 21))
+    tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
+
+    result = await tool(chunk_index)
+
+    assert result.summary == (
+        f"Invalid read_chunk request: chunk_index {chunk_index} does not exist; this document has chunks "
+        "0 to 11 (paper.pdf), 12 to 13 (Table S1.xlsx), 20 to 21 (Data S2.docx)."
+    )
+    assert result.error_code == "invalid_result_cursor"
+    assert looked_up == []
+
+
+@pytest.mark.asyncio
+async def test_search_and_section_reads_pass_the_readable_files(monkeypatch):
+    seen = []
+
+    async def _capture(**kwargs):
+        seen.append(kwargs["readable"])
+        return []
+
+    _READABLE["value"] = files("doc-12345678", ("paper.pdf", 0, 11), ("Table S1.xlsx", 12, 13))
+    monkeypatch.setattr(weaviate_search, "hybrid_search_chunks", _capture)
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _capture)
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_subsection", _capture)
+
+    await weaviate_search.create_search_tool("doc-12345678", "user-1")(query="wing disc expression")
+    await weaviate_search.create_read_section_tool("doc-12345678", "user-1")(section_name="Results")
+    await weaviate_search.create_read_subsection_tool("doc-12345678", "user-1")(
+        parent_section="Results", subsection="Expression")
+
+    assert seen == [_READABLE["value"]] * 3
 
 
 @pytest.mark.asyncio
@@ -673,7 +720,7 @@ async def test_read_subsection_tool_no_content_and_success(monkeypatch):
     assert empty_result.subsection is None
     assert captured == {
         "document_id": "doc-123", "parent_section": "Methods",
-        "subsection": "Fly Strains", "user_id": "user-1",
+        "subsection": "Fly Strains", "user_id": "user-1", "readable": _READABLE["value"],
     }
     weaviate_search.retain_issued_spans.assert_not_awaited()
 

@@ -993,13 +993,14 @@ def _real_read_chunk_tool(monkeypatch, *, chunk_count):
         assert kwargs["chunk_index"] >= 0, "a negative index must not reach the store lookup"
         return None
 
-    async def _count(**_kwargs):
-        return chunk_count
+    from src.lib.document_files.readable import ReadableFiles
+    from tests.readable_files_support import single_file
 
+    readable = single_file("doc-1", chunk_count) if chunk_count else ReadableFiles("doc-1", ())
     monkeypatch.setattr(weaviate_search, "get_chunk_by_index", _missing)
-    monkeypatch.setattr(weaviate_search, "count_document_chunks", _count)
     # Source binding needs the persistence layer; covered in test_document_references.py.
     monkeypatch.setattr(weaviate_search, "scoped_document_tool", lambda tool, **_kwargs: tool)
+    monkeypatch.setattr(weaviate_search, "current_readable_files", lambda: readable)
     return weaviate_search.create_read_chunk_tool("doc-1", "user-1")
 
 

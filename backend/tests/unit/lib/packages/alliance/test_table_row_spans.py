@@ -12,6 +12,7 @@ from uuid import NAMESPACE_URL, uuid5
 import pytest
 
 import agr_ai_curation_alliance.tools.weaviate_search as weaviate_search  # pyright: ignore[reportMissingImports]
+from tests.readable_files_support import single_file
 import src.lib.openai_agents.tools.record_evidence as record_evidence
 from src.lib.openai_agents.document_result_view import (
     TABLE_LABEL_PREFIX,
@@ -239,6 +240,7 @@ def section_tool(monkeypatch):
 
     monkeypatch.setattr(weaviate_search, "function_tool", function_tool)
     monkeypatch.setattr(weaviate_search, "scoped_document_tool", lambda tool, **kwargs: tool)
+    monkeypatch.setattr(weaviate_search, "current_readable_files", lambda: single_file("doc-12345678"))
     retain = AsyncMock()
     monkeypatch.setattr(weaviate_search, "retain_issued_spans", retain)
     return retain
@@ -354,6 +356,7 @@ async def test_a_row_quoted_from_a_later_piece_is_an_exact_source_row_without_he
         return {**later, "parent_section": "Sheet1", "subsection": None, "doc_items": []}
 
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _get_chunk_by_id)
+    monkeypatch.setattr(record_evidence, "current_readable_files", lambda: single_file("doc-table"))
     tool = record_evidence._create_canonical_evidence_recorder("doc-table", "user-1", tracker=cast(Any, None))
 
     result = await tool(entity="zeta", span_ids=[span.span_id])

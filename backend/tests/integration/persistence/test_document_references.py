@@ -31,7 +31,8 @@ def source_record():
         user_id = user.id
         db.add(new_paper(id=document_id, user_id=user_id, filename="fixture.pdf",
             file_path="/test/" + document_id.hex, file_hash=document_id.hex * 2,
-            file_size=1, page_count=1, status="completed",
+            file_size=1, page_count=1, status="completed", next_chunk_index=100,
+            chunk_index_start=0, chunk_index_end=99, chunk_count=100, text_bytes=1000,
             processing_completed_at=datetime.now(timezone.utc)))
     scope = HistoryScope(owner, uuid4().hex, uuid4().hex, "extractor", uuid4().hex + "/", uuid4().hex)
     try:

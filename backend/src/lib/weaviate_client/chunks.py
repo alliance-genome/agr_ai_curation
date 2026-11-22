@@ -15,6 +15,7 @@ from weaviate.classes.query import Filter, HybridFusion, MetadataQuery
 from weaviate.exceptions import WeaviateQueryError
 
 from ..bedrock_reranker import get_effective_rerank_provider, rerank_chunks
+from ..document_files.readable import ReadableFiles
 from ..openai_agents.config import (
     get_weaviate_chunk_fetch_page_size,
     get_weaviate_search_hybrid_alpha,
@@ -72,6 +73,29 @@ def _weaviate_object_uuid(obj: Any) -> str | None:
 
     normalized = str(raw_uuid).strip()
     return normalized or None
+
+
+def _require_readable(document_id: str, readable: ReadableFiles) -> ReadableFiles:
+    if not isinstance(readable, ReadableFiles):
+        raise TypeError("readable must be the run's ReadableFiles")
+    if readable.document_id != document_id:
+        raise ValueError("Readable files belong to another document")
+    return readable
+
+
+def readable_pieces_filter(document_id: str, readable: ReadableFiles) -> Any | None:
+    """The paper's pieces inside its readable ranges; None when no file is readable."""
+
+    _require_readable(document_id, readable)
+    if not readable.files:
+        return None
+    ranges = [
+        Filter.by_property("chunkIndex").greater_or_equal(file.chunk_index_start)
+        & Filter.by_property("chunkIndex").less_or_equal(file.chunk_index_end)
+        for file in readable.files
+    ]
+    in_ranges = ranges[0] if len(ranges) == 1 else Filter.any_of(ranges)
+    return Filter.by_property("documentId").equal(document_id) & in_ranges
 
 
 def _run_sync_in_package_tool_subprocess() -> bool:
@@ -233,16 +257,31 @@ def fetch_document_chunks_for_resolution(
     *,
     page_size: int = 250,
 ) -> List[Dict[str, Any]]:
-    """Fetch all document chunks needed for deterministic evidence resolution."""
+    """Fetch every chunk of the document's ready files for deterministic evidence resolution.
+
+    Pieces of files being added, failed or removed are never returned, so evidence
+    cannot be anchored to them. Narrowing to the evidence's own file is the
+    resolver's job (P8b).
+    """
 
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped chunk retrieval (FR-011, FR-014)")
+    from ..document_files.readable import ReadingScope, readable_files_in_session
+    from src.models.sql.database import SessionLocal
+
+    with SessionLocal() as session:
+        readable = readable_files_in_session(
+            session, document_id, user_id, scope=ReadingScope.ALL_READY_FILES,
+        )
+    readable_filter = readable_pieces_filter(document_id, readable)
+    if readable_filter is None:
+        return []
 
     connection = get_connection()
     if not connection:
         raise RuntimeError("No Weaviate connection established")
 
-    from weaviate.classes.query import Filter, Sort
+    from weaviate.classes.query import Sort
 
     chunks: List[Dict[str, Any]] = []
     with connection.session() as client:
@@ -254,7 +293,7 @@ def fetch_document_chunks_for_resolution(
         while True:
             # Offset paging needs a total order: the object id breaks chunkIndex ties.
             response = chunk_collection.query.fetch_objects(
-                filters=Filter.by_property("documentId").equal(document_id),
+                filters=readable_filter,
                 sort=Sort.by_property("chunkIndex", ascending=True).by_id(ascending=True),
                 limit=page_size,
                 offset=offset,
@@ -409,10 +448,11 @@ async def get_chunk_by_id(
 
 
 async def get_chunk_by_index(
-    *, chunk_index: int, user_id: str, document_id: str,
+    *, chunk_index: int, user_id: str, document_id: str, readable: ReadableFiles,
 ) -> Dict[str, Any] | None:
-    """Resolve exactly one stored index within the authenticated document.
+    """Resolve exactly one stored index within the authenticated document's readable files.
 
+    An index outside every readable range is None without a query.
     Storage UUIDs remain internal (see pipeline.store.generate_deterministic_uuid).
     Two matches prove ambiguity; this is a uniqueness check, not a retrieval cap.
     """
@@ -420,6 +460,8 @@ async def get_chunk_by_index(
         raise ValueError("chunk_index must be a non-negative integer")
     if not document_id or not user_id:
         raise ValueError("Document and user scope are required")
+    if not _require_readable(document_id, readable).contains(chunk_index):
+        return None
     connection = get_connection()
 
     def resolve():
@@ -453,18 +495,21 @@ async def get_chunk_by_index(
 
 
 async def get_existing_chunk_indexes(
-    *, chunk_indexes: List[int], user_id: str, document_id: str,
+    *, chunk_indexes: List[int], user_id: str, document_id: str, readable: ReadableFiles,
 ) -> set[int]:
-    """Return which of ``chunk_indexes`` exist in the authenticated document.
+    """Return which of ``chunk_indexes`` exist in the authenticated document's readable files.
 
     A structural reference check in one tenant-scoped query: no chunk text is read.
-    Query failures raise; an empty result means the indexes do not exist.
+    Indexes outside every readable range are never looked up. Query failures
+    raise; an empty result means the indexes do not exist.
     """
     wanted = sorted(set(chunk_indexes))
     if any(type(index) is not int or index < 0 for index in wanted):
         raise ValueError("chunk_index values must be non-negative integers")
     if not document_id or not user_id:
         raise ValueError("Document and user scope are required")
+    _require_readable(document_id, readable)
+    wanted = [index for index in wanted if readable.contains(index)]
     if not wanted:
         return set()
     connection = get_connection()
@@ -495,54 +540,36 @@ async def get_existing_chunk_indexes(
     return query() if _run_sync_in_package_tool_subprocess() else await asyncio.to_thread(query)
 
 
-async def count_document_chunks(*, user_id: str, document_id: str) -> int:
-    """Return how many chunks the authenticated document has stored.
-
-    One tenant-scoped aggregate count; no chunk text is read. Query failures and
-    malformed counts raise.
-    """
-    if not document_id or not user_id:
-        raise ValueError("Document and user scope are required")
-    connection = get_connection()
-
-    def count() -> int:
-        with connection.session() as client:
-            from ..weaviate_helpers import get_user_collections
-            collection, _ = get_user_collections(client, user_id)
-            total = collection.aggregate.over_all(
-                filters=Filter.by_property("documentId").equal(document_id),
-                total_count=True,
-            ).total_count
-            if type(total) is not int or total < 0:
-                raise TypeError("Document chunk count query returned no valid chunk count")
-            return total
-
-    return count() if _run_sync_in_package_tool_subprocess() else await asyncio.to_thread(count)
-
-
 async def get_chunk_neighbor_ids(
     *,
     document_id: str,
     user_id: str,
     chunk_index: int | None,
+    readable: ReadableFiles,
 ) -> Dict[str, str | None]:
-    """Fetch adjacent tenant-scoped chunk IDs by chunk index."""
+    """Fetch adjacent tenant-scoped chunk IDs by chunk index, within the index's own file.
+
+    A file's first piece has no previous piece and its last no next one, even
+    when another file's pieces follow; an index in no readable file has neither.
+    """
 
     if not document_id:
         raise ValueError("document_id is required for tenant-scoped chunk navigation")
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped chunk navigation")
+    _require_readable(document_id, readable)
     if chunk_index is None:
         return {"previous_chunk_id": None, "next_chunk_id": None}
     if not isinstance(chunk_index, int):
         raise TypeError("chunk_index must be an int or None")
+    own_file = readable.file_for(chunk_index)
 
     connection = get_connection()
     if not connection:
         raise RuntimeError("No Weaviate connection established")
 
     def _fetch_chunk_id_at_index(index: int) -> str | None:
-        if index < 0:
+        if own_file is None or not own_file.contains(index):
             return None
 
         with connection.session() as client:
@@ -617,6 +644,8 @@ async def hybrid_search_chunks(
     use_bm25_boost: bool = False,   # V5: Boost exact matches/acronyms
     section_keywords: Optional[List[str]] = None,  # Section filtering
     strategy: str = "hybrid",       # NEW: hybrid | lexical | hybrid_lexical_first
+    *,
+    readable: ReadableFiles,
 ) -> List[Dict[str, Any]]:
     """
     Production-ready hybrid search with server-side embeddings (V5).
@@ -625,6 +654,7 @@ async def hybrid_search_chunks(
         document_id: Document UUID to search within
         query: Search query text
         user_id: User identifier for tenant scoping (required, FR-011, FR-014)
+        readable: The run's readable files; only their pieces are searched
         limit: Final number of results after all processing
         initial_limit: Number of candidates for reranker
         alpha: Hybrid search weight (0-1, higher = more vector emphasis)
@@ -646,6 +676,9 @@ async def hybrid_search_chunks(
     # T038: Validate user_id is provided (required for tenant scoping)
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped chunk search (FR-011, FR-014)")
+    readable_filter = readable_pieces_filter(document_id, readable)
+    if readable_filter is None:
+        return []
 
     initial_limit = (
         get_weaviate_search_initial_limit()
@@ -717,8 +750,8 @@ async def hybrid_search_chunks(
                 collection = chunk_collection
 
                 # Build query params - NO manual vector! (V5 change)
-                # Build base document filter
-                base_filter = Filter.by_property("documentId").equal(document_id)
+                # Base filter: the document's pieces inside its readable files
+                base_filter = readable_filter
 
                 # Add section filtering if keywords provided (Option A: active filtering)
                 if section_keywords:
@@ -1247,31 +1280,34 @@ async def get_chunks_by_parent_section(
     document_id: str,
     parent_section: str,
     user_id: str,
+    *,
+    readable: ReadableFiles,
 ) -> List[Dict[str, Any]]:
     """
-    Retrieve every chunk whose top-level section name contains ``parent_section``.
+    Retrieve every readable chunk whose top-level section name contains ``parent_section``.
 
     Uses the LLM-resolved parentSection field for section boundaries. Matching is
     a substring match, so one call can cover several stored section names; each
     returned chunk carries its own ``parent_section``. Returns every match in
-    chunk order, however many there are.
+    chunk order, however many there are, inside the run's readable files only.
 
     Args:
         document_id: Document UUID
         parent_section: The paper's own top-level section heading (e.g., "Materials and Methods", "Results")
         user_id: User identifier for tenant scoping
+        readable: The run's readable files
 
     Returns:
         List of chunks sorted by index
     """
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped chunk retrieval")
+    readable_filter = readable_pieces_filter(document_id, readable)
+    if readable_filter is None:
+        return []
 
     def _filters(Filter):
-        return (
-            Filter.by_property("documentId").equal(document_id)
-            & Filter.by_property("parentSection").like(f"*{parent_section}*")
-        )
+        return readable_filter & Filter.by_property("parentSection").like(f"*{parent_section}*")
 
     chunks = await asyncio.to_thread(_fetch_section_chunks, user_id, _filters)
     logger.info("Found %s chunks for parent section '%s'", len(chunks), parent_section)
@@ -1283,29 +1319,36 @@ async def get_chunks_by_subsection(
     parent_section: str,
     subsection: str,
     user_id: str,
+    *,
+    readable: ReadableFiles,
 ) -> List[Dict[str, Any]]:
     """
-    Retrieve every chunk of a subsection within a parent section.
+    Retrieve every readable chunk of a subsection within a parent section.
 
     Uses the LLM-resolved parentSection and subsection fields, each matched as a
-    substring. Returns every match in chunk order, however many there are.
-    Example: get_chunks_by_subsection(doc_id, "Methods", "Fly Strains", user_id)
+    substring. Returns every match in chunk order, however many there are, inside
+    the run's readable files only.
+    Example: get_chunks_by_subsection(doc_id, "Methods", "Fly Strains", user_id, readable=readable)
 
     Args:
         document_id: Document UUID
         parent_section: Top-level section name (e.g., "Methods")
         subsection: Subsection name (e.g., "Fly Strains", "Cell Culture")
         user_id: User identifier for tenant scoping
+        readable: The run's readable files
 
     Returns:
         List of chunks sorted by index
     """
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped chunk retrieval")
+    readable_filter = readable_pieces_filter(document_id, readable)
+    if readable_filter is None:
+        return []
 
     def _filters(Filter):
         return (
-            Filter.by_property("documentId").equal(document_id)
+            readable_filter
             & Filter.by_property("parentSection").like(f"*{parent_section}*")
             & Filter.by_property("subsection").like(f"*{subsection}*")
         )
@@ -1319,7 +1362,9 @@ async def get_chunks_by_subsection(
 
 async def get_document_sections_hierarchical(
     document_id: str,
-    user_id: str
+    user_id: str,
+    *,
+    readable: ReadableFiles,
 ) -> Dict[str, Any]:
     """
     Get document sections organized hierarchically (top-level -> subsections).
@@ -1345,12 +1390,16 @@ async def get_document_sections_hierarchical(
     Args:
         document_id: Document UUID
         user_id: User identifier for tenant scoping
+        readable: The run's readable files; only their pieces are listed
 
     Returns:
         Hierarchical structure of document sections
     """
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped section listing")
+    readable_filter = readable_pieces_filter(document_id, readable)
+    if readable_filter is None:
+        return {"sections": [], "top_level_sections": []}
 
     def _fetch():
         connection = get_connection()
@@ -1360,12 +1409,11 @@ async def get_document_sections_hierarchical(
             from ..weaviate_helpers import get_user_collections
             chunk_collection, _ = get_user_collections(client, user_id)
 
-            from weaviate.classes.query import Filter
             from collections import defaultdict
 
             objects = _fetch_every_object(
                 chunk_collection,
-                filters=Filter.by_property("documentId").equal(document_id),
+                filters=readable_filter,
                 return_properties=[
                     "parentSection",
                     "subsection",
@@ -1573,13 +1621,16 @@ def update_chunk_embeddings(chunk_id: str, vector: List[float], user_id: str) ->
 
 
 # Async wrapper functions for FastAPI endpoints
-async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str) -> Dict[str, Any]:
-    """Get chunks for a document using Weaviate v4 collections API.
+async def get_chunks(
+    document_id: str, pagination: Dict[str, Any], user_id: str, *, readable: ReadableFiles,
+) -> Dict[str, Any]:
+    """Get the chunks of a document's readable files using Weaviate v4 collections API.
 
     Args:
         document_id: Parent document UUID
         pagination: Dict with page, page_size, include_metadata
         user_id: User identifier for tenant scoping (required, FR-011, FR-014)
+        readable: The document's readable files; only their pieces are listed and counted
 
     Returns:
         Dictionary with chunks and total count
@@ -1590,8 +1641,11 @@ async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str)
     # T038: Validate user_id is provided (required for tenant scoping)
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped chunk retrieval (FR-011, FR-014)")
+    readable_filter = readable_pieces_filter(document_id, readable)
+    if readable_filter is None:
+        return {"chunks": [], "total": 0}
     import asyncio
-    from weaviate.classes.query import Filter, Sort
+    from weaviate.classes.query import Sort
 
     # Extract pagination parameters
     page = pagination.get("page", 1)
@@ -1617,7 +1671,7 @@ async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str)
                 # Main page query. Offset pages need a total order, so the
                 # object id breaks chunkIndex ties.
                 response = collection.query.fetch_objects(
-                    filters=Filter.by_property("documentId").equal(document_id),
+                    filters=readable_filter,
                     sort=Sort.by_property("chunkIndex", ascending=True).by_id(ascending=True),
                     limit=page_size,
                     offset=offset,
@@ -1699,9 +1753,9 @@ async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str)
                     }
                     chunks.append(chunk_data)
 
-                # The store counts every chunk of the document, with no window.
+                # The store counts every readable chunk of the document, with no window.
                 total = collection.aggregate.over_all(
-                    filters=Filter.by_property("documentId").equal(document_id),
+                    filters=readable_filter,
                     total_count=True,
                 ).total_count
 

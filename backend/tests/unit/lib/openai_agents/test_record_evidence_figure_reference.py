@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import src.lib.openai_agents.tools.record_evidence as record_evidence_module
+from tests.readable_files_support import single_file
 from src.lib.document_sources.figure_metadata import PROVIDER_FIGURE_METADATA_SECTION
 from src.lib.openai_agents.evidence_spans import build_evidence_spans
 from src.lib.openai_agents.tools.record_evidence import (
@@ -248,6 +249,8 @@ async def test_record_evidence_aggregates_only_one_safe_reference(
         )
     chunk = {
         "id": "44444444-4444-4444-8444-444444444444",
+        "document_id": "doc-aggregate",
+        "chunk_index": 0,
         "text": text,
         "parent_section": "Results",
         "metadata": {
@@ -276,6 +279,7 @@ async def test_record_evidence_aggregates_only_one_safe_reference(
         "function_tool",
         lambda function: function,
     )
+    monkeypatch.setattr(record_evidence_module, "current_readable_files", lambda: single_file("doc-aggregate"))
     tool = record_evidence_module._create_canonical_evidence_recorder(
         "doc-aggregate",
         "user-1",

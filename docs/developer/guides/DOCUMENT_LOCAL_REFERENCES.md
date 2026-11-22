@@ -40,6 +40,44 @@ workspace evidence updates are staged until the final generation check succeeds.
 Changed source or segmentation fails explicitly instead of rebinding an ordinal.
 These checks verify identity and exact source, not scientific sufficiency.
 
+## Readable files
+
+A paper holds one or more files (`pdf_document_files`), and each file owns the
+piece range `chunk_index_start..chunk_index_end` of the paper's `chunk_index`
+numbers. Every document read keeps to the run's readable files
+(`src.lib.document_files.readable`, `ReadableFiles`): the paper's `ready` files,
+or only its ready main file when the run's `ReadingScope` is `MAIN_FILE_ONLY`.
+Batch runs set `MAIN_FILE_ONLY` (`lib/batch/processor.py`); chat and
+single-paper flows read every ready file. Files being added (`pending`), failed
+files and removed files are never readable.
+
+- Each document tool call resolves the readable files inside the transaction
+  that binds its source generation, and exposes them as
+  `current_readable_files()`. The call fails if a file it could read stops being
+  readable before it ends; a file that becomes ready during the call is harmless.
+- Every read function in `weaviate_client/chunks.py` (and the runtime facade
+  `agr_ai_curation_runtime.weaviate_chunks`) takes `readable=` and filters on the
+  readable ranges: search, index reads, existing-index checks, neighbours
+  (clamped to the piece's own file), section reads, the document outline and the
+  chunks API. With no readable file they return nothing without a query.
+- `read_chunk` on an index in no readable file (negative, past the end, or in a
+  gap left by a pending or removed file) returns `invalid_result_cursor` with
+  the readable ranges, for example "this document has chunks 0 to 41" for a
+  one-file paper and "0 to 41 (paper.pdf), 42 to 60 (Table S1.xlsx)" for
+  several. A missing piece inside a readable range is still a terminal
+  `DocumentReadError`.
+- A piece loaded by its storage id is checked against the ranges before use:
+  `record_evidence`'s internal span-ID path treats it as a source failure, and
+  history projection marks it `source_unavailable`.
+- The curation review's evidence resolution fetch
+  (`fetch_document_chunks_for_resolution`) reads the ready files only, whatever
+  the run's scope.
+- A ready file with no recorded range (the paper-files fill step has not run)
+  is a named `FileRangeMissingError`; tools and history projection end with a
+  `DocumentReadError`. `fill_existing --verify` must be clean before traffic.
+- The document-context cache records the readable files each outline was built
+  from; a run with other readable files builds its own.
+
 ## Selections that have not been read
 
 If `record_evidence` selects a chunk or span window that has not been issued in
@@ -49,6 +87,14 @@ selection. The agent must explicitly read the relevant passage with `read_chunk`
 `read_section` or `read_subsection` and submit the selections again within its existing turn budget. The application
 does not fetch the missing selection, replay the tool, or save partial evidence.
 Mixed issued/unissued selections cannot alter an existing evidence record.
+
+A selection the scope has read and issued, whose `chunk_index` is no longer part of a
+readable file (its file was removed or is no longer ready since the read), returns `status:
+needs_source_read`, `error_code: unreadable_document_selection`, `saved: false`,
+the selection, and the readable ranges. Nothing is looked up or saved. Like an
+unissued selection, it is unsuccessful in tool telemetry without a Sentry event.
+The issued check runs first: a selection never read gets the unissued answer
+above whatever its piece number, so one-file papers answer exactly as before.
 
 This is a source-read precondition, not evidence that retrieval failed. The
 rejection remains unsuccessful in tool telemetry without generating a new Sentry
