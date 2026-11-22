@@ -1074,23 +1074,26 @@ def _create_canonical_evidence_recorder(
             None,
         )
         if other_file_fragment is not None:
-            # One evidence record names one file.
+            # One evidence record names one file. This is a choice the model can
+            # correct (one call per file), so it is a refusal returned to the model,
+            # not a resolution failure (those end the run in the public tool).
+            file_names = list(dict.fromkeys(fragment.file_name for fragment in fragments))
             return _log_record_evidence_result(
-                _build_span_resolution_error_result(
-                    entity=normalized_entity,
-                    span_ids=normalized_span_ids,
-                    failed_span_id=other_file_fragment.span.span_id,
-                    failed_span_error=(
-                        "These sentences come from more than one file. Record the "
-                        "sentences of each file in a separate call"
+                {
+                    "status": "invalid_request",
+                    "error_code": "selections_in_several_files",
+                    "saved": False,
+                    "entity": normalized_entity,
+                    "file_names": file_names,
+                    "message": (
+                        "Nothing was saved. The selected sentences come from more than one "
+                        f"file: {', '.join(file_names)}. Record the sentences of each file "
+                        "in a separate record_evidence call."
                     ),
-                    resolution_failure="spans_in_several_files",
-                    chunk_id=other_file_fragment.chunk_id,
-                    extra_fields=error_extra_fields,
-                    retry_instructions=None,
-                ),
+                    **(error_extra_fields or {}),
+                },
                 document_id=document_id,
-                verification_method="spans_in_several_files",
+                verification_method="selections_in_several_files",
             )
         verified_quote = "\n\n".join(fragment.span.text for fragment in fragments)
         chunk_ids = _unique_non_empty([fragment.chunk_id for fragment in fragments])

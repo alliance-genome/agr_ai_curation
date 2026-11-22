@@ -846,14 +846,14 @@ async def test_record_evidence_refuses_sentences_from_two_files_in_one_record(mo
     monkeypatch.setattr(record_evidence, "current_readable_files", _two_files)
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
     tool = record_evidence._create_canonical_evidence_recorder("doc-1", "user-1")
-    sheet_span = _span_ids(sheet_chunk, sheet_text)[0]
-
     result = await tool(
         entity="abc-1",
-        span_ids=[_span_ids(main_chunk, main_text)[0], sheet_span],
+        span_ids=[_span_ids(main_chunk, main_text)[0], _span_ids(sheet_chunk, sheet_text)[0]],
     )
 
-    assert result["status"] == "not_found"
-    assert result["resolution_failure"] == "spans_in_several_files"
-    assert result["failed_span_id"] == sheet_span
+    assert result["status"] == "invalid_request"
+    assert result["error_code"] == "selections_in_several_files"
+    assert result["saved"] is False
+    assert result["file_names"] == ["paper.pdf", "Table_S1.xlsx"]
+    assert "resolution_failure" not in result
     assert "evidence_record_id" not in result
