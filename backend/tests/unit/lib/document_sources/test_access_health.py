@@ -437,3 +437,26 @@ async def test_document_source_health_auth_failure_precedes_provider_constructio
 
     assert result.ok is False
     assert result.metadata["reason"] == "authentication"
+
+
+@pytest.mark.asyncio
+async def test_a_curator_request_never_uses_the_machine_reader_cache(monkeypatch) -> None:
+    """The machine reader's cache renews by its refresh skew only (KANBAN-1976 /
+    ALL-1460, P7w). A curator's import must never take that bearer, whatever is
+    cached: it carries the curator's own login."""
+
+    from src.lib.document_sources import access
+
+    async def _machine_reader():
+        raise AssertionError("a curator request must not read the machine reader")
+
+    monkeypatch.setattr(access, "development_reader_required", lambda: False)
+    monkeypatch.setattr(access, "get_development_reader_credentials", _machine_reader)
+
+    context = await build_document_source_request_context(
+        request=request_with_cookies({"auth_token": "curator-token"}),  # type: ignore[arg-type]
+        user_claims={"sub": "curator", "groups": ["MGICurator"]},
+    )
+
+    assert context.bearer_kind is ProviderBearerKind.CURATOR
+    assert context.curator_token == "curator-token"

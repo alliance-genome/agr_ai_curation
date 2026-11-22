@@ -127,3 +127,60 @@ def test_touching_queued_jobs_refreshes_only_those_still_pending(owner_id):
         assert db.get(PdfProcessingJob, queued.job_id).updated_at > queued_aged + timedelta(seconds=4000)
         # A started job records its own activity; it is never touched for it.
         assert db.get(PdfProcessingJob, started.job_id).updated_at == started_aged
+
+
+def _ten_paper_batch(owner: int):
+    """One request's ten imports: the first waits on ABC, nine queue behind it."""
+
+    papers = [_importing_paper(owner) for _ in range(10)]
+    running = _waiting_job(papers[0], owner, "provider_conversion")
+    queued = [
+        job_service.create_job(document_id=paper.id, user_id=owner, filename=paper.filename)
+        for paper in papers[1:]
+    ]
+    return running, queued
+
+
+def _sweep(monkeypatch):
+    from src.lib.pdf_jobs.recovery import reconcile_stale_jobs_once
+
+    monkeypatch.setenv("PDF_JOB_STALE_TIMEOUT_SECONDS", "7200")
+    monkeypatch.setenv("PDF_JOB_RECOVERY_BATCH_SIZE", "200")
+    cursor = reconcile_stale_jobs_once()
+    while cursor is not None:
+        cursor = reconcile_stale_jobs_once(after=cursor)
+
+
+def _statuses(jobs):
+    with SessionLocal() as db:
+        return [db.get(PdfProcessingJob, job.job_id).status for job in jobs]
+
+
+def test_a_batch_queued_behind_a_slow_living_import_is_not_swept(owner_id, monkeypatch):
+    running, queued = _ten_paper_batch(owner_id)
+    # Three hours in: the first import is still polling ABC and, at each poll,
+    # touches the jobs queued behind it (UploadExecutionService does this).
+    for job in (running, *queued):
+        _age(job.job_id, 3 * 3600)
+    job_service.update_progress(
+        job_id=running.job_id, stage="provider_conversion", progress_percentage=20,
+        message="ABC Literature conversion running", status="running",
+    )
+    job_service.touch_pending_jobs(job_ids=[job.job_id for job in queued])
+
+    _sweep(monkeypatch)
+
+    assert _statuses([running]) == ["running"]
+    assert _statuses(queued) == ["pending"] * 9
+
+
+def test_a_dead_batch_is_still_swept_after_the_stale_timeout(owner_id, monkeypatch):
+    running, queued = _ten_paper_batch(owner_id)
+    # The process is gone: nothing has polled or touched anything for 3 hours.
+    for job in (running, *queued):
+        _age(job.job_id, 3 * 3600)
+
+    _sweep(monkeypatch)
+
+    assert _statuses([running]) == ["failed"]
+    assert _statuses(queued) == ["failed"] * 9
