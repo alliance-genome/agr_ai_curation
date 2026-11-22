@@ -18,6 +18,7 @@ from pydantic import (
     Field,
     StringConstraints,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -834,6 +835,18 @@ class CurationDraft(CurationWorkspaceBaseModel):
     )
 
 
+def _without_unrecorded_file(record: Any, serialized: dict[str, Any]) -> dict[str, Any]:
+    """Leave ``file_id`` out of evidence saved before files were recorded.
+
+    Such evidence then serializes exactly as before 0.12.0, so submission
+    payloads, exports and intent fingerprints of existing records are unchanged.
+    """
+
+    if record.file_id is None:
+        serialized.pop("file_id", None)
+    return serialized
+
+
 class CurationEvidenceRecord(CurationWorkspaceBaseModel):
     """Workspace-owned wrapper around the reusable evidence anchor contract."""
 
@@ -855,12 +868,23 @@ class CurationEvidenceRecord(CurationWorkspaceBaseModel):
         description="Whether the anchor is the primary evidence record for its target field(s)",
     )
     anchor: EvidenceAnchor = Field(description="Resolved evidence anchor payload")
+    file_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "The paper file this evidence quotes (pdf_document_files id). Every record "
+            "made since 0.12.0 has one; absent means saved before files were recorded"
+        ),
+    )
     created_at: datetime = Field(description="Evidence record creation timestamp")
     updated_at: datetime = Field(description="Latest evidence record mutation timestamp")
     warnings: list[str] = Field(
         default_factory=list,
         description="Warnings or degraded-mode notes for this evidence record",
     )
+
+    @model_serializer(mode="wrap")
+    def serialize_without_unrecorded_file(self, handler):
+        return _without_unrecorded_file(self, handler(self))
 
 
 class CurationValidationSnapshot(CurationWorkspaceBaseModel):
@@ -952,6 +976,13 @@ class DomainEnvelopeEvidenceAnchorProjection(CurationWorkspaceBaseModel):
         default=None,
         description="Workspace or source document identifier used for viewer navigation",
     )
+    file_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "The paper file the evidence record quotes (its stored file_id). Every record "
+            "made since 0.12.0 has one; absent means saved before files were recorded"
+        ),
+    )
     quote: Optional[str] = Field(
         default=None,
         description="Best available quote or snippet text for curator display",
@@ -979,6 +1010,10 @@ class DomainEnvelopeEvidenceAnchorProjection(CurationWorkspaceBaseModel):
         default_factory=dict,
         description="Projection metadata retained from the envelope evidence record",
     )
+
+    @model_serializer(mode="wrap")
+    def serialize_without_unrecorded_file(self, handler):
+        return _without_unrecorded_file(self, handler(self))
 
 
 class DomainEnvelopeValidationFindingProjection(CurationWorkspaceBaseModel):

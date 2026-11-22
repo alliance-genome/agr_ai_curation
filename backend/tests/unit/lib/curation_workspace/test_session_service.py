@@ -6029,7 +6029,7 @@ def test_pre_release_anchor_keeps_its_submission_fingerprint_and_payload(
     )
     assert response.submission.status == CurationSubmissionStatus.ACCEPTED
     persisted_text = _persisted_payload_without_volatile_keys(db_session, seeded["session_id"])
-    assert '"file_id"' not in persisted_text
+    assert "file_id" not in persisted_text
     assert sha256(persisted_text.encode()).hexdigest() == _PRE_RELEASE_PAYLOAD_SHA256
 
 
@@ -6057,3 +6057,76 @@ def test_pre_release_projection_keeps_its_submission_fingerprint(
         _intent_fingerprint(db_session, session_row, candidate, domain_context)
         == _PRE_RELEASE_FINGERPRINT_PROJECTION
     )
+
+
+def _seed_anchor_with_file(db_session, *, quoted_file: bool):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+        with_manual_evidence=True,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    session_row.adapter_key = REFERENCE_ADAPTER_KEY
+    candidate = db_session.get(CurationCandidate, UUID(seeded["first_candidate_id"]))
+    document = db_session.get(PDFDocument, session_row.document_id)
+    anchor_row = candidate.evidence_anchors[0]
+    from src.schemas.curation_workspace import (
+        EvidenceAnchor,
+        EvidenceAnchorKind,
+        EvidenceLocatorQuality,
+        EvidenceSupportsDecision,
+    )
+
+    anchor_row.anchor = EvidenceAnchor(
+        anchor_kind=EvidenceAnchorKind.SNIPPET,
+        locator_quality=EvidenceLocatorQuality.EXACT_QUOTE,
+        supports_decision=EvidenceSupportsDecision.SUPPORTS,
+        snippet_text="The bronze astrolabe was catalogued in 1901.",
+        viewer_highlightable=True,
+        chunk_ids=[str(uuid4())],
+    ).model_dump(mode="json")
+    if quoted_file:
+        anchor_row.source_file_id = document.main_file.id
+    db_session.commit()
+    return seeded, session_row, candidate, document
+
+
+def test_served_evidence_anchor_names_its_file_beside_the_anchor(db_session):
+    _, _, candidate, document = _seed_anchor_with_file(db_session, quoted_file=True)
+
+    served = serializer_module._candidate_payload(candidate).model_dump(mode="json")
+
+    assert served["evidence_anchors"][0]["file_id"] == str(document.main_file.id)
+    assert "file_id" not in served["evidence_anchors"][0]["anchor"]
+
+
+def test_served_pre_release_evidence_anchor_has_no_file(db_session):
+    _, _, candidate, _ = _seed_anchor_with_file(db_session, quoted_file=False)
+
+    served = serializer_module._candidate_payload(candidate).model_dump(mode="json")
+
+    assert "file_id" not in served["evidence_anchors"][0]
+
+
+def test_submission_of_evidence_that_names_its_file_carries_the_file(db_session):
+    seeded, session_row, candidate, document = _seed_anchor_with_file(db_session, quoted_file=True)
+    file_id = str(document.main_file.id)
+
+    material = submission_module._non_envelope_candidate_submission_intent(candidate)
+    assert material["evidence_anchors"][0]["file_id"] == file_id
+
+    response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionExecuteRequest(
+            session_id=seeded["session_id"],
+            idempotency_key=str(uuid4()),
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+        actor_claims={"sub": "user-1"},
+    )
+    assert response.submission.status == CurationSubmissionStatus.ACCEPTED
+    persisted = db_session.scalars(
+        select(SubmissionModel).where(SubmissionModel.session_id == UUID(seeded["session_id"]))
+    ).one()
+    assert persisted.payload["payload_json"]["candidates"][0]["evidence_anchors"][0]["file_id"] == file_id
