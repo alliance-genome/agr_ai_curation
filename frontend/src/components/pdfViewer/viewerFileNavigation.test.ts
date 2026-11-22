@@ -156,6 +156,22 @@ describe('locateEvidenceInBlocks (fragment by fragment, as the record_evidence w
     })
   })
 
+  // The writer keeps the model's selection order and does not remove duplicates.
+  it('finds fragments given out of reading order, and a repeated fragment, independently', () => {
+    const target = {
+      fragments: [twoRows.fragments[1]!, twoRows.fragments[0]!, twoRows.fragments[1]!],
+      section: 'Sheet 1',
+      subsection: null,
+    }
+
+    expect(locateEvidenceInBlocks(blocks, target, '')).toEqual({
+      blocks: [{ blockIndex: 1, rowIndexes: [0, 1] }],
+      found: 3,
+      total: 3,
+      chosenAmongSeveral: false,
+    })
+  })
+
   it('locates the quote when the record has no fragments (a review-grid anchor)', () => {
     expect(locateEvidenceInBlocks(blocks, { fragments: null, section: null, subsection: null }, 'two temperatures')).toMatchObject({
       found: 1,
