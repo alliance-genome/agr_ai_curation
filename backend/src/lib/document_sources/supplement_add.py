@@ -17,7 +17,8 @@ own job) calls ``add_files_to_paper``. The paper stays usable throughout.
 - Rows left ``failed`` by an add that died (the stale sweep marks them) are removed
   with their pieces at the start of the next add on the paper.
 
-Codes only: no wording is built here.
+Each file's outcome is a code. The four job messages near the end of this module
+are proposals awaiting sign-off.
 """
 
 from __future__ import annotations
