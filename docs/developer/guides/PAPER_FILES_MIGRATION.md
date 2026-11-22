@@ -84,6 +84,21 @@ elements under the file's id: `{user}/source_markdown/{file_id}.md` and
 (named by paper id); every reader and the delete path use the paths stored on
 the file row, never a rebuilt one.
 
+## Supplement files added to a paper
+
+An add (`supplement_add.py`, see the ABC import lifecycle) writes one row per
+converted supplement: role `supplement`, display mode `text`, `page_count` NULL,
+`file_path` and `source_markdown_path` the stored Markdown, `file_hash` the
+SHA-256 of `"{owner_user_id}:{sha256 of the converted text}"` (the main file's
+user-scoped form; the hash unique index covers main files only, so one
+supplement may be on two papers), `file_size` the Markdown's bytes, its own
+`processed_json_path`, provenance (the original's provider file id, MD5, access
+scope and groups; the converted text's id, SHA-256, class and extension), its
+piece range and `text_bytes`. Rows are `pending` until every file of the add is
+stored, then `ready` together; readers see only `ready` files. A row left
+`failed` by an add that died is removed, with its pieces, by the next add on the
+paper; piece numbers are never reused.
+
 ## One active job per paper (Alembic `d7e8f9a0b1c2`)
 
 A partial unique index, `uq_pdf_processing_jobs_one_active_per_document`, allows
