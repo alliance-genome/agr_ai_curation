@@ -405,7 +405,8 @@ export interface EvidenceRecord {
   verified_quote: string
   /** Null when the file has no pages to cite (text files, PDF supplements without page data). */
   page: number | null
-  section: string
+  /** Null only when the record names its file (text before the file's first heading). */
+  section: string | null
   subsection?: string
   chunk_id: string
   chunk_ids?: string[]

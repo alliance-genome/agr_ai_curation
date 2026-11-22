@@ -17,7 +17,7 @@ interface EvidenceQuoteProps {
   testId?: string
 }
 
-function buildMetadataLabel(evidenceRecord: EvidenceRecord): string {
+function buildMetadataLabel(evidenceRecord: EvidenceRecord): string | null {
   return buildEvidenceLocationLabel({
     pageNumber: evidenceRecord.page,
     sectionTitle: evidenceRecord.section,
@@ -26,7 +26,9 @@ function buildMetadataLabel(evidenceRecord: EvidenceRecord): string {
 }
 
 function buildEvidenceQuoteCopyText(evidenceRecord: EvidenceRecord): string {
-  return `${buildMetadataLabel(evidenceRecord)}\n"${evidenceRecord.verified_quote.trim()}"`
+  const label = buildMetadataLabel(evidenceRecord)
+  const quote = `"${evidenceRecord.verified_quote.trim()}"`
+  return label ? `${label}\n${quote}` : quote
 }
 
 export default function EvidenceQuote({
@@ -49,15 +51,17 @@ export default function EvidenceQuote({
           py: '10px',
         })}
       >
-        <Box
-          sx={{
-            fontSize: '11px',
-            color: 'text.secondary',
-            mb: '4px',
-          }}
-        >
-          {buildMetadataLabel(evidenceRecord)}
-        </Box>
+        {buildMetadataLabel(evidenceRecord) ? (
+          <Box
+            sx={{
+              fontSize: '11px',
+              color: 'text.secondary',
+              mb: '4px',
+            }}
+          >
+            {buildMetadataLabel(evidenceRecord)}
+          </Box>
+        ) : null}
 
         <Box
           sx={{

@@ -170,6 +170,39 @@ describe('P9b review fixes', () => {
     })
   })
 
+  it('evidence with no section (text before the first heading) that is not found gets the plain not-found banner, no section mark', async () => {
+    stubViewerFetch()
+    await showFourFilePaper()
+    act(() => {
+      dispatchPDFViewerNavigateEvidence(chatCommand({
+        verified_quote: 'A sentence that is not in this file.',
+        section: null,
+        file_id: TEXT_SUPPLEMENT_FILE_ID,
+        file_name: 'Table_S1.xlsx',
+        source_fragments: [{ text: 'A sentence that is not in this file.', file_id: TEXT_SUPPLEMENT_FILE_ID }],
+      }))
+    })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/^This quote could not be found in the file's text\.$/)
+    expect(document.querySelector('[data-highlight-kind="section"]')).toBeNull()
+  })
+
+  it('evidence with no section that is found is highlighted as usual', async () => {
+    stubViewerFetch()
+    await showFourFilePaper()
+    act(() => {
+      dispatchPDFViewerNavigateEvidence(chatCommand({
+        verified_quote: '| XS0401 | 25 C |',
+        section: null,
+        file_id: TEXT_SUPPLEMENT_FILE_ID,
+        file_name: 'Table_S1.xlsx',
+        source_fragments: [{ text: '| XS0401 | 25 C |', span_type: 'table_row', file_id: TEXT_SUPPLEMENT_FILE_ID }],
+      }))
+    })
+
+    expect(await screen.findByRole('row', { current: true })).toHaveTextContent('XS0401')
+  })
+
   describe('F2: the same paper sent again', () => {
     it('R3: equal files keep the text highlight and do not fetch the text again', async () => {
       stubViewerFetch()

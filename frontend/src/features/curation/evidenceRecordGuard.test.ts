@@ -23,6 +23,20 @@ describe('isEvidenceRecord', () => {
     })).toBe(true)
   })
 
+  it('keeps a record that names its file and has no section (text before the file\'s first heading)', () => {
+    expect(isEvidenceRecord({
+      ...base,
+      section: null,
+      page: null,
+      file_id: 'aaaaaaaa-0000-0000-0000-000000000002',
+      file_name: 'Table_S1.xlsx',
+    })).toBe(true)
+  })
+
+  it('drops a section-less record without a file', () => {
+    expect(isEvidenceRecord({ ...base, page: 3, section: null })).toBe(false)
+  })
+
   it('drops a page-less record without a file, and records missing required fields', () => {
     expect(isEvidenceRecord({ ...base, page: null })).toBe(false)
     expect(isEvidenceRecord({ ...base })).toBe(false)

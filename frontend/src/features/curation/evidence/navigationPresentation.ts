@@ -53,11 +53,12 @@ export function normalizeEvidenceSectionHierarchy(
   }
 }
 
+/** The page and section of evidence, or null when it has neither (nothing is shown then). */
 export function buildEvidenceLocationLabel(args: {
   pageNumber?: number | null
   sectionTitle?: string | null
   subsectionTitle?: string | null
-}): string {
+}): string | null {
   const { sectionTitle, subsectionTitle } = normalizeEvidenceSectionHierarchy(
     args.sectionTitle,
     args.subsectionTitle,
@@ -78,7 +79,7 @@ export function buildEvidenceLocationLabel(args: {
     return sectionLabel
   }
 
-  return 'Location unavailable'
+  return null
 }
 
 export function dispatchEvidenceNavigationCommand(

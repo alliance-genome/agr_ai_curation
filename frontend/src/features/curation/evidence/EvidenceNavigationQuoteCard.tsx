@@ -104,7 +104,7 @@ export default function EvidenceNavigationQuoteCard({
         }}
         type="button"
       >
-        <Box
+        {locationLabel ? <Box
           sx={{
             fontSize: '11px',
             color: 'text.secondary',
@@ -113,7 +113,7 @@ export default function EvidenceNavigationQuoteCard({
           }}
         >
           {locationLabel}
-        </Box>
+        </Box> : null}
 
         <Box
           sx={{
