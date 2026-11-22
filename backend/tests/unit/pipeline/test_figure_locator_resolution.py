@@ -7,7 +7,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from agents import Agent, Model, ModelSettings
 
+from src.lib.config import models_loader
 from src.lib.document_sources.figure_metadata import PROVIDER_FIGURE_METADATA_SECTION
 from src.lib.document_sources.figure_metadata import (
     append_provider_figure_metadata_markdown,
@@ -81,24 +83,41 @@ def _provider_reference_for(chunk: DocumentChunk) -> ProviderFigureReference:
     return reference
 
 
+@pytest.fixture(scope="module", autouse=True)
+def shipped_model_catalog():
+    # A worker may already have loaded a catalog from another test's package.
+    models_loader.load_models(
+        models_path=Path(__file__).resolve().parents[4] / "config" / "models.yaml",
+        force_reload=True,
+    )
+    yield
+    models_loader.reset_cache()
+
+
 @pytest.fixture(autouse=True)
 def figure_locator_env(monkeypatch):
     monkeypatch.setenv("FIGURE_LOCATOR_LLM_MODEL", "gpt-6.1-sol")
     monkeypatch.setenv("FIGURE_LOCATOR_LLM_REASONING", "low")
+    monkeypatch.delenv("FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("LLM_DISABLED_PROVIDERS", "")
 
 
 @pytest.fixture
 def contract_runner(monkeypatch):
+    from src.lib.openai_agents import runner as agent_runner
+
     monkeypatch.setenv("FIGURE_LOCATOR_RESOLUTION_CONTRACT_RETRIES", "1")
     monkeypatch.setattr("src.lib.openai_agents.config.get_model_for_agent", lambda _: "test-model")
-    monkeypatch.setattr("src.lib.openai_agents.config.build_model_settings", lambda *a, **k: None)
-    monkeypatch.setattr("agents.Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        "src.lib.openai_agents.config.build_model_settings",
+        lambda *args, **kwargs: ModelSettings(),
+    )
     monkeypatch.setattr(locator, "gen_ai_invoke_agent_span", lambda **kwargs: nullcontext(None))
     telemetry = MagicMock()
     monkeypatch.setattr(locator, "set_redacted_ai_span_data", telemetry)
     runner = AsyncMock()
-    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_with_owned_openai_resources", runner)
+    monkeypatch.setattr(agent_runner, "run_agent_with_owned_openai_resources", runner)
     return runner, telemetry
 
 
@@ -1088,6 +1107,9 @@ async def test_gpt61_sol_unoffered_reasoning_is_rejected_from_catalog(monkeypatc
 async def test_catalog_compatible_model_uses_its_provider_without_openai_key(
     monkeypatch,
 ) -> None:
+    # The runner initializes SDK defaults on import. Load it with the real catalog.
+    from src.lib.openai_agents import runner as agent_runner
+
     model_id = "catalog-gemini"
     monkeypatch.setattr(
         "src.lib.config.models_loader.get_model",
@@ -1116,23 +1138,15 @@ async def test_catalog_compatible_model_uses_its_provider_without_openai_key(
         else None,
     )
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_BASE_URL", raising=False)
 
-    model_object = SimpleNamespace()
+    model_object = MagicMock(spec=Model)
     compatible_provider = MagicMock()
     compatible_provider.return_value.get_model.return_value = model_object
     monkeypatch.setattr(
         "agents.OpenAIProvider",
         compatible_provider,
     )
-    agent_factory = MagicMock(
-        side_effect=lambda **kwargs: SimpleNamespace(
-            name=kwargs["name"],
-            model=kwargs["model"],
-        )
-    )
-    monkeypatch.setattr("agents.Agent", agent_factory)
-
     output = locator.FigureLocatorBatchOutput(
         candidates=[
             locator.FigureLocatorCandidateOutput(
@@ -1142,7 +1156,7 @@ async def test_catalog_compatible_model_uses_its_provider_without_openai_key(
         ]
     )
     runner = AsyncMock(return_value=SimpleNamespace(final_output=output))
-    monkeypatch.setattr("agents.Runner.run", runner)
+    monkeypatch.setattr(agent_runner.Runner, "run", runner)
 
     result = await locator._call_figure_locator_classifier(
         [(_chunk("chunk-0", "Figure 1 shows signal."), "Figure 1 shows signal.")],
@@ -1168,9 +1182,11 @@ async def test_catalog_compatible_model_uses_its_provider_without_openai_key(
     assert provider_kwargs["strict_feature_validation"] is True
     compatible_provider.return_value.get_model.assert_called_once_with(model_id)
     assert model_object._agr_provider_id == "gemini"
-    assert agent_factory.call_args is not None
-    assert agent_factory.call_args.kwargs["model"] is model_object
     runner.assert_awaited_once()
+    assert runner.await_args is not None
+    classifier_agent = runner.await_args.args[0]
+    assert isinstance(classifier_agent, Agent)
+    assert classifier_agent.model is model_object
 
 
 _UUID_A = "0f5c1a52-8a4e-4c1e-9d7a-1b2c3d4e5f60"
