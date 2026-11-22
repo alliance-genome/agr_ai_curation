@@ -3235,3 +3235,90 @@ async def test_abc_is_never_asked_again_after_a_final_answer(monkeypatch, final_
     assert len(provider.conversion_requests) == 3
     assert len(outcomes["failed"]) == 1
     assert outcomes["completed"] == []
+
+
+# --- P7w: the papers queued behind a long import in the same request stay fresh
+
+
+def _queued_request(job_id: str) -> ProviderConversionExecutionRequest:
+    return ProviderConversionExecutionRequest(
+        bearer_kind=ProviderBearerKind.CURATOR,
+        document_id=f"doc-{job_id}",
+        job_id=job_id,
+        user_id="user-provider",
+        owner_user_id=42,
+        filename="paper.pdf",
+        file_path=Path("/tmp/paper.pdf"),
+        reference="AGRKB:101",
+        source_artifact_id="source-pdf-1",
+        curator_token="curator-token",
+        source_provenance={"provider": "abc_literature"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_jobs_queued_behind_a_running_import_of_the_same_request_are_kept_fresh(monkeypatch):
+    """One request's imports run one after another; while one waits on ABC, the
+    jobs queued behind it must not look stale to the sweep."""
+
+    touched = []
+    ran = []
+
+    def _touch(*, job_ids):
+        touched.append(tuple(job_ids))
+        return len(job_ids)
+
+    async def _unbounded(self, request):
+        ran.append(request.job_id)
+        if request.job_id == "job-1":
+            # Longer than two keep-alive intervals (the interval is at least 0.1 s).
+            await asyncio.sleep(0.35)
+
+    monkeypatch.setattr(service_module.pdf_job_service, "touch_pending_jobs", _touch)
+    monkeypatch.setattr(service_module, "get_document_source_poll_interval_seconds", lambda: 0.01)
+    monkeypatch.setattr(UploadExecutionService, "_execute_provider_conversion_unbounded", _unbounded)
+    service = UploadExecutionService(
+        pipeline_tracker=_Tracker(),
+        document_source_provider_factory=lambda: _Provider(),
+    )
+    background_tasks = BackgroundTasks()
+    for job_id in ("job-1", "job-2", "job-3"):
+        await service.dispatch_provider_conversion_execution(
+            background_tasks=background_tasks, request=_queued_request(job_id)
+        )
+
+    await background_tasks()
+
+    assert ran == ["job-1", "job-2", "job-3"]
+    # While job-1 ran: jobs 2 and 3, several times; while job-2 ran (briefly):
+    # at most job 3; the last job keeps nothing alive.
+    assert touched.count(("job-2", "job-3")) >= 2
+    assert set(touched) <= {("job-2", "job-3"), ("job-3",)}
+
+
+@pytest.mark.asyncio
+async def test_a_request_with_one_import_keeps_nothing_alive(monkeypatch):
+    touched = []
+
+    async def _unbounded(self, request):
+        await asyncio.sleep(0.03)
+
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "touch_pending_jobs",
+        lambda *, job_ids: touched.append(tuple(job_ids)),
+    )
+    monkeypatch.setattr(service_module, "get_document_source_poll_interval_seconds", lambda: 0.01)
+    monkeypatch.setattr(UploadExecutionService, "_execute_provider_conversion_unbounded", _unbounded)
+    service = UploadExecutionService(
+        pipeline_tracker=_Tracker(),
+        document_source_provider_factory=lambda: _Provider(),
+    )
+    background_tasks = BackgroundTasks()
+    await service.dispatch_provider_conversion_execution(
+        background_tasks=background_tasks, request=_queued_request("job-1")
+    )
+
+    await background_tasks()
+
+    assert touched == []

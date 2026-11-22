@@ -225,6 +225,10 @@ Stale-job recovery:
 - Every `update_progress` call records activity (`updated_at`), even when the
   provider's answer is unchanged, so a living wait polls itself fresh and is
   never stale.
+- One request's imports run one after another, so the jobs behind a long one
+  wait `pending`. While a job runs, the execution service records activity on
+  the jobs queued behind it in the same request (`touch_pending_jobs`, at the
+  poll interval), so the sweep does not fail them before they start.
 - A backend restart or deploy ends a wait (the in-process task dies); the job
   stays active until the curator cancels it or the stale sweep fails it. The
   wait is not resumed.

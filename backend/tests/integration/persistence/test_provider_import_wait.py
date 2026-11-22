@@ -108,3 +108,22 @@ def test_cancel_of_a_living_wait_only_asks_the_task_to_stop(owner_id):
     assert response.status == "cancel_requested"
     with pytest.raises(job_service.ActiveJobExistsError):
         job_service.create_job(document_id=paper.id, user_id=owner_id, filename=paper.filename)
+
+
+def test_touching_queued_jobs_refreshes_only_those_still_pending(owner_id):
+    queued_paper = _importing_paper(owner_id)
+    queued = job_service.create_job(
+        document_id=queued_paper.id, user_id=owner_id, filename=queued_paper.filename
+    )
+    started_paper = _importing_paper(owner_id)
+    started = _waiting_job(started_paper, owner_id, "provider_conversion")
+    queued_aged = _age(queued.job_id, 5000)
+    started_aged = _age(started.job_id, 5000)
+
+    touched = job_service.touch_pending_jobs(job_ids=[queued.job_id, started.job_id])
+
+    assert touched == 1
+    with SessionLocal() as db:
+        assert db.get(PdfProcessingJob, queued.job_id).updated_at > queued_aged + timedelta(seconds=4000)
+        # A started job records its own activity; it is never touched for it.
+        assert db.get(PdfProcessingJob, started.job_id).updated_at == started_aged

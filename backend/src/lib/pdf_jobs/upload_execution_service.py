@@ -8,7 +8,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+import weakref
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -202,6 +204,20 @@ class ProviderConversionExecutionRequest:
     figure_metadata_artifact_ids: tuple[str, ...] = ()
 
 
+@dataclass
+class _RequestJobQueue:
+    """The job ids of one request's background tasks, in the order they run.
+
+    FastAPI runs one request's background tasks one after another, so a job
+    waits ``pending`` until every job before it has finished.
+    """
+
+    job_ids: list[str] = field(default_factory=list)
+
+    def queued_after(self, job_id: str) -> tuple[str, ...]:
+        return tuple(self.job_ids[self.job_ids.index(job_id) + 1:])
+
+
 class UploadExecutionService:
     """Dispatch and execute the upload processing pipeline lifecycle."""
 
@@ -217,6 +233,51 @@ class UploadExecutionService:
         self._orchestrator_factory = orchestrator_factory or self._default_orchestrator_factory
         self._document_source_provider_factory = document_source_provider_factory
         self._provider_markdown_ingestion = provider_markdown_ingestion_fn
+        self._queues_by_request: weakref.WeakKeyDictionary[BackgroundTasks, _RequestJobQueue] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._queues_by_job: dict[str, _RequestJobQueue] = {}
+
+    def _record_queued_job(self, background_tasks: BackgroundTasks, job_id: str) -> None:
+        queue = self._queues_by_request.setdefault(background_tasks, _RequestJobQueue())
+        queue.job_ids.append(str(job_id))
+        self._queues_by_job[str(job_id)] = queue
+
+    @asynccontextmanager
+    async def _keep_queued_jobs_fresh(self, job_id: str) -> AsyncIterator[None]:
+        """While this job runs, record activity on the jobs queued behind it.
+
+        A queued job has no task of its own yet, so without this a long import
+        (up to the import deadline) would leave the jobs behind it looking
+        stale to the stale-job sweep, which would fail them before they start.
+        """
+        queue = self._queues_by_job.pop(str(job_id), None)
+        queued = queue.queued_after(str(job_id)) if queue is not None else ()
+        if not queued:
+            yield
+            return
+        keeper = asyncio.create_task(self._touch_queued_jobs(queued))
+        try:
+            yield
+        finally:
+            keeper.cancel()
+            await asyncio.gather(keeper, return_exceptions=True)
+
+    async def _touch_queued_jobs(self, job_ids: tuple[str, ...]) -> None:
+        interval_seconds = max(0.1, get_document_source_poll_interval_seconds())
+        while True:
+            try:
+                await asyncio.to_thread(pdf_job_service.touch_pending_jobs, job_ids=job_ids)
+            except Exception as exc:
+                # The running import is unaffected; the queued jobs may then be
+                # failed by the stale sweep, with its own message.
+                logger.warning(
+                    "Could not record activity on queued PDF jobs: %s",
+                    type(exc).__name__,
+                    extra={"sentry_skip_event": True},
+                )
+                return
+            await asyncio.sleep(interval_seconds)
 
     async def dispatch_upload_execution(
         self,
@@ -226,6 +287,7 @@ class UploadExecutionService:
     ) -> None:
         """Prime tracking and queue upload execution on FastAPI background tasks."""
         await self.pipeline_tracker.track_pipeline_progress(request.document_id, ProcessingStage.UPLOAD)
+        self._record_queued_job(background_tasks, request.job_id)
         add_observed_background_task(
             background_tasks,
             self.execute_upload,
@@ -246,6 +308,7 @@ class UploadExecutionService:
     ) -> None:
         """Prime tracking and queue provider Markdown ingestion on background tasks."""
         await self.pipeline_tracker.track_pipeline_progress(request.document_id, ProcessingStage.UPLOAD)
+        self._record_queued_job(background_tasks, request.job_id)
         add_observed_background_task(
             background_tasks,
             self.execute_provider_markdown,
@@ -266,6 +329,7 @@ class UploadExecutionService:
     ) -> None:
         """Prime tracking and queue provider conversion polling."""
         await self.pipeline_tracker.track_pipeline_progress(request.document_id, ProcessingStage.UPLOAD)
+        self._record_queued_job(background_tasks, request.job_id)
         add_observed_background_task(
             background_tasks,
             self.execute_provider_conversion,
@@ -281,7 +345,8 @@ class UploadExecutionService:
     @costed_document_processing
     async def execute_upload(self, request: UploadExecutionRequest) -> None:
         """Run upload orchestration and persist durable job transitions."""
-        await self._execute_upload_unbounded(request)
+        async with self._keep_queued_jobs_fresh(request.job_id):
+            await self._execute_upload_unbounded(request)
 
     async def _execute_upload_unbounded(
         self,
@@ -380,6 +445,10 @@ class UploadExecutionService:
     @costed_document_processing
     async def execute_provider_markdown(self, request: ProviderMarkdownExecutionRequest) -> None:
         """Run provider Markdown ingestion with the configured wall-clock bound."""
+        async with self._keep_queued_jobs_fresh(request.job_id):
+            await self._execute_provider_markdown_bounded(request)
+
+    async def _execute_provider_markdown_bounded(self, request: ProviderMarkdownExecutionRequest) -> None:
         timeout_seconds = get_document_source_import_timeout_seconds()
         try:
             await asyncio.wait_for(
@@ -430,6 +499,10 @@ class UploadExecutionService:
     @costed_document_processing
     async def execute_provider_conversion(self, request: ProviderConversionExecutionRequest) -> None:
         """Poll provider conversion until main Markdown can be ingested."""
+        async with self._keep_queued_jobs_fresh(request.job_id):
+            await self._execute_provider_conversion_bounded(request)
+
+    async def _execute_provider_conversion_bounded(self, request: ProviderConversionExecutionRequest) -> None:
         timeout_seconds = get_document_source_import_timeout_seconds()
         try:
             await asyncio.wait_for(

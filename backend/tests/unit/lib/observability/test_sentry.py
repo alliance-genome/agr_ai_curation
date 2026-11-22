@@ -2100,7 +2100,7 @@ def test_pdf_conversion_timeouts_have_one_capture_owner_with_logging_enabled():
             before_send=sentry.before_send, include_local_variables=False,
             integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
             default_integrations=False)
-        service = module.UploadExecutionService.__new__(module.UploadExecutionService)
+        service = module.UploadExecutionService(pipeline_tracker=SimpleNamespace())
         service._execute_provider_conversion_unbounded = AsyncMock(side_effect=asyncio.TimeoutError())
         service._sync_provider_conversion_sql_failure = AsyncMock()
         service._mark_failed_and_sync_tracker = AsyncMock()

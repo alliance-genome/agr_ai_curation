@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 from uuid import UUID
 
-from sqlalchemy import exists, func, select, text
+from sqlalchemy import exists, func, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
@@ -809,6 +809,32 @@ def _finalize_cancelled(session, job: PdfProcessingJob, *, now: datetime) -> Non
     job.message = "Processing cancelled by user request"
     _store_terminal_metadata(job, metadata=None, outcome="cancelled", completed_at=now)
     _reconcile_terminal_document(session, job)
+
+
+def touch_pending_jobs(*, job_ids: Iterable[UUID | str]) -> int:
+    """Record activity on jobs still queued (``pending``) behind a running one.
+
+    A started job records its own activity; only queued ones are touched.
+    Returns how many were touched.
+    """
+    ids = [_to_uuid(job_id) for job_id in job_ids]
+    if not ids:
+        return 0
+    session = SessionLocal()
+    try:
+        result = session.execute(
+            update(PdfProcessingJob)
+            .where(
+                PdfProcessingJob.id.in_(ids),
+                PdfProcessingJob.status == PdfJobStatus.PENDING.value,
+            )
+            .values(updated_at=func.now())
+            .execution_options(synchronize_session=False)
+        )
+        session.commit()
+        return result.rowcount
+    finally:
+        session.close()
 
 
 def set_process_id(*, job_id: UUID | str, process_id: str) -> Optional[PdfJobResponse]:
