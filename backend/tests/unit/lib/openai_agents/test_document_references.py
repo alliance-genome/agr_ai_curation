@@ -16,6 +16,7 @@ from agr_ai_curation_runtime.evidence_spans import build_evidence_spans
 from src.models.sql.agent_run_history import AgentHistoryEvent, AgentHistoryPayload
 from src.lib.openai_agents import document_references as refs
 from src.lib.openai_agents.run_history import HistoryScope, HistoryStore
+from tests.readable_files_support import files, single_file
 
 
 @pytest.fixture(autouse=True)
@@ -23,6 +24,15 @@ def alliance_package_path(monkeypatch):
     # These tests exercise the isolated package even when collected on their own.
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[5] /
         "packages/alliance/python/src"))
+
+
+@pytest.fixture(autouse=True)
+def readable_papers(monkeypatch):
+    """Each paper reads as one file unless a test sets its readable files."""
+    values = {}
+    monkeypatch.setattr(refs, "resolve_readable_files",
+                        lambda document_id, user_id: values.get(document_id, single_file(document_id)))
+    return values
 
 
 @pytest.fixture
@@ -39,9 +49,9 @@ def scope():
     return HistoryScope("alice", "run-a", "inv-a", "extractor", "inv-a/", "chat-a")
 
 
-def binding(store, scope, *, doc="doc-a", generation="generation-a"):
+def binding(store, scope, *, doc="doc-a", generation="generation-a", readable=None):
     value = refs.SourceBinding(doc, scope.owner_id, generation, scope, store,
-        refs._read_bindings(store, scope, doc))
+        refs._read_bindings(store, scope, doc), readable or single_file(doc))
     value.pin_generation()
     return value
 
@@ -68,7 +78,8 @@ async def test_restart_and_new_specialist_keep_issued_span_meaning(store, scope,
     monkeypatch.setattr(refs, "get_chunk_by_index", AsyncMock(return_value=chunk))
     selections = [DocumentSelection(chunk_index=42, span_index=0)] * 2
     assert await restarted.resolve(selections) == [spans[0]["span_id"]]
-    refs.get_chunk_by_index.assert_awaited_once_with(chunk_index=42, user_id="alice", document_id="doc-a")
+    refs.get_chunk_by_index.assert_awaited_once_with(
+        chunk_index=42, user_id="alice", document_id="doc-a", readable=single_file("doc-a"))
 
 
 @pytest.mark.parametrize("change", ["owner", "session", "document"])
@@ -191,8 +202,11 @@ async def test_public_sdk_discovery_read_record_and_model_projection_preserve_ca
     assert "source_fragments" in items[1]["output"]
 
 
-def _section_reading_setup(store, scope, monkeypatch, section_chunks):
-    """Real source scope, store and tools; the Weaviate fetches return ``section_chunks``."""
+def _section_reading_setup(store, scope, monkeypatch, section_chunks, readable=None):
+    """Real source scope, store and tools; the Weaviate fetches return ``section_chunks``.
+
+    ``readable`` holds what each tool call's binding may read (one file by default).
+    """
     from agr_ai_curation_alliance.tools import documents, weaviate_search
     from src.lib.openai_agents.tools import record_evidence
 
@@ -200,11 +214,13 @@ def _section_reading_setup(store, scope, monkeypatch, section_chunks):
     monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
     monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
     monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")
-    monkeypatch.setattr(refs, "_load_source_binding", lambda *args: binding(store, scope))
+    current = {"readable": readable}
+    monkeypatch.setattr(refs, "_load_source_binding",
+                        lambda *args: binding(store, scope, readable=current["readable"]))
     monkeypatch.setattr(refs, "_verify_source_generation", lambda value: None)
 
-    async def by_chunk_index(*, chunk_index, **_kwargs):
-        return by_index.get(chunk_index)
+    async def by_chunk_index(*, chunk_index, readable, **_kwargs):
+        return by_index.get(chunk_index) if readable.contains(chunk_index) else None
 
     async def by_chunk_id(*, chunk_id, **_kwargs):
         return next((chunk for chunk in section_chunks if chunk["id"] == chunk_id), None)
@@ -225,6 +241,7 @@ def _section_reading_setup(store, scope, monkeypatch, section_chunks):
         "read_subsection": documents.create_read_subsection_tool(context),
         "read_chunk": documents.create_read_chunk_tool(context),
         "record_evidence": documents.create_record_evidence_tool(context),
+        "readable": current,
     }
 
 
@@ -1037,3 +1054,137 @@ async def test_selection_result_through_flow_boundary_and_sentry(store, scope, m
         boundary.chat._LOCAL_SESSION_OWNERS.clear()
         boundary.chat.executable_run_manager._runs.clear()
         boundary.chat.executable_run_manager._active_session_run_ids.clear()
+
+
+THREE_FILES = files("doc-a", ("paper.pdf", 0, 11), ("Table S1.xlsx", 12, 13), ("Data S2.docx", 20, 21))
+
+
+@pytest.mark.asyncio
+async def test_read_chunk_outside_the_readable_files_gets_their_ranges_with_names(store, scope, monkeypatch):
+    tools = _section_reading_setup(store, scope, monkeypatch, [_section_chunk(10, "Main text.")],
+                                   readable=THREE_FILES)
+
+    for index in (-1, 15, 22):
+        result = await _invoke(tools["read_chunk"], {"chunk_index": index})
+        assert result.chunk is None
+        assert result.error_code == "invalid_result_cursor"
+        assert result.summary == (
+            f"Invalid read_chunk request: chunk_index {index} does not exist; this document has chunks "
+            "0 to 11 (paper.pdf), 12 to 13 (Table S1.xlsx), 20 to 21 (Data S2.docx)."
+        )
+
+
+@pytest.mark.asyncio
+async def test_read_chunk_past_the_end_of_a_one_file_paper_reads_as_before(store, scope, monkeypatch):
+    tools = _section_reading_setup(store, scope, monkeypatch, [_section_chunk(10, "Main text.")],
+                                   readable=single_file("doc-a", 12))
+
+    result = await _invoke(tools["read_chunk"], {"chunk_index": 12})
+    assert result.summary == (
+        "Invalid read_chunk request: chunk_index 12 does not exist; this document has chunks 0 to 11."
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_missing_piece_inside_a_readable_file_still_fails_the_read(store, scope, monkeypatch):
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+    tools = _section_reading_setup(store, scope, monkeypatch, [_section_chunk(10, "Main text.")],
+                                   readable=THREE_FILES)
+
+    with pytest.raises(DocumentReadError):
+        await _invoke(tools["read_chunk"], {"chunk_index": 12})
+
+
+@pytest.mark.asyncio
+async def test_evidence_from_a_file_that_stopped_being_readable_is_refused_to_the_model(store, scope, monkeypatch):
+    sheet = _section_chunk(12, "Row one of the sheet.")
+    tools = _section_reading_setup(store, scope, monkeypatch, [sheet], readable=THREE_FILES)
+    read = await _invoke(tools["read_chunk"], {"chunk_index": 12})
+    assert read.chunk.chunk_index == 12
+
+    # The sheet is removed from the paper before the evidence is recorded.
+    tools["readable"]["readable"] = files("doc-a", ("paper.pdf", 0, 11), ("Data S2.docx", 20, 21))
+    refused = await _invoke(tools["record_evidence"], {
+        "entity": "wg", "selections": [{"chunk_index": 12, "span_index": 0}]})
+
+    assert refused == {
+        "status": "needs_source_read",
+        "error_code": "unreadable_document_selection",
+        "saved": False,
+        "selection": {"chunk_index": 12, "span_index": 0},
+        "message": (
+            "Nothing was saved. chunk_index 12 is not part of a file you can read now. "
+            "This document has chunks 0 to 11 (paper.pdf), 20 to 21 (Data S2.docx). "
+            "Read a passage from them and call record_evidence again."
+        ),
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_selection_outside_the_readable_files_never_reaches_the_store(store, scope, monkeypatch):
+    chunk, spans = source(12)
+    value = binding(store, scope, readable=files("doc-a", ("paper.pdf", 0, 11)))
+    value.retain([(chunk, spans, [0])])
+    lookup = AsyncMock()
+    monkeypatch.setattr(refs, "get_chunk_by_index", lookup)
+
+    with pytest.raises(refs.UnreadableDocumentSelectionError) as caught:
+        await value.resolve([DocumentSelection(chunk_index=12, span_index=0)])
+    assert caught.value.selection.chunk_index == 12
+    lookup.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_span_id_on_an_unreadable_piece_is_a_source_failure(store, scope, monkeypatch):
+    """The internal span-ID path checks the piece number of a piece loaded by id."""
+    from src.lib.openai_agents.tools import record_evidence
+    chunk, spans = source(12)
+    chunk["document_id"] = "doc-a"
+    value = binding(store, scope, readable=files("doc-a", ("paper.pdf", 0, 11)))
+    monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
+    monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
+    monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")
+    monkeypatch.setattr(refs, "_load_source_binding", lambda *args: value)
+    monkeypatch.setattr(refs, "_verify_source_generation", lambda value: None)
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", AsyncMock(return_value=chunk))
+    recorder = record_evidence._create_canonical_evidence_recorder("doc-a", "alice")
+
+    async with refs.document_reference_scope("doc-a", "alice"):
+        result = await recorder(entity="wg", span_ids=[spans[0]["span_id"]])
+
+    assert result["resolution_failure"] == "unreadable_chunk"
+    assert result.get("status") != "verified"
+
+
+@pytest.mark.asyncio
+async def test_history_projection_marks_a_piece_of_an_unreadable_file_unavailable(monkeypatch, readable_papers):
+    chunk, spans = source(12)
+    chunk["document_id"] = "doc-a"
+    monkeypatch.setattr("src.lib.weaviate_client.chunks.get_chunk_by_id", AsyncMock(return_value=chunk))
+    readable_papers["doc-a"] = files("doc-a", ("paper.pdf", 0, 11))
+
+    projected = await refs.project_source_references(
+        {"chunk_id": chunk["id"], "span_ids": [spans[0]["span_id"]]}, user_id="alice", document_id="doc-a")
+
+    assert projected["source_reference_status"] == "source_unavailable"
+    assert projected["selections"] == []
+    assert "chunk_index" not in projected
+
+    readable_papers["doc-a"] = files("doc-a", ("paper.pdf", 0, 11), ("Table S1.xlsx", 12, 13))
+    readable_now = await refs.project_source_references(
+        {"chunk_id": chunk["id"], "span_ids": [spans[0]["span_id"]]}, user_id="alice", document_id="doc-a")
+    assert readable_now["chunk_index"] == 12
+    assert readable_now["selections"] == [{"chunk_index": 12, "span_index": 0}]
+
+
+def test_the_active_tool_call_exposes_its_readable_files(store, scope):
+    from agr_ai_curation_runtime.document_references import current_readable_files
+    value = binding(store, scope, readable=THREE_FILES)
+
+    with pytest.raises(refs.DocumentReferenceError, match="Missing source binding"):
+        current_readable_files()
+    token = refs._ACTIVE_SOURCE.set(value)
+    try:
+        assert current_readable_files() is THREE_FILES
+    finally:
+        refs._ACTIVE_SOURCE.reset(token)

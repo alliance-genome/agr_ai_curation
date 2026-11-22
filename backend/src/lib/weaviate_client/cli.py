@@ -299,7 +299,7 @@ def available_models():
 @click.option('--include-metadata', is_flag=True, default=True, help='Include chunk metadata')
 def get_chunks_cmd(document_id: str, user_id: str, page: int, page_size: int,
                   include_metadata: bool):
-    """Get chunks for a document.
+    """Get the chunks of a document's ready files.
 
     Requires --user-id to enforce tenant isolation (FR-011, FR-014).
     """
@@ -312,10 +312,13 @@ def get_chunks_cmd(document_id: str, user_id: str, page: int, page_size: int,
             'include_metadata': include_metadata
         }
 
+        from src.lib.document_files.readable import resolve_readable_files
+
         result = asyncio.run(get_chunks(
             document_id=document_id,
             pagination=pagination,
-            user_id=user_id
+            user_id=user_id,
+            readable=resolve_readable_files(document_id, user_id),
         ))
 
         chunks = result.get('chunks', [])

@@ -16,7 +16,12 @@ from typing import Annotated, Optional, List, TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, Field
 from agr_ai_curation_runtime.function_tools import function_tool
 from agr_ai_curation_runtime.document_errors import DocumentReadError
-from agr_ai_curation_runtime.document_references import LocalIndex, scoped_document_tool, retain_issued_spans
+from agr_ai_curation_runtime.document_references import (
+    LocalIndex,
+    current_readable_files,
+    retain_issued_spans,
+    scoped_document_tool,
+)
 from agr_ai_curation_runtime.evidence_spans import (
     EVIDENCE_SPANIZER_VERSION,
     build_evidence_spans,
@@ -25,7 +30,6 @@ from agr_ai_curation_runtime.evidence_spans import (
 from agr_ai_curation_runtime.chunk_identity import resolve_chunk_identifier
 from agr_ai_curation_runtime.tool_result_bounds import parse_offset
 from agr_ai_curation_runtime.weaviate_chunks import (
-    count_document_chunks,
     hybrid_search_chunks,
     get_chunk_by_index,
     get_chunk_neighbor_ids,
@@ -325,6 +329,7 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
             apply_mmr=_SEARCH_MMR_ENABLED,
             mmr_lambda=_SEARCH_MMR_LAMBDA,
             strategy=strategy,
+            readable=current_readable_files(),
         )
 
         if not chunks:
@@ -468,24 +473,26 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
             document_id[:8],
         )
 
+        readable = current_readable_files()
+        if readable.files and not readable.contains(chunk_index):
+            # An index in no readable file (negative, past the end, or in a file that is
+            # being added or was removed) is a request error the model can correct.
+            return ChunkReadResult(
+                summary=(
+                    f"Invalid read_chunk request: chunk_index {chunk_index} does not exist; "
+                    f"this document has chunks {readable.ranges_text()}."
+                ),
+                chunk=None,
+                error_code="invalid_result_cursor",
+            )
         chunk = None if chunk_index < 0 else await get_chunk_by_index(
             chunk_index=chunk_index,
             user_id=user_id,
             document_id=document_id,
+            readable=readable,
         )
         if not chunk:
-            # A negative index or one past the document's last chunk is a request error
-            # the model can correct; a missing chunk inside the range is a failed source read.
-            chunk_count = await count_document_chunks(user_id=user_id, document_id=document_id)
-            if chunk_count > 0 and not 0 <= chunk_index < chunk_count:
-                return ChunkReadResult(
-                    summary=(
-                        f"Invalid read_chunk request: chunk_index {chunk_index} does not exist; "
-                        f"this document has chunks 0 to {chunk_count - 1}."
-                    ),
-                    chunk=None,
-                    error_code="invalid_result_cursor",
-                )
+            # A missing chunk inside a readable file's range is a failed source read.
             raise DocumentReadError("read_chunk")
 
         chunk_id = _read_actual_chunk_id(str(chunk_index), chunk)
@@ -509,6 +516,7 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
             document_id=document_id,
             user_id=user_id,
             chunk_index=chunk_index,
+            readable=readable,
         )
         table_segments = chunk_table_segments(metadata)
         spans = _evidence_spans(actual_chunk_id, content, page_number, section_title, table_segments)
@@ -807,6 +815,7 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
             document_id=document_id,
             parent_section=section_name,
             user_id=user_id,
+            readable=current_readable_files(),
         )
 
         if not chunks:
@@ -900,6 +909,7 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
             parent_section=parent_section,
             subsection=subsection,
             user_id=user_id,
+            readable=current_readable_files(),
         )
 
         if not chunks:

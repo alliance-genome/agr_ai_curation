@@ -21,6 +21,12 @@ from agr_ai_curation_runtime.document_errors import DocumentReadError
 from agr_ai_curation_runtime.document_references import DocumentSelection
 from agr_ai_curation_runtime.evidence_spans import resolve_evidence_span_id
 from src.lib.context import get_current_session_id, get_current_trace_id, get_current_user_id
+from src.lib.document_files.readable import (
+    ReadableFiles,
+    ReadableFilesError,
+    readable_files_in_session,
+    resolve_readable_files,
+)
 from src.lib.weaviate_client.chunks import get_chunk_by_index
 from src.models.sql.agent_run_history import AgentHistoryEvent, AgentHistoryPayload
 from src.models.sql.database import SessionLocal
@@ -45,6 +51,15 @@ class UnissuedDocumentSelectionError(DocumentReferenceError):
     def __init__(self, selection: DocumentSelection, message: str):
         self.selection = selection
         super().__init__(message)
+
+
+class UnreadableDocumentSelectionError(DocumentReferenceError):
+    """The agent selected a chunk outside every file the run can read now."""
+
+    def __init__(self, selection: DocumentSelection, readable: ReadableFiles):
+        self.selection = selection
+        self.readable = readable
+        super().__init__("Selected chunk is not part of a readable file")
 
 
 def _read_bindings(store: HistoryStore, scope: HistoryScope, document_id: str, *, db=None) -> list[dict]:
@@ -98,6 +113,8 @@ class SourceBinding:
     history_scope: HistoryScope
     store: HistoryStore
     records: list[dict]
+    # The files this tool call may read, resolved with the generation check.
+    readable: ReadableFiles
     staged_updates: list[tuple[dict, dict, dict]] = field(default_factory=list)
 
     def stage_update(self, target: dict, replacement: dict) -> None:
@@ -179,6 +196,8 @@ class SourceBinding:
         result = []
         chunks = {}
         for selection in selections:
+            if not self.readable.contains(selection.chunk_index):
+                raise UnreadableDocumentSelectionError(selection, self.readable)
             records = [r for r in self.records if r["kind"] == _SPAN_KIND
                        and r["chunk_index"] == selection.chunk_index]
             if not records:
@@ -193,7 +212,8 @@ class SourceBinding:
                 raise UnissuedDocumentSelectionError(selection, "Read the selected span window before recording evidence")
             if selection.chunk_index not in chunks:
                 chunks[selection.chunk_index] = await get_chunk_by_index(
-                    chunk_index=selection.chunk_index, user_id=self.user_id, document_id=self.document_id)
+                    chunk_index=selection.chunk_index, user_id=self.user_id, document_id=self.document_id,
+                    readable=self.readable)
             chunk = chunks[selection.chunk_index]
             if (not chunk or chunk["id"] != record["chunk_id"]
                     or hashlib.sha256(chunk["text"].encode("utf-8")).hexdigest() != record["content_sha256"]):
@@ -221,8 +241,9 @@ def _load_source_binding(document_id: str, user_id: str, scope: HistoryScope, st
         # hold a SQL row lock across asynchronous tool I/O: other application
         # endpoints can still use synchronous SQL transactions on the event loop.
         generation = _generation(db, document_id, user_id, lock=True)
+        readable = readable_files_in_session(db, document_id, user_id)
         records = _read_bindings(store, scope, document_id, db=db)
-        binding = SourceBinding(document_id, user_id, generation, scope, store, records)
+        binding = SourceBinding(document_id, user_id, generation, scope, store, records, readable)
         binding.pin_generation(db=db)
         return binding
 
@@ -231,6 +252,11 @@ def _verify_source_generation(binding: SourceBinding) -> None:
     with SessionLocal() as db:
         if _generation(db, binding.document_id, binding.user_id) != binding.generation:
             raise DocumentReferenceError("Document changed while reading or verifying source")
+        # A file that became readable during the call is harmless; one the call
+        # could read that stopped being readable (removed, or no longer ready) is not.
+        now_readable = set(readable_files_in_session(db, binding.document_id, binding.user_id).fingerprint)
+        if not set(binding.readable.fingerprint) <= now_readable:
+            raise DocumentReferenceError("A readable file changed while reading or verifying source")
 
 
 async def _finish(task):
@@ -281,6 +307,14 @@ async def document_reference_scope(document_id: str, user_id: str):
             _ACTIVE_SOURCE.reset(token)
 
 
+def current_readable_files() -> ReadableFiles:
+    """The readable files of the document tool call in progress."""
+    binding = _ACTIVE_SOURCE.get()
+    if binding is None:
+        raise DocumentReferenceError("Missing source binding")
+    return binding.readable
+
+
 async def retain_issued_spans(reads: list[tuple[dict, list[dict], list[int]]]) -> None:
     """Issue every span one read displayed: ``(chunk, spans, issued_indexes)`` per chunk."""
     binding = _ACTIVE_SOURCE.get()
@@ -319,6 +353,17 @@ async def project_source_references(value, *, user_id: str, document_id: str | N
     from src.lib.weaviate_client.chunks import get_chunk_by_id
     from agr_ai_curation_runtime.evidence_spans import parse_evidence_span_id, EvidenceSpanResolutionError
     cache = {}
+    readable_by_document = {}
+
+    async def readable_for(chunk_document_id):
+        if chunk_document_id not in readable_by_document:
+            try:
+                readable_by_document[chunk_document_id] = await asyncio.to_thread(
+                    resolve_readable_files, chunk_document_id, user_id)
+            except ReadableFilesError:
+                # The piece's paper row is gone: its source is unavailable, like a missing piece.
+                readable_by_document[chunk_document_id] = None
+        return readable_by_document[chunk_document_id]
 
     async def chunk_for(chunk_id, doc_id):
         key = (chunk_id, doc_id)
@@ -329,8 +374,14 @@ async def project_source_references(value, *, user_id: str, document_id: str | N
                 cache[key] = None
                 return None
             chunk = await get_chunk_by_id(chunk_id=chunk_id, user_id=user_id, document_id=doc_id)
-            if chunk and (type(chunk.get("chunk_index")) is not int or chunk["chunk_index"] < 0):
+            if chunk and (type(chunk.get("chunk_index")) is not int or chunk["chunk_index"] < 0
+                          or not isinstance(chunk.get("document_id"), str)):
                 chunk = None
+            if chunk:
+                # A piece outside the run's readable files is not a current source.
+                readable = await readable_for(chunk["document_id"])
+                if readable is None or not readable.contains(chunk["chunk_index"]):
+                    chunk = None
             cache[key] = chunk
         return cache[key]
 

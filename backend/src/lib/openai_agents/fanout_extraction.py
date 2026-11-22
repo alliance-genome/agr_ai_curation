@@ -611,12 +611,16 @@ class FanoutExtraction:
             return json.dumps({"status": "rejected", "message": str(exc)})
         cited = sorted({chunk for item in plan.items for chunk in item.chunks})
         if cited:
-            # Structural reference check: every cited chunk must exist in this document.
-            # Query failures raise and fail the step; only absent indexes are rejected.
+            # Structural reference check: every cited chunk must exist in a readable file
+            # of this document. Query failures raise and fail the step; only absent
+            # indexes are rejected.
+            from src.lib.document_files.readable import resolve_readable_files
             from src.lib.weaviate_client.chunks import get_existing_chunk_indexes
 
+            readable = await asyncio.to_thread(resolve_readable_files, self.document_id, self.user_id)
             existing = await get_existing_chunk_indexes(
                 chunk_indexes=cited, user_id=self.user_id, document_id=self.document_id,
+                readable=readable,
             )
             missing = [chunk for chunk in cited if chunk not in existing]
             if missing:

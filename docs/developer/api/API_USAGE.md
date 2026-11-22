@@ -367,6 +367,7 @@ curl "http://localhost:8000/weaviate/documents/$DOC_ID/chunks?page=1&page_size=1
 ```
 Response (`ChunkListResponse`):
 - `chunks`: array of `DocumentChunk` objects (content, `element_type`, `page_number`, `doc_items` with bounding boxes, metadata).
+- Only the pieces of the paper's `ready` files are listed and counted; a file still being added is not. A paper that is not the caller's, or an id that is not a UUID, is a 404.
 - `pagination`: `{ current_page, total_pages, total_items, page_size }`
 
 Use this endpoint to verify embedding coverage or to reconstruct provenance overlays produced by `/api/chat/stream` (the SSE `CHUNK_PROVENANCE` events reuse the same `doc_items` schema).

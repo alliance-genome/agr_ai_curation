@@ -12,6 +12,7 @@ from unittest.mock import Mock
 import pytest
 
 from src.lib.batch import processor
+from src.lib.document_files.readable import ReadingScope, current_reading_scope
 from src.lib.batch.service import BatchService
 from src.models.sql.batch import BatchDocumentStatus, BatchStatus
 
@@ -308,6 +309,7 @@ def test_batch_processor_marks_completed_when_file_ready(monkeypatch):
 
     async def _fake_execute_flow_for_document(**kwargs):
         captured.update(kwargs)
+        captured["reading_scope"] = current_reading_scope()
         return (
             [
                 {
@@ -347,6 +349,8 @@ def test_batch_processor_marks_completed_when_file_ready(monkeypatch):
     assert batch_doc.output_status == "partial"
     assert batch_doc.review_session_ids is None
     assert captured["active_groups"] == ["group-a"]
+    # Batches read the paper's main file only (supplements in batches: KANBAN-2133).
+    assert captured["reading_scope"] is ReadingScope.MAIN_FILE_ONLY
 
 
 def test_batch_processor_succeeds_on_curation_handoff(monkeypatch):

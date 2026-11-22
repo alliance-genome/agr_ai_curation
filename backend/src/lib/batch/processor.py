@@ -29,6 +29,7 @@ from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.user import User
 from src.models.sql.file_output import FileOutput
 from src.models.sql.pdf_document import PDFDocument
+from src.lib.document_files.readable import ReadingScope, reading_scope
 from src.lib.observability.background_tasks import report_background_task_exception
 from src.lib.flows.outcome import FLOW_FAILURE_REASONS_REPORTED_UPSTREAM
 from src.lib.agent_studio.agent_service import inaccessible_flow_agent_keys
@@ -421,17 +422,20 @@ def _process_single_document(
         ).first()
         document_name = getattr(source_document, "filename", None)
 
-        result_files, review_session_ids, output_status, output_branches, set_aside = asyncio.run(
-            _execute_flow_for_document(
-                flow=flow,
-                document_id=str(batch_doc.document_id),
-                document_name=document_name,
-                cognito_sub=cognito_sub,
-                batch_id=str(batch.id),
-                db_user_id=batch.user_id,
-                active_groups=batch.active_group_ids,
+        # Batches read the paper's main file only (supplements in batches: KANBAN-2133).
+        # asyncio.run copies this context into the flow's task.
+        with reading_scope(ReadingScope.MAIN_FILE_ONLY):
+            result_files, review_session_ids, output_status, output_branches, set_aside = asyncio.run(
+                _execute_flow_for_document(
+                    flow=flow,
+                    document_id=str(batch_doc.document_id),
+                    document_name=document_name,
+                    cognito_sub=cognito_sub,
+                    batch_id=str(batch.id),
+                    db_user_id=batch.user_id,
+                    active_groups=batch.active_group_ids,
+                )
             )
-        )
 
         if (
             not result_files

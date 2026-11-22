@@ -1286,6 +1286,19 @@ async def document_reference_scope(document_id, user_id):
     assert document_id == "doc-42" and user_id == "user-9"
     yield
 
+class _OneFile:
+    files = ("main",)
+
+    def contains(self, chunk_index):
+        return 0 <= chunk_index <= 99
+
+    def ranges_text(self):
+        return "0 to 99"
+
+
+def current_readable_files():
+    return _OneFile()
+
 async def retain_issued_spans(reads):
     issued = {chunk["id"]: (chunk["chunk_index"], indexes) for chunk, _spans, indexes in reads}
     assert issued in (

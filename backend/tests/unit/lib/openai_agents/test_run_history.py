@@ -380,6 +380,9 @@ async def test_input_item_recovery_projects_source_output_without_changing_archi
     chunk_id = "12345678-1234-1234-1234-123456789abc"
     monkeypatch.setattr("src.lib.weaviate_client.chunks.get_chunk_by_id", AsyncMock(
         return_value={"id": chunk_id, "document_id": "doc", "chunk_index": 7}))
+    from tests.readable_files_support import single_file
+    monkeypatch.setattr("src.lib.openai_agents.document_references.resolve_readable_files",
+                        lambda document_id, user_id: single_file(document_id))
     items = [{"type": "function_call", "name": "record_evidence", "call_id": "one", "arguments": "{}"},
         {"type": "function_call_output", "call_id": "one", "output": str({"chunk_id": chunk_id, "quote": "Not expressed."})}]
     if legacy:

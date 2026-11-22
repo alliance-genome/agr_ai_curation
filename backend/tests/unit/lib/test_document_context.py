@@ -8,6 +8,9 @@ import pytest
 
 from src.lib import document_cache
 from src.lib.document_context import DocumentContext
+from tests.readable_files_support import files, single_file
+
+ONE_FILE = single_file("doc").fingerprint
 
 
 @pytest.fixture(autouse=True)
@@ -17,6 +20,18 @@ def cache():
     yield
     assert not document_cache._pending_fills
     document_cache._cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def readable(monkeypatch):
+    """The run's readable files for each (document, user); one file unless a test says otherwise."""
+    values = {}
+
+    def resolve(document_id, user_id):
+        return values.get((document_id, user_id), single_file(document_id))
+
+    monkeypatch.setattr("src.lib.document_files.readable.resolve_readable_files", resolve)
+    return values
 
 
 @pytest.fixture
@@ -30,7 +45,7 @@ def retrieval(monkeypatch):
 async def test_cold_warm_expired_and_tenant_cache(retrieval, monkeypatch):
     first = await DocumentContext.fetch("doc", "user", "paper.pdf")
     assert first.document_name == "paper.pdf" and first.sections == ["Methods"]
-    retrieval.assert_awaited_once_with("doc", "user")
+    retrieval.assert_awaited_once_with("doc", "user", readable=single_file("doc"))
     warm = await DocumentContext.fetch("doc", "user", "new.pdf")
     assert warm.document_name == "new.pdf" and warm.hierarchy == first.hierarchy
     retrieval.assert_awaited_once()
@@ -63,7 +78,7 @@ async def test_prepared_context_carries_no_abstract(retrieval):
     assert result.sections == ["Abstract", "Results"]
     assert not hasattr(result, "abstract")
     assert "abstract" not in result.to_agent_kwargs()
-    cached = document_cache.get_cached_metadata("user", "doc")
+    cached = document_cache.get_cached_metadata("user", "doc", ONE_FILE)
     assert cached is not None and not hasattr(cached, "abstract")
 
 
@@ -71,7 +86,7 @@ async def test_prepared_context_carries_no_abstract(retrieval):
 async def test_delayed_fetch_yields_and_cancellation_never_publishes(retrieval):
     entered, release = asyncio.Event(), asyncio.Event()
 
-    async def delayed(*args):
+    async def delayed(*args, **kwargs):
         entered.set()
         await release.wait()
 
@@ -84,7 +99,7 @@ async def test_delayed_fetch_yields_and_cancellation_never_publishes(retrieval):
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, 5)
-        assert document_cache.get_cached_metadata("user", "doc") is None
+        assert document_cache.get_cached_metadata("user", "doc", ONE_FILE) is None
     finally:
         release.set()
         if not task.done():
@@ -100,7 +115,7 @@ async def test_failure_timeout_and_sanitized_reporting(retrieval, monkeypatch, c
     monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
     monkeypatch.setenv("DOCUMENT_CONTEXT_STAGE_TIMEOUT_SECONDS", "0.02")
 
-    async def failure(*args):
+    async def failure(*args, **kwargs):
         if timeout:
             await asyncio.Event().wait()
         raise RuntimeError("SECRET query")
@@ -120,7 +135,7 @@ async def test_invalidation_revokes_old_fill_but_allows_new_fill(retrieval):
     entered, release = asyncio.Event(), asyncio.Event()
     fresh = {"sections": [{"name": "Fresh"}]}
 
-    async def old(*args):
+    async def old(*args, **kwargs):
         entered.set()
         await release.wait()
         return {"sections": [{"name": "Obsolete"}]}
@@ -136,7 +151,7 @@ async def test_invalidation_revokes_old_fill_but_allows_new_fill(retrieval):
     finally:
         release.set()
         await asyncio.wait_for(task, 5)
-    cached = document_cache.get_cached_metadata("user", "doc")
+    cached = document_cache.get_cached_metadata("user", "doc", ONE_FILE)
     assert cached is not None and cached.hierarchy == fresh
 
 
@@ -146,7 +161,7 @@ async def test_concurrent_misses_are_independent_and_keep_context(retrieval):
     arrived, release = asyncio.Event(), asyncio.Event()
     seen = []
 
-    async def hierarchy(doc, user):
+    async def hierarchy(doc, user, *, readable):
         seen.append((user, run.get()))
         if len(seen) == 3:
             arrived.set()
@@ -174,6 +189,21 @@ async def test_concurrent_misses_are_independent_and_keep_context(retrieval):
     assert all(isinstance(r, DocumentContext) for r in results[1:])
     assert [r.sections for r in results[1:] if isinstance(r, DocumentContext)] == [["b"], ["c"]]
     assert seen == [("one", "a"), ("one", "b"), ("two", "c")]
+
+
+@pytest.mark.asyncio
+async def test_the_outline_lists_only_the_runs_readable_files(retrieval, readable):
+    with_sheet = files("doc", ("paper.pdf", 0, 41), ("Table S1.xlsx", 42, 60))
+    readable[("doc", "user")] = with_sheet
+
+    await DocumentContext.fetch("doc", "user")
+    retrieval.assert_awaited_once_with("doc", "user", readable=with_sheet)
+
+    # The same paper read with only its main file (a batch) builds its own outline.
+    readable[("doc", "user")] = single_file("doc", 42)
+    await DocumentContext.fetch("doc", "user")
+    assert retrieval.await_count == 2
+    assert retrieval.await_args.kwargs["readable"] == single_file("doc", 42)
 
 
 def test_document_context_helper_methods():
@@ -217,3 +247,21 @@ def test_preparation_limits(monkeypatch, name, getter, default, value):
     else:
         monkeypatch.setenv(name, value)
     assert getattr(config, getter)() == (25.5 if value == "25.5" else default)
+
+
+@pytest.mark.asyncio
+async def test_unknown_readable_files_leave_the_run_without_an_outline(retrieval, monkeypatch, caplog):
+    report = Mock()
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+
+    def unavailable(document_id, user_id):
+        raise RuntimeError("SECRET database outage")
+
+    monkeypatch.setattr("src.lib.document_files.readable.resolve_readable_files", unavailable)
+    result = await DocumentContext.fetch("doc", "user")
+
+    assert result.hierarchy is None and result.sections is None
+    retrieval.assert_not_awaited()
+    assert report.call_args.kwargs["context"] == {"stage": "readable_files"}
+    assert "SECRET" not in caplog.text + str(report.call_args)
+    assert document_cache._cache == {}

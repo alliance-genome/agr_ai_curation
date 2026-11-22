@@ -9,6 +9,7 @@ from uuid import NAMESPACE_URL, uuid5
 import pytest
 
 import src.lib.openai_agents.tools.record_evidence as record_evidence
+from tests.readable_files_support import single_file
 from src.lib.openai_agents.tools import evidence_workspace
 from src.lib.openai_agents.evidence_spans import build_evidence_spans
 from src.lib.openai_agents.evidence_summary import build_evidence_record_id
@@ -25,6 +26,8 @@ class _Tracker:
 @pytest.fixture(autouse=True)
 def identity_function_tool(monkeypatch):
     monkeypatch.setattr(record_evidence, "function_tool", lambda fn: fn)
+    # The recorder runs inside a document tool call; its readable files are one whole file here.
+    monkeypatch.setattr(record_evidence, "current_readable_files", lambda: single_file("doc-1"))
 
 
 @pytest.fixture
@@ -50,8 +53,11 @@ def _chunk(
     subsection: str | None = "Expression assays",
     doc_items: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
+    # The shape get_chunk_by_id returns: the piece's paper and its piece number are always stored.
     return {
         "id": chunk_id,
+        "document_id": "doc-1",
+        "chunk_index": 0,
         "text": text,
         "page_number": page_number,
         "parent_section": section,
