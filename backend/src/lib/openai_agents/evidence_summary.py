@@ -588,6 +588,8 @@ class _EvidenceRegistry:
         self._ids_by_locator_key: Dict[tuple[Any, ...], List[str]] = {}
         self._canonical_id_by_input_id: Dict[str, str] = {}
         self._recorded_ids: set[str] = set()
+        # Model-written records dropped for naming a file they were never recorded in.
+        self.dropped: List[Dict[str, Any]] = []
 
     def _forget_indexes_for_record(self, evidence_record_id: str, record: Dict[str, Any]) -> None:
         exact_key = _evidence_record_key(record)
@@ -644,17 +646,25 @@ class _EvidenceRegistry:
         for evidence_record_id in self.add_many(values):
             self._recorded_ids.add(evidence_record_id)
 
-    def add_model_written(self, values: Any) -> None:
+    def add_model_written(
+        self,
+        values: Any,
+        *,
+        entity_fallback: Optional[str] = None,
+        allow_locator_fallback: bool = False,
+    ) -> List[str]:
         """Add records a model wrote in its structured output (ALL-1460).
 
-        A copy of a recorded record keeps the recorded provenance and contributes
-        only its other fields. A record that matches no recorded evidence may not
-        name a file: it is dropped, with a warning, since only record_evidence
-        attributes evidence to a file.
+        A copy of a recorded record (same ID, or another ID whose quote and place
+        match a recording exactly or, where allowed, by locator) keeps the recorded
+        provenance. A record that matches no recording may not name a file: only
+        record_evidence attributes evidence to a file, so it is dropped and listed
+        in ``dropped`` (IDs and a code only).
         """
 
         if not isinstance(values, list):
-            return
+            return []
+        added_ids: List[str] = []
         for value in values:
             record = _coerce_evidence_record_dict(value)
             if not isinstance(record, dict):
@@ -662,19 +672,65 @@ class _EvidenceRegistry:
             evidence_record_id = str(record.get("evidence_record_id") or "").strip()
             if evidence_record_id in self._recorded_ids:
                 recorded = self._records_by_id[evidence_record_id]
-                self._replace_record_by_id(
-                    evidence_record_id,
-                    _model_copy_of_recorded(recorded, record),
+                added_ids.append(
+                    self._replace_record_by_id(
+                        evidence_record_id, _model_copy_of_recorded(recorded, record),
+                    )
                 )
                 continue
+            recorded_id = self._recorded_match(
+                record,
+                entity_fallback=entity_fallback,
+                allow_locator_fallback=allow_locator_fallback,
+            )
+            if recorded_id is not None:
+                if evidence_record_id:
+                    self._canonical_id_by_input_id[evidence_record_id] = recorded_id
+                added_ids.append(recorded_id)
+                continue
             if _names_a_file(record):
+                self.dropped.append(
+                    {"evidence_record_id": evidence_record_id or None, "code": "unrecorded_file_evidence"}
+                )
                 logger.warning(
                     "Dropped a model-written evidence record that names a file but was never "
                     "recorded: evidence_record_id=%s",
                     evidence_record_id or None,
                 )
                 continue
-            self.add(value)
+            added_id = self.add(
+                value,
+                entity_fallback=entity_fallback,
+                allow_locator_fallback=allow_locator_fallback,
+            )
+            if added_id:
+                added_ids.append(added_id)
+        return added_ids
+
+    def _recorded_match(
+        self,
+        record: Dict[str, Any],
+        *,
+        entity_fallback: Optional[str],
+        allow_locator_fallback: bool,
+    ) -> Optional[str]:
+        """The recording this model-written record copies, by quote and place (never the file)."""
+
+        normalized = _normalize_evidence_record(record, entity_fallback=entity_fallback)
+        if normalized is None:
+            return None
+        exact_id = self._id_by_exact_key.get(_evidence_record_key(normalized))
+        if exact_id in self._recorded_ids:
+            return exact_id
+        if allow_locator_fallback:
+            locator_ids = [
+                locator_id
+                for locator_id in self._ids_by_locator_key.get(_evidence_locator_key(normalized), [])
+                if locator_id in self._recorded_ids
+            ]
+            if len(locator_ids) == 1:
+                return locator_ids[0]
+        return None
 
     def add_many(
         self,
@@ -1042,13 +1098,16 @@ def _canonicalize_nested_evidence_references(
     value: Any,
     *,
     registry: _EvidenceRegistry,
+    payload_evidence: str,
     top_level: bool = False,
 ) -> Any:
     """Replace legacy inline evidence blobs with evidence_record_ids recursively."""
 
     if isinstance(value, list):
         return [
-            _canonicalize_nested_evidence_references(item, registry=registry)
+            _canonicalize_nested_evidence_references(
+                item, registry=registry, payload_evidence=payload_evidence,
+            )
             for item in value
         ]
 
@@ -1065,6 +1124,7 @@ def _canonicalize_nested_evidence_references(
         canonical_record[key] = _canonicalize_nested_evidence_references(
             nested_value,
             registry=registry,
+            payload_evidence=payload_evidence,
         )
 
     evidence_record_ids = registry.canonicalize_reference_ids(record_dict.get("evidence_record_ids"))
@@ -1077,7 +1137,7 @@ def _canonicalize_nested_evidence_references(
     if isinstance(legacy_evidence, list):
         evidence_record_ids = _merge_unique_reference_ids(
             evidence_record_ids,
-            registry.add_many(
+            (registry.add_model_written if payload_evidence == "model_written" else registry.add_many)(
                 legacy_evidence,
                 entity_fallback=_candidate_entity_fallback(record_dict),
                 allow_locator_fallback=True,
@@ -1154,6 +1214,20 @@ def _prune_unreferenced_evidence_records(payload: Dict[str, Any]) -> Dict[str, A
     return canonical_payload
 
 
+def _record_dropped_evidence(dropped: List[Dict[str, Any]]) -> None:
+    """Record dropped model-written evidence as a trace event TraceReview shows (IDs and codes only)."""
+
+    from src.lib.openai_agents.extraction_trace_events import write_extraction_trace_event
+
+    write_extraction_trace_event(
+        event_type=DROPPED_EVIDENCE_TRACE_EVENT,
+        output_summary={"dropped_evidence_records": list(dropped), "count": len(dropped)},
+    )
+
+
+DROPPED_EVIDENCE_TRACE_EVENT = "evidence.unrecorded_records_dropped"
+
+
 def canonicalize_structured_result_payload(
     value: Any,
     *,
@@ -1188,8 +1262,11 @@ def canonicalize_structured_result_payload(
     canonical_payload = _canonicalize_nested_evidence_references(
         payload,
         registry=registry,
+        payload_evidence=payload_evidence,
         top_level=True,
     )
+    if registry.dropped:
+        _record_dropped_evidence(registry.dropped)
 
     original_items = canonical_payload.get("items")
     canonical_items = _consolidate_items(
@@ -1277,11 +1354,26 @@ def _extract_object_payload_evidence_records(payload: Dict[str, Any]) -> List[Di
     return registry.records()
 
 
-def extract_evidence_records_from_structured_result(value: Any) -> List[Dict[str, Any]]:
-    """Extract normalized evidence records from a structured extraction result."""
+def extract_evidence_records_from_structured_result(
+    value: Any,
+    *,
+    payload_evidence: Literal["model_written", "persisted"],
+    preferred_evidence_records: Any = None,
+) -> List[Dict[str, Any]]:
+    """Extract normalized evidence records from a structured extraction result.
+
+    ``payload_evidence`` as for ``canonicalize_structured_result_payload``: a
+    model's raw structured output is ``model_written`` (with its run's recorded
+    evidence as ``preferred_evidence_records``); a result already canonicalized
+    or saved is ``persisted``.
+    """
 
     payload = _coerce_evidence_record_dict(
-        canonicalize_structured_result_payload(value, payload_evidence="persisted")
+        canonicalize_structured_result_payload(
+            value,
+            payload_evidence=payload_evidence,
+            preferred_evidence_records=preferred_evidence_records,
+        )
     )
     if not isinstance(payload, dict):
         return []

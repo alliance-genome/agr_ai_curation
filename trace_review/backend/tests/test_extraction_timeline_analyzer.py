@@ -766,3 +766,20 @@ def test_evidence_source_summary_names_the_file():
     assert summary["file_id"] == "6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c"
     assert summary["file_name"] == "Table_S1.xlsx"
     assert "page" not in summary
+
+
+
+def test_dropped_model_written_evidence_is_shown(tmp_path, monkeypatch):
+    # ALL-1460: a model-written record naming a file it was never recorded in is dropped.
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    dropped = {"dropped_evidence_records": [{"evidence_record_id": "EV9", "code": "unrecorded_file_evidence"}],
+               "count": 1}
+    _write_event(tmp_path, "trace-dropped", _event("trace-dropped", 1, "evidence.unrecorded_records_dropped",
+                 output_summary={"preview": dropped}))
+
+    timeline = ExtractionTimelineAnalyzer.analyze(
+        trace_id="trace-dropped", raw_trace={}, observations=[], include_raw_outputs=True,
+    )
+
+    [event] = timeline["dropped_evidence"]["events"]
+    assert event["output"]["preview"] == dropped

@@ -791,7 +791,9 @@ def _evidence_record_ids(
 ) -> list[str]:
     ids = [
         record.get("evidence_record_id")
-        for record in extract_evidence_records_from_structured_result(dict(payload))
+        for record in extract_evidence_records_from_structured_result(
+            dict(payload), payload_evidence="persisted",
+        )
         if isinstance(record, Mapping)
     ]
     if evidence_records:

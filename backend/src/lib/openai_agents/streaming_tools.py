@@ -1182,7 +1182,9 @@ def _emit_specialist_evidence_summary_or_raise(
     authored_evidence_record_ids: set[str],
 ):
     """Emit specialist evidence summary from live tool-verified evidence or fail fast."""
-    evidence_records = extract_evidence_records_from_structured_result(final_output)
+    evidence_records = extract_evidence_records_from_structured_result(
+        final_output, payload_evidence="persisted",
+    )
     requires_evidence = structured_result_requires_evidence(
         final_output,
         expected_output_type=expected_output_type,
@@ -6462,7 +6464,7 @@ async def run_specialist_with_events(
         if not builder_evidence_records and builder_finalization is not None:
             try:
                 builder_evidence_records = extract_evidence_records_from_structured_result(
-                    json.dumps(builder_finalization.payload)
+                    json.dumps(builder_finalization.payload), payload_evidence="persisted",
                 )
             except (TypeError, ValueError):
                 builder_evidence_records = []
@@ -6636,7 +6638,7 @@ async def run_specialist_with_events(
         else final_output
     )
     retained_evidence_records = extract_evidence_records_from_structured_result(
-        retained_evidence_source
+        retained_evidence_source, payload_evidence="persisted",
     )
 
     inline_persistence: InlineExtractionPersistenceResult | None = None

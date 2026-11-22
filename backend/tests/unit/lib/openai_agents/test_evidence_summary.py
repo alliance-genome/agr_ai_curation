@@ -95,7 +95,7 @@ def test_canonicalize_preserves_structured_evidence_when_preferred_records_empty
     assert canonical["evidence_records"] == [
         {**_record(entity="vtg1"), "evidence_record_id": "EV1"}
     ]
-    assert extract_evidence_records_from_structured_result(canonical) == [
+    assert extract_evidence_records_from_structured_result(canonical, payload_evidence="persisted") == [
         {**_record(entity="vtg1"), "evidence_record_id": "EV1"}
     ]
     assert structured_result_evidence_reference_report(canonical)["evidence_record_count"] == 1
@@ -614,7 +614,7 @@ def test_extract_evidence_records_from_domain_envelope_extraction_metadata():
         },
     }
 
-    assert extract_evidence_records_from_structured_result(envelope) == [
+    assert extract_evidence_records_from_structured_result(envelope, payload_evidence="persisted") == [
         {
             **_record(
                 entity="flcn",
@@ -651,7 +651,7 @@ def test_extract_evidence_records_from_domain_envelope_object_payload():
         "metadata": {},
     }
 
-    assert extract_evidence_records_from_structured_result(envelope) == [
+    assert extract_evidence_records_from_structured_result(envelope, payload_evidence="persisted") == [
         {
             "entity": "Crumbs",
             "verified_quote": "Crumbs regulates R8 cell fate.",
@@ -730,7 +730,7 @@ def test_canonicalize_prunes_unreferenced_live_evidence_from_domain_envelope():
         record["evidence_record_id"]
         for record in canonical["metadata"]["evidence_records"]
     ] == ["evidence-crb", "evidence-ninae"]
-    assert extract_evidence_records_from_structured_result(canonical) == [
+    assert extract_evidence_records_from_structured_result(canonical, payload_evidence="persisted") == [
         crb_record,
         ninae_record,
     ]
@@ -1105,3 +1105,92 @@ def test_persisted_results_keep_their_records_as_stored():
 
     [record] = canonical["evidence_records"]
     assert record["file_id"] == _FILE_ID
+
+
+
+def _payload_with_copy(copy, *, evidence_ids=("EV1",)):
+    return {
+        "items": [{"label": "abc-1", "entity_type": "gene", "source_mentions": ["abc-1"],
+                   "evidence_record_ids": list(evidence_ids)}],
+        "evidence_records": [copy],
+        "run_summary": {"kept_count": 1},
+    }
+
+
+def test_a_correct_copy_with_its_own_id_is_remapped_to_the_recording():
+    recorded = _recorded_record()
+    copy = {**recorded, "evidence_record_id": "EV1"}
+
+    canonical = canonicalize_structured_result_payload(
+        _payload_with_copy(copy), payload_evidence="model_written", preferred_evidence_records=[recorded],
+    )
+
+    assert canonical["items"][0]["evidence_record_ids"] == ["evidence-page-less"]
+    [record] = canonical["evidence_records"]
+    assert (record["evidence_record_id"], record["file_id"]) == ("evidence-page-less", _FILE_ID)
+
+
+def test_a_copy_with_its_own_id_and_another_file_keeps_the_recorded_file():
+    recorded = _recorded_record()
+    copy = {**recorded, "evidence_record_id": "EV1",
+            "file_id": "00000000-0000-0000-0000-00000000fake", "file_name": "Invented.xlsx"}
+
+    canonical = canonicalize_structured_result_payload(
+        _payload_with_copy(copy), payload_evidence="model_written", preferred_evidence_records=[recorded],
+    )
+
+    assert canonical["items"][0]["evidence_record_ids"] == ["evidence-page-less"]
+    [record] = canonical["evidence_records"]
+    assert (record["file_id"], record["file_name"]) == (_FILE_ID, "Supplementary Table 2")
+
+
+def test_an_inline_evidence_blob_naming_an_unrecorded_file_is_dropped_and_traced(monkeypatch):
+    from src.lib.openai_agents import extraction_trace_events
+
+    events = []
+    monkeypatch.setattr(
+        extraction_trace_events, "write_extraction_trace_event", lambda **event: events.append(event),
+    )
+    blob = {
+        "entity": "abc-1", "verified_quote": "An invented quote.", "page": 99, "section": "Results",
+        "chunk_id": "chunk-9", "file_id": "fake", "file_name": "Invented.xlsx",
+        "evidence_record_id": "evidence-blob",
+    }
+    payload = {
+        "items": [{"label": "abc-1", "entity_type": "gene", "source_mentions": ["abc-1"],
+                   "evidence": [blob]}],
+        "evidence_records": [],
+        "run_summary": {"kept_count": 1},
+    }
+
+    canonical = canonicalize_structured_result_payload(
+        payload, payload_evidence="model_written", preferred_evidence_records=[_recorded_record()],
+    )
+
+    assert all(record.get("file_id") != "fake" for record in canonical["evidence_records"])
+    assert canonical["items"][0]["evidence_record_ids"] == []
+    assert events == [{
+        "event_type": "evidence.unrecorded_records_dropped",
+        "output_summary": {
+            "dropped_evidence_records": [
+                {"evidence_record_id": "evidence-blob", "code": "unrecorded_file_evidence"}
+            ],
+            "count": 1,
+        },
+    }]
+
+
+def test_an_inline_blob_copying_a_recording_is_remapped():
+    recorded = _recorded_record()
+    payload = {
+        "items": [{"label": "abc-1", "entity_type": "gene", "source_mentions": ["abc-1"],
+                   "evidence": [{**recorded, "evidence_record_id": "evidence-blob"}]}],
+        "evidence_records": [],
+        "run_summary": {"kept_count": 1},
+    }
+
+    canonical = canonicalize_structured_result_payload(
+        payload, payload_evidence="model_written", preferred_evidence_records=[recorded],
+    )
+
+    assert canonical["items"][0]["evidence_record_ids"] == ["evidence-page-less"]

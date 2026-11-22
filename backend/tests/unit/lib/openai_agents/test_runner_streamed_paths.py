@@ -1218,7 +1218,7 @@ async def test_runner_traces_impossible_top_level_curation_shaped_output(monkeyp
     monkeypatch.setattr(
         runner,
         "extract_evidence_records_from_structured_result",
-        lambda _structured_result: [],
+        lambda _structured_result, **_kwargs: [],
     )
     monkeypatch.setattr(
         runner,

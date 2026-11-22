@@ -2512,7 +2512,11 @@ async def _run_agent_with_owned_resources(
                     "output_type": output_type_name,
                 },
             )
-        structured_evidence_records = extract_evidence_records_from_structured_result(structured_result)
+        structured_evidence_records = extract_evidence_records_from_structured_result(
+            structured_result,
+            payload_evidence="model_written",
+            preferred_evidence_records=list(evidence_records),
+        )
         if (
             structured_result_requires_evidence(
                 structured_result,

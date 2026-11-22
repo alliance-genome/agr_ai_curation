@@ -278,7 +278,9 @@ def build_extraction_envelope_candidate_with_evidence(
         execution_receipt=execution_receipt,
     )
     evidence_source = candidate.payload_json if candidate is not None else raw_output
-    evidence_records = extract_evidence_records_from_structured_result(evidence_source)
+    evidence_records = extract_evidence_records_from_structured_result(
+        evidence_source, payload_evidence="persisted",
+    )
 
     return candidate, {
         "evidence_records": evidence_records,

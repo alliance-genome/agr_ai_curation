@@ -1021,6 +1021,9 @@ class ExtractionTimelineAnalyzer:
             counts[key] = counts.get(key, 0) + 1
 
         fanout_events = [item for item in timeline if str(item.get("event_type", "")).startswith("extraction_fanout.")]
+        dropped_evidence_events = [
+            item for item in timeline if item.get("event_type") == "evidence.unrecorded_records_dropped"
+        ]
         quick_check_events = [item for item in timeline
                               if str(item.get("event_type", "")).startswith("review_quick_check.")]
         return {
@@ -1053,6 +1056,12 @@ class ExtractionTimelineAnalyzer:
                         "and code finalize attempts. Writers run as separate agent runs in this trace; counts are "
                         "what code observed, not judgments about the records.",
             }} if fanout_events else {}),
+            **({"dropped_evidence": {
+                "events": dropped_evidence_events,
+                "note": "Evidence records a model wrote in its structured output that named a file but "
+                        "matched no record_evidence recording; code dropped them (IDs and codes only). "
+                        "Only record_evidence attributes evidence to a file.",
+            }} if dropped_evidence_events else {}),
             **({"review_quick_check": {
                 "events": quick_check_events,
                 "note": "Shadow Decisions check of each fresh review packet: the model's probabilities per record "
