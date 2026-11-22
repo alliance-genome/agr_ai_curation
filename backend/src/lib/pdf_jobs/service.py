@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 from uuid import UUID
 
-from sqlalchemy import exists, func, select, text
+from sqlalchemy import exists, func, or_, select, text
 from sqlalchemy.exc import OperationalError
 
 from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
@@ -63,6 +63,10 @@ NO_JOB_ORPHAN_FAILURE_MESSAGE = (
     "PDF processing did not start because no durable processing job was created; "
     "retry the document processing request"
 )
+NO_JOB_ORPHAN_SKIPPED_REASON = (
+    "skipped_has_processed_output: the paper was processed (processed or extraction "
+    "output is stored), so it is not an unstarted upload and is never marked failed here"
+)
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,8 @@ class NoJobOrphanRepairSummary:
     cutoff: datetime
     batch_size: int
     records: tuple[NoJobOrphanRepairRecord, ...]
+    # Pending, no job, aged, but with processed output: never failed by this repair.
+    skipped: tuple[NoJobOrphanRepairRecord, ...] = ()
 
     @property
     def qualifying_count(self) -> int:
@@ -105,6 +111,8 @@ class NoJobOrphanRepairSummary:
             "batch_size": self.batch_size,
             "qualifying_count": self.qualifying_count,
             "records": [record.to_json() for record in self.records],
+            "skipped_count": len(self.skipped),
+            "skipped": [record.to_json() for record in self.skipped],
         }
 
 
@@ -357,13 +365,20 @@ def _reconcile_pending_documents_without_jobs(
             PdfProcessingJob.document_id == PDFDocument.id
         )
     )
+    aged_pending_without_job = (
+        PDFDocument.status == "pending",
+        PDFDocument.upload_timestamp <= cutoff,
+        ~has_job,
+    )
+    # An unstarted upload never produced processed or extraction output. A paper
+    # that has either was processed, so it is reported and never marked failed.
+    never_processed = (
+        PDFDocument.processed_json_path.is_(None),
+        PDFDocument.pdfx_json_path.is_(None),
+    )
     statement = (
         select(PDFDocument)
-        .where(
-            PDFDocument.status == "pending",
-            PDFDocument.upload_timestamp <= cutoff,
-            ~has_job,
-        )
+        .where(*aged_pending_without_job, *never_processed)
         .order_by(PDFDocument.upload_timestamp.asc(), PDFDocument.id.asc())
         .limit(batch_size)
     )
@@ -388,11 +403,32 @@ def _reconcile_pending_documents_without_jobs(
             )
         )
 
+    skipped_documents = session.execute(
+        select(PDFDocument)
+        .where(
+            *aged_pending_without_job,
+            or_(
+                PDFDocument.processed_json_path.is_not(None),
+                PDFDocument.pdfx_json_path.is_not(None),
+            ),
+        )
+        .order_by(PDFDocument.upload_timestamp.asc(), PDFDocument.id.asc())
+    ).scalars().all()
+
     return NoJobOrphanRepairSummary(
         dry_run=not apply,
         cutoff=cutoff,
         batch_size=batch_size,
         records=tuple(records),
+        skipped=tuple(
+            NoJobOrphanRepairRecord(
+                document_id=str(document.id),
+                upload_timestamp=document.upload_timestamp,
+                status="skipped",
+                reason=NO_JOB_ORPHAN_SKIPPED_REASON,
+            )
+            for document in skipped_documents
+        ),
     )
 
 

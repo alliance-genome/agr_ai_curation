@@ -417,7 +417,8 @@ def test_no_job_orphan_dry_run_reports_without_writes():
         status="pending",
         upload_timestamp=now - timedelta(days=7),
     )
-    session = _FakeSession([[document]])
+    # The selection, then the report-only query for processed papers (skipped).
+    session = _FakeSession([[document], []])
 
     summary = service_module._reconcile_pending_documents_without_jobs(
         session,
@@ -439,6 +440,10 @@ def test_no_job_orphan_dry_run_reports_without_writes():
     assert "pdf_documents.upload_timestamp" in compiled
     assert "NOT (EXISTS" in compiled
     assert "pdf_processing_jobs.document_id = pdf_documents.id" in compiled
+    # Only never-processed papers can be failed (legacy completed papers are skipped).
+    assert "pdf_documents.processed_json_path IS NULL" in compiled
+    assert "pdf_documents.pdfx_json_path IS NULL" in compiled
+    assert summary.skipped == ()
 
 
 def test_no_job_orphan_apply_creates_canonical_failed_job_and_reconciles_document():
@@ -460,6 +465,7 @@ def test_no_job_orphan_apply_creates_canonical_failed_job_and_reconciles_documen
             [document],
             document,
             lambda current_session: current_session.added[-1],
+            [],
         ]
     )
 
@@ -489,7 +495,7 @@ def test_no_job_orphan_apply_creates_canonical_failed_job_and_reconciles_documen
 
 def test_no_job_orphan_repair_is_idempotent_when_no_pending_no_job_rows_remain():
     now = datetime(2026, 8, 27, 12, tzinfo=timezone.utc)
-    session = _FakeSession([[]])
+    session = _FakeSession([[], []])
 
     summary = service_module._reconcile_pending_documents_without_jobs(
         session,
@@ -507,7 +513,7 @@ def test_no_job_orphan_repair_is_idempotent_when_no_pending_no_job_rows_remain()
 def test_no_job_orphan_repair_retries_transient_database_failure(monkeypatch):
     failure = OperationalError("select", {}, RuntimeError("transient"))
     failed_session = _FakeSession([failure])
-    successful_session = _FakeSession([[]])
+    successful_session = _FakeSession([[], []])
     sessions = iter((failed_session, successful_session))
     monkeypatch.setattr(service_module, "SessionLocal", lambda: next(sessions))
     monkeypatch.setattr(

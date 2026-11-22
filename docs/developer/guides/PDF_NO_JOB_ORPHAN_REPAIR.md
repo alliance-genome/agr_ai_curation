@@ -6,6 +6,12 @@ command reports or terminalizes only documents older than the configured race
 window. It does not process stale live jobs; normal PDF job reconciliation
 continues to own those records.
 
+Only papers that were never processed qualify: no processed-elements JSON and
+no extraction (PDFX) JSON. A pending paper with no job that has either was
+processed (for example a paper from before v0.3.0, when the pipeline did not
+yet write the SQL status); it is listed under `skipped` with reason
+`skipped_has_processed_output` and is never marked failed.
+
 The repair creates a synthetic failed job with the canonical PDF processing
 receipt, then reconciles the document through the PDF job service. Existing
 document and job APIs expose the resulting `failed` status and retry guidance.
