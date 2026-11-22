@@ -23,6 +23,52 @@ from src.models.pipeline import PipelineStatus, ProcessingStage
 from src.schemas.documents import DocumentUpdateRequest
 
 
+class _FakeLockConnection:
+    """Postgres in miniature for the per-paper delete lock: the lock code itself runs unchanged.
+
+    The unit job has no database; the lock's behaviour against real Postgres (refusal when
+    held, release on failure and cancellation, two deletes on one loop) is tested in
+    tests/integration/persistence/test_supplement_add_search_index.py.
+    """
+
+    held: set[int] = set()
+    log: list[str] = []
+
+    def execute(self, statement, params):
+        sql = str(statement)
+        key = params["key"]
+        if "pg_try_advisory_lock" in sql:
+            taken = key not in self.held
+            self.held.add(key)
+            self.log.append("lock")
+            return SimpleNamespace(scalar_one=lambda: taken)
+        if "pg_advisory_unlock" in sql:
+            self.held.discard(key)
+            self.log.append("unlock")
+            return SimpleNamespace(scalar_one=lambda: True)
+        raise AssertionError(f"unexpected lock statement {sql}")
+
+    def commit(self):
+        pass
+
+    def close(self):
+        pass
+
+    def invalidate(self):
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _paper_lock_database(monkeypatch):
+    _FakeLockConnection.held = set()
+    _FakeLockConnection.log = []
+    monkeypatch.setattr(
+        "src.models.sql.database.engine", SimpleNamespace(connect=lambda: _FakeLockConnection()), raising=False,
+    )
+    yield _FakeLockConnection
+    assert _FakeLockConnection.held == set(), "a delete left its paper lock held"
+
+
 _FILE_FIELDS = (
     "file_path", "file_hash", "file_size", "page_count", "pdfx_json_path", "processed_json_path",
     "hierarchy_metadata", "source_provider_source_file_id", "source_provider_converted_artifact_id",
