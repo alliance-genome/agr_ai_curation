@@ -19,8 +19,7 @@ import {
 
 import {
   buildCurationPDFViewerOwner,
-  dispatchPDFDocumentChanged,
-  dispatchPDFViewerDocumentCleared,
+  showPaperFilesInViewer,
 } from '@/components/pdfViewer/pdfEvents'
 import { usePersistentPdfWorkspaceLayout } from '@/components/pdfViewer/PersistentPdfWorkspaceLayout'
 import { buildManualCandidateDraft } from '@/features/curation/entityTags/workspaceEntityTags'
@@ -174,10 +173,7 @@ function CurationWorkspacePageContent({
   const runtimeWarning = autosave.warning ?? hydration.warning
   const workspaceDocument = workspace.session.document
   const workspaceDocumentId = workspaceDocument.document_id
-  const workspaceDocumentPdfUrl = workspaceDocument.pdf_url
-  const workspaceDocumentPageCount = workspaceDocument.page_count
-  const workspaceDocumentTitle = workspaceDocument.title
-  const workspaceDocumentViewerUrl = workspaceDocument.viewer_url
+  const workspaceDocumentFiles = workspaceDocument.files
   const viewerOwnerToken = useMemo(
     () => buildCurationPDFViewerOwner(workspace.session.session_id),
     [workspace.session.session_id],
@@ -355,22 +351,15 @@ function CurationWorkspacePageContent({
   }, [expectedEnvelopeRevisions, setWorkspace, workspace.session.session_id])
 
   useEffect(() => {
-    const pdfUrl = workspaceDocumentPdfUrl ?? workspaceDocumentViewerUrl
     if (!hydration.isHydrated || !workspaceDocumentId) {
       return
     }
-    if (!pdfUrl) {
-      // A text paper has no PDF. Clear the shared viewer so it cannot keep
-      // showing (and searching) the paper chat had open before.
-      dispatchPDFViewerDocumentCleared(viewerOwnerToken)
-      return
-    }
-
-    dispatchPDFDocumentChanged(
+    // One tab per file with a URL; a text paper shows its text tab, so the shared
+    // viewer never keeps the paper chat had open before. A paper with no file to
+    // show yet clears the viewer.
+    showPaperFilesInViewer(
       workspaceDocumentId,
-      pdfUrl,
-      workspaceDocumentTitle,
-      workspaceDocumentPageCount ?? 1,
+      workspaceDocumentFiles,
       hydration.restoredScrollPosition === null
         ? { ownerToken: viewerOwnerToken }
         : {
@@ -383,11 +372,8 @@ function CurationWorkspacePageContent({
   }, [
     hydration.isHydrated,
     hydration.restoredScrollPosition,
+    workspaceDocumentFiles,
     workspaceDocumentId,
-    workspaceDocumentPageCount,
-    workspaceDocumentPdfUrl,
-    workspaceDocumentTitle,
-    workspaceDocumentViewerUrl,
     viewerOwnerToken,
   ])
 

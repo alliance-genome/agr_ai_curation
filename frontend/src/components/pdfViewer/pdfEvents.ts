@@ -1,10 +1,12 @@
 import type { EvidenceNavigationCommand } from '@/features/curation/evidence'
+import { defaultActiveFileId, viewerTabFiles, type ViewerFile } from './viewerFiles'
 
 export interface PDFViewerDocumentChangedDetail {
   documentId: string
-  viewerUrl: string
-  filename: string
-  pageCount: number
+  /** The paper's files with a tab (a content or text URL), in tab order; never empty. */
+  files: ViewerFile[]
+  /** The file to show; one of `files`. */
+  activeFileId: string
   ownerToken?: string
   viewerState?: {
     currentPage?: number
@@ -36,28 +38,39 @@ export function buildCurationPDFViewerOwner(sessionId: string): string {
   return `curation:${sessionId}`
 }
 
-export function dispatchPDFDocumentChanged(
+export interface PaperFilesViewerOptions {
+  ownerToken?: string
+  viewerState?: PDFViewerDocumentChangedDetail['viewerState']
+}
+
+/**
+ * Show a paper's files in the viewer: one tab per file with a URL, the main file
+ * first (or the first file with a URL). When no file has a URL yet (all being added,
+ * or failed), the viewer is cleared instead. Returns whether a file is shown.
+ */
+export function showPaperFilesInViewer(
   documentId: string,
-  viewerUrl: string,
-  filename: string,
-  pageCount: number,
-  options?: {
-    ownerToken?: string
-    viewerState?: PDFViewerDocumentChangedDetail['viewerState']
-  },
-): void {
+  files: readonly ViewerFile[],
+  options?: PaperFilesViewerOptions,
+): boolean {
+  const tabFiles = viewerTabFiles(files)
+  const activeFileId = defaultActiveFileId(tabFiles)
+  if (activeFileId === null) {
+    dispatchPDFViewerDocumentCleared(options?.ownerToken)
+    return false
+  }
   window.dispatchEvent(
     new CustomEvent<PDFViewerDocumentChangedDetail>('pdf-viewer-document-changed', {
       detail: {
         documentId,
-        viewerUrl,
-        filename,
-        pageCount,
+        files: tabFiles,
+        activeFileId,
         ownerToken: options?.ownerToken,
         viewerState: options?.viewerState,
       },
     }),
   )
+  return true
 }
 
 export function onPDFDocumentChanged(
@@ -114,8 +127,8 @@ export interface PDFViewerDocumentClearedDetail {
 }
 
 /**
- * The active document has nothing for the PDF viewer to show (a text paper).
- * The viewer ends any pending load and clears the previous PDF.
+ * The active document has nothing for the viewer to show (unloaded, or no file of
+ * the paper has a URL yet). The viewer ends any pending load and clears what it showed.
  */
 export function dispatchPDFViewerDocumentCleared(ownerToken?: string): void {
   window.dispatchEvent(

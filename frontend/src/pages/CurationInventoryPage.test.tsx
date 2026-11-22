@@ -13,6 +13,7 @@ import type {
   CurationSessionListResponse,
   CurationSessionStatsResponse,
 } from '../features/curation/types'
+import { singleMainPdfFile } from '@/components/pdfViewer/viewerFilesFixtures'
 
 const theme = createTheme()
 
@@ -88,6 +89,7 @@ describe('CurationInventoryPage', () => {
         },
         document: {
           document_id: 'doc-1',
+          files: [singleMainPdfFile({ documentId: 'doc-1' })],
           title: 'Alpha paper',
           pmid: '123456',
           doi: null,

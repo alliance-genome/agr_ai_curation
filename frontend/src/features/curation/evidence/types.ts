@@ -17,6 +17,11 @@ export interface EvidenceChipProps {
 
 export interface EvidenceNavigationCommand {
   anchorId: string
+  /**
+   * The paper file the evidence is in. Null only for evidence saved before files
+   * were recorded (0.12.0): the viewer then opens nothing.
+   */
+  fileId: string | null
   anchor: EvidenceAnchor
   searchText: string | null
   pageNumber: number | null

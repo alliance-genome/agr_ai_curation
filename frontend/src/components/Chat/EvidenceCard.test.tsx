@@ -140,7 +140,7 @@ describe('EvidenceCard', () => {
     expect(onNavigateEvidence).toHaveBeenCalledTimes(1)
     expect(onNavigateEvidence.mock.calls[0][0].detail.command).toEqual(
       expect.objectContaining({
-        anchorId: expect.stringContaining('chat-evidence:chunk-1:p4:crumb:'),
+        anchorId: expect.stringContaining('chat-evidence:no-file:chunk-1:crumb:'),
         searchText: 'Crumb is essential for maintaining epithelial polarity.',
         pageNumber: 4,
         sectionTitle: 'Results',

@@ -6,9 +6,10 @@ import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 import {
   HOME_PDF_VIEWER_OWNER,
   buildCurationPDFViewerOwner,
-  dispatchPDFDocumentChanged,
+  showPaperFilesInViewer,
   dispatchPDFViewerDocumentCleared,
 } from './pdfEvents'
+import { singleMainPdfFile, singleMainTextFile } from './viewerFilesFixtures'
 import PdfViewer from './PdfViewer'
 
 function dispatchChatDocumentLoaded(documentId: string) {
@@ -26,7 +27,7 @@ function jsonResponse(payload: unknown): Response {
 
 async function showPreviousPdf() {
   render(<PdfViewer activeDocumentOwnerToken={HOME_PDF_VIEWER_OWNER} />)
-  dispatchPDFDocumentChanged('doc-pdf', '/fixtures/previous.pdf', 'previous.pdf', 4, {
+  showPaperFilesInViewer('doc-pdf', [singleMainPdfFile({ documentId: 'doc-pdf', displayName: 'previous.pdf', pageCount: 4 })], {
     ownerToken: HOME_PDF_VIEWER_OWNER,
   })
   expect(await screen.findByText('previous.pdf')).toBeInTheDocument()
@@ -72,13 +73,23 @@ describe('PdfViewer when chat loads a text paper', () => {
     expect(screen.getByText('previous.pdf')).toBeInTheDocument()
   })
 
-  it('a resumed chat on a text paper leaves no PDF and no loading overlay', async () => {
+  it('a resumed chat on a text paper leaves no PDF and no loading overlay, and shows its text tab', async () => {
     await showPreviousPdf()
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => (
-      url.endsWith('/url')
-        ? jsonResponse({ viewer_url: null, viewer_mode: 'text', has_main_file: true })
-        : jsonResponse({ filename: 'provider-paper.md', page_count: null })
-    )))
+    const textFile = singleMainTextFile({ documentId: 'doc-text', displayName: 'provider-paper.md' })
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.endsWith('/files')) {
+        return jsonResponse({ document_id: 'doc-text', files: [textFile] })
+      }
+      if (url === textFile.text_url) {
+        return jsonResponse({
+          document_id: 'doc-text',
+          file_id: textFile.file_id,
+          display_name: 'provider-paper.md',
+          blocks: [{ kind: 'paragraph', text: 'Made-up paper text.', level: null, section_path: [], rows: null }],
+        })
+      }
+      return jsonResponse({ filename: 'provider-paper.md', page_count: null })
+    }))
     act(() => { dispatchChatDocumentLoaded('doc-text') })
 
     await act(async () => {
@@ -91,5 +102,7 @@ describe('PdfViewer when chat loads a text paper', () => {
 
     await waitFor(() => expect(screen.queryByText('Loading PDF...')).not.toBeInTheDocument())
     expect(screen.queryByText('previous.pdf')).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'provider-paper.md, file 1 of 1, converted text' })).toBeInTheDocument()
+    expect(await screen.findByText('Made-up paper text.')).toBeInTheDocument()
   })
 })

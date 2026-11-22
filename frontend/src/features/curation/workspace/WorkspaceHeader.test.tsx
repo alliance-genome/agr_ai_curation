@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 import type { CurationReviewSession } from '@/features/curation/types'
 import theme, { createAppTheme, type ThemeMode } from '@/theme'
 import WorkspaceHeader from './WorkspaceHeader'
+import { singleMainPdfFile } from '@/components/pdfViewer/viewerFilesFixtures'
 
 function buildSession(): CurationReviewSession {
   return {
@@ -21,6 +22,7 @@ function buildSession(): CurationReviewSession {
     },
     document: {
       document_id: 'document-1',
+      files: [singleMainPdfFile({ documentId: 'document-1' })],
       title: 'Annotation-ready paper',
       pmid: '123456',
       doi: '10.1000/example',

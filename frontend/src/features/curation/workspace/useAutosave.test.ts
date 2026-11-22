@@ -12,6 +12,7 @@ import {
 } from './CurationWorkspaceContext'
 import { useAutosave } from './useAutosave'
 import { useSessionHydration } from './useSessionHydration'
+import { singleMainPdfFile } from '@/components/pdfViewer/viewerFilesFixtures'
 
 const serviceMocks = vi.hoisted(() => ({
   autosaveCurationCandidateDraft: vi.fn(),
@@ -41,6 +42,7 @@ function buildWorkspace(
       },
       document: {
         document_id: 'document-1',
+        files: [singleMainPdfFile({ documentId: 'document-1' })],
         title: 'Workspace document',
       },
       progress: {

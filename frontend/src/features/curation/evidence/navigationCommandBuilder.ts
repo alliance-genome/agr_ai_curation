@@ -20,6 +20,7 @@ type QuoteCentricAnchorInput = Omit<
 
 export function buildQuoteCentricEvidenceNavigationCommand(args: {
   anchorId: string
+  fileId: string | null
   anchor: QuoteCentricAnchorInput
   quote: string
   /** What the viewer searches the PDF for; the quote itself unless it differs (table rows). */
@@ -49,6 +50,7 @@ export function buildQuoteCentricEvidenceNavigationCommand(args: {
   }
   return {
     anchorId: args.anchorId,
+    fileId: args.fileId,
     anchor,
     searchText,
     pageNumber: args.pageNumber ?? anchor.page_number ?? null,

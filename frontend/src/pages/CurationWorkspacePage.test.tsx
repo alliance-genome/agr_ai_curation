@@ -14,6 +14,12 @@ import { dispatchPDFViewerEvidenceAnchorSelected } from '@/components/pdfViewer/
 import { PDF_TO_FORM_HIGHLIGHT_CLASSNAME } from '@/features/curation/workspace/usePdfToFormLinking'
 import theme from '@/theme'
 import CurationWorkspacePage from './CurationWorkspacePage'
+import {
+  SUPPLEMENTS_ONLY_PAYLOAD,
+  singleMainPdfFile,
+  singleMainTextFile,
+} from '@/components/pdfViewer/viewerFilesFixtures'
+import type { ViewerFile } from '@/components/pdfViewer/viewerFiles'
 
 const serviceMocks = vi.hoisted(() => ({
   autosaveCurationCandidateDraft: vi.fn(),
@@ -26,8 +32,7 @@ const serviceMocks = vi.hoisted(() => ({
   fetchSubmissionPreview: vi.fn(),
   patchCurationEnvelopeField: vi.fn(),
   handoffCurationBenchmarkSnapshot: vi.fn(),
-  dispatchPDFDocumentChanged: vi.fn(),
-  dispatchPDFViewerDocumentCleared: vi.fn(),
+  showPaperFilesInViewer: vi.fn(),
   renderPdfViewer: vi.fn(),
   submitCurationCandidateDecision: vi.fn(),
   updateCurationSession: vi.fn(),
@@ -94,8 +99,7 @@ vi.mock('@/components/pdfViewer/pdfEvents', async () => {
 
   return {
     ...actual,
-    dispatchPDFDocumentChanged: serviceMocks.dispatchPDFDocumentChanged,
-    dispatchPDFViewerDocumentCleared: serviceMocks.dispatchPDFViewerDocumentCleared,
+    showPaperFilesInViewer: serviceMocks.showPaperFilesInViewer,
   }
 })
 
@@ -123,6 +127,7 @@ function buildWorkspace(): CurationWorkspace {
       },
       document: {
         document_id: 'document-1',
+        files: [singleMainPdfFile({ documentId: 'document-1' })],
         title: 'Workspace Document',
         pmid: '123456',
         pdf_url: '/api/documents/document-1.pdf',
@@ -587,8 +592,7 @@ describe('CurationWorkspacePage', () => {
     serviceMocks.fetchSubmissionPreview.mockReset()
     serviceMocks.patchCurationEnvelopeField.mockReset()
     serviceMocks.handoffCurationBenchmarkSnapshot.mockReset()
-    serviceMocks.dispatchPDFDocumentChanged.mockReset()
-    serviceMocks.dispatchPDFViewerDocumentCleared.mockReset()
+    serviceMocks.showPaperFilesInViewer.mockReset()
     serviceMocks.renderPdfViewer.mockReset()
     serviceMocks.submitCurationCandidateDecision.mockReset()
     serviceMocks.updateCurationSession.mockReset()
@@ -1100,101 +1104,83 @@ describe('CurationWorkspacePage', () => {
     })
   })
 
-  it('initializes the PDF viewer document after hydration', async () => {
+  it('initializes the viewer with the paper\'s files after hydration', async () => {
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
 
     renderPage('/curation/session-1/candidate-accepted')
 
     await waitFor(() => {
-      expect(serviceMocks.dispatchPDFDocumentChanged).toHaveBeenCalledWith(
+      expect(serviceMocks.showPaperFilesInViewer).toHaveBeenCalledWith(
         'document-1',
-        '/api/documents/document-1.pdf',
-        'Workspace Document',
-        5,
+        [singleMainPdfFile({ documentId: 'document-1' })],
         { ownerToken: 'curation:session-1' },
       )
     })
   })
 
-  function buildTextPaperWorkspace(): CurationWorkspace {
+  function buildWorkspaceWithFiles(files: ViewerFile[]): CurationWorkspace {
     const workspace = buildWorkspace()
     return {
       ...workspace,
       session: {
         ...workspace.session,
         // What the session serializer sends for a text paper: no PDF and no pages.
-        document: { ...workspace.session.document, pdf_url: null, viewer_url: null, page_count: null },
+        document: { ...workspace.session.document, pdf_url: null, viewer_url: null, page_count: null, files },
       },
     }
   }
 
-  it('clears the shared viewer for a text paper instead of leaving the previous paper in it', async () => {
-    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildTextPaperWorkspace())
+  const textPaperFiles = [singleMainTextFile({ documentId: 'document-1' })]
+
+  // #1089 and #1090: a text paper never leaves the previous paper in the shared viewer.
+  // Since P9b the text paper is sent with its text file, which replaces what was shown.
+  it('sends a text paper\'s text file to the shared viewer instead of skipping it', async () => {
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspaceWithFiles(textPaperFiles))
 
     renderPage('/curation/session-1/candidate-accepted')
 
     await waitFor(() => {
-      expect(serviceMocks.dispatchPDFViewerDocumentCleared).toHaveBeenCalledWith('curation:session-1')
+      expect(serviceMocks.showPaperFilesInViewer).toHaveBeenCalledWith(
+        'document-1',
+        textPaperFiles,
+        { ownerToken: 'curation:session-1' },
+      )
     })
-    expect(serviceMocks.dispatchPDFDocumentChanged).not.toHaveBeenCalled()
   })
 
-  it('clears the shared viewer for a paper without a main file', async () => {
-    // The session serializer sends the same shape for a paper that holds supplements
-    // only: no PDF URL, no viewer URL, no pages.
-    const workspace = buildWorkspace()
-    serviceMocks.fetchCurationWorkspace.mockResolvedValue({
-      ...workspace,
-      session: {
-        ...workspace.session,
-        document: {
-          ...workspace.session.document,
-          filename: 'supplements-only-paper',
-          pdf_url: null,
-          viewer_url: null,
-          page_count: null,
-        },
-      },
-    })
+  // #1094: a paper that holds supplements only.
+  it('sends a paper without a main file with its supplements', async () => {
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(
+      buildWorkspaceWithFiles(SUPPLEMENTS_ONLY_PAYLOAD.files),
+    )
 
     renderPage('/curation/session-1/candidate-accepted')
 
     await waitFor(() => {
-      expect(serviceMocks.dispatchPDFViewerDocumentCleared).toHaveBeenCalledWith('curation:session-1')
+      expect(serviceMocks.showPaperFilesInViewer).toHaveBeenCalledWith(
+        'document-1',
+        SUPPLEMENTS_ONLY_PAYLOAD.files,
+        { ownerToken: 'curation:session-1' },
+      )
     })
-    expect(serviceMocks.dispatchPDFDocumentChanged).not.toHaveBeenCalled()
   })
 
   it('loads a PDF paper normally after a text paper session', async () => {
-    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildTextPaperWorkspace())
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspaceWithFiles(textPaperFiles))
     const textView = renderPage('/curation/session-1/candidate-accepted')
-    await waitFor(() => expect(serviceMocks.dispatchPDFViewerDocumentCleared).toHaveBeenCalled())
+    await waitFor(() => expect(serviceMocks.showPaperFilesInViewer).toHaveBeenCalled())
     textView.unmount()
 
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
     renderPage('/curation/session-1/candidate-accepted')
 
     await waitFor(() => {
-      expect(serviceMocks.dispatchPDFDocumentChanged).toHaveBeenCalledWith(
+      expect(serviceMocks.showPaperFilesInViewer).toHaveBeenLastCalledWith(
         'document-1',
-        '/api/documents/document-1.pdf',
-        'Workspace Document',
-        5,
+        [singleMainPdfFile({ documentId: 'document-1' })],
         { ownerToken: 'curation:session-1' },
       )
     })
-  })
-
-  it('opening the same text paper twice only ever clears the viewer', async () => {
-    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildTextPaperWorkspace())
-    renderPage('/curation/session-1/candidate-accepted').unmount()
-    renderPage('/curation/session-1/candidate-accepted')
-
-    await waitFor(() => expect(serviceMocks.dispatchPDFViewerDocumentCleared).toHaveBeenCalled())
-    expect(serviceMocks.dispatchPDFViewerDocumentCleared.mock.calls.every(
-      ([owner]) => owner === 'curation:session-1',
-    )).toBe(true)
-    expect(serviceMocks.dispatchPDFDocumentChanged).not.toHaveBeenCalled()
   })
 
   it('restores the route-selected candidate into the horizontal grid', async () => {

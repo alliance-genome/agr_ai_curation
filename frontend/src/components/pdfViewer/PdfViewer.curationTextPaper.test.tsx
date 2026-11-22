@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   HOME_PDF_VIEWER_OWNER,
   buildCurationPDFViewerOwner,
-  dispatchPDFDocumentChanged,
+  showPaperFilesInViewer,
   dispatchPDFViewerDocumentCleared,
 } from './pdfEvents'
+import { singleMainPdfFile, singleMainTextFile } from './viewerFilesFixtures'
 import PdfViewer from './PdfViewer'
 
 const CURATION_OWNER = buildCurationPDFViewerOwner('session-text')
@@ -25,7 +26,7 @@ function RouteOwnerHarness() {
 }
 
 async function showChatPdfA() {
-  dispatchPDFDocumentChanged('doc-a', '/fixtures/paper-a.pdf', 'paper-a.pdf', 6, {
+  showPaperFilesInViewer('doc-a', [singleMainPdfFile({ documentId: 'doc-a', displayName: 'paper-a.pdf', pageCount: 6 })], {
     ownerToken: HOME_PDF_VIEWER_OWNER,
   })
   expect(await screen.findByText('paper-a.pdf')).toBeInTheDocument()
@@ -35,6 +36,34 @@ describe('PdfViewer on a curation session whose paper is text', () => {
   beforeEach(() => {
     localStorage.clear()
     sessionStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('the workspace\'s text paper replaces paper A with its text tab, and no PDF is loading', async () => {
+    const textFile = singleMainTextFile({ documentId: 'doc-text', displayName: 'paper-text.md' })
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === textFile.text_url) {
+        return new Response(JSON.stringify({
+          document_id: 'doc-text',
+          file_id: textFile.file_id,
+          display_name: 'paper-text.md',
+          blocks: [{ kind: 'paragraph', text: 'Made-up text paper.', level: null, section_path: [], rows: null }],
+        }), { status: 200 })
+      }
+      return new Response(null, { status: 200 })
+    }))
+    render(<RouteOwnerHarness />)
+    await showChatPdfA()
+    fireEvent.click(screen.getByText('Open curation session'))
+
+    act(() => { showPaperFilesInViewer('doc-text', [textFile], { ownerToken: CURATION_OWNER }) })
+
+    expect(await screen.findByText('Made-up text paper.')).toBeInTheDocument()
+    expect(screen.queryByText('paper-a.pdf')).not.toBeInTheDocument()
+    expect(screen.queryByText('Loading PDF...')).not.toBeInTheDocument()
   })
 
   it('the owner switch alone keeps chat paper A on screen (why the workspace must clear)', async () => {

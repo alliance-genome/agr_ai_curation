@@ -1,3 +1,4 @@
+import { MAIN_FILE_ID, singleMainPdfFile } from '@/components/pdfViewer/viewerFilesFixtures'
 import type { ComponentProps } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -163,13 +164,16 @@ function mockChatFetch(options?: {
       } as Response
     }
 
-    if (activeDocument && url === `/api/pdf-viewer/documents/${activeDocument.id}/url`) {
+    if (activeDocument && url === `/api/pdf-viewer/documents/${activeDocument.id}/files`) {
       return {
         ok: true,
         json: async () => ({
-          viewer_url: `/viewer/${activeDocument.id}`,
-          viewer_mode: 'local_pdf',
-          has_main_file: true,
+          document_id: activeDocument.id,
+          files: [singleMainPdfFile({
+            documentId: activeDocument.id,
+            displayName: activeDocument.filename ?? `${activeDocument.id}.pdf`,
+            pageCount: 7,
+          })],
         }),
       } as Response
     }
@@ -736,10 +740,9 @@ describe('Chat persistence', () => {
       const pdfEvent = listener.mock.calls.at(-1)?.[0] as CustomEvent
       expect(pdfEvent.detail).toMatchObject({
         documentId: 'doc-7',
-        viewerUrl: '/viewer/doc-7',
-        filename: 'doc-7.pdf',
-        pageCount: 7,
+        activeFileId: MAIN_FILE_ID,
       })
+      expect(pdfEvent.detail.files[0]).toMatchObject({ display_name: 'doc-7.pdf', page_count: 7 })
     } finally {
       window.removeEventListener('pdf-viewer-document-changed', listener as EventListener)
     }
@@ -798,7 +801,7 @@ describe('Chat persistence', () => {
           return detailResponse.promise
         }
 
-        if (url === '/api/pdf-viewer/documents/doc-late/url') {
+        if (url === '/api/pdf-viewer/documents/doc-late/files') {
           return urlResponse.promise
         }
 
@@ -825,9 +828,8 @@ describe('Chat persistence', () => {
         urlResponse.resolve({
           ok: true,
           json: async () => ({
-            viewer_url: '/viewer/doc-late',
-            viewer_mode: 'local_pdf',
-            has_main_file: true,
+            document_id: 'doc-late',
+            files: [singleMainPdfFile({ documentId: 'doc-late', displayName: 'doc-late.pdf', pageCount: 7 })],
           }),
         } as Response)
         await Promise.resolve()
@@ -900,11 +902,14 @@ describe('Chat persistence', () => {
           } as Response
         }
 
-        const viewerDocumentId = url.match(/^\/api\/pdf-viewer\/documents\/([^/]+)\/url$/)?.[1]
+        const viewerDocumentId = url.match(/^\/api\/pdf-viewer\/documents\/([^/]+)\/files$/)?.[1]
         if (viewerDocumentId) {
           return {
             ok: true,
-            json: async () => ({ viewer_url: `/viewer/${viewerDocumentId}`, viewer_mode: 'local_pdf', has_main_file: true }),
+            json: async () => ({
+              document_id: viewerDocumentId,
+              files: [singleMainPdfFile({ documentId: viewerDocumentId, displayName: `${viewerDocumentId}.pdf`, pageCount: 7 })],
+            }),
           } as Response
         }
 

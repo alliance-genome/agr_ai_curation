@@ -1,3 +1,9 @@
+import {
+  MAIN_FILE_ID,
+  SUPPLEMENTS_ONLY_PAYLOAD,
+  singleMainPdfFile,
+  singleMainTextFile,
+} from '@/components/pdfViewer/viewerFilesFixtures'
 import { type ComponentProps, StrictMode } from 'react'
 import { ThemeProvider } from '@mui/material/styles'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -234,12 +240,8 @@ describe('HomePage durable session bootstrap', () => {
         })
       }
 
-      if (url === '/api/pdf-viewer/documents/doc-42/url') {
-        return jsonResponse({
-          viewer_url: '/viewer/doc-42',
-          viewer_mode: 'local_pdf',
-          has_main_file: true,
-        })
+      if (url === '/api/pdf-viewer/documents/doc-42/files') {
+        return jsonResponse({ document_id: 'doc-42', files: [singleMainPdfFile({ documentId: 'doc-42' })] })
       }
 
       throw new Error(`Unexpected fetch: ${url}`)
@@ -285,9 +287,7 @@ describe('HomePage durable session bootstrap', () => {
     const pdfEvent = pdfDocumentChangedSpy.mock.calls[0][0] as CustomEvent
     expect(pdfEvent.detail).toMatchObject({
       documentId: 'doc-42',
-      viewerUrl: '/viewer/doc-42',
-      filename: 'resume.pdf',
-      pageCount: 7,
+      activeFileId: MAIN_FILE_ID,
     })
 
     window.removeEventListener('pdf-viewer-document-changed', pdfDocumentChangedSpy as EventListener)
@@ -335,8 +335,8 @@ describe('HomePage durable session bootstrap', () => {
       if (url === '/api/pdf-viewer/documents/doc-b') {
         return Promise.resolve(jsonResponse({ filename: 'b.pdf', page_count: 2 }))
       }
-      if (url === '/api/pdf-viewer/documents/doc-b/url') {
-        return Promise.resolve(jsonResponse({ viewer_url: '/viewer/doc-b', viewer_mode: 'local_pdf', has_main_file: true }))
+      if (url === '/api/pdf-viewer/documents/doc-b/files') {
+        return Promise.resolve(jsonResponse({ document_id: 'doc-b', files: [singleMainPdfFile({ documentId: 'doc-b' })] }))
       }
       throw new Error(`Unexpected fetch: ${url}`)
     })
@@ -419,8 +419,8 @@ describe('HomePage durable session bootstrap', () => {
       if (url === '/api/pdf-viewer/documents/doc-b') {
         return Promise.resolve(jsonResponse({ filename: 'b.pdf', page_count: 2 }))
       }
-      if (url === '/api/pdf-viewer/documents/doc-b/url') {
-        return Promise.resolve(jsonResponse({ viewer_url: '/viewer/doc-b', viewer_mode: 'local_pdf', has_main_file: true }))
+      if (url === '/api/pdf-viewer/documents/doc-b/files') {
+        return Promise.resolve(jsonResponse({ document_id: 'doc-b', files: [singleMainPdfFile({ documentId: 'doc-b' })] }))
       }
       throw new Error(`Unexpected fetch: ${url}`)
     })
@@ -603,8 +603,8 @@ describe('HomePage durable session bootstrap', () => {
         return jsonResponse({ filename: 'upload.pdf', page_count: 4 })
       }
 
-      if (url === '/api/pdf-viewer/documents/doc-upload/url') {
-        return jsonResponse({ viewer_url: '/viewer/doc-upload', viewer_mode: 'local_pdf', has_main_file: true })
+      if (url === '/api/pdf-viewer/documents/doc-upload/files') {
+        return jsonResponse({ document_id: 'doc-upload', files: [singleMainPdfFile({ documentId: 'doc-upload' })] })
       }
 
       throw new Error(`Unexpected fetch: ${url}`)
@@ -656,7 +656,7 @@ describe('HomePage durable session bootstrap', () => {
     expect(viewerDocumentChangedSpy).toHaveBeenCalledTimes(1)
     expect((viewerDocumentChangedSpy.mock.calls[0][0] as CustomEvent).detail).toMatchObject({
       documentId: 'doc-upload',
-      viewerUrl: '/viewer/doc-upload',
+      activeFileId: MAIN_FILE_ID,
     })
 
     window.removeEventListener(
@@ -772,12 +772,8 @@ describe('HomePage durable session bootstrap', () => {
         return viewerMetadataResponse.promise
       }
 
-      if (url === '/api/pdf-viewer/documents/doc-route/url') {
-        return jsonResponse({
-          viewer_url: '/viewer/doc-route',
-          viewer_mode: 'local_pdf',
-          has_main_file: true,
-        })
+      if (url === '/api/pdf-viewer/documents/doc-route/files') {
+        return jsonResponse({ document_id: 'doc-route', files: [singleMainPdfFile({ documentId: 'doc-route' })] })
       }
 
       throw new Error(`Unexpected fetch: ${url}`)
@@ -1115,12 +1111,8 @@ describe('HomePage durable session bootstrap', () => {
           })
         }
 
-        if (url === '/api/pdf-viewer/documents/doc-42/url') {
-          return jsonResponse({
-            viewer_url: '/viewer/doc-42',
-            viewer_mode: 'local_pdf',
-            has_main_file: true,
-          })
+        if (url === '/api/pdf-viewer/documents/doc-42/files') {
+          return jsonResponse({ document_id: 'doc-42', files: [singleMainPdfFile({ documentId: 'doc-42' })] })
         }
 
         throw new Error(`Unexpected fetch: ${url}`)
@@ -1882,13 +1874,18 @@ describe('flow document selection', () => {
       if (url === '/api/chat/document/load') return jsonResponse({ active: true, document: selectedDocument })
       if (url === '/api/chat/document') return jsonResponse({ active: Boolean(selectedDocument), document: selectedDocument })
       if (url === '/api/chat/conversation/reset') return resetResponse ?? jsonResponse({ session_id: 'session-new' })
-      // A paper without a main file: has_main_file false and every main-file field null.
-      if (url.startsWith('/api/pdf-viewer/documents/') && noMainFile) return jsonResponse(url.endsWith('/url')
-        ? { viewer_url: null, viewer_mode: null, has_main_file: false }
-        : { filename: selectedDocument?.filename ?? 'paper.pdf', page_count: null, file_size: null, has_main_file: false })
-      if (url.startsWith('/api/pdf-viewer/documents/')) return jsonResponse(url.endsWith('/url')
-        ? { viewer_url: textOnly ? null : '/paper.pdf', viewer_mode: textOnly ? 'text' : 'local_pdf', has_main_file: true }
-        : { filename: selectedDocument?.filename ?? 'paper.pdf', page_count: textOnly ? null : 1 })
+      // The viewer's files route: a PDF paper, a text paper, or a paper without a main
+      // file (one text supplement), in the backend's shapes.
+      if (url.startsWith('/api/pdf-viewer/documents/') && url.endsWith('/files')) {
+        const documentId = url.split('/')[4]!
+        const file = noMainFile
+          ? SUPPLEMENTS_ONLY_PAYLOAD.files[0]!
+          : textOnly ? singleMainTextFile({ documentId }) : singleMainPdfFile({ documentId })
+        return jsonResponse({ document_id: documentId, files: [file] })
+      }
+      if (url.startsWith('/api/pdf-viewer/documents/')) {
+        return jsonResponse({ filename: selectedDocument?.filename ?? 'paper.pdf' })
+      }
       const support = realChatSupportResponse(url, init)
       if (support) return support
       throw new Error(`Unexpected fetch: ${url}`)

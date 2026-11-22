@@ -8,6 +8,7 @@ import {
   useCurationWorkspaceContext,
 } from './CurationWorkspaceContext'
 import { useSessionHydration } from './useSessionHydration'
+import { singleMainPdfFile } from '@/components/pdfViewer/viewerFilesFixtures'
 
 const serviceMocks = vi.hoisted(() => ({
   updateCurationSession: vi.fn(),
@@ -39,6 +40,7 @@ function buildWorkspace(): CurationWorkspace {
       },
       document: {
         document_id: 'document-1',
+        files: [singleMainPdfFile({ documentId: 'document-1' })],
         title: 'Workspace document',
       },
       progress: {

@@ -1,0 +1,240 @@
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Alert, Box, Button, CircularProgress, Stack, Typography } from '@mui/material'
+import { alpha, useTheme } from '@mui/material/styles'
+
+import type { PdfViewerNavigationResult } from './pdfEvidenceNavigation'
+import {
+  buildTextNavigationResult,
+  commandQuote,
+  locateQuoteInBlocks,
+  type TextNavigationRequest,
+  type TextQuoteLocation,
+} from './viewerFileNavigation'
+import { fetchViewerText, type DisplayBlock, type ViewerFile } from './viewerFiles'
+
+export const VIEWER_FILE_PANEL_ID = 'viewer-file-panel'
+
+/** Proposals, awaiting sign-off. */
+const LOADING_TEXT = 'Loading the file\'s text...'
+const LOAD_ERROR_TEXT = 'Could not load this file\'s text. Try again.'
+
+export function viewerFileTabId(fileId: string): string {
+  return `viewer-file-tab-${fileId}`
+}
+
+interface TextFileViewProps {
+  documentId: string
+  file: ViewerFile
+  navigation: TextNavigationRequest | null
+  onNavigationResult: (request: TextNavigationRequest, result: PdfViewerNavigationResult) => void
+}
+
+type TextLoadState =
+  | { kind: 'loading' }
+  | { kind: 'ready'; blocks: DisplayBlock[] }
+  | { kind: 'error' }
+
+function prefersReducedMotion(): boolean {
+  return typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
+/**
+ * A text file of the paper (a converted Word or Excel supplement, or a text-imported
+ * paper), rendered from the server's display blocks. Evidence is located by exact
+ * copied text only (see viewerFileNavigation.ts).
+ */
+export function TextFileView({ documentId, file, navigation, onNavigationResult }: TextFileViewProps) {
+  const theme = useTheme()
+  const [loadState, setLoadState] = useState<TextLoadState>({ kind: 'loading' })
+  const [reloadKey, setReloadKey] = useState(0)
+  const [highlight, setHighlight] = useState<TextQuoteLocation | null>(null)
+  const highlightedRef = useRef<HTMLElement | null>(null)
+  // Each navigation request is located and reported once.
+  const reportedRequestIdRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setLoadState({ kind: 'loading' })
+    setHighlight(null)
+    fetchViewerText(file, controller.signal)
+      .then((payload) => {
+        if (!controller.signal.aborted) {
+          setLoadState({ kind: 'ready', blocks: payload.blocks })
+        }
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) {
+          return
+        }
+        console.warn('Unable to load a text file for the viewer', { fileId: file.file_id, error })
+        setLoadState({ kind: 'error' })
+      })
+    return () => controller.abort()
+  }, [file, reloadKey])
+
+  useEffect(() => {
+    if (
+      !navigation
+      || navigation.fileId !== file.file_id
+      || loadState.kind !== 'ready'
+      || reportedRequestIdRef.current === navigation.requestId
+    ) {
+      return
+    }
+    reportedRequestIdRef.current = navigation.requestId
+    const location = locateQuoteInBlocks(
+      loadState.blocks,
+      commandQuote(navigation.command),
+      navigation.command.sectionTitle,
+    )
+    setHighlight(location)
+    onNavigationResult(navigation, buildTextNavigationResult(navigation, documentId, location))
+  }, [documentId, file.file_id, loadState, navigation, onNavigationResult])
+
+  useEffect(() => {
+    if (highlight && highlightedRef.current) {
+      highlightedRef.current.scrollIntoView({
+        block: 'center',
+        behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+      })
+    }
+  }, [highlight])
+
+  const setHighlightedElement = useCallback((element: HTMLElement | null) => {
+    highlightedRef.current = element
+  }, [])
+
+  const highlightSx = {
+    backgroundColor: alpha(theme.palette.success.main, 0.22),
+    outline: `2px solid ${alpha(theme.palette.success.main, 0.9)}`,
+  }
+
+  let content: ReactNode
+  if (loadState.kind === 'loading') {
+    content = (
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', p: 2 }}>
+        <CircularProgress size={16} />
+        <Typography variant="body2">{LOADING_TEXT}</Typography>
+      </Stack>
+    )
+  } else if (loadState.kind === 'error') {
+    content = (
+      <Alert
+        severity="error"
+        sx={{ m: 2 }}
+        action={(
+          <Button color="inherit" size="small" onClick={() => setReloadKey((key) => key + 1)}>
+            Try again
+          </Button>
+        )}
+      >
+        {LOAD_ERROR_TEXT}
+      </Alert>
+    )
+  } else {
+    content = renderBlocks(loadState.blocks, highlight, setHighlightedElement, highlightSx)
+  }
+
+  return (
+    <Box
+      role="tabpanel"
+      id={VIEWER_FILE_PANEL_ID}
+      aria-labelledby={viewerFileTabId(file.file_id)}
+      data-testid="viewer-text-file"
+      sx={{
+        position: 'absolute',
+        inset: 0,
+        overflow: 'auto',
+        px: 2,
+        py: 1.5,
+        backgroundColor: 'background.paper',
+        color: 'text.primary',
+        '& table': { borderCollapse: 'collapse', my: 1.5, fontSize: '0.85rem' },
+        '& th, & td': { border: 1, borderColor: 'divider', px: 1, py: 0.5, textAlign: 'left', verticalAlign: 'top' },
+        '& pre': { whiteSpace: 'pre-wrap', fontSize: '0.85rem' },
+      }}
+    >
+      {content}
+    </Box>
+  )
+}
+
+type HighlightSx = Record<string, string>
+
+function renderBlocks(
+  blocks: DisplayBlock[],
+  highlight: TextQuoteLocation | null,
+  setHighlightedElement: (element: HTMLElement | null) => void,
+  highlightSx: HighlightSx,
+): ReactNode {
+  const nodes: ReactNode[] = []
+  let listItems: ReactNode[] = []
+  const flushList = (key: string) => {
+    if (listItems.length > 0) {
+      nodes.push(<ul key={key}>{listItems}</ul>)
+      listItems = []
+    }
+  }
+
+  blocks.forEach((block, blockIndex) => {
+    const isHighlightedBlock = highlight?.blockIndex === blockIndex && highlight.rowIndex === null
+    const highlightProps = isHighlightedBlock
+      ? { ref: setHighlightedElement, 'aria-current': true as const, sx: highlightSx }
+      : {}
+    if (block.kind === 'list_item') {
+      listItems.push(
+        <Box component="li" key={blockIndex} {...highlightProps}>{block.text}</Box>,
+      )
+      return
+    }
+    flushList(`list-${blockIndex}`)
+    switch (block.kind) {
+      case 'heading': {
+        const level = Math.min((block.level ?? 1) + 2, 6)
+        nodes.push(
+          <Typography key={blockIndex} component={`h${level}` as 'h3'} variant="subtitle1" sx={{ fontWeight: 700, mt: 1.5, ...(isHighlightedBlock ? highlightSx : {}) }} ref={isHighlightedBlock ? setHighlightedElement : undefined} aria-current={isHighlightedBlock ? true : undefined}>
+            {block.text}
+          </Typography>,
+        )
+        break
+      }
+      case 'paragraph':
+        nodes.push(<Box component="p" key={blockIndex} {...highlightProps}>{block.text}</Box>)
+        break
+      case 'code':
+        nodes.push(
+          <Box component="pre" key={blockIndex} {...highlightProps}><code>{block.text}</code></Box>,
+        )
+        break
+      case 'table':
+        nodes.push(
+          <table key={blockIndex}>
+            <tbody>
+              {(block.rows ?? []).map((row, rowIndex) => {
+                const isHighlightedRow = highlight?.blockIndex === blockIndex && highlight.rowIndex === rowIndex
+                return (
+                  <Box
+                    component="tr"
+                    key={rowIndex}
+                    ref={isHighlightedRow ? setHighlightedElement : undefined}
+                    aria-current={isHighlightedRow ? true : undefined}
+                    sx={isHighlightedRow ? highlightSx : undefined}
+                  >
+                    {row.cells.map((cell, cellIndex) => (
+                      <Fragment key={cellIndex}>
+                        {row.is_header ? <th scope="col">{cell}</th> : <td>{cell}</td>}
+                      </Fragment>
+                    ))}
+                  </Box>
+                )
+              })}
+            </tbody>
+          </table>,
+        )
+        break
+    }
+  })
+  flushList('list-end')
+  return nodes
+}

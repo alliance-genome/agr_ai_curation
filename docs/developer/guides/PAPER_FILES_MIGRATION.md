@@ -46,10 +46,40 @@ Alembic revision `c6d7e8f9a0b1`.
 The API still reports `viewer_mode`: it is the main file's display mode. Text
 files now report `text` (previously `text_only`), and plain uploads report
 `local_pdf` (previously no value). `/api/pdf-viewer/documents/{id}` reports
-`page_count: null` for a text paper. Readers must accept that: chat restore
-keeps a text paper active without the PDF viewer, and still refuses a PDF paper
-without a page count (`chatDocumentRehydration.ts`; the shapes are pinned in
+`page_count: null` for a text paper (the shapes are pinned in
 `backend/tests/unit/api/test_pdf_viewer_text_only.py`).
+
+## The viewer: one tab per file
+
+The viewer shows a paper through its files, never through the single main-file
+fields. Both places that open a paper in the shared viewer read the files list
+(`GET /api/pdf-viewer/documents/{id}/files`, or `files` on the curation session's
+document) and send it with `showPaperFilesInViewer` (`pdfEvents.ts`):
+
+- Chat restore (`chatDocumentRehydration.ts`) reads the files route on every
+  restore, because supplements can join a paper after chat stored it. The chat's
+  active document does not carry files.
+- The curation workspace sends `workspace.session.document.files`.
+
+Every file with a `content_url` (a ready PDF, main or supplement) or a `text_url`
+(a ready text file) gets a tab, in `tab_order`; a file still being added gets none.
+The main file opens first; a paper without a main file opens its first file with a
+URL; a paper with no such file clears the viewer. A text paper therefore shows its
+text tab and never leaves the previous PDF on screen. The page, scroll, pdf.js
+page-text corpus, PDF search, highlight and any waiting evidence navigation are
+kept per file (`PdfViewer.tsx`).
+
+Evidence opens its own file first (`EvidenceNavigationCommand.fileId`):
+
+- no `file_id` (saved before 0.12.0): the viewer shows "This evidence was saved
+  before files were recorded" and opens nothing;
+- a `file_id` that is not one of the paper's tabs: the file was removed; nothing
+  opens;
+- a PDF file: today's quote search, against that file's own pages only. Evidence
+  without a page never falls back to a page;
+- a text file: the quote is located by exact copied text in the file's display
+  blocks (a table-row quote equals the row's stored line); pdf.js and the fuzzy
+  matcher are never called.
 
 ## A paper without a main file
 

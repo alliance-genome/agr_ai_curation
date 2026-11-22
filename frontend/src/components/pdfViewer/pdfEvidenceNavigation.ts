@@ -50,12 +50,20 @@ export type PdfEvidenceSpikeStatus =
   | 'document-fallback'
   | 'not-found'
   | 'viewer-not-ready'
+  // Evidence saved before files were recorded (no file id): nothing is opened.
+  | 'evidence-without-file'
+  // Evidence naming a file that is no longer part of the paper: nothing is opened.
+  | 'file-removed'
 
 export type PdfEvidenceSpikeStrategy =
   | PdfEvidenceSpikeCandidateReason
   | PdfEvidenceFuzzyMatchStrategy
   | 'page-hint'
   | 'document'
+  // Located (or not) by exact copied text in a text file's display blocks.
+  | 'text-exact'
+  // Decided by the evidence's file alone (no file, or a removed file).
+  | 'evidence-file'
 
 export interface PdfEvidenceSpikeInput {
   quote: string
@@ -86,6 +94,10 @@ export interface PdfViewerNavigationResult {
   currentMatch: number
   attemptedQueries: string[]
   note: string
+  /** The paper file the result is about; null when the evidence names none. */
+  fileId?: string | null
+  /** Curator-facing text that replaces the generic banner message, when set. */
+  curatorMessage?: string | null
 }
 
 export type PdfEvidenceSpikeResult = PdfViewerNavigationResult
@@ -2111,6 +2123,7 @@ export const buildEvidenceSpikeAnchor = (input: PdfEvidenceSpikeInput): Evidence
 export const buildNavigationCommandKey = (command: EvidenceNavigationCommand): string => {
   return JSON.stringify([
     command.anchorId,
+    command.fileId,
     command.anchor.anchor_kind,
     command.anchor.locator_quality,
     command.anchor.supports_decision,
@@ -2213,6 +2226,9 @@ export const getNavigationBannerMessage = (
   result: PdfViewerNavigationResult,
   highlight: EvidenceTextLayerHighlight | null,
 ): string => {
+  if (result.curatorMessage) {
+    return result.curatorMessage
+  }
   switch (result.locatorQuality) {
     case 'section_only':
       return highlight?.kind === 'section'

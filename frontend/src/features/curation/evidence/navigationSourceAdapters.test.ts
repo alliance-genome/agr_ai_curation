@@ -299,6 +299,7 @@ describe('navigationSourceAdapters', () => {
 
     expect(command).toEqual({
       anchorId: 'anchor-crb-7',
+      fileId: null,
       anchor: expect.objectContaining({
         locator_quality: 'section_only',
         page_number: 7,
@@ -310,5 +311,74 @@ describe('navigationSourceAdapters', () => {
       sectionTitle: 'Results',
       mode: 'select',
     })
+  })
+})
+
+describe('navigation commands name the evidence file (ALL-1460, P9b)', () => {
+  const FILE_ID = 'aaaaaaaa-0000-0000-0000-000000000002'
+
+  it('a chat record carries its file id into the command', () => {
+    const command = buildNavigationCommandFromChatEvidenceRecord(
+      makeChatEvidenceRecord({ file_id: FILE_ID, file_name: 'Table_S1.xlsx' }),
+    )
+
+    expect(command.fileId).toBe(FILE_ID)
+  })
+
+  it('a chat record saved before files were recorded gives a command with no file', () => {
+    const command = buildNavigationCommandFromChatEvidenceRecord(makeChatEvidenceRecord())
+
+    expect(command.fileId).toBeNull()
+  })
+
+  it('a page-less chat record builds a command without a page and without "pnull" in its anchor id', () => {
+    const command = buildNavigationCommandFromChatEvidenceRecord(
+      makeChatEvidenceRecord({ file_id: FILE_ID, file_name: 'Table_S1.xlsx', page: null }),
+    )
+
+    expect(command.pageNumber).toBeNull()
+    expect(command.anchor.page_number).toBeNull()
+    expect(command.anchorId).not.toContain('pnull')
+    expect(command.anchorId).toContain(FILE_ID)
+  })
+
+  it('two chat records quoting the same text in two files get different anchor ids', () => {
+    const first = buildNavigationCommandFromChatEvidenceRecord(
+      makeChatEvidenceRecord({ file_id: FILE_ID, file_name: 'a.xlsx', page: null }),
+    )
+    const second = buildNavigationCommandFromChatEvidenceRecord(
+      makeChatEvidenceRecord({ file_id: 'aaaaaaaa-0000-0000-0000-000000000003', file_name: 'b.pdf', page: null }),
+    )
+
+    expect(first.anchorId).not.toBe(second.anchorId)
+  })
+
+  it('a review-grid record carries the file id that sits beside its anchor', () => {
+    const command = buildNavigationCommandFromCurationEvidenceRecord(
+      makeCurationEvidenceRecord({ file_id: FILE_ID }),
+    )
+
+    expect(command?.fileId).toBe(FILE_ID)
+  })
+
+  it('a review-grid record saved before files were recorded gives a command with no file', () => {
+    const command = buildNavigationCommandFromCurationEvidenceRecord(makeCurationEvidenceRecord())
+
+    expect(command?.fileId).toBeNull()
+  })
+
+  it('an envelope projection carries its file id', () => {
+    const command = buildNavigationCommandFromEnvelopeEvidenceProjection({
+      ...makeEnvelopeEvidenceProjection(),
+      file_id: FILE_ID,
+    })
+
+    expect(command?.fileId).toBe(FILE_ID)
+  })
+
+  it('an envelope projection saved before files were recorded gives a command with no file', () => {
+    const command = buildNavigationCommandFromEnvelopeEvidenceProjection(makeEnvelopeEvidenceProjection())
+
+    expect(command?.fileId).toBeNull()
   })
 })

@@ -13,6 +13,7 @@ import type {
   SubmissionMode,
 } from '@/features/curation/types'
 import SubmissionPreviewDialog from './SubmissionPreviewDialog'
+import { singleMainPdfFile } from '@/components/pdfViewer/viewerFilesFixtures'
 
 const serviceMocks = vi.hoisted(() => ({
   fetchSubmissionPreview: vi.fn(),
@@ -34,6 +35,7 @@ function buildSession(): CurationReviewSession {
     },
     document: {
       document_id: 'document-1',
+      files: [singleMainPdfFile({ documentId: 'document-1' })],
       title: 'Submission-ready paper',
       pdf_url: '/api/documents/document-1.pdf',
       viewer_url: '/api/documents/document-1.pdf',

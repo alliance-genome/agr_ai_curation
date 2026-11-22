@@ -24,11 +24,12 @@ function buildAnchorToken(value: string, fallback: string): string {
   return normalized || fallback
 }
 
+/** Chat evidence has no stored anchor id; this one is stable per file, piece, entity and quote. */
 function buildChatEvidenceAnchorId(evidenceRecord: EvidenceRecord): string {
   return [
     'chat-evidence',
+    evidenceRecord.file_id ?? 'no-file',
     evidenceRecord.chunk_id,
-    `p${evidenceRecord.page}`,
     buildAnchorToken(evidenceRecord.entity, 'entity'),
     buildAnchorToken(evidenceRecord.verified_quote, 'quote'),
   ].join(':')
@@ -48,6 +49,7 @@ export function deriveNavigationQuoteFromAnchor(
 
 function buildAnchorContextNavigationCommand(args: {
   anchorId: string
+  fileId: string | null
   anchor: EvidenceAnchor
   mode: EvidenceNavigationCommand['mode']
 }): EvidenceNavigationCommand | null {
@@ -69,6 +71,7 @@ function buildAnchorContextNavigationCommand(args: {
 
   return {
     anchorId: args.anchorId,
+    fileId: args.fileId,
     anchor: {
       ...args.anchor,
       section_title: normalizedHierarchy.sectionTitle,
@@ -89,6 +92,7 @@ export function buildNavigationCommandFromChatEvidenceRecord(
 
   return buildQuoteCentricEvidenceNavigationCommand({
     anchorId: buildChatEvidenceAnchorId(evidenceRecord),
+    fileId: evidenceRecord.file_id ?? null,
     anchor: {
       anchor_kind: 'snippet',
       locator_quality: 'exact_quote',
@@ -113,9 +117,11 @@ export function buildNavigationCommandFromCurationEvidenceRecord(
   mode: EvidenceNavigationCommand['mode'] = 'select',
 ): EvidenceNavigationCommand | null {
   const quote = deriveNavigationQuoteFromAnchor(evidenceRecord.anchor)
+  const fileId = evidenceRecord.file_id ?? null
   if (!quote) {
     return buildAnchorContextNavigationCommand({
       anchorId: evidenceRecord.anchor_id,
+      fileId,
       anchor: evidenceRecord.anchor,
       mode,
     })
@@ -123,6 +129,7 @@ export function buildNavigationCommandFromCurationEvidenceRecord(
 
   return buildQuoteCentricEvidenceNavigationCommand({
     anchorId: evidenceRecord.anchor_id,
+    fileId,
     anchor: evidenceRecord.anchor,
     quote,
     pageNumber: evidenceRecord.anchor.page_number ?? null,
@@ -167,10 +174,12 @@ export function buildNavigationCommandFromEnvelopeEvidenceProjection(
       ?? projection.anchor.subsection_title,
   }
   const quote = deriveNavigationQuoteFromEnvelopeEvidenceProjection(projection)
+  const fileId = projection.file_id ?? null
 
   if (!quote) {
     return buildAnchorContextNavigationCommand({
       anchorId: projection.anchor_id,
+      fileId,
       anchor,
       mode,
     })
@@ -178,6 +187,7 @@ export function buildNavigationCommandFromEnvelopeEvidenceProjection(
 
   return buildQuoteCentricEvidenceNavigationCommand({
     anchorId: projection.anchor_id,
+    fileId,
     anchor,
     quote,
     searchText: evidenceViewerSearchText(sourceRecordFragments(projection)),

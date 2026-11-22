@@ -13,6 +13,7 @@ import type {
   CurationSessionSummary,
 } from '../types'
 import BatchGroupRow from './BatchGroupRow'
+import { singleMainPdfFile } from '@/components/pdfViewer/viewerFilesFixtures'
 
 const theme = createTheme()
 
@@ -50,6 +51,7 @@ function buildSession(sessionId: string, title: string): CurationSessionSummary 
     },
     document: {
       document_id: `${sessionId}-doc`,
+      files: [singleMainPdfFile({ documentId: `${sessionId}-doc` })],
       title,
       pmid: null,
       doi: null,

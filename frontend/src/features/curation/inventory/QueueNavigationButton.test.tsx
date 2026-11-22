@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CurationQueueNavigationRequest, CurationQueueNavigationState } from '../services/curationQueueNavigationService'
 import type { CurationNextSessionResponse, CurationSessionFilters, CurationSessionSummary } from '../types'
 import QueueNavigationButton from './QueueNavigationButton'
+import { singleMainPdfFile } from '@/components/pdfViewer/viewerFilesFixtures'
 
 const theme = createTheme()
 
@@ -41,6 +42,7 @@ function buildSessionSummary(sessionId: string): CurationSessionSummary {
     },
     document: {
       document_id: `doc-${sessionId}`,
+      files: [singleMainPdfFile({ documentId: `doc-${sessionId}` })],
       title: `Document ${sessionId}`,
       pmid: null,
       doi: null,
