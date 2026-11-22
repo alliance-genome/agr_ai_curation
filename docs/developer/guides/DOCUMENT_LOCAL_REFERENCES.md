@@ -69,6 +69,12 @@ files and removed files are never readable.
 - A piece loaded by its storage id is checked against the ranges before use:
   `record_evidence`'s internal span-ID path treats it as a source failure, and
   history projection marks it `source_unavailable`.
+- The curation review's evidence resolution fetch
+  (`fetch_document_chunks_for_resolution`) reads the ready files only, whatever
+  the run's scope.
+- A ready file with no recorded range (the paper-files fill step has not run)
+  is a named `FileRangeMissingError`; tools and history projection end with a
+  `DocumentReadError`. `fill_existing --verify` must be clean before traffic.
 - The document-context cache records the readable files each outline was built
   from; a run with other readable files builds its own.
 
@@ -82,11 +88,13 @@ selection. The agent must explicitly read the relevant passage with `read_chunk`
 does not fetch the missing selection, replay the tool, or save partial evidence.
 Mixed issued/unissued selections cannot alter an existing evidence record.
 
-A selection whose `chunk_index` is not part of a readable file now (its file was
-removed or is no longer ready since it was read) returns `status:
+A selection the scope has read and issued, whose `chunk_index` is no longer part of a
+readable file (its file was removed or is no longer ready since the read), returns `status:
 needs_source_read`, `error_code: unreadable_document_selection`, `saved: false`,
 the selection, and the readable ranges. Nothing is looked up or saved. Like an
 unissued selection, it is unsuccessful in tool telemetry without a Sentry event.
+The issued check runs first: a selection never read gets the unissued answer
+above whatever its piece number, so one-file papers answer exactly as before.
 
 This is a source-read precondition, not evidence that retrieval failed. The
 rejection remains unsuccessful in tool telemetry without generating a new Sentry

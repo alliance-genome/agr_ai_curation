@@ -257,16 +257,31 @@ def fetch_document_chunks_for_resolution(
     *,
     page_size: int = 250,
 ) -> List[Dict[str, Any]]:
-    """Fetch all document chunks needed for deterministic evidence resolution."""
+    """Fetch every chunk of the document's ready files for deterministic evidence resolution.
+
+    Pieces of files being added, failed or removed are never returned, so evidence
+    cannot be anchored to them. Narrowing to the evidence's own file is the
+    resolver's job (P8b).
+    """
 
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped chunk retrieval (FR-011, FR-014)")
+    from ..document_files.readable import ReadingScope, readable_files_in_session
+    from src.models.sql.database import SessionLocal
+
+    with SessionLocal() as session:
+        readable = readable_files_in_session(
+            session, document_id, user_id, scope=ReadingScope.ALL_READY_FILES,
+        )
+    readable_filter = readable_pieces_filter(document_id, readable)
+    if readable_filter is None:
+        return []
 
     connection = get_connection()
     if not connection:
         raise RuntimeError("No Weaviate connection established")
 
-    from weaviate.classes.query import Filter, Sort
+    from weaviate.classes.query import Sort
 
     chunks: List[Dict[str, Any]] = []
     with connection.session() as client:
@@ -278,7 +293,7 @@ def fetch_document_chunks_for_resolution(
         while True:
             # Offset paging needs a total order: the object id breaks chunkIndex ties.
             response = chunk_collection.query.fetch_objects(
-                filters=Filter.by_property("documentId").equal(document_id),
+                filters=readable_filter,
                 sort=Sort.by_property("chunkIndex", ascending=True).by_id(ascending=True),
                 limit=page_size,
                 offset=offset,

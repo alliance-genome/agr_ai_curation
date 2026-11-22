@@ -276,6 +276,48 @@ async def test_get_chunks_pages_in_a_total_order(monkeypatch):
     assert _sort_keys(chunk_collection.query.fetch_objects.call_args) == [("chunkIndex", True), ("_id", True)]
 
 
+@contextmanager
+def _ready_files(document_id, readable, seen=None):
+    """The paper's ready files as the resolution fetch resolves them (no database)."""
+    def resolve(_session, doc, user, *, scope):
+        if seen is not None:
+            seen.append((doc, user, scope))
+        return readable
+
+    with patch("src.models.sql.database.SessionLocal", MagicMock()), \
+         patch("src.lib.document_files.readable.readable_files_in_session", resolve):
+        yield
+
+
+def test_resolution_fetch_reads_only_ready_files_even_inside_a_batch():
+    """Evidence is never anchored to a file being added; batches do not narrow review."""
+    from weaviate.collections.classes.filters import _FilterOr
+    from src.lib.document_files.readable import ReadingScope, reading_scope
+    from tests.readable_files_support import files
+
+    chunk_collection = MagicMock()
+    chunk_collection.query.fetch_objects.return_value = SimpleNamespace(objects=[])
+    seen = []
+    readable = files("doc-1", ("paper.pdf", 0, 41), ("Table S1.xlsx", 42, 60))
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())), \
+         _ready_files("doc-1", readable, seen), reading_scope(ReadingScope.MAIN_FILE_ONLY):
+        chunks.fetch_document_chunks_for_resolution("doc-1", "user-1")
+
+    assert seen == [("doc-1", "user-1", ReadingScope.ALL_READY_FILES)]
+    _, in_ranges = chunk_collection.query.fetch_objects.call_args.kwargs["filters"].filters
+    assert isinstance(in_ranges, _FilterOr)
+    assert [tuple(bound.value for bound in each.filters) for each in in_ranges.filters] == [(0, 41), (42, 60)]
+
+
+def test_resolution_fetch_of_a_paper_without_ready_files_reads_nothing():
+    from tests.readable_files_support import files
+
+    with patch("src.lib.weaviate_client.chunks.get_connection", side_effect=AssertionError("no query")), \
+         _ready_files("doc-1", files("doc-1")):
+        assert chunks.fetch_document_chunks_for_resolution("doc-1", "user-1") == []
+
+
 def test_resolution_fetch_pages_every_chunk_in_a_total_order():
     stored = [
         SimpleNamespace(uuid=f"uuid-{index}", properties={"chunkIndex": index // 2, "content": f"P{index}"})
@@ -290,7 +332,8 @@ def test_resolution_fetch_pages_every_chunk_in_a_total_order():
     connection = _connection_with_client(MagicMock())
 
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
-         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())):
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())), \
+         _ready_files("doc-1", single_file("doc-1")):
         rows = chunks.fetch_document_chunks_for_resolution("doc-1", "user-1", page_size=2)
 
     assert [row["id"] for row in rows] == [f"uuid-{index}" for index in range(5)]

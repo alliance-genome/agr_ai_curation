@@ -1123,7 +1123,8 @@ async def test_evidence_from_a_file_that_stopped_being_readable_is_refused_to_th
 @pytest.mark.asyncio
 async def test_a_selection_outside_the_readable_files_never_reaches_the_store(store, scope, monkeypatch):
     chunk, spans = source(12)
-    value = binding(store, scope, readable=files("doc-a", ("paper.pdf", 0, 11)))
+    # Read while the paper held a sheet at 12..13; the sheet has since been removed.
+    value = binding(store, scope, readable=files("doc-a", ("paper.pdf", 0, 11), ("Data S2.docx", 20, 21)))
     value.retain([(chunk, spans, [0])])
     lookup = AsyncMock()
     monkeypatch.setattr(refs, "get_chunk_by_index", lookup)
@@ -1188,3 +1189,53 @@ def test_the_active_tool_call_exposes_its_readable_files(store, scope):
         assert current_readable_files() is THREE_FILES
     finally:
         refs._ACTIVE_SOURCE.reset(token)
+
+
+
+@pytest.mark.asyncio
+async def test_a_never_read_selection_on_a_one_file_paper_gets_todays_unissued_answer(store, scope, monkeypatch):
+    """Past the end of a one-file paper (pieces 0..348) the answer is exactly today's."""
+    tools = _section_reading_setup(store, scope, monkeypatch, [_section_chunk(10, "Main text.")],
+                                   readable=single_file("doc-a", 349))
+
+    refused = await _invoke(tools["record_evidence"], {
+        "entity": "wg", "selections": [{"chunk_index": 349, "span_index": 0}]})
+
+    assert refused == {
+        "status": "needs_source_read",
+        "error_code": "unissued_document_selection",
+        "saved": False,
+        "selection": {"chunk_index": 349, "span_index": 0},
+        "message": (
+            "Nothing was saved. Call read_chunk for the selected chunk_index "
+            "and read the window containing the selected span_index. "
+            "Then explicitly call record_evidence again with issued selections."
+        ),
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_never_read_piece_of_a_removed_file_is_still_unissued(store, scope):
+    value = binding(store, scope, readable=files("doc-a", ("paper.pdf", 0, 11), ("Data S2.docx", 20, 21)))
+
+    with pytest.raises(refs.UnissuedDocumentSelectionError):
+        await value.resolve([DocumentSelection(chunk_index=12, span_index=0)])
+
+
+@pytest.mark.asyncio
+async def test_history_projection_of_a_ready_file_without_a_range_is_a_named_read_failure(monkeypatch):
+    """The fill step has not run: projection fails like the document tools, never unhandled."""
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+    from src.lib.document_files.service import FileRangeMissingError
+    chunk, spans = source(12)
+    chunk["document_id"] = "doc-a"
+    monkeypatch.setattr("src.lib.weaviate_client.chunks.get_chunk_by_id", AsyncMock(return_value=chunk))
+
+    def unfilled(document_id, user_id):
+        raise FileRangeMissingError("File has no recorded piece range")
+
+    monkeypatch.setattr(refs, "resolve_readable_files", unfilled)
+    with pytest.raises(DocumentReadError) as caught:
+        await refs.project_source_references(
+            {"chunk_id": chunk["id"], "span_ids": [spans[0]["span_id"]]}, user_id="alice", document_id="doc-a")
+    assert isinstance(caught.value.__cause__, FileRangeMissingError)

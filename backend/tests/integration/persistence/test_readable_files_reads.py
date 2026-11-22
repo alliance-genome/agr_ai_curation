@@ -259,3 +259,31 @@ def test_a_call_whose_readable_file_was_removed_fails(owner_id):
 
     with pytest.raises(refs.DocumentReferenceError, match="readable file changed"):
         refs._verify_source_generation(binding)
+
+
+def test_a_file_that_became_ready_during_a_run_is_readable_from_the_next_call(owner_id):
+    paper = _paper(owner_id)
+    first_call = _bind(paper["document_id"])
+    with SessionLocal.begin() as db:
+        db.get(PDFDocumentFile, UUID(paper["adding"])).status = "ready"
+
+    next_call = _bind(paper["document_id"])
+
+    assert paper["adding"] not in [file.file_id for file in first_call.readable.files]
+    assert [file.file_id for file in next_call.readable.files] == [paper["main"], paper["sheet"], paper["adding"]]
+
+
+def test_a_file_made_unready_during_a_call_fails_it_by_name(owner_id):
+    paper = _paper(owner_id)
+    binding = _bind(paper["document_id"])
+    with SessionLocal.begin() as db:
+        db.get(PDFDocumentFile, UUID(paper["sheet"])).status = "pending"
+
+    with pytest.raises(refs.DocumentReferenceError, match="readable file changed"):
+        refs._verify_source_generation(binding)
+
+
+def test_the_evidence_resolution_fetch_skips_a_pending_file(stored_paper):
+    pieces = chunk_reads.fetch_document_chunks_for_resolution(stored_paper["document_id"], TEST_USER_ID)
+
+    assert [piece["chunk_index"] for piece in pieces] == [0, 1, 2, 3, 4]

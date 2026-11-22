@@ -21,6 +21,7 @@ from agr_ai_curation_runtime.document_errors import DocumentReadError
 from agr_ai_curation_runtime.document_references import DocumentSelection
 from agr_ai_curation_runtime.evidence_spans import resolve_evidence_span_id
 from src.lib.context import get_current_session_id, get_current_trace_id, get_current_user_id
+from src.lib.document_files.service import FileRangeMissingError
 from src.lib.document_files.readable import (
     ReadableFiles,
     ReadableFilesError,
@@ -196,8 +197,6 @@ class SourceBinding:
         result = []
         chunks = {}
         for selection in selections:
-            if not self.readable.contains(selection.chunk_index):
-                raise UnreadableDocumentSelectionError(selection, self.readable)
             records = [r for r in self.records if r["kind"] == _SPAN_KIND
                        and r["chunk_index"] == selection.chunk_index]
             if not records:
@@ -210,6 +209,13 @@ class SourceBinding:
                       and r["chunk_index"] == selection.chunk_index for i in r["issued_indexes"]}
             if selection.span_index not in issued:
                 raise UnissuedDocumentSelectionError(selection, "Read the selected span window before recording evidence")
+            # Only a piece that was read can have stopped being readable since (its
+            # file removed or no longer ready); a piece never read stays "unissued".
+            if not self.readable.files:
+                # A completed paper always has a ready file; nothing to offer the model.
+                raise DocumentReferenceError("Document has no readable file")
+            if not self.readable.contains(selection.chunk_index):
+                raise UnreadableDocumentSelectionError(selection, self.readable)
             if selection.chunk_index not in chunks:
                 chunks[selection.chunk_index] = await get_chunk_by_index(
                     chunk_index=selection.chunk_index, user_id=self.user_id, document_id=self.document_id,
@@ -360,6 +366,10 @@ async def project_source_references(value, *, user_id: str, document_id: str | N
             try:
                 readable_by_document[chunk_document_id] = await asyncio.to_thread(
                     resolve_readable_files, chunk_document_id, user_id)
+            except FileRangeMissingError as exc:
+                # A ready file without a range (the paper-files fill step has not run):
+                # the same named failure the document tools give.
+                raise DocumentReadError("document_reference") from exc
             except ReadableFilesError:
                 # The piece's paper row is gone: its source is unavailable, like a missing piece.
                 readable_by_document[chunk_document_id] = None
