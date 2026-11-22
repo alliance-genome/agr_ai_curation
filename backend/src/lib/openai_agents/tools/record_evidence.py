@@ -1077,7 +1077,14 @@ def _create_canonical_evidence_recorder(
             # One evidence record names one file. This is a choice the model can
             # correct (one call per file), so it is a refusal returned to the model,
             # not a resolution failure (those end the run in the public tool).
-            file_names = list(dict.fromkeys(fragment.file_name for fragment in fragments))
+            # The outline's labels: the names the model uses with ``file=`` (two files
+            # with the same display name are told apart there as "name (2)").
+            readable = current_readable_files()
+            labels_by_file_id = {file.file_id: readable.label_of(file) for file in readable.files}
+            file_names = [
+                labels_by_file_id[file_id]
+                for file_id in dict.fromkeys(fragment.file_id for fragment in fragments)
+            ]
             return _log_record_evidence_result(
                 {
                     "status": "invalid_request",

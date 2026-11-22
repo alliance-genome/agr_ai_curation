@@ -1268,3 +1268,29 @@ async def test_one_record_evidence_call_across_two_files_is_refused_to_the_model
             "entity": "wg", "selections": [{"chunk_index": index, "span_index": 0}]})
         assert saved["status"] == "verified"
         assert saved["file_name"] == file_name
+
+
+
+@pytest.mark.asyncio
+async def test_the_two_file_refusal_names_same_named_files_by_their_outline_labels(store, scope, monkeypatch):
+    # Two supplements with the same display name are "Table S1.xlsx" and "Table S1.xlsx (2)".
+    same_names = files("doc-a", ("paper.pdf", 0, 11), ("Table S1.xlsx", 12, 13), ("Table S1.xlsx", 20, 21))
+    first_sheet = _section_chunk(12, "| abc-1 | 3 | 5 |")
+    second_sheet = _section_chunk(20, "| abc-2 | 4 | 6 |")
+    tools = _section_reading_setup(store, scope, monkeypatch, [first_sheet, second_sheet], readable=same_names)
+    for index in (12, 20):
+        await _invoke(tools["read_chunk"], {"chunk_index": index})
+
+    refused = await _invoke(tools["record_evidence"], {
+        "entity": "abc",
+        "selections": [{"chunk_index": 12, "span_index": 0}, {"chunk_index": 20, "span_index": 0}],
+    })
+
+    assert refused["file_names"] == ["Table S1.xlsx", "Table S1.xlsx (2)"]
+    assert "Table S1.xlsx, Table S1.xlsx (2)" in refused["message"]
+
+    # Stored evidence keeps the display name; the file id tells the two apart.
+    saved = await _invoke(tools["record_evidence"], {
+        "entity": "abc", "selections": [{"chunk_index": 20, "span_index": 0}]})
+    assert saved["file_name"] == "Table S1.xlsx"
+    assert saved["file_id"] == "file-2"
