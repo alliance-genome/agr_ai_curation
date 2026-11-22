@@ -47,11 +47,23 @@ class PerFileOutlineTests(unittest.TestCase):
         self.assertEqual(result["top_level_sections"], ["Materials and Methods", "Results", "Sheet1"])
         self.assertEqual(result["chunk_count_total"], 3 + 1 + 2 + 19)
 
+    def test_the_files_being_added_line_is_reported(self):
+        adding = OUTLINE.replace(
+            "**Sheet1** (19 chunks)\n",
+            "**Sheet1** (19 chunks)\n\nFiles are still being added to this paper; they cannot be read yet.\n")
+
+        result = DocumentHierarchyAnalyzer.analyze({}, _observations(adding))
+
+        self.assertTrue(result["files_being_added"])
+        self.assertEqual([s["name"] for s in result["files"][1]["sections"]], ["Sheet1"])
+        self.assertFalse(DocumentHierarchyAnalyzer.analyze({}, _observations(OUTLINE))["files_being_added"])
+
     def test_instructions_without_an_outline_are_not_found(self):
         result = DocumentHierarchyAnalyzer.analyze({}, _observations("No document here."))
 
         self.assertFalse(result["found"])
         self.assertEqual(result["files"], [])
+        self.assertFalse(DocumentHierarchyAnalyzer.analyze({}, [])["files_being_added"])
 
 
 if __name__ == "__main__":

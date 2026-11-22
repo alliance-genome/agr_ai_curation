@@ -134,7 +134,7 @@ HIERARCHY_TEMPLATE = """
 This paper has {file_count}. Each file lists its sections and subsections with their exact names; use these names, written exactly, with `read_section` and `read_subsection`.
 
 {hierarchy_text}
-
+{files_being_added}
 ### How to use this outline:
 - Use `read_section("<a section name from the outline>")` to read an entire top-level section
 - Use `read_subsection("<section name>", "<subsection name>")` to read a specific subsection
@@ -145,6 +145,9 @@ This paper has {file_count}. Each file lists its sections and subsections with t
 """
 
 _FILE_ROLE_LABELS = {"main": "main paper", "supplement": "supplement"}
+
+# Approved by Chris, 22 Nov 2026 (O4). Shown while the paper has files being added.
+FILES_BEING_ADDED_LINE = "\nFiles are still being added to this paper; they cannot be read yet.\n"
 
 # Fallback template for flat sections (no hierarchy available)
 SECTION_LIST_TEMPLATE = """
@@ -207,6 +210,7 @@ def format_hierarchy_for_prompt(hierarchy: Dict[str, Any]) -> str:
     return HIERARCHY_TEMPLATE.format(
         file_count="1 file" if len(files) == 1 else f"{len(files)} files",
         hierarchy_text="\n\n".join(blocks),
+        files_being_added=FILES_BEING_ADDED_LINE if hierarchy.get("files_being_added") else "",
     )
 
 

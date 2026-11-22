@@ -26,6 +26,7 @@ from src.lib.document_files.service import require_chunk_range
 from src.models.sql.pdf_document import (
     DISPLAY_MODE_TEXT,
     FILE_ROLE_MAIN,
+    FILE_STATUS_PENDING,
     FILE_STATUS_READY,
     PDFDocument,
     PDFDocumentFile,
@@ -104,6 +105,10 @@ class ReadableFiles:
 
     document_id: str
     files: tuple[ReadableFile, ...]
+    # Files of the paper being added right now (pending rows): never readable,
+    # only counted so the model can be told. A dead add's rows stop counting
+    # when the reconciler marks them failed. Not part of the fingerprint.
+    files_being_added: int = 0
 
     def contains(self, chunk_index: int) -> bool:
         return self.file_for(chunk_index) is not None
@@ -155,7 +160,7 @@ class ReadableFiles:
 
         if file not in self.files:
             raise ReadableFilesError("The file is not one of this paper's readable files")
-        return ReadableFiles(self.document_id, (file,))
+        return ReadableFiles(self.document_id, (file,), self.files_being_added)
 
     def ranges_text(self) -> str:
         """The readable ranges as the model is told them.
@@ -192,20 +197,23 @@ def readable_files_in_session(
         raise ReadableFilesError(f"Document {document_id} is not a paper of this user")
     statement = select(PDFDocumentFile).where(
         PDFDocumentFile.document_id == paper_id,
-        PDFDocumentFile.status == FILE_STATUS_READY,
+        PDFDocumentFile.status.in_((FILE_STATUS_READY, FILE_STATUS_PENDING)),
     )
     if scope is ReadingScope.MAIN_FILE_ONLY:
         statement = statement.where(PDFDocumentFile.role == FILE_ROLE_MAIN)
     rows = session.execute(statement.order_by(PDFDocumentFile.tab_order)).scalars().all()
     files = []
     for row in rows:
+        if row.status == FILE_STATUS_PENDING:
+            continue
         start, end = require_chunk_range(row)
         files.append(ReadableFile(
             str(row.id), row.display_name, row.role, start, end,
             file_kind(row.display_mode, row.source_file_extension),
         ))
+    being_added = sum(1 for row in rows if row.status == FILE_STATUS_PENDING)
     # Keep the caller's spelling: read functions compare it with the documentId they filter on.
-    return ReadableFiles(str(document_id), tuple(files))
+    return ReadableFiles(str(document_id), tuple(files), being_added)
 
 
 def resolve_readable_files(document_id: str, owner_auth_sub: str) -> ReadableFiles:

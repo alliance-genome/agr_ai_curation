@@ -105,6 +105,12 @@ ready during the run is readable from the next tool call (its pieces appear in
 search results, and `read_section` with its name and the file works), but the
 outline the model was given does not list it.
 
+While the paper has files being added (its `pending` file rows, counted by
+`readable_files_in_session` within the run's scope), the outline adds "Files are
+still being added to this paper; they cannot be read yet." The count is taken for
+every run and never cached with the outline. A dead add's pending rows count
+until the reconciler marks them `failed` (the stale-job rule), then the line stops.
+
 ## Selections that have not been read
 
 If `record_evidence` selects a chunk or span window that has not been issued in

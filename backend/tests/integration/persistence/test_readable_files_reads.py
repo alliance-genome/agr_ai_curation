@@ -324,3 +324,31 @@ async def test_section_names_are_exact_although_the_index_matches_words(owner_id
     assert [chunk["chunk_index"] for chunk in methods] == [1]
     assert [chunk["chunk_index"] for chunk in full] == [0]
     assert [chunk["chunk_index"] for chunk in strains] == [1]
+
+
+
+def test_files_being_added_are_the_papers_pending_rows_until_ready_or_reconciled(owner_id):
+    """Running: a pending row counts. Finished: ready, it is readable instead. Dead: the
+    reconciler marks the row failed and the count stops, so the model is not told forever."""
+    running = _paper(owner_id)
+    assert resolve_readable_files(running["document_id"], TEST_USER_ID).files_being_added == 1
+
+    finished = _paper(owner_id)
+    with SessionLocal.begin() as db:
+        db.get(PDFDocumentFile, UUID(finished["adding"])).status = "ready"
+    after = resolve_readable_files(finished["document_id"], TEST_USER_ID)
+    assert after.files_being_added == 0
+    assert finished["adding"] in [file.file_id for file in after.files]
+
+    dead = _paper(owner_id)
+    with SessionLocal.begin() as db:
+        db.get(PDFDocumentFile, UUID(dead["adding"])).status = "failed"
+    reconciled = resolve_readable_files(dead["document_id"], TEST_USER_ID)
+    assert reconciled.files_being_added == 0
+    assert dead["adding"] not in [file.file_id for file in reconciled.files]
+
+
+def test_a_batch_is_not_told_about_supplements_being_added(owner_id):
+    paper = _paper(owner_id)
+    with reading_scope(ReadingScope.MAIN_FILE_ONLY):
+        assert resolve_readable_files(paper["document_id"], TEST_USER_ID).files_being_added == 0

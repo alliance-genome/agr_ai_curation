@@ -46,6 +46,8 @@ class DocumentHierarchyAnalyzer:
                 "structure_type": "unknown",
                 "top_level_sections": [],
                 "sections": [],
+                "files": [],
+                "files_being_added": False,
                 "raw_hierarchy_text": None,
                 "error": "No PDF specialist found in trace"
             }
@@ -63,6 +65,7 @@ class DocumentHierarchyAnalyzer:
             "top_level_sections": hierarchy_info.get("top_level_sections", []),
             "sections": hierarchy_info.get("sections", []),
             "files": hierarchy_info.get("files", []),
+            "files_being_added": hierarchy_info.get("files_being_added", False),
             "raw_hierarchy_text": hierarchy_info.get("raw_text"),
             "chunk_count_total": hierarchy_info.get("chunk_count_total", 0)
         }
@@ -123,6 +126,7 @@ class DocumentHierarchyAnalyzer:
             "top_level_sections": [],
             "sections": [],
             "files": [],
+            "files_being_added": False,
             "raw_text": None,
             "chunk_count_total": 0
         }
@@ -148,6 +152,8 @@ class DocumentHierarchyAnalyzer:
             result["found"] = True
             result["raw_text"] = raw_text
             result["files"] = cls._parse_files(raw_text)
+            # The outline says so while files of the paper were being added (0.12.0).
+            result["files_being_added"] = cls._FILES_BEING_ADDED in raw_text
             result["sections"] = [section for file in result["files"] for section in file["sections"]]
 
             # Check for hierarchy resolution failure (only "Unknown" section)
@@ -174,6 +180,8 @@ class DocumentHierarchyAnalyzer:
                 result["chunk_count_total"] += sub.get("chunk_count", 0)
 
         return result
+
+    _FILES_BEING_ADDED = "Files are still being added to this paper; they cannot be read yet."
 
     _FILE_LINE = re.compile(
         r'^File (\d+) of (\d+): (.+) \((main paper|supplement), ([^,]+), (\d+) chunks, chunks (\d+) to (\d+)\)$'

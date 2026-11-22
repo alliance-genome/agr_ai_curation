@@ -265,3 +265,19 @@ async def test_unknown_readable_files_leave_the_run_without_an_outline(retrieval
     assert report.call_args.kwargs["context"] == {"stage": "readable_files"}
     assert "SECRET" not in caplog.text + str(report.call_args)
     assert document_cache._cache == {}
+
+
+
+@pytest.mark.asyncio
+async def test_files_being_added_reach_each_run_and_are_never_cached(retrieval, readable):
+    from dataclasses import replace
+
+    readable[("doc", "user")] = replace(single_file("doc"), files_being_added=1)
+    adding = await DocumentContext.fetch("doc", "user")
+    readable[("doc", "user")] = single_file("doc")
+    done = await DocumentContext.fetch("doc", "user")
+
+    assert adding.hierarchy["files_being_added"] == 1
+    assert done.hierarchy["files_being_added"] == 0
+    retrieval.assert_awaited_once()  # same readable files: the cached outline is reused
+    assert "files_being_added" not in document_cache._cache[("user", "doc")].hierarchy

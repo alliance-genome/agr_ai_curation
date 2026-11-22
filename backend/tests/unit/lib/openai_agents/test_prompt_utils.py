@@ -139,10 +139,23 @@ def test_several_files_are_listed_in_tab_order_and_text_files_show_no_pages():
     assert 'add `file="<file name>"`' in result
 
 
-def test_the_outline_never_says_files_are_still_being_added():
-    """That line waits for the owner's decision (O4)."""
-    result = format_hierarchy_for_prompt(_outline(_file("paper.pdf", "main", "PDF", 0, 41, [METHODS])))
-    assert "still being added" not in result
+def test_while_files_are_being_added_the_outline_says_so_after_the_files():
+    outline = {**_outline(_file("paper.pdf", "main", "PDF", 0, 41, [METHODS])), "files_being_added": 1}
+
+    result = format_hierarchy_for_prompt(outline)
+
+    # Approved by Chris, 22 Nov 2026 (O4), character for character.
+    assert "\nFiles are still being added to this paper; they cannot be read yet.\n" in result
+    assert result.index("**Materials and Methods**") < result.index("Files are still being added") < result.index(
+        "### How to use this outline:")
+
+
+def test_with_no_file_being_added_the_outline_does_not_mention_it():
+    for count in (0, None):
+        outline = {**_outline(_file("paper.pdf", "main", "PDF", 0, 41, [METHODS])), "files_being_added": count}
+        assert "still being added" not in format_hierarchy_for_prompt(outline)
+    assert "still being added" not in format_hierarchy_for_prompt(
+        _outline(_file("paper.pdf", "main", "PDF", 0, 41, [METHODS])))
 
 
 def test_format_sections_for_prompt_returns_empty_when_no_sections():
