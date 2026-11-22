@@ -941,3 +941,58 @@ def test_section_less_evidence_without_a_file_is_still_dropped():
     assert build_record_evidence_summary_record(
         tool_name="record_evidence", tool_input={"entity": "abc-1"}, tool_output=output,
     ) is None
+
+
+
+def _recorded_record(**overrides):
+    record = _page_less_tool_output(page=4)
+    record.pop("status")
+    record["source_fragments"][0]["page"] = 4
+    record.update(overrides)
+    return record
+
+
+def _canonical_after_copy(copy):
+    payload = {
+        "items": [{"label": "abc-1", "entity_type": "gene", "source_mentions": ["abc-1"],
+                   "evidence_record_ids": ["evidence-page-less"]}],
+        "evidence_records": [copy],
+        "run_summary": {"kept_count": 1},
+    }
+    canonical = canonicalize_structured_result_payload(
+        payload, preferred_evidence_records=[_recorded_record()],
+    )
+    [record] = canonical["evidence_records"]
+    return record
+
+
+def test_a_copy_without_the_file_does_not_erase_the_recorded_file():
+    copy = {key: value for key, value in _recorded_record().items()
+            if key not in ("file_id", "file_name", "source_fragments")}
+
+    record = _canonical_after_copy({**copy, "agent_note": "Seen in Table 2."})
+
+    assert (record["file_id"], record["file_name"]) == (_FILE_ID, "Supplementary Table 2")
+    assert record["source_fragments"][0]["file_id"] == _FILE_ID
+    assert record["agent_note"] == "Seen in Table 2."
+
+
+def test_a_copy_without_the_page_does_not_null_a_recorded_page():
+    copy = {key: value for key, value in _recorded_record().items() if key != "page"}
+
+    record = _canonical_after_copy(copy)
+
+    assert record["page"] == 4
+
+
+def test_a_new_recording_of_the_same_record_still_replaces_its_source():
+    new_span = "4c1e2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c:s0003:c0018-c0035:5e6f7a8b"
+    copy = _recorded_record(
+        verified_quote="| abc-2 | 4 | 6 |", source_span_ids=[new_span], page=5,
+        source_fragments=[{**_recorded_record()["source_fragments"][0],
+                           "span_id": new_span, "text": "| abc-2 | 4 | 6 |", "page": 5}],
+    )
+
+    record = _canonical_after_copy(copy)
+
+    assert (record["verified_quote"], record["page"]) == ("| abc-2 | 4 | 6 |", 5)

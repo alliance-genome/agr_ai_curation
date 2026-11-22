@@ -88,6 +88,7 @@ def test_the_generic_pdf_record_needs_a_page_unless_it_names_a_file():
         ({"section": "", "file_id": FILE_ID}, (True, None)),
         ({}, (False, None)),
         ({"section": "   "}, (False, None)),
+        ({"section": "   ", "file_id": FILE_ID}, (True, None)),
         ({"section": 5, "file_id": FILE_ID}, (False, None)),
     ],
 )

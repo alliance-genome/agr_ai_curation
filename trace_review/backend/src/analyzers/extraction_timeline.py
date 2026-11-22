@@ -448,7 +448,7 @@ def _source_snapshot_summary(source: Mapping[str, Any]) -> Dict[str, Any]:
     if chunk_ids:
         summary["chunk_ids"] = chunk_ids
 
-    for key in ("document_id", "page", "section", "subsection", "figure_reference"):
+    for key in ("document_id", "file_id", "file_name", "page", "section", "subsection", "figure_reference"):
         text = _text_value(source.get(key))
         if text:
             summary[key] = text

@@ -261,7 +261,8 @@ def _required_locator(
         if field_path == "section" and isinstance(located["section"], str):
             raise ValueError("gene_mention_evidence payload has blank section")
         raise ValueError(f"gene_mention_evidence payload is missing {field_path}")
-    return value
+    # The stored value, exactly as saved; null when the evidence names a file without one.
+    return None if value is None else located[field_path]
 
 
 def _required_payload_value(payload: Mapping[str, Any], field_path: str) -> Any:

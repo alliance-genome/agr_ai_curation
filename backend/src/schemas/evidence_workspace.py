@@ -95,7 +95,8 @@ def evidence_record_section(record: Mapping[str, Any]) -> tuple[bool, str | None
     if isinstance(section, str) and section.strip():
         return True, section.strip()
     file_id = record.get("file_id")
-    if (section is None or section == "") and isinstance(file_id, str) and file_id.strip():
+    empty = section is None or (isinstance(section, str) and not section.strip())
+    if empty and isinstance(file_id, str) and file_id.strip():
         return True, None
     return False, None
 

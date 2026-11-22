@@ -749,3 +749,20 @@ def test_fanout_section_is_absent_when_fanout_did_not_run(tmp_path, monkeypatch)
 
     assert 'extraction_fanout' not in result
 
+
+
+def test_evidence_source_summary_names_the_file():
+    # ALL-1460: record_evidence writes the file each quote comes from.
+    from src.analyzers.extraction_timeline import _source_snapshot_summary
+
+    summary = _source_snapshot_summary({
+        "verified_quote": "| abc-1 | 3 | 5 |",
+        "chunk_id": "chunk-1",
+        "file_id": "6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c",
+        "file_name": "Table_S1.xlsx",
+        "section": "Sheet1",
+    })
+
+    assert summary["file_id"] == "6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c"
+    assert summary["file_name"] == "Table_S1.xlsx"
+    assert "page" not in summary

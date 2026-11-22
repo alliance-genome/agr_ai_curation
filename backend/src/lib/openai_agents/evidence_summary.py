@@ -553,6 +553,37 @@ def _evidence_locator_key(record: Dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+# Provenance record_evidence writes; a copy of the same record can only repeat it.
+_RECORDED_PROVENANCE_FIELDS = (
+    "verified_quote", "page", "section", "subsection", "figure_reference", "document_id",
+    "file_id", "file_name", "chunk_id", "chunk_ids", "source_span_ids", "source_fragments",
+)
+
+
+def _keep_recorded_provenance(existing: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep a recorded evidence record's provenance when a copy of it replaces it (ALL-1460).
+
+    A record that names its file was written by record_evidence. A later record
+    with the same ID that names no file, or that cites the same spans (or none),
+    is a copy of it: it must not erase the file, the fragments, or a known page or
+    section. Only a record of different spans is a new recording and replaces the
+    provenance. Records saved before files were recorded are unchanged.
+    """
+
+    if not existing.get("file_id"):
+        return incoming
+    incoming_spans = incoming.get("source_span_ids")
+    new_recording = bool(incoming.get("file_id")) and incoming_spans not in (
+        None,
+        existing.get("source_span_ids"),
+    )
+    if new_recording:
+        return incoming
+    kept = {key: value for key, value in incoming.items() if key not in _RECORDED_PROVENANCE_FIELDS}
+    kept.update({key: existing[key] for key in _RECORDED_PROVENANCE_FIELDS if key in existing})
+    return kept
+
+
 class _EvidenceRegistry:
     """Canonical evidence registry keyed by stable tool-verified record IDs."""
 
@@ -593,6 +624,7 @@ class _EvidenceRegistry:
         normalized_record: Dict[str, Any],
     ) -> str:
         existing_record = self._records_by_id[evidence_record_id]
+        normalized_record = _keep_recorded_provenance(existing_record, normalized_record)
         if (
             "evidence_revision_history" not in normalized_record
             and existing_record.get("evidence_revision_history")
