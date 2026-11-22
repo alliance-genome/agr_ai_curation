@@ -28,8 +28,10 @@ def test_rich_source_and_projection_resolve_without_mutation(source):
 
 
 @pytest.mark.parametrize("field,value", [("verified_quote", "Other"), ("page", 8),
-                                         ("source_span_ids", ["s1", "s2"]), ("document_id", "D2")])
+                                         ("source_span_ids", ["s1", "s2"]), ("document_id", "D2"),
+                                         ("file_id", "F2"), ("file_name", "Other file")])
 def test_known_source_conflicts_never_merged(source, field, value):
+    source = {**source, "file_id": "F1", "file_name": "Main paper"}
     changed = {**source, field: value}
     assert EvidenceSnapshot([source, changed]).resolve("E1") == (None, "ambiguous")
 
