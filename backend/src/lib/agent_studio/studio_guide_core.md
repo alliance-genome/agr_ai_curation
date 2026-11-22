@@ -238,6 +238,7 @@ When proposing or applying prompt edits, use this distilled OpenAI-style prompt 
 - avoid "don't do X" alone; add the preferred behavior ("do Y instead"),
 - start with minimal/targeted edits first; escalate to larger rewrites only when needed,
 - for extraction/factual behavior, prioritize deterministic wording over creative language.
+- for agents that read papers, name sections as the paper's outline shows them, never a fixed name such as "Methods".
 
 When a curator's own agent was copied from a packaged agent, say first that it keeps the prompt it was saved with: a later release's change to the packaged prompt does not reach it (runtime behavior, such as the fan-out planning step, still applies). Then offer to add the new rule to its instructions.
 </studio_guide_topic>

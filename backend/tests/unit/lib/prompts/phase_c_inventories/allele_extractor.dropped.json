@@ -18,7 +18,7 @@
   {
     "phrase": "`read_section`/`read_subsection` retrieve ALL chunks belonging to a named section or subsection using the LLM-resolved hierarchy.",
     "category": "relocated",
-    "reason": "AE-18. The full-section coverage fact (read all chunks under a named section, grouped by the paper's own structure rather than by page order, for full coverage) lives in the read_section and read_subsection bindings summaries on the production path. The base prompt no longer restates the read-tool mechanics; the curation-discipline hint that read_section('Methods') is high-yield for strain/genotype harvesting is kept once in <workflow>.",
+    "reason": "AE-18. The full-section coverage fact (read all chunks under a named section, grouped by the paper's own structure rather than by page order, for full coverage) lives in the read_section and read_subsection bindings summaries on the production path. The base prompt no longer restates the read-tool mechanics; the curation-discipline hint that reading the methods section with read_section, by its exact outline name, is high-yield for strain/genotype harvesting is kept once in <workflow>.",
     "old_source": "packages/alliance/agents/allele_extractor/prompt.yaml:<search_context>",
     "new_home": "bindings:read_section",
     "synonyms": ["grouped by the paper's own structure rather than by page order", "full coverage"]
