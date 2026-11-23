@@ -1092,11 +1092,16 @@ def markdown_to_pipeline_elements(
     Each element's raw text is cleaned exactly once, by the normalizer for its
     kind, before it is added; section paths hold heading titles that were
     already cleaned.
+
+    Pages (ALL-1460): with ``page_provenance`` every element takes its page from
+    it. Otherwise an element claims a page only when a page marker in the text
+    stands before it; text with no marker (converted Word, Excel and PDF text,
+    main papers imported as text, benchmark text papers) claims no page.
     """
     lines, line_byte_starts = _markdown_lines_with_byte_starts(markdown)
     elements: List[Dict[str, Any]] = []
     section_path: List[str] = []
-    current_page = 1
+    current_page: Optional[int] = None
     index = 0
     i = 0
 

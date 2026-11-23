@@ -185,6 +185,13 @@ def test_format_sections_for_prompt_formats_entries_with_defaults():
     assert "- **Unknown** (p.5-7, 0 chunks)" in result
 
 
+def test_a_section_with_no_pages_shows_its_piece_count_only():
+    # ALL-1460: converted text has no pages; the outline never shows an empty page slot.
+    result = format_sections_for_prompt([{"title": "Sheet1", "page_numbers": [], "chunk_count": 3}])
+
+    assert "- **Sheet1** (3 chunks)" in result
+
+
 def test_format_document_context_for_prompt_prefers_hierarchy():
     hierarchy = _outline(_file("paper.pdf", "main", "PDF", 0, 1, [
         {"name": "Results", "page_numbers": [8], "chunk_count": 2, "subsections": []}]))

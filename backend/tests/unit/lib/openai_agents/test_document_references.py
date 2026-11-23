@@ -1294,3 +1294,34 @@ async def test_the_two_file_refusal_names_same_named_files_by_their_outline_labe
         "entity": "abc", "selections": [{"chunk_index": 20, "span_index": 0}]})
     assert saved["file_name"] == "Table S1.xlsx"
     assert saved["file_id"] == "file-2"
+
+
+@pytest.mark.asyncio
+async def test_evidence_from_a_piece_with_no_page_stores_no_page_and_names_its_file(store, scope, monkeypatch):
+    # ALL-1460: a piece of converted text with no page marker claims no page; reading it
+    # shows no page and the recorded evidence has none, naming its file instead.
+    from src.lib.openai_agents.evidence_summary import build_record_evidence_summary_record
+    from src.lib.openai_agents.document_result_view import document_result_view
+    from src.schemas.evidence_workspace import evidence_record_page
+
+    sheet_row = _section_chunk(12, "| abc-1 | 3 | 5 |")
+    sheet_row["page_number"] = None
+    sheet_row["metadata"] = {"section_title": "Results"}
+    two_files = files("doc-a", ("paper.pdf", 0, 11), ("Table S1.xlsx", 12, 13))
+    tools = _section_reading_setup(store, scope, monkeypatch, [sheet_row], readable=two_files)
+
+    read = await _invoke(tools["read_chunk"], {"chunk_index": 12})
+    view = document_result_view("read_chunk", read)[0]
+    recorded = await _invoke(tools["record_evidence"],
+                             {"entity": "abc-1", "selections": [{"chunk_index": 12, "span_index": 0}]})
+    summary = build_record_evidence_summary_record(
+        tool_name="record_evidence", tool_input={"entity": "abc-1"}, tool_output=json.dumps(recorded),
+    )
+
+    assert "page" not in read.summary
+    assert all(span.page_number is None for span in read.chunk.evidence_spans)
+    assert "from page" not in json.dumps(view)
+    assert recorded["status"] == "verified"
+    assert recorded.get("page") is None and recorded["file_name"] == "Table S1.xlsx"
+    assert summary.get("page") is None and summary["file_name"] == "Table S1.xlsx"
+    assert evidence_record_page(summary) == (True, None)

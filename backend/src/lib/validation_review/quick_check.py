@@ -313,7 +313,12 @@ def _record_block(rid, record, definition):
     if not record["evidence"]:
         lines.append("  (no evidence quotes)")
     for item in record["evidence"]:
-        lines.append(f"  evidence {item['id']} (page {item['page']}, {item['section'] or ''}): \"{item['quote']}\"")
+        # A quote from a file with no pages (converted text) has no page: only what is known is named.
+        place = ", ".join(part for part in (
+            f"page {item['page']}" if item["page"] is not None else None, item["section"] or None,
+        ) if part)
+        label = f"{item['id']} ({place})" if place else item["id"]
+        lines.append(f"  evidence {label}: \"{item['quote']}\"")
     for index, validator in enumerate(record["validators"]):
         parts = [f"validator answer {rid}V{index + 1} ({validator['validator']}, field {validator['field']}): "
                  f"status {validator['status']}"]

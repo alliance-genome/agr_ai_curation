@@ -1246,3 +1246,20 @@ async def test_slow_text_clean_up_does_not_block_the_event_loop(parser_env, monk
 
     assert longest_stall < MAX_LOOP_STALL_SECONDS
     assert result["elements"] == elements
+
+
+def test_text_with_no_page_marker_claims_no_page():
+    # ALL-1460: converted text (ABC main papers and supplements, benchmark text papers)
+    # has no page data; a piece claims a page only when a marker in the text gives it.
+    elements = markdown_to_pipeline_elements("# Results\n\nA made-up result.\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n")
+
+    assert elements and [element["metadata"]["page_number"] for element in elements] == [None] * len(elements)
+
+
+def test_a_page_marker_sets_the_page_from_where_it_stands():
+    elements = markdown_to_pipeline_elements(
+        "# Title\n\nBefore any marker.\n\n<!-- page: 3 -->\n\n## Results\n\nOn page three.\n\n[page 4]\n\nOn page four.\n"
+    )
+
+    pages = {element["text"]: element["metadata"]["page_number"] for element in elements}
+    assert pages == {"Title": None, "Before any marker.": None, "Results": 3, "On page three.": 3, "On page four.": 4}

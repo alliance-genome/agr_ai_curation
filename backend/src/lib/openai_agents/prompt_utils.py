@@ -232,15 +232,8 @@ def format_sections_for_prompt(sections: List[Dict[str, Any]]) -> str:
     lines = []
     for section in sections:
         title = section.get("title", "Unknown")
-        pages = section.get("page_numbers", [])
-        chunk_count = section.get("chunk_count", 0)
-
-        if pages:
-            page_str = f"p.{pages[0]}" if len(pages) == 1 else f"p.{pages[0]}-{pages[-1]}"
-        else:
-            page_str = ""
-
-        lines.append(f"- **{title}** ({page_str}, {chunk_count} chunks)")
+        # A section of a file with no pages (converted text) shows its piece count only.
+        lines.append(f"- **{title}** ({_size_label(section.get('page_numbers', []), section.get('chunk_count', 0))})")
 
     section_list = "\n".join(lines)
     return SECTION_LIST_TEMPLATE.format(section_list=section_list)
