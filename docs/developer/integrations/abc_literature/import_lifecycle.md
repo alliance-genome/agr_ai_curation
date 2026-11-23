@@ -234,11 +234,14 @@ Configured knobs:
   extraction machine and allows itself 30 minutes per file; a median main
   conversion from a cold machine takes about 12 minutes. KANBAN-1976 /
   ALL-1460 (P7w) raised it from 600 seconds, which failed such imports.
-  **ABC fact this depends on:** near the deadline the wait asks ABC once more
-  why the main text has not appeared. ABC reports a failed conversion, without
-  converting again, for one hour after the failure (`FAILED_JOB_HOLD` in ABC's
-  `conversion_job_manager.py`). At 3,600 seconds or less, that one late request
-  always falls inside the hour. **Above 3,600 seconds, the late request can make
+  **ABC fact this depends on:** the wait is timed from the paper's own
+  on-demand request (in a batch, papers run one after another, so a paper may
+  start waiting long after its request), and only before that request's
+  deadline does it ask ABC once more why the main text has not appeared. ABC
+  reports a failed conversion, without converting again, for one hour after the
+  failure (`FAILED_JOB_HOLD` in ABC's `conversion_job_manager.py`), and it cannot
+  fail before the request. At 3,600 seconds or less, the late request therefore
+  falls inside the hour. **Above 3,600 seconds, the late request can make
   ABC start a new conversion job** for a paper that failed early, converting
   its main text and pending supplements again. AI Curation does not check this:
   it is ABC's rule, so an operator raising the deadline must know it.
@@ -304,6 +307,13 @@ So:
   hold (see the deadline above).
 - **A first answer that ends the wait** (nothing to convert, an immediate
   failure) ends it at once, as before.
+- **Timed from the paper's own request.** A request's papers run one after
+  another, so a later paper may start waiting long after its on-demand request.
+  Its wait ends at that request's time plus `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS`,
+  and its end request is sent only before then. A paper that starts after its
+  deadline is read once (a paper ABC converted meanwhile is imported); if its
+  text is not listed it fails with the existing timeout message ("Provider
+  conversion exceeded {n} seconds") without asking ABC.
 - **Never twice.** Each request is recorded on the job before it is sent, and a
   run of the job reads that record, so neither request is sent again. A backend
   restart ends the wait's task; nothing resumes a started job (the execution's

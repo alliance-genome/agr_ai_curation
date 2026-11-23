@@ -42,6 +42,7 @@ from src.lib.document_sources.models import (
     DocumentSourceProvider,
     ProviderBearerKind,
     SourceArtifact,
+    SourceConversionResult,
     ViewerMode,
 )
 from src.lib.document_sources.provenance import (
@@ -173,6 +174,10 @@ class ProviderChecksumImportPlan:
     bearer_kind: ProviderBearerKind
     wait_for_conversion: bool = False
     figure_metadata_artifact_ids: tuple[str, ...] = ()
+    # The provider's answer when the checksum decision sent its on-demand request,
+    # and when it was sent.
+    conversion_answer: SourceConversionResult | None = None
+    conversion_requested_at: datetime | None = None
 
 
 class UploadIntakeValidationError(ValueError):
@@ -469,11 +474,25 @@ class UploadIntakeService:
         finally:
             session.close()
 
+        job_values: dict[str, Any] = {}
+        if (
+            provider_import_plan is not None
+            and provider_import_plan.wait_for_conversion
+            and provider_import_plan.conversion_answer is not None
+        ):
+            # The checksum decision sent the provider's on-demand request: the job
+            # keeps that fact, so the wait never sends it again (KANBAN-2191 / ALL-1725).
+            job_values["metadata"] = {
+                pdf_job_service.CONVERSION_REQUESTS_KEY: {
+                    "on_demand_sent_at": provider_import_plan.conversion_requested_at.isoformat(),
+                },
+            }
         try:
             job = self._create_job(
                 document_id=document.id,
                 user_id=db_user.id,
                 filename=document.filename,
+                **job_values,
             )
         except Exception:
             await self._compensate_job_creation_failure(
@@ -521,6 +540,7 @@ class UploadIntakeService:
                     source_provenance=provider_import_plan.source_provenance,
                     figure_metadata_artifact_ids=provider_import_plan.figure_metadata_artifact_ids,
                     file_path=saved_path,
+                    conversion_answer=provider_import_plan.conversion_answer,
                 ),
             )
         else:
@@ -732,6 +752,8 @@ class UploadIntakeService:
                 artifact.artifact_id
                 for artifact in decision.selected.provider_metadata_artifacts
             ),
+            conversion_answer=decision.conversion_answer,
+            conversion_requested_at=decision.conversion_requested_at,
         )
 
     @staticmethod

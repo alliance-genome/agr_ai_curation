@@ -3149,6 +3149,7 @@ async def test_main_import_that_abc_converts_in_eleven_minutes_completes(monkeyp
         ingested.append(request.document_id)
 
     monkeypatch.setattr(service_module, "asyncio", clock)
+    monkeypatch.setattr(service_module, "time", SimpleNamespace(time=lambda: clock.now))
     service = UploadExecutionService(
         pipeline_tracker=_Tracker(),
         document_source_provider_factory=lambda: provider,
@@ -3175,6 +3176,7 @@ async def test_main_import_still_waiting_after_an_hour_fails_and_the_paper_is_fa
     provider = _ProviderReadyAt(clock, ready_at=61 * 60)
     outcomes = _record_job_outcomes(monkeypatch)
     monkeypatch.setattr(service_module, "asyncio", clock)
+    monkeypatch.setattr(service_module, "time", SimpleNamespace(time=lambda: clock.now))
     service = UploadExecutionService(
         pipeline_tracker=_Tracker(),
         document_source_provider_factory=lambda: provider,
@@ -3244,6 +3246,7 @@ async def test_abc_is_never_asked_again_after_a_final_answer(monkeypatch, final_
     provider.request_conversion = _answer
     outcomes = _record_job_outcomes(monkeypatch)
     monkeypatch.setattr(service_module, "asyncio", clock)
+    monkeypatch.setattr(service_module, "time", SimpleNamespace(time=lambda: clock.now))
     service = UploadExecutionService(
         pipeline_tracker=_Tracker(),
         document_source_provider_factory=lambda: provider,
@@ -3389,6 +3392,7 @@ async def test_an_iteration_in_flight_when_its_job_was_finalized_writes_nothing(
     )
     monkeypatch.setattr(UploadExecutionService, "_sync_provider_conversion_sql_selection", _select)
     monkeypatch.setattr(service_module, "asyncio", clock)
+    monkeypatch.setattr(service_module, "time", SimpleNamespace(time=lambda: clock.now))
     service = UploadExecutionService(
         pipeline_tracker=_Tracker(),
         document_source_provider_factory=lambda: provider,
@@ -3654,6 +3658,7 @@ async def test_an_ordinary_import_is_never_refused_for_its_login(monkeypatch):
     provider = _ProviderReadyAt(clock, ready_at=0)
     outcomes = _record_job_outcomes(monkeypatch)
     monkeypatch.setattr(service_module, "asyncio", clock)
+    monkeypatch.setattr(service_module, "time", SimpleNamespace(time=lambda: clock.now))
     service = UploadExecutionService(
         pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: provider,
         provider_markdown_ingestion_fn=AsyncMock(return_value=None),

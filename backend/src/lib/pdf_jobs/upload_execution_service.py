@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 import time
+from datetime import datetime
 from typing import Any, Protocol
 
 from fastapi import BackgroundTasks
@@ -226,6 +227,18 @@ class ProviderConversionExecutionRequest:
 
 class _JobFinalizedElsewhere(Exception):
     """The job was made terminal outside this task (a cancel of a wait taken for dead)."""
+
+
+def _raise_if_conversion_ended(
+    provider: DocumentSourceProvider, answer: SourceConversionResult | None,
+) -> None:
+    """The provider's answer is final with nothing to import: end the wait with its reason."""
+    if answer is None:
+        return
+    if answer.status is SourceConversionStatus.FAILED:
+        raise RuntimeError(provider.conversion_failure_message(answer))
+    if answer.status is SourceConversionStatus.NO_SOURCES:
+        raise RuntimeError("Provider conversion found no convertible source files")
 
 
 def _job_was_finalized_elsewhere(job_id: str) -> bool:
@@ -616,13 +629,17 @@ class UploadExecutionService:
 
         provider: DocumentSourceProvider | None = None
         poll_interval_seconds = get_document_source_poll_interval_seconds()
-        # The end request is sent when another listing read would no longer fit
-        # before the import deadline (KANBAN-2191 / ALL-1725).
-        loop_clock = asyncio.get_running_loop()
-        end_request_at = loop_clock.time() + get_document_source_import_timeout_seconds() - (
-            poll_interval_seconds + get_document_source_request_timeout_seconds()
-        )
+        deadline_seconds = get_document_source_import_timeout_seconds()
         sent = pdf_job_service.conversion_requests_sent(existing_job)
+        # The wait is timed from the paper's own on-demand request, not from when
+        # this execution starts: a request's papers run one after another, and the
+        # end request must come within the deadline of that request (inside ABC's
+        # failure hold; KANBAN-2191 / ALL-1725).
+        requested_at = (
+            datetime.fromisoformat(sent["on_demand_sent_at"]).timestamp()
+            if sent.get("on_demand_sent_at")
+            else None
+        )
         max_failed_reads = get_document_source_listing_max_failed_reads()
         failed_reads = 0
         last_result: SourceConversionResult | None = request.conversion_answer
@@ -636,14 +653,20 @@ class UploadExecutionService:
             # The provider's on-demand request is sent once per import: by the import
             # itself (recorded on the job), or here when the import did not need to.
             # Each request is recorded before it is sent, so it is never repeated.
-            if not sent.get("on_demand_sent_at"):
+            if requested_at is None:
                 await asyncio.to_thread(
                     pdf_job_service.record_provider_conversion_request,
                     job_id=request.job_id, which="on_demand_sent_at",
                 )
+                requested_at = time.time()
                 last_result = await provider.request_conversion(
                     request.reference, wait=False, request_bearer_token=curator_token,
                 )
+            wait_ends_at = requested_at + deadline_seconds
+            # The end request goes out when another read would no longer fit.
+            end_request_at = wait_ends_at - (
+                poll_interval_seconds + get_document_source_request_timeout_seconds()
+            )
             while True:
                 if pdf_job_service.is_cancel_requested(job_id=request.job_id):
                     raise PDFCancellationError("Processing cancelled by user request")
@@ -667,6 +690,10 @@ class UploadExecutionService:
                     failed_reads += 1
                     if failed_reads >= max_failed_reads:
                         raise
+                    if time.time() >= wait_ends_at:
+                        raise RuntimeError(
+                            f"Provider conversion exceeded {deadline_seconds:g} seconds"
+                        ) from None
                     if _job_was_finalized_elsewhere(request.job_id):
                         raise _JobFinalizedElsewhere()
                     pdf_job_service.update_progress(
@@ -739,19 +766,21 @@ class UploadExecutionService:
                     )
                     return
 
-                if last_result is not None:
-                    if last_result.status is SourceConversionStatus.FAILED:
-                        raise RuntimeError(provider.conversion_failure_message(last_result))
-                    if last_result.status is SourceConversionStatus.NO_SOURCES:
-                        raise RuntimeError("Provider conversion found no convertible source files")
-                    if last_result.status is SourceConversionStatus.CONVERTED:
-                        raise RuntimeError("Provider conversion completed without canonical converted Markdown")
+                _raise_if_conversion_ended(provider, last_result)
+                if last_result is not None and last_result.status is SourceConversionStatus.CONVERTED:
+                    raise RuntimeError("Provider conversion completed without canonical converted Markdown")
 
-                if not sent.get("end_sent_at") and loop_clock.time() >= end_request_at:
+                now = time.time()
+                if now >= wait_ends_at:
+                    # Includes a paper queued behind others past its own deadline:
+                    # it was read once above, and nothing is asked outside the hold.
+                    raise RuntimeError(f"Provider conversion exceeded {deadline_seconds:g} seconds")
+                if not sent.get("end_sent_at") and now >= end_request_at:
                     # Nothing appeared in time: ask the provider once more, only to
-                    # learn why. Inside ABC's one-hour failure hold this reports a
-                    # failure rather than starting a new job (the deadline is at most
-                    # an hour; see DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS).
+                    # learn why. Sent within the deadline of the paper's own request,
+                    # so at a deadline of at most an hour it falls inside ABC's
+                    # one-hour failure hold and reports a failure rather than
+                    # starting a new job (see DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS).
                     await asyncio.to_thread(
                         pdf_job_service.record_provider_conversion_request,
                         job_id=request.job_id, which="end_sent_at",
@@ -760,9 +789,11 @@ class UploadExecutionService:
                     last_result = await provider.request_conversion(
                         request.reference, wait=False, request_bearer_token=curator_token,
                     )
+                    # ABC's reason is kept even if the next read fails.
+                    _raise_if_conversion_ended(provider, last_result)
                     continue
 
-                await asyncio.sleep(poll_interval_seconds)
+                await asyncio.sleep(min(poll_interval_seconds, max(wait_ends_at - now, 0.0)))
         except _ProviderMainMarkdownAccessDenied:
             raise
         except _JobFinalizedElsewhere:

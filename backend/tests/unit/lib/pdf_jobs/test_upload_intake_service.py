@@ -30,6 +30,8 @@ from src.lib.document_sources.models import (
     SourceArtifactFormat,
     SourceArtifactRole,
     SourceArtifactStatus,
+    SourceConversionResult,
+    SourceConversionStatus,
     SourceReference,
 )
 from src.lib.observability import runtime
@@ -1759,3 +1761,82 @@ async def test_provisioning_integrity_failure_never_enters_pdf_duplicate_recover
     assert caught.value is failure
     assert not dispatch.calls
     assert not any((tmp_path / 'user-1').iterdir())
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_sent", [True, False], ids=["selector_sent_the_request", "listing_showed_it_running"])
+async def test_an_upload_that_waits_for_conversion_records_whether_the_request_was_sent(tmp_path, request_sent):
+    """KANBAN-2191 / ALL-1725 (finding 2 of #1137's review): the checksum match sends the
+    provider's on-demand request while deciding; the job records it and the wait gets the
+    answer, so the wait never sends it a second time."""
+
+    session = _FakeSession()
+    dispatch = _DispatchRecorder()
+    provider = _FakeDocumentSourceProvider()
+    provider.provider_id = "fake_provider"
+    created_jobs = []
+    source_artifact = SourceArtifact(
+        provider="fake_provider", artifact_id="source-pdf-1", role=SourceArtifactRole.SOURCE_PDF,
+        artifact_format=SourceArtifactFormat.PDF, status=SourceArtifactStatus.AVAILABLE,
+        reference_id="ref-1", reference_curie="AGRKB:101", md5sum=FAKE_UPLOAD_MD5,
+        access_policy=SourceAccessPolicy(scope=SourceAccessScope.RESTRICTED, group_ids=("MGI",)),
+    )
+    from datetime import datetime, timezone
+
+    sent_at = datetime.now(timezone.utc)
+    answer = SourceConversionResult(
+        provider="fake_provider", status=SourceConversionStatus.RUNNING, reference_curie="AGRKB:101",
+        job_id="job-fake",
+    )
+
+    async def _selector(**kwargs):
+        candidate = ChecksumImportCandidate(source_artifact=source_artifact)
+        return ChecksumImportDecision(
+            status=ChecksumImportDecisionStatus.CONVERSION_RUNNING, provider="fake_provider",
+            checksum=kwargs["checksum"], selected=candidate, candidates=(candidate,),
+            source_artifacts=(source_artifact,), conversion_answer=answer if request_sent else None,
+            conversion_requested_at=sent_at if request_sent else None,
+        )
+
+    def _create_job(**kwargs):
+        created_jobs.append(kwargs)
+        return SimpleNamespace(job_id="job-ready")
+
+    service = UploadIntakeService(
+        upload_execution_service=dispatch,
+        session_factory=lambda: session,
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path, checksum="sha256-source"),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        create_document_fn=AsyncMock(),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        create_job_fn=_create_job,
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+        document_source_import_enabled_fn=lambda: True,
+        document_source_provider_factory=lambda: provider,
+        checksum_import_selector=_selector,
+        find_existing_source_document_fn=lambda *_args, **_kwargs: None,
+    )
+
+    await service.intake_upload(
+        background_tasks=BackgroundTasks(),
+        file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+        user={"sub": "user-1"},
+        document_source_context=DocumentSourceRequestContext(
+            bearer_kind=ProviderBearerKind.CURATOR, provider_groups=("MGIStaff",),
+            authorized_group_ids=("MGI",), curator_token="curator-token",
+        ),
+    )
+
+    from src.lib.pdf_jobs import service as jobs
+
+    request = dispatch.provider_conversion_calls[0]["request"]
+    if request_sent:
+        assert created_jobs[0]["metadata"][jobs.CONVERSION_REQUESTS_KEY] == {"on_demand_sent_at": sent_at.isoformat()}
+        assert request.conversion_answer is answer
+    else:
+        assert "metadata" not in created_jobs[0]
+        assert request.conversion_answer is None

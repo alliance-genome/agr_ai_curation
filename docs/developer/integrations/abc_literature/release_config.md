@@ -169,10 +169,11 @@ Document-source operational limits are env-configurable in `.env.example`:
 - READY upload and identifier-import smoke timeout/evidence knobs
 
 **Operators: `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS` depends on an ABC rule.**
-Near the end of a main paper's wait, AI Curation asks ABC once more why the main
-text has not appeared. ABC answers a failed conversion with that failure,
-without converting again, for one hour after it failed. Keep the deadline at
-3,600 seconds or less: above it, that late request can make ABC start a new
+Before the deadline of a main paper's own on-demand request (the wait is timed
+from that request, also for later papers of a batch), AI Curation asks ABC once
+more why the main text has not appeared, and never after it. ABC answers a
+failed conversion with that failure, without converting again, for one hour
+after it failed. Keep the deadline at 3,600 seconds or less: above it, that late request can make ABC start a new
 conversion job (main text and pending supplements) for a paper that failed
 early. Nothing in AI Curation refuses a longer deadline.
 

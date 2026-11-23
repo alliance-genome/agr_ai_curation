@@ -15,8 +15,10 @@ the real row). All values are made up.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from urllib.parse import unquote
 
 import httpx
@@ -170,7 +172,7 @@ def _service(abc: _Abc, ingested: list):
         service_module.pdf_job_service.mark_completed(job_id=request.job_id, message=kwargs["message"])
 
     service = UploadExecutionService(
-        pipeline_tracker=SimpleNamespace(), document_source_provider_factory=abc.provider,
+        pipeline_tracker=AsyncMock(), document_source_provider_factory=abc.provider,
         provider_markdown_ingestion_fn=_ingest,
     )
     service._complete_main_paper = _complete.__get__(service)  # the supplement hand-off is P7b's
@@ -189,12 +191,15 @@ def _request(*, import_answer=RUNNING):
     )
 
 
-def _sent_at_import():
+def _sent_at_import(seconds_ago: float = 0.0):
     """What the import stores when it created the job after sending ABC's request."""
+
+    from datetime import datetime, timedelta, timezone
 
     from src.lib.pdf_jobs import service as jobs
 
-    return {jobs.CONVERSION_REQUESTS_KEY: {"on_demand_sent_at": "2026-11-23T11:59:00+00:00"}}
+    sent_at = datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)
+    return {jobs.CONVERSION_REQUESTS_KEY: {"on_demand_sent_at": sent_at.isoformat()}}
 
 
 @pytest.mark.asyncio
@@ -356,3 +361,164 @@ async def test_a_refused_login_on_a_listing_read_ends_the_import_at_once(monkeyp
 
     assert (abc.conversion_requests, abc.show_all_reads) == (0, 1)
     assert [status for status, _ in job.ended] == ["failed"]
+
+
+
+@pytest.mark.asyncio
+async def test_a_good_read_resets_the_main_waits_count_of_failed_reads(monkeypatch, quiet):
+    """Reads fail, fail, succeed, fail, fail, then the text is listed: never three in a row."""
+
+    abc = _Abc(answers=[RUNNING], main_after=6, failing_reads={1, 2, 4, 5})
+    job = _Job(metadata=_sent_at_import()).install(monkeypatch)
+    ingested: list = []
+
+    await _service(abc, ingested).execute_provider_conversion(_request())
+
+    assert ingested == ["doc-1"]
+    assert job.ended == [("completed", "Processing completed")]
+
+
+@pytest.mark.asyncio
+async def test_abcs_reason_from_the_end_request_is_kept_when_the_next_read_fails(monkeypatch, quiet):
+    class _ListingDownAfterTheEndRequest(_Abc):
+        def handle(self, request):
+            if unquote(request.url.path) == SHOW_ALL_PATH and self.conversion_requests:
+                self.requests.append(SHOW_ALL_PATH)
+                return httpx.Response(502, json={"detail": "made-up failure"})
+            return super().handle(request)
+
+    abc = _ListingDownAfterTheEndRequest(answers=[FAILED])
+    job = _Job(metadata=_sent_at_import()).install(monkeypatch)
+
+    await _service(abc, []).execute_provider_conversion(_request())
+
+    assert abc.conversion_requests == 1
+    assert job.ended == [("failed", "Made-up PDF could not be parsed")]
+
+
+@pytest.mark.asyncio
+async def test_a_wait_that_starts_after_its_deadline_reads_once_and_never_asks_abc(monkeypatch, quiet):
+    """Queued behind other papers past its deadline (timed from its own request): one
+    listing read, no request outside ABC's failure hold, then the existing timeout."""
+
+    abc = _Abc(answers=[FAILED])
+    job = _Job(metadata=_sent_at_import(seconds_ago=4.0)).install(monkeypatch)
+
+    await _service(abc, []).execute_provider_conversion(_request())
+
+    assert (abc.conversion_requests, abc.show_all_reads) == (0, 1)
+    assert job.ended == [("failed", "Provider conversion exceeded 3 seconds")]
+
+
+@pytest.mark.asyncio
+async def test_a_paper_abc_converted_while_it_was_queued_is_still_imported(monkeypatch, quiet):
+    abc = _Abc(answers=[FAILED], main_after=1)
+    job = _Job(metadata=_sent_at_import(seconds_ago=4.0)).install(monkeypatch)
+    ingested: list = []
+
+    await _service(abc, ingested).execute_provider_conversion(_request())
+
+    assert abc.conversion_requests == 0
+    assert ingested == ["doc-1"]
+    assert job.ended == [("completed", "Processing completed")]
+
+
+class _Jobs:
+    """Several durable jobs, for a batch."""
+
+    def __init__(self, metadata_by_job):
+        self.jobs = {job_id: _Job(metadata=metadata) for job_id, metadata in metadata_by_job.items()}
+
+    def install(self, monkeypatch):
+        jobs = service_module.pdf_job_service
+
+        def _job(kwargs):
+            return self.jobs[str(kwargs["job_id"])]
+
+        def _view(**kwargs):
+            job = _job(kwargs)
+            return SimpleNamespace(status=job.status, cancel_requested=job.cancel_requested,
+                                   metadata=dict(job.metadata))
+
+        def _progress(**kwargs):
+            job = _job(kwargs)
+            if kwargs.get("status"):
+                job.status = kwargs["status"]
+            if kwargs.get("metadata"):
+                job.metadata.update(kwargs["metadata"])
+
+        def _record(*, job_id, which):
+            job = self.jobs[str(job_id)]
+            requests = dict(job.metadata.get(jobs.CONVERSION_REQUESTS_KEY) or {})
+            requests[which] = "recorded"
+            job.metadata[jobs.CONVERSION_REQUESTS_KEY] = requests
+
+        def _end(status):
+            def _mark(**kwargs):
+                job = _job(kwargs)
+                job.status = status
+                job.ended.append((status, kwargs.get("message") or kwargs.get("reason") or ""))
+            return _mark
+
+        monkeypatch.setattr(jobs, "get_job_by_id", _view)
+        monkeypatch.setattr(jobs, "is_cancel_requested", lambda **kwargs: _job(kwargs).cancel_requested)
+        monkeypatch.setattr(jobs, "update_progress", _progress)
+        monkeypatch.setattr(jobs, "record_provider_conversion_request", _record)
+        monkeypatch.setattr(jobs, "touch_pending_jobs", lambda *, job_ids: 0)
+        monkeypatch.setattr(jobs, "mark_completed", _end("completed"))
+        monkeypatch.setattr(jobs, "mark_failed", _end("failed"))
+        monkeypatch.setattr(jobs, "mark_cancelled", _end("cancelled"))
+        return self
+
+
+class _TimedAbc(_Abc):
+    """Records when each conversion request was sent."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.request_times: list[float] = []
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        import time
+
+        if unquote(request.url.path) == CONVERSION_PATH:
+            self.request_times.append(time.time())
+        return super().handle(request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("first_paper_answer", "second_paper_requests"), [
+    # ABC failed both papers early: paper 1's end answer ends it at about 2.3 s; paper 2
+    # starts then and still asks inside its own deadline.
+    (FAILED, 1),
+    # ABC never answers for paper 1: it uses its whole deadline, so paper 2 starts after
+    # its own deadline (both requests were sent at import) and asks nothing.
+    (RUNNING, 0),
+], ids=["first_fails_early", "first_never_converts"])
+async def test_in_a_batch_no_end_request_comes_after_that_papers_deadline(
+    monkeypatch, quiet, first_paper_answer, second_paper_requests,
+):
+    """Finding 1 of #1137's review: a request's papers run one after another, so each
+    paper's wait is timed from its own on-demand request, never from when it starts."""
+
+    import time
+
+    from fastapi import BackgroundTasks
+
+    started = time.time()
+    abc = _TimedAbc(answers=[first_paper_answer])
+    jobs = _Jobs({"job-1": _sent_at_import(), "job-2": _sent_at_import()}).install(monkeypatch)
+    service = _service(abc, [])
+    background_tasks = BackgroundTasks()
+    for job_id in ("job-1", "job-2"):
+        request = dataclasses.replace(_request(), job_id=job_id, document_id=f"doc-{job_id}")
+        await service.dispatch_provider_conversion_execution(background_tasks=background_tasks, request=request)
+
+    await background_tasks()
+
+    deadline = 3.0
+    assert all(sent_at - started <= deadline for sent_at in abc.request_times), [
+        round(sent_at - started, 2) for sent_at in abc.request_times
+    ]
+    assert len(abc.request_times) == 1 + second_paper_requests
+    assert [status for status, _ in jobs.jobs["job-2"].ended] == ["failed"]

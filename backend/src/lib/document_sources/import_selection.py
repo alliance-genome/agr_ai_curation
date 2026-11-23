@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, cast
 
@@ -58,6 +59,10 @@ class ChecksumImportDecision:
     source_artifacts: tuple[SourceArtifact, ...] = ()
     message: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # The provider's answer when this decision sent its on-demand conversion request.
+    conversion_answer: SourceConversionResult | None = None
+    # When that request was sent (taken just before sending, so never later than it).
+    conversion_requested_at: datetime | None = None
 
     @property
     def is_ready(self) -> bool:
@@ -252,7 +257,9 @@ async def select_checksum_import_candidate(
         )
 
     conversion_result = None
+    requested_at = None
     if allow_conversion_request:
+        requested_at = datetime.now(timezone.utc)
         conversion_result = await _request_conversion_if_supported(
             provider=provider,
             source_artifact=source_artifact,
@@ -278,6 +285,8 @@ async def select_checksum_import_candidate(
             )
             if ambiguous_count > 1:
                 return _decision(
+                    conversion_answer=conversion_result,
+                    conversion_requested_at=requested_at,
                     provider=provider.provider_id,
                     checksum=normalized_checksum,
                     status=ChecksumImportDecisionStatus.AMBIGUOUS_MATCH,
@@ -292,6 +301,8 @@ async def select_checksum_import_candidate(
                     provider_metadata_artifacts=refreshed_metadata_artifacts,
                 )
                 return _decision(
+                    conversion_answer=conversion_result,
+                    conversion_requested_at=requested_at,
                     provider=provider.provider_id,
                     checksum=normalized_checksum,
                     status=ChecksumImportDecisionStatus.READY,
@@ -303,6 +314,8 @@ async def select_checksum_import_candidate(
                 )
         if conversion_result.status is SourceConversionStatus.RUNNING:
             return _decision(
+                conversion_answer=conversion_result,
+                conversion_requested_at=requested_at,
                 provider=provider.provider_id,
                 checksum=normalized_checksum,
                 status=ChecksumImportDecisionStatus.CONVERSION_RUNNING,
@@ -316,6 +329,8 @@ async def select_checksum_import_candidate(
             )
         if conversion_result.status is SourceConversionStatus.FAILED:
             return _decision(
+                conversion_answer=conversion_result,
+                conversion_requested_at=requested_at,
                 provider=provider.provider_id,
                 checksum=normalized_checksum,
                 status=ChecksumImportDecisionStatus.CONVERSION_FAILED,
@@ -326,6 +341,8 @@ async def select_checksum_import_candidate(
             )
         if conversion_result.status is SourceConversionStatus.NO_SOURCES:
             return _decision(
+                conversion_answer=conversion_result,
+                conversion_requested_at=requested_at,
                 provider=provider.provider_id,
                 checksum=normalized_checksum,
                 status=ChecksumImportDecisionStatus.NO_CONVERTED_TEXT,
@@ -335,6 +352,8 @@ async def select_checksum_import_candidate(
                 metadata=conversion_metadata,
             )
         return _decision(
+            conversion_answer=conversion_result,
+            conversion_requested_at=requested_at,
             provider=provider.provider_id,
             checksum=normalized_checksum,
             status=ChecksumImportDecisionStatus.NO_CONVERTED_TEXT,
@@ -349,6 +368,8 @@ async def select_checksum_import_candidate(
         provider_metadata_artifacts=provider_metadata_artifacts,
     )
     return _decision(
+        conversion_answer=conversion_result,
+        conversion_requested_at=requested_at,
         provider=provider.provider_id,
         checksum=normalized_checksum,
         status=ChecksumImportDecisionStatus.READY,
@@ -573,6 +594,8 @@ def _decision(
     source_artifacts: tuple[SourceArtifact, ...] = (),
     message: str | None = None,
     metadata: dict[str, Any] | None = None,
+    conversion_answer: SourceConversionResult | None = None,
+    conversion_requested_at: datetime | None = None,
 ) -> ChecksumImportDecision:
     return ChecksumImportDecision(
         status=status,
@@ -583,4 +606,6 @@ def _decision(
         source_artifacts=source_artifacts,
         message=message,
         metadata=metadata or {},
+        conversion_answer=conversion_answer,
+        conversion_requested_at=conversion_requested_at,
     )

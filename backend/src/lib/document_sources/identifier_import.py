@@ -163,6 +163,8 @@ class ReferenceImportDecision:
     metadata: dict[str, Any] = field(default_factory=dict)
     # The provider's answer when this decision sent the conversion request, else ``None``.
     conversion_answer: SourceConversionResult | None = None
+    # When that request was sent (taken just before sending, so never later than it).
+    conversion_requested_at: datetime | None = None
 
     @property
     def is_ready(self) -> bool:
@@ -533,7 +535,9 @@ async def decide_reference_import(
         )
 
     conversion_result = None
+    requested_at = None
     if allow_conversion_request:
+        requested_at = datetime.now(timezone.utc)
         conversion_result = await _request_reference_conversion_if_supported(
             provider=provider,
             reference=reference,
@@ -561,6 +565,7 @@ async def decide_reference_import(
             if ambiguous_count > 1:
                 return _reference_decision(
                     conversion_answer=conversion_result,
+                    conversion_requested_at=requested_at,
                     provider=provider.provider_id,
                     identifier=identifier,
                     reference=reference,
@@ -577,6 +582,7 @@ async def decide_reference_import(
                 )
                 return _reference_decision(
                     conversion_answer=conversion_result,
+                    conversion_requested_at=requested_at,
                     provider=provider.provider_id,
                     identifier=identifier,
                     reference=reference,
@@ -589,6 +595,7 @@ async def decide_reference_import(
         if conversion_result.status is SourceConversionStatus.RUNNING:
             return _reference_decision(
                 conversion_answer=conversion_result,
+                conversion_requested_at=requested_at,
                 provider=provider.provider_id,
                 identifier=identifier,
                 reference=reference,
@@ -604,6 +611,7 @@ async def decide_reference_import(
         if conversion_result.status is SourceConversionStatus.FAILED:
             return _reference_decision(
                 conversion_answer=conversion_result,
+                conversion_requested_at=requested_at,
                 provider=provider.provider_id,
                 identifier=identifier,
                 reference=reference,
@@ -618,6 +626,7 @@ async def decide_reference_import(
         if conversion_result.status is SourceConversionStatus.NO_SOURCES:
             return _reference_decision(
                 conversion_answer=conversion_result,
+                conversion_requested_at=requested_at,
                 provider=provider.provider_id,
                 identifier=identifier,
                 reference=reference,
@@ -631,6 +640,7 @@ async def decide_reference_import(
             )
         return _reference_decision(
             conversion_answer=conversion_result,
+            conversion_requested_at=requested_at,
             provider=provider.provider_id,
             identifier=identifier,
             reference=reference,
@@ -1237,7 +1247,7 @@ class IdentifierImportService:
                 # that fact, so its wait never sends it again (KANBAN-2191 / ALL-1725).
                 job_values["metadata"] = {
                     pdf_job_service.CONVERSION_REQUESTS_KEY: {
-                        "on_demand_sent_at": datetime.now(timezone.utc).isoformat(),
+                        "on_demand_sent_at": decision.conversion_requested_at.isoformat(),
                     },
                 }
             job = self._create_job(
@@ -1457,6 +1467,7 @@ def _reference_decision(
     message: str | None = None,
     metadata: dict[str, Any] | None = None,
     conversion_answer: SourceConversionResult | None = None,
+    conversion_requested_at: datetime | None = None,
 ) -> ReferenceImportDecision:
     return ReferenceImportDecision(
         status=status,
@@ -1468,6 +1479,7 @@ def _reference_decision(
         message=message,
         metadata=metadata or {},
         conversion_answer=conversion_answer,
+        conversion_requested_at=conversion_requested_at,
     )
 
 
