@@ -295,6 +295,9 @@ class CurationExtractionResultRecord(Base):
         default=dict,
         server_default=JSONB_EMPTY_OBJECT,
     )
+    # The paper files whose text the model was shown while producing this result
+    # (ALL-1460). NULL: not recorded (saved before files were recorded); []: none read.
+    files_read: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

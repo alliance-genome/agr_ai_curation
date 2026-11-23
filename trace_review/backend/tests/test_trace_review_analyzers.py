@@ -1239,6 +1239,25 @@ class LiteralToolResultTests(unittest.TestCase):
                 self.assertIsNone(result['parsed'])
                 self.assertEqual(result['raw'], raw)
 
+class TraceSummaryFilesReadTests(unittest.TestCase):
+    """ALL-1460: the run's files read are in the trace metadata; older traces have none."""
+
+    def _trace(self, metadata):
+        return {"id": "trace-1", "name": "chat", "input": {"query": "Q", "document_id": "doc-1"},
+                "metadata": metadata, "output": None}
+
+    def test_files_read_are_shown(self):
+        files_read = [{"file_id": "file-1", "file_name": "Table_S1.xlsx"}]
+
+        summary = TraceSummaryAnalyzer.analyze(self._trace({"files_read": files_read}), [])
+
+        self.assertEqual(summary["files_read"], files_read)
+
+    def test_an_older_trace_without_files_read_still_parses(self):
+        summary = TraceSummaryAnalyzer.analyze(self._trace({"supervisor_agent": "supervisor"}), [])
+
+        self.assertIsNone(summary["files_read"])
+
 
 if __name__ == "__main__":
     unittest.main()

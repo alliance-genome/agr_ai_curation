@@ -1021,6 +1021,7 @@ class ExtractionTimelineAnalyzer:
             counts[key] = counts.get(key, 0) + 1
 
         fanout_events = [item for item in timeline if str(item.get("event_type", "")).startswith("extraction_fanout.")]
+        files_read_events = [item for item in timeline if item.get("event_type") == "extraction.files_read"]
         dropped_evidence_events = [
             item for item in timeline if item.get("event_type") == "evidence.unrecorded_records_dropped"
         ]
@@ -1056,6 +1057,12 @@ class ExtractionTimelineAnalyzer:
                         "and code finalize attempts. Writers run as separate agent runs in this trace; counts are "
                         "what code observed, not judgments about the records.",
             }} if fanout_events else {}),
+            **({"files_read": {
+                "events": files_read_events,
+                "note": "For each saved extraction result, the paper files the AI was shown text from while "
+                        "producing it, with each file's name, whether it is the main paper or a supplement, and a "
+                        "fingerprint of the converted text.",
+            }} if files_read_events else {}),
             **({"dropped_evidence": {
                 "events": dropped_evidence_events,
                 "note": "Evidence records a model wrote in its structured output that named a file but "

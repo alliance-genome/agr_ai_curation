@@ -7,7 +7,7 @@ history store. Compaction and worker restarts cannot change those definitions.
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from copy import deepcopy
@@ -22,6 +22,7 @@ from agr_ai_curation_runtime.document_references import DocumentSelection
 from agr_ai_curation_runtime.evidence_spans import resolve_evidence_span_id
 from src.lib.context import get_current_session_id, get_current_trace_id, get_current_user_id
 from src.lib.document_files.service import FileRangeMissingError
+from src.lib.document_files.files_read import FILES_READ_KIND
 from src.lib.document_files.readable import (
     ReadableFiles,
     ReadableFilesError,
@@ -70,7 +71,7 @@ def _read_bindings(store: HistoryStore, scope: HistoryScope, document_id: str, *
     condition &= (AgentHistoryEvent.session_id == scope.session_id if scope.session_id
                   else AgentHistoryEvent.run_id == scope.run_id)
     query = select(AgentHistoryEvent, AgentHistoryPayload.content).join(AgentHistoryPayload).where(
-        condition, AgentHistoryEvent.kind.in_([_SOURCE_KIND, _SPAN_KIND, _WINDOW_KIND])
+        condition, AgentHistoryEvent.kind.in_([_SOURCE_KIND, _SPAN_KIND, _WINDOW_KIND, FILES_READ_KIND])
     ).order_by(AgentHistoryEvent.sequence)
     if db is None:
         with store.session_factory() as reader:
@@ -83,7 +84,9 @@ def _read_bindings(store: HistoryStore, scope: HistoryScope, document_id: str, *
             raise DocumentReferenceError("Source history integrity check failed")
         payload = json.loads(content)
         if payload.get("document_id") == document_id:
-            result.append({"kind": event.kind, **payload})
+            # Files-read rows are per invocation (ALL-1460); the others are per session.
+            invocation = {"invocation_id": event.invocation_id} if event.kind == FILES_READ_KIND else {}
+            result.append({"kind": event.kind, **payload, **invocation})
     return result
 
 
@@ -162,14 +165,7 @@ class SourceBinding:
                 raise DocumentReferenceError("Issued window contains an undefined span")
             previous = definitions.get(index, (definition, set()))[1]
             definitions[index] = (definition, previous | set(issued_indexes))
-        with self.store.session_factory() as db, db.begin():
-            # All reference issuers use this transaction lock. It protects a
-            # definition, not model context size, and never spans async tool I/O.
-            if db.bind.dialect.name == "postgresql":
-                lock_key = exact_json([self.user_id, self.history_scope.session_id or self.history_scope.run_id, self.document_id])
-                db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": lock_key})
-            self.records = _read_bindings(self.store, self.history_scope, self.document_id, db=db)
-            self.pin_generation(db=db)
+        with self._locked_transaction() as db:
             defined = {}
             issued = {}
             for record in self.records:
@@ -188,6 +184,62 @@ class SourceBinding:
                 if added:
                     # Retain each definition once; later reads add only ordinal coverage.
                     self.append(_WINDOW_KIND, {"chunk_index": index, "issued_indexes": sorted(added)}, db=db)
+            self._record_files_read(definitions, db=db)
+
+    @contextmanager
+    def _locked_transaction(self):
+        """One transaction under the reference lock, with the bindings re-read and pinned."""
+        with self.store.session_factory() as db, db.begin():
+            # All reference issuers use this transaction lock. It protects a
+            # definition, not model context size, and never spans async tool I/O.
+            if db.bind.dialect.name == "postgresql":
+                lock_key = exact_json([self.user_id, self.history_scope.session_id or self.history_scope.run_id, self.document_id])
+                db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": lock_key})
+            self.records = _read_bindings(self.store, self.history_scope, self.document_id, db=db)
+            self.pin_generation(db=db)
+            yield db
+
+    def record_files_shown(self, chunk_indexes: list[int]) -> None:
+        """Record the files of pieces shown to the model without issuing spans (search hits).
+
+        Search snippets are not evidence, so nothing becomes selectable; the files
+        whose text the model saw still count as read (ALL-1460, Q2).
+        """
+        if not chunk_indexes:
+            return
+        with self._locked_transaction() as db:
+            self._record_files_read(chunk_indexes, db=db)
+
+    def _record_files_read(self, chunk_indexes, *, db) -> None:
+        """Record the files these pieces belong to that the invocation had not been shown.
+
+        One row per newly shown set of files (ALL-1460, Q8), so a long run writes at
+        most one row per file per invocation, in the read's own transaction. The
+        "already shown" set comes from the bindings scanned under the same lock.
+        Every agent run with history enabled has its own invocation; with history
+        disabled each tool call gets a fresh one, so each read then writes a row.
+        """
+        shown: dict[str, str] = {}
+        for index in chunk_indexes:
+            file = self.readable.file_for(index)
+            if file is None:
+                raise DocumentReferenceError("A shown chunk is not part of a readable file")
+            shown.setdefault(file.file_id, file.display_name)
+        invocation_id = self.history_scope.invocation_id
+        already = {
+            entry["file_id"]
+            for record in self.records
+            if record["kind"] == FILES_READ_KIND and record["invocation_id"] == invocation_id
+            for entry in record["files"]
+        }
+        new_files = [
+            {"file_id": file_id, "file_name": name}
+            for file_id, name in shown.items()
+            if file_id not in already
+        ]
+        if new_files:
+            self.append(FILES_READ_KIND, {"files": new_files}, db=db)
+            self.records[-1]["invocation_id"] = invocation_id
 
     async def resolve(self, selections: list[DocumentSelection]) -> list[str]:
         if not selections:
@@ -327,6 +379,14 @@ async def retain_issued_spans(reads: list[tuple[dict, list[dict], list[int]]]) -
     if binding is None:
         raise DocumentReferenceError("Missing source binding")
     await asyncio.to_thread(binding.retain, reads)
+
+
+async def record_files_shown(chunk_indexes: list[int]) -> None:
+    """Record the files of pieces a tool showed without issuing spans (search hits)."""
+    binding = _ACTIVE_SOURCE.get()
+    if binding is None:
+        raise DocumentReferenceError("Missing source binding")
+    await asyncio.to_thread(binding.record_files_shown, chunk_indexes)
 
 
 def stage_evidence_update(target: dict, replacement: dict) -> None:

@@ -453,6 +453,8 @@ async def test_run_curation_prep_selects_envelope_refs_and_persists_output(monke
     assert persisted_request.payload_json["envelope_refs"][0]["envelope_id"] == "env-gene-1"
     assert persisted_request.metadata["scope_adapter_keys"] == ["gene"]
     assert persisted_request.metadata["envelope_refs"][0]["envelope_id"] == "env-gene-1"
+    # ALL-1460: the prepared result's files read come from its input results, not a run.
+    assert persisted_request.input_files_read == [extraction_result.files_read]
     assert (
         persisted_request.metadata["final_run_metadata"]["model_name"]
         == "deterministic_programmatic_mapper_v1"

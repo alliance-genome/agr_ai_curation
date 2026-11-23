@@ -1309,6 +1309,9 @@ class _OneFile:
 def current_readable_files():
     return _OneFile()
 
+async def record_files_shown(chunk_indexes):
+    assert chunk_indexes == [4]
+
 async def retain_issued_spans(reads):
     issued = {chunk["id"]: (chunk["chunk_index"], indexes) for chunk, _spans, indexes in reads}
     assert issued in (

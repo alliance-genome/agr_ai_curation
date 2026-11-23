@@ -690,6 +690,8 @@ def _build_persistence_request(
             persistence_context,
         ),
         payload_json=prep_output.model_dump(mode="json"),
+        # The prepared rows come from these results, so their files are the ones read (ALL-1460).
+        input_files_read=[record.files_read for record in extraction_results],
         metadata={
             "final_run_metadata": prep_output.run_metadata.model_dump(mode="json"),
             "scope_confirmed": scope_confirmation.confirmed,

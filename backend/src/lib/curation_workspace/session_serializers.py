@@ -602,6 +602,7 @@ def _extraction_records(session: ReviewSessionModel) -> list[CurationExtractionR
                 payload_json=extraction_result.payload_json,
                 created_at=extraction_result.created_at,
                 metadata=dict(extraction_result.extraction_metadata or {}),
+                files_read=extraction_result.files_read,
             )
         )
 

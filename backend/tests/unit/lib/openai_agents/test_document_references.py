@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -1124,8 +1124,9 @@ async def test_evidence_from_a_file_that_stopped_being_readable_is_refused_to_th
 async def test_a_selection_outside_the_readable_files_never_reaches_the_store(store, scope, monkeypatch):
     chunk, spans = source(12)
     # Read while the paper held a sheet at 12..13; the sheet has since been removed.
-    value = binding(store, scope, readable=files("doc-a", ("paper.pdf", 0, 11), ("Data S2.docx", 20, 21)))
+    value = binding(store, scope, readable=THREE_FILES)
     value.retain([(chunk, spans, [0])])
+    value.readable = files("doc-a", ("paper.pdf", 0, 11), ("Data S2.docx", 20, 21))
     lookup = AsyncMock()
     monkeypatch.setattr(refs, "get_chunk_by_index", lookup)
 
@@ -1364,3 +1365,179 @@ async def test_a_stored_page_counts_only_for_a_file_with_real_pages(store, scope
     assert section.section.page_numbers == ([3] if shown else [])
     assert recorded["status"] == "verified" and recorded.get("page") == shown
     assert summary.get("page") == shown and summary["file_name"] == "paper.pdf"
+
+
+def _files_read_rows(store):
+    from src.lib.document_files.files_read import FILES_READ_KIND
+    with store.session_factory() as db:
+        return [
+            (event.invocation_id, json.loads(content)["files"])
+            for event, content in db.execute(
+                select(AgentHistoryEvent, AgentHistoryPayload.content).join(AgentHistoryPayload)
+                .where(AgentHistoryEvent.kind == FILES_READ_KIND).order_by(AgentHistoryEvent.sequence)
+            ).all()
+        ]
+
+
+@pytest.mark.asyncio
+async def test_reads_record_each_newly_shown_file_once_per_invocation(store, scope, monkeypatch):
+    # ALL-1460 Q8: 300 reads over two files of a three-file paper write two rows.
+    main_text = _section_chunk(10, "Wingless was absent from the wing disc.")
+    sheet_row = _section_chunk(12, "| abc-1 | 3 | 5 |")
+    tools = _section_reading_setup(store, scope, monkeypatch, [main_text, sheet_row], readable=THREE_FILES)
+
+    for _ in range(150):
+        await _invoke(tools["read_chunk"], {"chunk_index": 10})
+    for _ in range(150):
+        await _invoke(tools["read_chunk"], {"chunk_index": 12})
+
+    assert _files_read_rows(store) == [
+        ("inv-a", [{"file_id": "file-0", "file_name": "paper.pdf"}]),
+        ("inv-a", [{"file_id": "file-1", "file_name": "Table S1.xlsx"}]),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_read_records_no_file(store, scope, monkeypatch):
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+    tools = _section_reading_setup(store, scope, monkeypatch, [_section_chunk(10, "Main text.")],
+                                   readable=THREE_FILES)
+
+    with pytest.raises(DocumentReadError):
+        await _invoke(tools["read_chunk"], {"chunk_index": 12})
+
+    assert _files_read_rows(store) == []
+
+
+@pytest.mark.asyncio
+async def test_a_search_hit_records_its_file_without_issuing_evidence(store, scope, monkeypatch):
+    # ALL-1460 Q2: the model is shown each hit's text, so the hit's file was read;
+    # search snippets are not evidence, so no span is issued.
+    from agr_ai_curation_alliance.tools import weaviate_search
+
+    sheet_row = _section_chunk(12, "| abc-1 | 3 | 5 |")
+    main_text = _section_chunk(3, "Wingless was absent.")
+    _section_reading_setup(store, scope, monkeypatch, [sheet_row, main_text], readable=THREE_FILES)
+
+    async def hybrid(**_kwargs):
+        return [dict(sheet_row, score=0.9), dict(main_text, score=0.5)]
+
+    monkeypatch.setattr(weaviate_search, "hybrid_search_chunks", hybrid)
+    search = weaviate_search.create_search_tool("doc-a", "alice")
+    result = await _invoke(search, {"query": "abc-1"})
+    await _invoke(search, {"query": "abc-1 again"})
+
+    assert [hit.content for hit in result.hits] == ["| abc-1 | 3 | 5 |", "Wingless was absent."]
+    assert _files_read_rows(store) == [
+        ("inv-a", [{"file_id": "file-1", "file_name": "Table S1.xlsx"},
+                   {"file_id": "file-0", "file_name": "paper.pdf"}]),
+    ]
+    kinds = {r["kind"] for r in refs._read_bindings(store, scope, "doc-a")}
+    assert refs._SPAN_KIND not in kinds and refs._WINDOW_KIND not in kinds
+
+
+@pytest.mark.asyncio
+async def test_a_search_with_no_hits_records_nothing(store, scope, monkeypatch):
+    from agr_ai_curation_alliance.tools import weaviate_search
+    _section_reading_setup(store, scope, monkeypatch, [], readable=THREE_FILES)
+
+    async def hybrid(**_kwargs):
+        return []
+
+    monkeypatch.setattr(weaviate_search, "hybrid_search_chunks", hybrid)
+    await _invoke(weaviate_search.create_search_tool("doc-a", "alice"), {"query": "nothing"})
+
+    assert _files_read_rows(store) == []
+
+
+@pytest.mark.asyncio
+async def test_a_read_scans_the_history_once_for_spans_and_files_read(store, scope, monkeypatch):
+    # The files-read check rides on the locked binding scan: no extra query per read.
+    from sqlalchemy import event
+    tools = _section_reading_setup(store, scope, monkeypatch,
+                                   [_section_chunk(10, "Main text."), _section_chunk(12, "| a | 1 |")],
+                                   readable=THREE_FILES)
+    await _invoke(tools["read_chunk"], {"chunk_index": 10})
+    engine = store.session_factory.kw["bind"]
+    selects = []
+
+    def count(_conn, _cursor, statement, *_args):
+        if statement.lstrip().upper().startswith("SELECT") and "agent_history_events" in statement:
+            selects.append(statement)
+
+    event.listen(engine, "before_cursor_execute", count)
+    try:
+        await _invoke(tools["read_chunk"], {"chunk_index": 12})
+    finally:
+        event.remove(engine, "before_cursor_execute", count)
+
+    # The tool call's binding load and the read's locked re-scan; no files-read lookup.
+    assert len(selects) == 2
+    assert all("kind IN" in statement for statement in selects)
+    assert _files_read_rows(store)[-1] == ("inv-a", [{"file_id": "file-1", "file_name": "Table S1.xlsx"}])
+
+
+@pytest.mark.asyncio
+async def test_recording_evidence_on_a_span_another_agent_read_records_the_file(store, scope, monkeypatch):
+    # Spans are issued per conversation, so an agent can record a span another agent
+    # read; the verified quote then shows it that file's text (ALL-1460).
+    from dataclasses import replace as dataclass_replace
+    sheet_row = _section_chunk(12, "| abc-1 | 3 | 5 |")
+    tools = _section_reading_setup(store, scope, monkeypatch, [sheet_row], readable=THREE_FILES)
+    await _invoke(tools["read_chunk"], {"chunk_index": 12})
+    other = dataclass_replace(scope, invocation_id="inv-b", agent_key="writer", lineage="inv-b/")
+    monkeypatch.setattr(refs, "_load_source_binding",
+                        lambda *args: binding(store, other, readable=THREE_FILES))
+
+    refused = await _invoke(tools["record_evidence"],
+                            {"entity": "abc-1", "selections": [{"chunk_index": 3, "span_index": 0}]})
+    assert _files_read_rows(store) == [("inv-a", [{"file_id": "file-1", "file_name": "Table S1.xlsx"}])]
+    accepted = await _invoke(tools["record_evidence"],
+                             {"entity": "abc-1", "selections": [{"chunk_index": 12, "span_index": 0}]})
+
+    assert refused["saved"] is False
+    assert accepted["status"] == "verified"
+    assert _files_read_rows(store) == [
+        ("inv-a", [{"file_id": "file-1", "file_name": "Table S1.xlsx"}]),
+        ("inv-b", [{"file_id": "file-1", "file_name": "Table S1.xlsx"}]),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_files_read_write_saves_no_evidence(store, scope, monkeypatch):
+    # The files-read row and the evidence succeed or fail together: a new record is
+    # saved only from the tool's verified result, and an update to an existing record
+    # is committed only after the tool call (SourceBinding.commit_updates).
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+    from src.lib.openai_agents.tools import evidence_workspace
+    sheet_row = _section_chunk(12, "| abc-1 | 3 | 5 |")
+    tools = _section_reading_setup(store, scope, monkeypatch, [sheet_row], readable=THREE_FILES)
+    await _invoke(tools["read_chunk"], {"chunk_index": 12})
+    from dataclasses import replace as dataclass_replace
+    writer = dataclass_replace(scope, invocation_id="inv-b", agent_key="writer", lineage="inv-b/")
+    monkeypatch.setattr(refs, "_load_source_binding", lambda *args: binding(store, writer, readable=THREE_FILES))
+    accepted = await _invoke(tools["record_evidence"],
+                             {"entity": "abc-1", "selections": [{"chunk_index": 12, "span_index": 0}]})
+    existing = dict(accepted)
+    workspace = [existing]
+    token = evidence_workspace.set_active_evidence_records(workspace)
+    writer_c = dataclass_replace(scope, invocation_id="inv-c", agent_key="writer", lineage="inv-c/")
+    monkeypatch.setattr(refs, "_load_source_binding", lambda *args: binding(store, writer_c, readable=THREE_FILES))
+
+    def fail(self, chunk_indexes):
+        raise refs.DocumentReferenceError("files-read write failed")
+
+    monkeypatch.setattr(refs.SourceBinding, "record_files_shown", fail)
+    try:
+        with pytest.raises(DocumentReadError):
+            await _invoke(tools["record_evidence"],
+                          {"entity": "abc-1", "selections": [{"chunk_index": 12, "span_index": 0}]})
+        with pytest.raises(DocumentReadError):
+            await _invoke(tools["record_evidence"],
+                          {"entity": "abc-1 updated", "evidence_record_id": existing["evidence_record_id"],
+                           "selections": [{"chunk_index": 12, "span_index": 0}]})
+    finally:
+        evidence_workspace.reset_active_evidence_records(token)
+
+    assert workspace == [accepted] and existing == accepted
+    assert [invocation for invocation, _ in _files_read_rows(store)] == ["inv-a", "inv-b"]

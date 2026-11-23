@@ -282,12 +282,22 @@ def _tool(name, invoke, *, schema=None):
     )
 
 
+def _note_source_call(scenario, name):
+    """The history invocation a source tool call ran under: the scope its reads record."""
+    from src.lib.openai_agents.run_history import ACTIVE_HISTORY
+    if scenario is not None:
+        history = ACTIVE_HISTORY.get()
+        scenario.setdefault("source_calls", []).append(
+            (name, history.scope.invocation_id if history is not None else None))
+
+
 def _source_tools(reads, scenario=None):
     async def read_chunk(_ctx, arguments):
         from src.lib.openai_agents.document_result_view import document_result_view
 
         index = json.loads(arguments)["chunk_index"]
         reads.append(index)
+        _note_source_call(scenario, "read_chunk")
         text = f"passage {index}"
         canonical = {"chunk": {"chunk_id": f"uuid-{index}", "chunk_index": index, "content": text,
                                "evidence_spans": [{"span_id": f"uuid-{index}:s0", "span_index": 0, "text": text,
@@ -296,6 +306,7 @@ def _source_tools(reads, scenario=None):
         return document_result_view("read_chunk", canonical)[0]
 
     async def search_document(_ctx, _arguments):
+        _note_source_call(scenario, "search_document")
         return {"hits": []}
 
     async def record_evidence(_ctx, arguments):
@@ -465,7 +476,10 @@ class ScriptedFanoutModel(FakeResponsesHTTPModel):
         # A separate call-ID series per attempt, as the provider issues fresh IDs.
         prefix = f"w{writer}" if attempt == 1 else f"w{writer}a{attempt}"
         if turn == 0:
-            return _calls(f"{prefix}-0", *[
+            own_reads = ([("read_chunk", f"{prefix}-rd", {"chunk_index": 7}),
+                          ("search_document", f"{prefix}-sr", {"query": "abc-1"})]
+                         if self.scenario.get("writer_reads") else [])
+            return _calls(f"{prefix}-0", *own_reads, *[
                 ("record_evidence", f"{prefix}-ev-{n}", {"entity": label, "selections": [{"chunk_index": 1, "span_index": 0}]})
                 for n, label in enumerate([*labels, *extra_entities])
             ])
@@ -1796,3 +1810,35 @@ async def test_writer_updates_its_own_new_evidence_record_by_id(harness):
     records = {record["evidence_record_id"]: record for record in summary["liveEvidenceRecords"]}
     assert len(records) == 7
     assert records["ev-reagent 1"]["verified_quote"] == "updated quote for reagent 1"
+
+
+@pytest.mark.asyncio
+async def test_the_result_names_the_planner_and_every_writer_attempt_whose_reads_count(harness, monkeypatch):
+    # ALL-1460 fix 3: writers read and search under their own history invocations;
+    # the saved result's files read must cover them, re-run attempts included.
+    from uuid import uuid4
+    from src.lib.context import set_current_trace_id, set_current_user_id
+    from src.lib.openai_agents import run_history
+
+    # Real history invocations; their rows are not stored (the lookup by these ids
+    # is covered on PostgreSQL in test_extraction_result_files_read.py).
+    monkeypatch.setattr(run_history.HistoryStore, "append", lambda self, *_args, **_kwargs: str(uuid4()))
+    set_current_user_id("curator-1")
+    set_current_trace_id("trace-fanout")
+    labels = [f"reagent {n}" for n in range(1, 7)]
+    model = ScriptedFanoutModel({"plan": _plan(*labels), "writer_reads": True,
+                                 "fail_once": {"writer": 2, "when": "after_staging"}})
+
+    await harness.run(model)
+
+    calls = model.scenario["source_calls"]
+    scope = _internal_result(harness.events)["internal"]
+    planner, *writers = scope["history_invocation_ids"]
+    # Each writer attempt (writer 2 ran twice) made its own search under its own invocation.
+    searches = [invocation for name, invocation in calls if name == "search_document"]
+    assert len(searches) == 3 and len(set(searches)) == 3
+    assert set(searches) == set(writers)
+    # Every source call, the planner's reads and the prefetch for writers included,
+    # ran under an invocation the result names.
+    assert {invocation for _, invocation in calls} == {planner, *writers}
+    assert "files_read_unrecorded" not in scope

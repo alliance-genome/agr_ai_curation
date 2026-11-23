@@ -159,6 +159,7 @@ from src.lib.prompts.context import (
     get_used_prompts,
 )
 from src.lib.prompts.service import PromptService
+from src.lib.document_files.files_read import files_read_for_result
 from src.models.sql.database import SessionLocal
 
 # Request-scoped context for tools (trace_id captured via closure)
@@ -1239,6 +1240,31 @@ async def _run_agent_with_groq_retry(
             }
             if sleep_seconds > 0:
                 await asyncio.sleep(sleep_seconds)
+
+
+def _record_trace_files_read(span: Any, *, user_id: str, trace_id: str, document_id: str) -> None:
+    """Add the run's files read (ids and display names only) to the trace metadata (ALL-1460).
+
+    Diagnostic metadata, like the prompt versions logged beside it: a failure is
+    logged and never fails the curator's run.
+    """
+
+    try:
+        with SessionLocal() as db:
+            files_read = files_read_for_result(
+                db, owner_id=user_id, run_id=trace_id, document_id=document_id, invocation_ids=None,
+            )
+        span.update(metadata={
+            "files_read": [
+                {"file_id": entry["file_id"], "file_name": entry["file_name"]} for entry in files_read
+            ],
+        })
+    except Exception:
+        logger.warning(
+            "Could not add the files read to the trace metadata",
+            extra={"trace_id": trace_id},
+            exc_info=True,
+        )
 
 
 def _log_used_prompts_to_db(
@@ -3325,6 +3351,10 @@ async def run_agent_streamed(
                 # CRITICAL: Log prompts regardless of how the generator exits (success, error, or client disconnect)
                 # This ensures audit trail is complete even if client disconnects mid-stream
                 _log_used_prompts_to_db(trace_id=trace_id, session_id=session_id, span=root_span)
+                if document_id:
+                    _record_trace_files_read(
+                        root_span, user_id=user_id, trace_id=trace_id, document_id=document_id,
+                    )
                 final_trace_io: Dict[str, Any] = {"input": {"query": user_message}}
                 if trace_final_output is not None:
                     final_trace_io["output"] = trace_final_output

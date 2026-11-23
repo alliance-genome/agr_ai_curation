@@ -243,6 +243,7 @@ def section_tool(monkeypatch):
     monkeypatch.setattr(weaviate_search, "current_readable_files", lambda: single_file("doc-12345678"))
     retain = AsyncMock()
     monkeypatch.setattr(weaviate_search, "retain_issued_spans", retain)
+    monkeypatch.setattr(weaviate_search, "record_files_shown", AsyncMock())
     return retain
 
 

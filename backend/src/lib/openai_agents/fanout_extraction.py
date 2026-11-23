@@ -545,6 +545,12 @@ class FanoutExtraction:
         self._attempt_call_ids: dict[tuple[int, int], list[str]] = {}
         self._evidence_recorders: dict[str, set[tuple[int, int]]] = {}
         self._finalize_created: set[str] = set()
+        # Every writer attempt's history invocation, discarded re-runs included: their
+        # reads reached a model, so they count toward the result's files read (ALL-1460).
+        # Held in memory for this run only; a writer built without a history makes
+        # the writers' reads unknowable, so the result records no files read.
+        self.writer_invocation_ids: list[str] = []
+        self.writer_invocations_unknown = False
         self.submit_tool = FunctionTool(
             name=SUBMIT_PLAN_TOOL_NAME,
             description=SUBMIT_PLAN_DESCRIPTION,
@@ -1080,6 +1086,11 @@ class FanoutExtraction:
             # New settings on the writer's copy only; the planner's object is untouched.
             writer.model_settings = replace(writer.model_settings, store=False)
         apply_tool_surface(writer, runtime=self.surface.runtime)
+        history = getattr(writer, "run_history", None)
+        if history is None:
+            self.writer_invocations_unknown = True
+        else:
+            self.writer_invocation_ids.append(history.scope.invocation_id)
         return writer
 
     def _writer_tool(self, tool: Any, attempt_key: tuple[int, int]) -> Any:
@@ -1204,7 +1215,18 @@ class FanoutExtraction:
             tool_call_id=call_id,
             tool_arguments=arguments,
         )
-        raw = await tool.on_invoke_tool(context, arguments)
+        # The prefetched text reaches the writers' models: read it under the
+        # planner's history invocation, which the result's files read include
+        # (ALL-1460). The prefetch runs outside any tool call, so no history is active.
+        from .run_history import ACTIVE_HISTORY
+
+        history = getattr(self.planner_agent, "run_history", None)
+        token = ACTIVE_HISTORY.set(history) if history is not None else None
+        try:
+            raw = await tool.on_invoke_tool(context, arguments)
+        finally:
+            if token is not None:
+                ACTIVE_HISTORY.reset(token)
         call = ResponseFunctionToolCall(
             type="function_call", call_id=call_id, name=_tool_name(tool), arguments=arguments,
         )

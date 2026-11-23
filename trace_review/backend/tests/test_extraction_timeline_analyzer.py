@@ -783,3 +783,25 @@ def test_dropped_model_written_evidence_is_shown(tmp_path, monkeypatch):
 
     [event] = timeline["dropped_evidence"]["events"]
     assert event["output"]["preview"] == dropped
+
+
+def test_files_read_of_saved_results_are_shown(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    files_read = {"extraction_result_id": "result-1",
+                  "files_read": [{"file_id": "file-1", "file_name": "paper.pdf", "role": "main",
+                                  "converted_artifact_id": None, "converted_artifact_sha256": None}]}
+    _write_event(tmp_path, "trace-files", _event("trace-files", 1, "extraction.files_read",
+                 output_summary={"preview": files_read}))
+
+    timeline = ExtractionTimelineAnalyzer.analyze(
+        trace_id="trace-files", raw_trace={}, observations=[], include_raw_outputs=True,
+    )
+
+    [event] = timeline["files_read"]["events"]
+    assert event["output"]["preview"] == files_read
+    # Approved by Chris, 23 Nov 2026 (decision 5).
+    assert timeline["files_read"]["note"] == (
+        "For each saved extraction result, the paper files the AI was shown text from while producing it, "
+        "with each file's name, whether it is the main paper or a supplement, and a fingerprint of the "
+        "converted text."
+    )

@@ -106,7 +106,7 @@ def test_identical_payload_under_different_profile_cannot_reuse_result(extractio
         payload_hash=results.canonical_extraction_payload_hash(payload),
     )
     second = first.model_copy(update={"execution_receipt": next_receipt})
-    record = results._build_extraction_result_record(first)
+    record = results._build_extraction_result_record(first, session=db)
     db.execute.return_value.scalars.return_value.all.return_value = [record]
     # Same-call collisions fail at receipt comparison. An existing-row retry
     # fails even earlier: identical JSON still names the old pinned profile.
