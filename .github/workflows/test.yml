@@ -483,7 +483,9 @@ jobs:
       - name: Check installed package freshness across builds and workspaces
         run: python3 scripts/tests/test_docker_test_compose_freshness.py
       - name: Check the agent PR gate requires exactly the Unit Tests jobs
-        run: python3 scripts/tests/test_gate_required_checks.py
+        run: |
+          python3 scripts/tests/test_gate_required_checks_cases.py
+          python3 scripts/tests/test_gate_required_checks.py
       # Stub-based tests of the local test, preflight and agent helper scripts
       # (docker is only stubbed or asked for `compose config`). The last five also
       # run in the agent PR gate when their targets change; running them on every
