@@ -33,6 +33,9 @@ from .test_retired_model_conversion import (  # noqa: F401
     world,
 )
 
+# The real event writer, kept before the db fixture swaps it out for other tests.
+REAL_LOG_AGENT_CONFIG = langfuse_client.log_agent_config
+
 
 def _families():
     """(replaced id, current entry) for each shipped OpenAI family, Sol and Astra."""
@@ -205,8 +208,14 @@ def test_every_record_of_an_agent_built_from_a_replaced_id_names_the_model_calle
     covered in tests/unit/lib/config/test_model_replacements.py)."""
     from src.lib.validation_review.extractor_phase import contract
 
+    # Observe the real call: record its arguments, then run the real event writer.
     events = []
-    monkeypatch.setattr(langfuse_client, "log_agent_config", lambda **kwargs: events.append(kwargs))
+
+    def spy(**kwargs):
+        events.append(kwargs)
+        return REAL_LOG_AGENT_CONFIG(**kwargs)
+
+    monkeypatch.setattr(langfuse_client, "log_agent_config", spy)
     agent = make_agent(db, "Finder")
     save_on_retired(db, agent, model=replaced)
     agent.model_id = replaced

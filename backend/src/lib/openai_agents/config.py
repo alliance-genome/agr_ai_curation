@@ -4339,7 +4339,19 @@ def get_agent_model_capacity_overrides() -> dict:
             any(key not in names or type(limit) is not int or limit < 1 for key, limit in item.items())
             for item in value.values()):
         raise ValueError("AGENT_MODEL_CAPACITY_OVERRIDES_JSON must map model IDs to positive capacity values")
-    return value
+    from src.lib.config.models_loader import resolve_model_id
+
+    # Looked up by the model actually requested: a key naming a replaced id applies to
+    # the entry replacing it (ALL-1708).
+    resolved: dict = {}
+    for model_id, limits in value.items():
+        current = resolve_model_id(model_id)
+        if current in resolved:
+            raise ValueError(
+                f"AGENT_MODEL_CAPACITY_OVERRIDES_JSON names model '{current}' more than once "
+                "(directly or through a model id it replaces)")
+        resolved[current] = limits
+    return resolved
 
 
 # --- Authenticated user provisioning ---

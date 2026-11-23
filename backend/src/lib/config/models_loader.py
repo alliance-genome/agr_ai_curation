@@ -259,6 +259,14 @@ def load_models(
                         f"Each model entry in {source.describe()} must be a mapping"
                     )
                 model = ModelDefinition.from_yaml(raw, source_label=source.describe())
+                earlier = registry.get(model.model_id)
+                if earlier is not None and earlier.replaces != model.replaces:
+                    # An override that differs only in replaces would silently decide which
+                    # saved ids still run (ALL-1708): the two files must agree.
+                    raise ModelCatalogError(
+                        f"Model '{model.model_id}' replaces {earlier.replaces} in "
+                        f"{earlier.source_label} but {model.replaces} in {model.source_label}"
+                    )
                 registry[model.model_id] = model
 
         _check_replacements(registry)

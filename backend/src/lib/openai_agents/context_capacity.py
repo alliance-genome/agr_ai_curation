@@ -423,7 +423,10 @@ class NativeCapacityRequest:
         self.effective_model = wire["model"]
         self.effective_instructions = wire.get("instructions")
         definition = get_model(self.effective_model)
-        overrides = get_agent_model_capacity_overrides().get(self.effective_model, {})
+        from src.lib.config.models_loader import resolve_model_id
+
+        # Overrides are keyed by catalog entry; a replaced id names its entry (ALL-1708).
+        overrides = get_agent_model_capacity_overrides().get(resolve_model_id(self.effective_model), {})
         limits = {name: overrides.get(name, getattr(definition, name, None))
             for name in ("context_window_tokens", "max_input_tokens", "max_output_tokens")}
         if not all(type(value) is int and value > 0 for value in limits.values()):

@@ -238,3 +238,61 @@ def test_environment_model_reads_record_the_model_actually_called(monkeypatch):
     assert get_validation_review_model() == sol.model_id
     monkeypatch.setenv("VALIDATION_REVIEW_MODEL", "")
     assert get_validation_review_model() == ""  # empty keeps the supervisor's own model
+
+
+def test_capacity_overrides_keyed_on_a_replaced_id_apply_to_its_entry(monkeypatch):
+    import json
+
+    from src.lib.openai_agents.config import get_agent_model_capacity_overrides
+
+    replaced, current = next((old, model.model_id) for model in loader.list_models() for old in model.replaces)
+    limits = {"max_output_tokens": 1000}
+    monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", json.dumps({replaced: limits}))
+    assert get_agent_model_capacity_overrides() == {current: limits}
+    monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", json.dumps({replaced: limits, current: limits}))
+    with pytest.raises(ValueError, match=f"names model '{current}' more than once"):
+        get_agent_model_capacity_overrides()
+
+
+def test_the_two_catalog_files_must_agree_on_what_an_entry_replaces(tmp_path):
+    from tests.unit.lib.config.test_models_loader import _write_model_package
+
+    packages = tmp_path / "packages"
+    _write_model_package(packages, directory_name="core", package_id="test.core", models_text="""
+models:
+  - model_id: sol-2
+    provider: openai
+    replaces: [sol-1]
+""")
+    runtime = tmp_path / "models.yaml"
+    runtime.write_text("models:\n  - model_id: sol-2\n    provider: openai\n")
+    with pytest.raises(loader.ModelCatalogError, match=r"'sol-2' replaces \['sol-1'\] in .* but \[\] in "):
+        loader.load_models(models_path=runtime, packages_dir=packages, force_reload=True)
+    runtime.write_text("models:\n  - model_id: sol-2\n    provider: openai\n    replaces: [sol-1]\n    name: Override\n")
+    assert loader.load_models(models_path=runtime, packages_dir=packages, force_reload=True)["sol-2"].name == "Override"
+
+
+def test_the_validation_review_runs_on_the_entry_replacing_its_configured_id(monkeypatch):
+    from types import SimpleNamespace
+
+    from agents import ModelSettings
+
+    from src.lib.openai_agents.config import PromptCacheIdentity, build_model_settings
+    from src.lib.validation_review.reviewer import _review_model_overrides
+
+    sol = next(model for model in loader.list_models() if model.default)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only-not-a-credential")
+    monkeypatch.setenv("VALIDATION_REVIEW_MODEL", sol.replaces[0])
+    monkeypatch.setenv("VALIDATION_REVIEW_REASONING", "medium")
+    supervisor = SimpleNamespace(model_settings=ModelSettings(parallel_tool_calls=True))
+
+    overrides = _review_model_overrides(supervisor, "x")
+
+    assert overrides["model"] == sol.model_id
+    expected = build_model_settings(
+        model=sol.model_id, reasoning_effort="medium", provider_override="openai", parallel_tool_calls=True,
+        prompt_cache=PromptCacheIdentity(agent_key="supervisor.validation_review", static_prompt="x"))
+    actual = overrides["model_settings"]
+    # The retry policy is a fresh object per build; every request-shaping field must match.
+    for field in ("reasoning", "temperature", "parallel_tool_calls", "verbosity", "extra_args", "tool_choice"):
+        assert getattr(actual, field) == getattr(expected, field), field
