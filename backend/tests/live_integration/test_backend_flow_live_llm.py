@@ -270,7 +270,10 @@ def _run_live_flow_case(
             # Native OpenAI emits model IDs directly; compatible providers may
             # emit a concrete Agents SDK model repr in RUN_STARTED.
             if provider == "openai":
-                assert model_id.lower() in model_blob, run_started
+                from src.lib.config.models_loader import resolve_model_id
+
+                # The run names the model actually called (a replaced id is its entry, ALL-1708).
+                assert resolve_model_id(model_id).lower() in model_blob, run_started
             else:
                 expected_suffix = model_id.lower().split("/")[-1]
                 assert expected_suffix in model_blob, run_started
