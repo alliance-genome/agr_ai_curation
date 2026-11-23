@@ -86,6 +86,10 @@ class FileReason(str, Enum):
     MARKDOWN_INVALID = "markdown_invalid"
     PAPER_TEXT_LIMIT = "paper_text_limit"
     PAPER_FILE_LIMIT = "paper_file_limit"
+    # Why adding a PDF supplement as its PDF left it out (P7c2).
+    PDF_TOO_LARGE = "pdf_too_large"          # over DOCUMENT_FILE_MAX_PDF_BYTES
+    PDF_INVALID = "pdf_invalid"              # not readable as a PDF, or no page
+    PDF_ACCESS_DENIED = "pdf_access_denied"  # the text is readable but the provider refused the PDF
 
 
 class SupplementState(str, Enum):
@@ -156,8 +160,11 @@ ADD_REFUSAL_REASONS: frozenset[FileReason] = CHECK_REASONS | frozenset({
     FileReason.MARKDOWN_INVALID,
     FileReason.PAPER_TEXT_LIMIT,
     FileReason.PAPER_FILE_LIMIT,
-    # Until P7c2 (then kept, never written, so older jobs still load).
+    # Written only before P7c2 (#1127); kept so older jobs' supplements still load.
     FileReason.PDF_SUPPLEMENT_NOT_SUPPORTED_YET,
+    FileReason.PDF_TOO_LARGE,
+    FileReason.PDF_INVALID,
+    FileReason.PDF_ACCESS_DENIED,
 })
 
 

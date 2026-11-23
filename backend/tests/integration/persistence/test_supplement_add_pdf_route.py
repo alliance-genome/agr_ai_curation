@@ -1,9 +1,9 @@
-"""Until P7c2, the add route never stores a PDF supplement as text (KANBAN-1976 / ALL-1460).
+"""The add route adds a converted PDF supplement as its PDF (KANBAN-1976 / ALL-1460, P7c2).
 
 Through the real route: the endpoint starts the job, the queued background task runs it
 against the real database and search index, and the job's ``metadata.supplements`` says
-what happened. The listing entry is deliberately tickable: the guard is the add's own,
-on the provider's file format, not the listing's flag.
+what happened. It fails if #1127's interim refusal (``pdf_supplement_not_supported_yet``)
+survived: the PDF would be left out.
 """
 
 # ruff: noqa: F811 - pytest fixtures are imported from the P7c1 module and used by name.
@@ -11,10 +11,15 @@ on the provider's file format, not the listing's flag.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import io
+from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi import BackgroundTasks
+from pypdf import PdfWriter
 from starlette.requests import Request
 
 from src.api import documents as documents_api
@@ -26,7 +31,6 @@ from src.lib.document_sources.file_listing import (
     ListedFileCheckStatus,
     ListedFileStatus,
 )
-from src.lib.document_sources.file_reasons import FileReason
 from src.lib.document_sources.models import SourceArtifactFormat, SourceArtifactRole, SupplementFileCategory
 from src.lib.pdf_jobs import service as pdf_job_service
 from src.schemas.document_files import AddFilesRequest
@@ -45,6 +49,18 @@ from tests.integration.persistence.test_supplement_add_search_index import (  # 
 )
 
 
+def _pdf(pages: int) -> bytes:
+    writer = PdfWriter()
+    for _ in range(pages):
+        writer.add_blank_page(width=612, height=792)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
+PDF = _pdf(2)
+
+
 def _pdf_entry(original_id: int) -> ListedFile:
     """A converted PDF supplement as ABC lists it: a ``SOURCE_PDF`` original of format PDF."""
 
@@ -52,6 +68,7 @@ def _pdf_entry(original_id: int) -> ListedFile:
         str(original_id), SourceArtifactRole.SOURCE_PDF, SourceArtifactFormat.PDF,
         file_class="supplement", file_extension="pdf",
     )
+    original = replace(original, md5sum=hashlib.md5(PDF).hexdigest())  # ABC stores the original's MD5
     converted = _artifact(
         str(original_id + 1), SourceArtifactRole.CONVERTED_TEXT, SourceArtifactFormat.MARKDOWN,
         file_class="converted_merged_supplement", file_extension="md",
@@ -62,7 +79,7 @@ def _pdf_entry(original_id: int) -> ListedFile:
         check=ListedFileCheck(ListedFileCheckStatus.NOT_CHECKED), in_this_paper=False,
         md5=original.md5sum, converted_md5=converted.md5sum, artifact_format="pdf",
         category=SupplementFileCategory.CONVERTIBLE, single_title_required=False,
-        tickable=True, not_tickable_reason=None,  # the guard must not depend on the listing's flag
+        tickable=True, not_tickable_reason=None,
         last_provider_observation=None, source_artifact=original, converted_artifact=converted,
     )
 
@@ -73,7 +90,7 @@ class _ClosingProvider(_Provider):
 
 
 @pytest.mark.asyncio
-async def test_the_add_route_leaves_a_pdf_supplement_out_and_adds_the_rest(owner_id, index, monkeypatch):
+async def test_the_add_route_adds_a_pdf_supplement_as_its_pdf_with_the_rest(owner_id, index, monkeypatch, tmp_path):
     paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
 
     async def listing(document_id, *, owner_user_id, provider, context):
@@ -96,12 +113,12 @@ async def test_the_add_route_leaves_a_pdf_supplement_out_and_adds_the_rest(owner
     monkeypatch.setattr(documents_api, "_document_source_context_or_503", context)
     monkeypatch.setattr(
         "src.lib.document_sources.registry.get_configured_document_source_provider",
-        lambda: _ClosingProvider({"21": WORKBOOK, "71": b"# Made_up_S70\n\nMade-up text of a PDF.\n"}),
+        lambda: _ClosingProvider({"21": WORKBOOK, "70": PDF, "71": b"## Made_up_S70\n\nMade-up text of a PDF.\n"}),
     )
     monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda: index)
 
     payload = AddFilesRequest(files=[
-        {"provider_file_id": "70", "md5": "md5-70", "converted_md5": "md5-71"},
+        {"provider_file_id": "70", "md5": hashlib.md5(PDF).hexdigest(), "converted_md5": "md5-71"},
         {"provider_file_id": "20", "md5": "md5-20", "converted_md5": "md5-21"},
     ])
     request = Request({"type": "http", "method": "POST", "path": f"/weaviate/documents/{paper}/files", "headers": []})
@@ -113,11 +130,10 @@ async def test_the_add_route_leaves_a_pdf_supplement_out_and_adds_the_rest(owner
 
     finished = pdf_job_service.get_job(job_id=job.job_id, user_id=owner_id)
     entries = {item["provider_file_id"]: item for item in finished.metadata["supplements"]}
-    assert entries["70"]["state"] == "left_out"
-    assert entries["70"]["reason_code"] == FileReason.PDF_SUPPLEMENT_NOT_SUPPORTED_YET.value
-    assert entries["70"]["file_id"] is None
+    assert entries["70"]["state"] == "added", entries["70"]
     assert entries["20"]["state"] == "added"
-    # Only the main file and the Excel supplement are rows of the paper; no PDF text was stored.
-    assert [row.source_provider_source_file_id for row in _rows(paper) if row.role == "supplement"] == ["20"]
-    supplement = next(row for row in _rows(paper) if row.role == "supplement")
-    assert _indexes(index, str(paper)) == [0, 1, 2, *range(supplement.chunk_index_start, supplement.chunk_index_end + 1)]
+    supplements = {row.source_provider_source_file_id: row for row in _rows(paper) if row.role == "supplement"}
+    pdf = supplements["70"]
+    assert (pdf.display_mode, pdf.page_count, pdf.status) == ("local_pdf", 2, "ready")
+    assert (Path(tmp_path) / pdf.file_path).read_bytes() == PDF
+    assert supplements["20"].display_mode == "text"

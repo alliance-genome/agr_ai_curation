@@ -17,6 +17,15 @@ from src.lib.storage_permissions import ensure_writable_directory
 logger = logging.getLogger(__name__)
 
 
+def pdf_page_count(source) -> int:
+    """The number of pages of a PDF (a path or a readable binary file); pypdf errors propagate.
+
+    The one page count for uploads and PDF supplements (ALL-1460, P7c2).
+    """
+
+    return len(PdfReader(source).pages)
+
+
 class UploadError(Exception):
     """Exception raised during file upload operations."""
     pass
@@ -89,7 +98,7 @@ class PDFUploadHandler:
                 shutil.rmtree(doc_dir, ignore_errors=True)
                 raise UploadError(pdf_file_size_limit_message(file_size))
 
-            page_count = len(PdfReader(saved_path).pages)
+            page_count = pdf_page_count(saved_path)
             if page_count < 1:
                 raise UploadError("PDF must contain at least one page")
 

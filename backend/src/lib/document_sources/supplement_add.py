@@ -1,6 +1,6 @@
-"""Add converted text supplements to an existing paper (KANBAN-1976 / ALL-1460, P7c1).
+"""Add converted supplements to an existing paper (KANBAN-1976 / ALL-1460, P7c1, P7c2).
 
-The write path every text supplement goes through: a curator's "add files" (the
+The write path every supplement goes through: a curator's "add files" (the
 ``POST /documents/{id}/files`` route) or an import's supplement stage (P7b, in its
 own job) calls ``add_files_to_paper``. The paper stays usable throughout.
 
@@ -16,6 +16,13 @@ own job) calls ``add_files_to_paper``. The paper stays usable throughout.
   unchanged. The paper's status and completion time never change.
 - Rows left ``failed`` by an add that died (the stale sweep marks them) are removed
   with their pieces at the start of the next add on the paper.
+- **A PDF supplement** (P7c2) is added as its PDF: its original PDF is downloaded
+  with the curator's login (a read of a file the provider lists), checked against
+  the listing's MD5 and counted for pages, and stored next to the paper
+  (``{owner}/{paper}/supplement_pdf/{file}.pdf``); its pieces still come from the
+  provider's converted text, never from the extraction service. Between the checks
+  and the write an accepted PDF waits in an unnamed temporary file on the document
+  storage volume, never in memory.
 
 Each file's outcome is a code. The four job messages near the end of this module
 are proposals awaiting sign-off.
@@ -25,10 +32,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
+import tempfile
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, BinaryIO
 from uuid import UUID
 
 from sqlalchemy import select
@@ -36,16 +46,17 @@ from sqlalchemy import select
 from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.file_assessment import FileProfile, assess_converted_file
 from src.lib.document_sources.file_listing import (
-    ConvertedTextDownloadFailure,
+    ProviderFileDownloadFailure,
     ListedFile,
     ListedFileStatus,
     current_file_check_limits,
-    download_converted_text,
+    download_provider_file,
 )
 from src.lib.document_sources.file_reasons import ADD_REFUSAL_REASONS, FileReason, SupplementState
 from src.lib.document_sources.models import DocumentSourceError, DocumentSourceProvider, SourceArtifactFormat
 from src.lib.observability.cost_context import costed_document_processing
 from src.models.sql.pdf_document import (
+    DISPLAY_MODE_LOCAL_PDF,
     DISPLAY_MODE_TEXT,
     FILE_ROLE_SUPPLEMENT,
     FILE_STATUS_FAILED,
@@ -130,6 +141,16 @@ class _Leftover:
     paths: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _SpooledPdf:
+    """An accepted supplement PDF waiting on the storage volume; its bytes are not in memory."""
+
+    file: BinaryIO  # an unnamed temporary file: gone when closed or when the process dies
+    sha256: str
+    size: int
+    page_count: int
+
+
 @dataclass(slots=True)
 class _Accepted:
     listed: ListedFile
@@ -138,6 +159,7 @@ class _Accepted:
     sha256: str
     prepared: Any  # ingestion.PreparedFile
     file_id: UUID
+    pdf: _SpooledPdf | None = None
 
 
 Checkpoint = Callable[[str], Awaitable[None]]
@@ -209,6 +231,41 @@ async def add_files_to_paper(
 
     outcomes: dict[str, FileOutcome] = {}
     accepted: list[_Accepted] = []
+    try:
+        await _check_and_write(
+            ordered, listed_by_id, outcomes, accepted,
+            document_id=document_id, owner_user_id=owner_user_id, paper=paper, provider=provider,
+            token=token, limits=limits, max_files=max_files, max_text_bytes=max_text_bytes,
+            download_cap=download_cap, weaviate_client=weaviate_client, stage_checkpoint=stage_checkpoint,
+        )
+    finally:
+        for item in accepted:
+            if item.pdf is not None:
+                item.pdf.file.close()
+    return AddResult(files=tuple(outcomes[chosen.provider_file_id] for chosen in ordered))
+
+
+async def _check_and_write(
+    ordered: Sequence[ChosenFile],
+    listed_by_id: dict[str, ListedFile],
+    outcomes: dict[str, FileOutcome],
+    accepted: list[_Accepted],
+    *,
+    document_id: UUID,
+    owner_user_id: int,
+    paper: _PaperState,
+    provider: DocumentSourceProvider,
+    token: str,
+    limits: Any,
+    max_files: int,
+    max_text_bytes: int,
+    download_cap: int,
+    weaviate_client: Any,
+    stage_checkpoint: Checkpoint,
+) -> None:
+    from src.lib.openai_agents.config import get_document_file_max_pdf_bytes
+
+    pdf_cap = get_document_file_max_pdf_bytes()
     file_count = paper.file_count
     text_total = paper.ready_text_bytes
     for chosen in ordered:
@@ -236,11 +293,6 @@ async def add_files_to_paper(
             # A paper's main file is never added to an existing paper.
             outcomes[file_id] = left_out(FileReason.FILE_NOT_TICKABLE)
             continue
-        if listed.source_artifact.artifact_format is SourceArtifactFormat.PDF:
-            # Until P7c2 adds a PDF supplement as its PDF, never store one as text. The add's
-            # own rule on the provider's file format, whatever the listing flag says.
-            outcomes[file_id] = left_out(FileReason.PDF_SUPPLEMENT_NOT_SUPPORTED_YET)
-            continue
         if listed.converted_md5 != chosen.converted_md5 or listed.md5 != chosen.md5:
             outcomes[file_id] = left_out(FileReason.FILE_CHANGED_SINCE_LISTED)
             continue
@@ -263,11 +315,19 @@ async def add_files_to_paper(
         if text_total + prepared.text_bytes > max_text_bytes:
             outcomes[file_id] = left_out(FileReason.PAPER_TEXT_LIMIT, text_total + prepared.text_bytes, max_text_bytes)
             continue
+        pdf = None
+        if listed.source_artifact.artifact_format is SourceArtifactFormat.PDF:
+            # A PDF supplement is added with its PDF, never as text alone (N3).
+            spooled = await _download_pdf(provider, listed, token=token, cap=pdf_cap)
+            if isinstance(spooled, FileOutcome):
+                outcomes[file_id] = left_out(spooled.reason_code, spooled.measured_value, spooled.limit_value)
+                continue
+            pdf = spooled
         text_total += prepared.text_bytes
         file_count += 1
         accepted.append(_Accepted(
             listed=listed, display_name=display_name, markdown=markdown, sha256=sha256, prepared=prepared,
-            file_id=uuid.uuid4(),
+            file_id=uuid.uuid4(), pdf=pdf,
         ))
 
     if accepted:
@@ -279,7 +339,75 @@ async def add_files_to_paper(
             outcomes[item.listed.provider_file_id] = FileOutcome(
                 item.listed.provider_file_id, "added", file_id=item.file_id, display_name=item.display_name,
             )
-    return AddResult(files=tuple(outcomes[chosen.provider_file_id] for chosen in ordered))
+
+
+def _spool_directory() -> Path:
+    """Where accepted supplement PDFs wait: on the document storage volume, not system temp."""
+
+    from src.config import get_pdf_storage_path
+    from src.lib.storage_permissions import ensure_writable_directory
+
+    return ensure_writable_directory(Path(get_pdf_storage_path()) / ".add_spool")
+
+
+def _spool_pdf(content: bytes, *, listed_md5: str | None, spool: Path) -> _SpooledPdf | FileReason:
+    """Check one downloaded supplement PDF and move it out of memory (runs in a worker thread).
+
+    Structural checks only: the listing's MD5, then a page count of at least one.
+    """
+
+    from src.lib.pipeline.upload import pdf_page_count
+
+    if hashlib.md5(content).hexdigest() != listed_md5:
+        return FileReason.FILE_CHANGED_SINCE_LISTED
+    try:
+        page_count = pdf_page_count(io.BytesIO(content))
+    except Exception:  # noqa: BLE001 - untrusted bytes: any parser error means "not a readable PDF"
+        return FileReason.PDF_INVALID
+    if page_count < 1:
+        return FileReason.PDF_INVALID
+    spooled = tempfile.TemporaryFile(dir=spool)
+    spooled.write(content)
+    spooled.flush()
+    return _SpooledPdf(
+        file=spooled, sha256=hashlib.sha256(content).hexdigest(), size=len(content), page_count=page_count,
+    )
+
+
+async def _download_pdf(
+    provider: DocumentSourceProvider, listed: ListedFile, *, token: str, cap: int,
+) -> _SpooledPdf | FileOutcome:
+    """Download a supplement's original PDF with the curator's login, within the shared limit.
+
+    A read of a file the provider lists; it never asks the provider to convert anything.
+    """
+
+    spool = await asyncio.to_thread(_spool_directory)
+    left_out = lambda reason, limit=None: FileOutcome(  # noqa: E731
+        listed.provider_file_id, "left_out", reason, limit_value=limit,
+    )
+    if not listed.md5:
+        # Without the provider's MD5 the bytes cannot be matched to what was listed.
+        return left_out(FileReason.FILE_NOT_TICKABLE)
+    try:
+        outcome = await download_provider_file(
+            provider, listed.provider_file_id, request_bearer_token=token, max_bytes=cap,
+            use=lambda content: _spool_pdf(content, listed_md5=listed.md5, spool=spool),
+        )
+    except DocumentSourceError:
+        return left_out(FileReason.SOURCE_DOWNLOAD_FAILED)
+    failure_codes = {
+        ProviderFileDownloadFailure.TOO_LARGE: FileReason.PDF_TOO_LARGE,
+        ProviderFileDownloadFailure.MISSING: FileReason.SOURCE_FILE_MISSING,
+        ProviderFileDownloadFailure.UNAVAILABLE: FileReason.SOURCE_UNAVAILABLE,
+        ProviderFileDownloadFailure.ACCESS_DENIED: FileReason.PDF_ACCESS_DENIED,
+    }
+    if outcome.failure is not None:
+        return left_out(failure_codes[outcome.failure], outcome.limit_value)
+    assert outcome.result is not None
+    if isinstance(outcome.result, FileReason):
+        return left_out(outcome.result)
+    return outcome.result
 
 
 async def _download_and_check(
@@ -312,16 +440,16 @@ async def _download_and_check(
         return content, hashlib.sha256(content).hexdigest(), assessment
 
     try:
-        outcome = await download_converted_text(
+        outcome = await download_provider_file(
             provider, converted.artifact_id, request_bearer_token=token, max_bytes=download_cap, use=use,
         )
     except DocumentSourceError:
         return FileOutcome(listed.provider_file_id, "left_out", FileReason.SOURCE_DOWNLOAD_FAILED)
     failure_codes = {
-        ConvertedTextDownloadFailure.TOO_LARGE: FileReason.TOO_LARGE,
-        ConvertedTextDownloadFailure.MISSING: FileReason.SOURCE_FILE_MISSING,
-        ConvertedTextDownloadFailure.UNAVAILABLE: FileReason.SOURCE_UNAVAILABLE,
-        ConvertedTextDownloadFailure.ACCESS_DENIED: FileReason.ACCESS_DENIED,
+        ProviderFileDownloadFailure.TOO_LARGE: FileReason.TOO_LARGE,
+        ProviderFileDownloadFailure.MISSING: FileReason.SOURCE_FILE_MISSING,
+        ProviderFileDownloadFailure.UNAVAILABLE: FileReason.SOURCE_UNAVAILABLE,
+        ProviderFileDownloadFailure.ACCESS_DENIED: FileReason.ACCESS_DENIED,
     }
     if outcome.failure is not None:
         return FileOutcome(
@@ -387,12 +515,19 @@ async def _write(
         (item, f"{subject}/source_markdown/{item.file_id}.md", f"{subject}/processed_json/{item.file_id}.json")
         for item in accepted
     ]
-    written_paths = [path for _, markdown_path, processed_path in planned for path in (markdown_path, processed_path)]
+    pdf_paths = {
+        item.file_id: f"{subject}/{document_id}/supplement_pdf/{item.file_id}.pdf"
+        for item in accepted if item.pdf is not None
+    }
+    written_paths = [
+        path for _, markdown_path, processed_path in planned for path in (markdown_path, processed_path)
+    ] + list(pdf_paths.values())
     try:
         await stage_checkpoint("saving_files")
         rows = [
             _new_row(item, document_id=document_id, owner_user_id=owner_user_id, tab_order=tab_order,
-                     markdown_path=markdown_path, processed_path=processed_path)
+                     markdown_path=markdown_path, processed_path=processed_path,
+                     pdf_path=pdf_paths.get(item.file_id))
             for tab_order, (item, markdown_path, processed_path) in enumerate(planned, start=paper.next_tab_order)
         ]
         await asyncio.to_thread(_insert_rows, document_id, rows)
@@ -403,6 +538,8 @@ async def _write(
             )
             if saved != (markdown_path, processed_path):
                 raise SupplementAddError("stored_file_path_mismatch")
+            if item.pdf is not None:
+                await asyncio.to_thread(_save_supplement_pdf, item.pdf.file, pdf_paths[item.file_id])
         for item in accepted:
             await stage_checkpoint("vector_storage")
             await store_file_pieces(
@@ -420,6 +557,21 @@ async def _write(
         # The files are added and readable; only the paper's search-index count or the
         # document cache may be stale. Reported, and the add still counts as done.
         _report_after_add_failure(exc, document_id)
+
+
+def _save_supplement_pdf(spooled: BinaryIO, relative_path: str) -> None:
+    """Copy a spooled supplement PDF to its stored path under the owner's folder."""
+
+    import shutil
+
+    from src.config import get_pdf_storage_path
+    from src.lib.storage_permissions import ensure_writable_directory
+
+    target = Path(get_pdf_storage_path()) / relative_path
+    ensure_writable_directory(target.parent)
+    spooled.seek(0)
+    with open(target, "wb") as stored:
+        shutil.copyfileobj(spooled, stored)
 
 
 def _report_after_add_failure(exc: Exception, document_id: UUID) -> None:
@@ -446,12 +598,27 @@ def _new_row(
     tab_order: int,
     markdown_path: str,
     processed_path: str,
+    pdf_path: str | None = None,
 ) -> PDFDocumentFile:
     from datetime import datetime, timezone
 
     original = item.listed.source_artifact
     converted = item.listed.converted_artifact
     assert converted is not None
+    if item.pdf is not None:
+        assert pdf_path is not None
+        # A PDF supplement: the viewer shows its stored PDF; its pieces come from the text.
+        stored = {
+            "display_mode": DISPLAY_MODE_LOCAL_PDF, "file_path": pdf_path,
+            "file_hash": _scoped_file_hash(owner_user_id, item.pdf.sha256), "file_size": item.pdf.size,
+            "page_count": item.pdf.page_count, "source_provider_pdf_artifact_id": original.artifact_id,
+        }
+    else:
+        stored = {
+            "display_mode": DISPLAY_MODE_TEXT, "file_path": markdown_path,
+            "file_hash": _scoped_file_hash(owner_user_id, item.sha256),
+            "file_size": len(item.markdown.encode("utf-8")), "page_count": None,
+        }
     return PDFDocumentFile(
         id=item.file_id,
         document_id=document_id,
@@ -459,11 +626,7 @@ def _new_row(
         display_name=item.display_name,
         status=FILE_STATUS_PENDING,
         tab_order=tab_order,
-        display_mode=DISPLAY_MODE_TEXT,
-        file_path=markdown_path,
-        file_hash=_scoped_file_hash(owner_user_id, item.sha256),
-        file_size=len(item.markdown.encode("utf-8")),
-        page_count=None,
+        **stored,
         processed_json_path=processed_path,
         source_markdown_path=markdown_path,
         source_provider_source_file_id=original.artifact_id,

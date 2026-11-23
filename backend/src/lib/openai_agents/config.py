@@ -2282,6 +2282,11 @@ def get_document_paper_max_text_bytes() -> int:
     return max(1, _get_env_int_with_fallback("DOCUMENT_PAPER_MAX_TEXT_BYTES", 2_000_000))
 
 
+def get_document_file_max_pdf_bytes() -> int:
+    """Largest original PDF of a PDF supplement an add stores; the download stops past it."""
+    return max(1, _get_env_int_with_fallback("DOCUMENT_FILE_MAX_PDF_BYTES", 20_000_000))
+
+
 def get_document_file_few_characters_note_below() -> int:
     """Readable characters below which a file gets the "almost no text" note (never a refusal)."""
     return max(0, _get_env_int_with_fallback("DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW", 200))

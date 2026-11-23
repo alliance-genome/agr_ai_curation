@@ -25,9 +25,9 @@ from src.lib.document_sources.file_listing import (
     ListedFileCheckStatus,
     ListedFileStatus,
     ListingRoute,
-    ConvertedTextDownloadFailure,
+    ProviderFileDownloadFailure,
     converted_text_access_allowed,
-    download_converted_text,
+    download_provider_file,
     file_role_for_artifact_role,
     list_reference_files,
     listing_to_payload,
@@ -362,15 +362,15 @@ async def test_the_shared_download_helper_bounds_size_and_reports_failure_codes(
     client = _Client({"1": b"text", "2": _http_error(404), "3": _http_error(502), "4": _http_error(403)})
     provider = provider_from_fake(client)
     results = {
-        artifact_id: await download_converted_text(
+        artifact_id: await download_provider_file(
             provider, artifact_id, request_bearer_token="curator-token", max_bytes=50, use=len,
         )
         for artifact_id in ("1", "2", "3", "4")
     }
     assert results["1"].result == 4 and results["1"].failure is None
-    assert results["2"].failure is ConvertedTextDownloadFailure.MISSING
-    assert results["3"].failure is ConvertedTextDownloadFailure.UNAVAILABLE
-    assert results["4"].failure is ConvertedTextDownloadFailure.ACCESS_DENIED
+    assert results["2"].failure is ProviderFileDownloadFailure.MISSING
+    assert results["3"].failure is ProviderFileDownloadFailure.UNAVAILABLE
+    assert results["4"].failure is ProviderFileDownloadFailure.ACCESS_DENIED
     downloads = [kwargs for name, kwargs in client.calls if name == "download_referencefile"]
     assert len(downloads) == 4 and all(item["max_bytes"] == 50 for item in downloads)
 
@@ -411,9 +411,9 @@ async def test_downloads_share_one_process_wide_limit_and_hold_it_while_the_byte
         return len(content)
 
     # Two separate callers (two listings, or a listing and an import) still share the limit.
-    first = [asyncio.create_task(download_converted_text(
+    first = [asyncio.create_task(download_provider_file(
         provider, str(i), request_bearer_token="t", max_bytes=10, use=use)) for i in range(3)]
-    second = [asyncio.create_task(download_converted_text(
+    second = [asyncio.create_task(download_provider_file(
         provider, str(i), request_bearer_token="t", max_bytes=10, use=use)) for i in range(3, 6)]
     await asyncio.sleep(0.05)
     assert client.active == 2
