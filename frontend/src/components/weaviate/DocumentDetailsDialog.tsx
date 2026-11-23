@@ -21,6 +21,7 @@ import {
   Close,
   Refresh as RefreshIcon,
 } from '@mui/icons-material';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   DocumentDetailData,
   DocumentSummary,
@@ -31,6 +32,11 @@ import {
   documentSourceProviderLabel,
   documentSourceReferenceLabel,
 } from '../../utils/documentSourcePresentation';
+import DocumentFilesSection, {
+  listedProviderLabel,
+  paperFilesQueryKey,
+  paperSourceFilesQueryKey,
+} from './DocumentFilesSection';
 
 interface DocumentDetailsDialogProps {
   open: boolean;
@@ -100,6 +106,7 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
   onRefreshRequested,
   disableActions = false,
 }) => {
+  const queryClient = useQueryClient();
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [actionLoading, setActionLoading] = React.useState(false);
 
@@ -133,7 +140,10 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
       return;
     }
     refetch();
-  }, [documentId, refetch]);
+    // The Files section too; this asks the provider again on purpose.
+    void queryClient.invalidateQueries({ queryKey: paperFilesQueryKey(documentId) });
+    void queryClient.invalidateQueries({ queryKey: paperSourceFilesQueryKey(documentId) });
+  }, [documentId, queryClient, refetch]);
 
   const handleReembed = React.useCallback(async () => {
     if (!documentId || !onReembed) {
@@ -285,6 +295,15 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                   {renderInfoItem('Created', formatDateTime(details.document.creationDate))}
                 </Paper>
               </Grid>
+              {documentId && (
+                <Grid size={12}>
+                  <DocumentFilesSection
+                    documentId={documentId}
+                    providerLabel={listedProviderLabel(sourceProvenance)}
+                    open={open}
+                  />
+                </Grid>
+              )}
               <Grid size={12}>
                 <Paper variant="outlined" sx={{ p: 2 }}>
                   <Typography variant="subtitle2" gutterBottom>

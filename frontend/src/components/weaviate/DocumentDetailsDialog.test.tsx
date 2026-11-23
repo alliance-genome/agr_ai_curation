@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '../../test/test-utils';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { render, screen, waitFor } from '../../test/test-utils';
 import DocumentDetailsDialog from './DocumentDetailsDialog';
 import {
   normalizeDocumentDetailResponse,
@@ -61,6 +62,38 @@ const providerSummary: DocumentSummary = {
 };
 
 describe('DocumentDetailsDialog', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('refetches the Files section with "Refresh details"', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ detail: { error: 'file_listing_failed' } }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    useDocumentMock.mockReturnValue({
+      data: providerDocument,
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    render(<DocumentDetailsDialog open documentId="doc-provider" onClose={vi.fn()} />);
+    const calls = (url: string) => fetchMock.mock.calls.filter((call) => String((call as unknown[])[0]) === url).length;
+    const paperFiles = '/api/pdf-viewer/documents/doc-provider/files';
+    const sourceFiles = '/api/weaviate/documents/doc-provider/source-files';
+    await waitFor(() => {
+      expect(calls(paperFiles)).toBe(1);
+      expect(calls(sourceFiles)).toBe(1);
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: 'refresh details' }));
+
+    await waitFor(() => {
+      expect(calls(paperFiles)).toBe(2);
+      expect(calls(sourceFiles)).toBe(2);
+    });
+  });
+
   it('renders compact provider provenance without raw payload dumps', () => {
     useDocumentMock.mockReturnValue({
       data: providerDocument,
