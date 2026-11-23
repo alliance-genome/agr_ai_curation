@@ -44,6 +44,10 @@ def identity_function_tool(monkeypatch):
     monkeypatch.setattr(weaviate_search, "scoped_document_tool", lambda tool, **kwargs: tool)
     monkeypatch.setattr(weaviate_search, "current_readable_files", lambda: single_file("doc-12345678"))
     monkeypatch.setattr(record_evidence, "current_readable_files", lambda: single_file("doc-12345678"))
+    # The evidence list shows each record's file label: the same one readable file.
+    monkeypatch.setattr(
+        evidence_workspace, "resolve_readable_files", lambda document_id, user_id: single_file("doc-12345678")
+    )
     monkeypatch.setattr(weaviate_search, "retain_issued_spans", AsyncMock())
     monkeypatch.setattr(weaviate_search, "function_tool", _identity_function_tool)
     monkeypatch.setattr(record_evidence, "function_tool", _identity_function_tool)

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextvars import ContextVar, Token
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
+from agr_ai_curation_runtime.document_errors import DocumentReadError
 from agr_ai_curation_runtime.function_tools import function_tool
+from src.lib.document_files.readable import ReadableFiles, ReadableFilesError, resolve_readable_files
+from src.lib.document_files.service import FileRangeMissingError
 
 from ..config import get_evidence_list_max_limit, get_list_recorded_evidence_limit
 from ..evidence_summary import evidence_record_status
@@ -284,6 +288,52 @@ def _record_summary(record: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+async def _run_readable_files(
+    records: list[dict[str, Any]], document_id: str, user_id: str,
+) -> ReadableFiles | None:
+    """The run's readable files, read once, only when a record names a file.
+
+    ``None`` means the paper itself is gone, so none of its files is readable.
+    """
+
+    if not any(_optional_string(record.get("file_id")) for record in records):
+        return None
+    try:
+        return await asyncio.to_thread(resolve_readable_files, document_id, user_id)
+    except FileRangeMissingError as exc:
+        # A ready file without a range: the same named failure the document tools give.
+        raise DocumentReadError("document_reference") from exc
+    except ReadableFilesError:
+        return None
+
+
+def _with_file(view: dict[str, Any], record: dict[str, Any], readable: ReadableFiles | None) -> dict[str, Any]:
+    """Show the record's file beside ``section``: the outline label the model uses with
+    ``file=``, or, for a file the run can no longer read, its stored display name
+    marked ``file_readable: false``. Records saved before files were recorded have
+    no ``file_id`` and get no file key."""
+
+    file_id = _optional_string(record.get("file_id"))
+    if not file_id:
+        return view
+    current = None
+    if readable is not None:
+        current = next((file for file in readable.files if file.file_id == file_id), None)
+    file_keys: dict[str, Any] = (
+        {"file": readable.label_of(current)}
+        if current is not None and readable is not None
+        else {"file": record["file_name"], "file_readable": False}
+    )
+    placed: dict[str, Any] = {}
+    for key, value in view.items():
+        placed[key] = value
+        if key == "section":
+            placed.update(file_keys)
+    if "file" not in placed:
+        placed.update(file_keys)
+    return placed
+
+
 # Env-configurable via LIST_RECORDED_EVIDENCE_LIMIT (default 100); see config.py.
 _LIST_RECORDED_EVIDENCE_LIMIT = get_list_recorded_evidence_limit()
 
@@ -381,7 +431,7 @@ def create_list_recorded_evidence_tool(
         _track(tracker, "list_recorded_evidence")
         requested = _normalize_target(object_id=object_id, pending_ref_id=pending_ref_id)
         needle = text_contains.lower() if text_contains else None
-        records = []
+        matching = []
         for record in _tool_records(workspace_records):
             if not _matches_document(record, document_id):
                 continue
@@ -395,7 +445,9 @@ def create_list_recorded_evidence_tool(
                 quote = record.get("verified_quote")
                 if not isinstance(quote, str) or needle not in quote.lower():
                     continue
-            records.append(_record_list_summary(record))
+            matching.append(record)
+        readable = await _run_readable_files(matching, document_id, user_id)
+        records = [_with_file(_record_list_summary(record), record, readable) for record in matching]
 
         total = len(records)
         try:
@@ -482,6 +534,9 @@ def create_get_recorded_evidence_tool(
         record_payload.pop("evidence_revision_history", None)
         from src.lib.openai_agents.document_references import project_source_references
         record_payload = await project_source_references(record_payload, user_id=user_id, document_id=document_id)
+        record_payload = _with_file(
+            record_payload, record, await _run_readable_files([record], document_id, user_id),
+        )
         response = {
             "status": "ok",
             "evidence_record_id": _optional_string(evidence_record_id),
