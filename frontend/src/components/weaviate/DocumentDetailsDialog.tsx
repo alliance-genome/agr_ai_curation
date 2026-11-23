@@ -21,6 +21,7 @@ import {
   Close,
   Refresh as RefreshIcon,
 } from '@mui/icons-material';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   DocumentDetailData,
   DocumentSummary,
@@ -31,7 +32,11 @@ import {
   documentSourceProviderLabel,
   documentSourceReferenceLabel,
 } from '../../utils/documentSourcePresentation';
-import DocumentFilesSection from './DocumentFilesSection';
+import DocumentFilesSection, {
+  listedProviderLabel,
+  paperFilesQueryKey,
+  paperSourceFilesQueryKey,
+} from './DocumentFilesSection';
 
 interface DocumentDetailsDialogProps {
   open: boolean;
@@ -101,6 +106,7 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
   onRefreshRequested,
   disableActions = false,
 }) => {
+  const queryClient = useQueryClient();
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [actionLoading, setActionLoading] = React.useState(false);
 
@@ -134,7 +140,10 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
       return;
     }
     refetch();
-  }, [documentId, refetch]);
+    // The Files section too; this asks the provider again on purpose.
+    void queryClient.invalidateQueries({ queryKey: paperFilesQueryKey(documentId) });
+    void queryClient.invalidateQueries({ queryKey: paperSourceFilesQueryKey(documentId) });
+  }, [documentId, queryClient, refetch]);
 
   const handleReembed = React.useCallback(async () => {
     if (!documentId || !onReembed) {
@@ -290,7 +299,7 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                 <Grid size={12}>
                   <DocumentFilesSection
                     documentId={documentId}
-                    providerLabel={sourceProvenance?.provider ? documentSourceProviderLabel(sourceProvenance) : null}
+                    providerLabel={listedProviderLabel(sourceProvenance)}
                     open={open}
                   />
                 </Grid>

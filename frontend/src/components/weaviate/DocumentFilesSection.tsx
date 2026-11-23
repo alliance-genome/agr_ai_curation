@@ -1,14 +1,26 @@
 import { Alert, Box, Chip, CircularProgress, Divider, Paper, Stack, Typography } from '@mui/material'
 import { useQuery } from '@tanstack/react-query'
 
-import { fetchViewerFiles, fileDisplayLabel, isPdfFile, type ViewerFile } from '@/components/pdfViewer/viewerFiles'
-import { fetchPaperSourceFiles, type PaperSourceFile } from '@/features/documents/paperSourceFiles'
+import {
+  UNNAMED_FILE_LABEL,
+  fetchViewerFiles,
+  fileDisplayLabel,
+  isPdfFile,
+  type ViewerFile,
+} from '@/components/pdfViewer/viewerFiles'
+import {
+  PaperSourceFilesContractError,
+  fetchPaperSourceFiles,
+  type PaperSourceListedFile,
+} from '@/features/documents/paperSourceFiles'
+import type { DocumentSourceProvenance } from '@/services/weaviate'
 
 import {
-  LISTING_REFUSAL_TEXT,
+  LISTING_UNREADABLE_TEXT,
   OBSERVATION_TEXT,
   duplicateCopiesText,
   fewCharactersNote,
+  listingRefusalText,
   notShownText,
   sourceFileStatusText,
 } from './paperFileReasonText'
@@ -23,6 +35,33 @@ import {
  *
  * All texts are proposals awaiting sign-off.
  */
+
+/** Query keys, shared with the dialog's "Refresh details". */
+export const paperFilesQueryKey = (documentId: string) => ['paper-files', documentId] as const
+export const paperSourceFilesQueryKey = (documentId: string) => ['paper-source-files', documentId] as const
+
+/**
+ * Reopening the same paper within this time shows the stored listing without asking the
+ * provider again (each listing reads the provider and can download up to 20 converted
+ * texts). "Refresh details" always asks again.
+ */
+export const PAPER_SOURCE_FILES_STALE_MS = 5 * 60 * 1000
+
+/**
+ * The provider's label for the Files section: only its configured label. The label is
+ * required when a provider is registered (the backend refuses to start without one), so
+ * a paper whose provider has no label came from a provider this server does not have; the
+ * listing would refuse it (`not_imported_from_provider`), so nothing is asked or shown.
+ * Never the raw provider id.
+ */
+export function listedProviderLabel(
+  source: Pick<DocumentSourceProvenance, 'provider' | 'providerMetadata'> | null,
+): string | null {
+  if (!source?.provider) {
+    return null
+  }
+  return source.providerMetadata?.displayLabel ?? null
+}
 
 const ROLE_TEXT: Record<ViewerFile['role'], string> = {
   main: 'Main paper',
@@ -63,14 +102,19 @@ function PaperFileRow({ file }: { file: ViewerFile }) {
   )
 }
 
-function SourceFileRow({ file, provider }: { file: PaperSourceFile; provider: string }) {
-  const observation = file.last_provider_observation
-  const fewCharacters = file.check.few_characters_count
+function SourceFileRow({ file, provider }: { file: PaperSourceListedFile; provider: string }) {
+  const observation = file.recognized ? file.last_provider_observation : null
+  const fewCharacters = file.recognized ? file.check.few_characters_count : null
   return (
     <Box component="li" sx={{ py: 0.5 }}>
-      <Typography variant="body2" sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>
-        {file.display_name || 'Unnamed file'}
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+        <Typography variant="body2" sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>
+          {file.display_name || UNNAMED_FILE_LABEL}
+        </Typography>
+        {file.recognized && file.file_role === 'main' ? (
+          <Chip size="small" variant="outlined" label={ROLE_TEXT.main} />
+        ) : null}
+      </Box>
       <Typography variant="body2" color="text.secondary">{sourceFileStatusText(file, provider)}</Typography>
       {fewCharacters !== null ? (
         <Typography variant="body2" color="text.secondary">{fewCharactersNote(fewCharacters)}</Typography>
@@ -86,11 +130,12 @@ function SourceFileRow({ file, provider }: { file: PaperSourceFile; provider: st
 
 function ProviderFilesPart({ documentId, provider, open }: { documentId: string; provider: string; open: boolean }) {
   const listingQuery = useQuery({
-    queryKey: ['paper-source-files', documentId],
+    queryKey: paperSourceFilesQueryKey(documentId),
     queryFn: ({ signal }) => fetchPaperSourceFiles(documentId, signal),
     enabled: open,
     retry: false,
     refetchOnWindowFocus: false,
+    staleTime: PAPER_SOURCE_FILES_STALE_MS,
   })
 
   if (listingQuery.isPending) {
@@ -102,17 +147,23 @@ function ProviderFilesPart({ documentId, provider, open }: { documentId: string;
     )
   }
   if (listingQuery.isError) {
-    return <Alert severity="warning">{`Could not check ${provider} for this paper's files.`}</Alert>
+    return (
+      <Alert severity="warning">
+        {listingQuery.error instanceof PaperSourceFilesContractError
+          ? LISTING_UNREADABLE_TEXT(provider)
+          : `Could not check ${provider} for this paper's files.`}
+      </Alert>
+    )
   }
   const result = listingQuery.data
   if (result.kind === 'refused') {
-    const text = LISTING_REFUSAL_TEXT[result.code]
-    return text ? <Alert severity="info">{text(provider)}</Alert> : null
+    const text = listingRefusalText(result.code, result.httpStatus, provider)
+    return text ? <Alert severity="info">{text}</Alert> : null
   }
   const others = result.listing.files.filter((file) => !file.in_this_paper)
   return (
     <Box>
-      <Typography variant="subtitle2" component="h3" gutterBottom>
+      <Typography variant="subtitle2" gutterBottom>
         {`Also in ${provider}`}
       </Typography>
       {others.length === 0 ? (
@@ -140,7 +191,7 @@ function ProviderFilesPart({ documentId, provider, open }: { documentId: string;
 
 export default function DocumentFilesSection({ documentId, providerLabel, open }: DocumentFilesSectionProps) {
   const filesQuery = useQuery({
-    queryKey: ['paper-files', documentId],
+    queryKey: paperFilesQueryKey(documentId),
     queryFn: ({ signal }) => fetchViewerFiles(documentId, signal),
     enabled: open,
     retry: false,
@@ -149,7 +200,7 @@ export default function DocumentFilesSection({ documentId, providerLabel, open }
 
   return (
     <Paper variant="outlined" sx={{ p: 2 }}>
-      <Typography variant="subtitle2" component="h2" gutterBottom>
+      <Typography variant="subtitle2" gutterBottom>
         Files
       </Typography>
       <Divider sx={{ mb: 2 }} />
