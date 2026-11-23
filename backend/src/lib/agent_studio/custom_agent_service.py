@@ -614,7 +614,9 @@ def _validate_model_id(model_id: str) -> str:
     require_provider_enabled(getattr(model_def, "provider", "openai"))
     if not bool(getattr(model_def, "curator_visible", True)):
         raise ValueError(f"Model is not selectable in Agent Workshop: {normalized}")
-    return normalized
+    # A save stores the catalog entry actually used: a replaced id is written as the
+    # entry replacing it (ALL-1708).
+    return model_def.model_id
 
 
 def _agent_validation_sources(
@@ -698,6 +700,7 @@ def authorized_agent_validation_sources(db, *, user_id, active_group_ids, source
     """Intersect canonical sources with the current authenticated authoring catalog."""
     from dataclasses import replace
     from src.lib.agent_access import is_resource_access_allowed
+    from src.lib.config.models_loader import resolve_model_id
     from src.lib.agent_studio.capability_catalog import CapabilityCatalogContext, build_authorized_capability_catalog
     records = build_authorized_capability_catalog(
         db=db, context=CapabilityCatalogContext(
@@ -728,8 +731,10 @@ def authorized_agent_validation_sources(db, *, user_id, active_group_ids, source
         sources,
         # Keep policy-disabled records for an actionable validation error, not
         # selection. The canonical validator rejects them before other checks.
+        # A replaced model id is available when the entry replacing it is (ALL-1708).
         models={key: value for key, value in sources.models.items()
-                if key in available["model"] or not value.provider_enabled},
+                if resolve_model_id(key) in {resolve_model_id(model) for model in available["model"]}
+                or not value.provider_enabled},
         tools={key: replace(value, system_managed=key in inherited)
                for key, value in sources.tools.items() if key in available["tool"] or key in inherited},
         output_schema_keys=sources.output_schema_keys & available["output_contract"],
@@ -1734,10 +1739,8 @@ def update_custom_agent(
         output_schema_key=next_output_schema_key,
         tool_ids=list(next_tool_ids),
     )
-    effective_model_id = (
-        _validate_model_id(model_id)
-        if model_id is not None
-        else custom_agent.model_id
+    effective_model_id = _validate_model_id(
+        model_id if model_id is not None else custom_agent.model_id
     )
     _require_valid_custom_agent_draft(
         db,
@@ -1815,8 +1818,8 @@ def update_custom_agent(
         custom_agent.icon = icon
     if include_group_rules is not None:
         custom_agent.group_rules_enabled = include_group_rules
-    if model_id is not None:
-        custom_agent.model_id = effective_model_id
+    # Every save writes the current catalog entry (a replaced id becomes its entry).
+    custom_agent.model_id = effective_model_id
     if model_temperature is not None:
         custom_agent.model_temperature = float(model_temperature)
     if model_reasoning_provided or model_reasoning is not None:

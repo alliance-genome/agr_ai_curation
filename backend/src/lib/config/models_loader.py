@@ -308,8 +308,12 @@ def resolve_model_id(model_id: str) -> str:
 
     A replaced id becomes the id of the entry replacing it; any other id is returned
     unchanged, so an id the catalog does not know is refused where it is checked."""
-    model = get_model(model_id)
-    return model.model_id if model is not None else model_id
+    if not _initialized:
+        load_models()
+    if model_id in _model_registry:
+        return model_id
+    replacing = _replacing_entry(model_id)
+    return replacing.model_id if replacing is not None else model_id
 
 
 def is_replaced_model_id(model_id: str) -> bool:

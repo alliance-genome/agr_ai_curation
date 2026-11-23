@@ -16,7 +16,7 @@ from src.api import benchmark_flow_imports as api
 from src.lib.agent_studio import custom_agent_service as service
 from src.lib.agent_studio import runtime_validation
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
-from src.lib.config.models_loader import get_model
+from src.lib.config.models_loader import get_model, resolve_model_id
 from src.lib.config import schema_discovery
 from src.lib.agent_studio.execution_revision_service import (append_execution_revision,
                                                              authorize_execution_receipt)
@@ -181,7 +181,7 @@ def test_destination_incompatibility_refuses_before_dependency_commit(
         copy = copy_of(session, agent)
         if existing:
             assert first is not None
-            assert copy.is_active and copy.model_id == "gpt-6.1-sol"
+            assert copy.is_active and copy.model_id == resolve_model_id("gpt-6.1-sol")
             assert copy.execution_revision_id == old_head
             flow = session.get(CurationFlow, first.flow_id)
             assert flow_execution_revision_findings(session, flow.flow_definition, user_id=2,

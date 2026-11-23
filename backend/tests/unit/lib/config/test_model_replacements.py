@@ -228,3 +228,13 @@ def test_studio_chat_configured_on_a_replaced_id_runs_on_its_entry(monkeypatch):
     monkeypatch.setenv("AGENT_STUDIO_OPENAI_MODEL", astra.replaces[0])
     monkeypatch.setenv("AGENT_STUDIO_REASONING_EFFORT", "medium")
     assert openai_runtime.resolve_agent_studio_model() == (astra.model_id, "medium")
+
+
+def test_environment_model_reads_record_the_model_actually_called(monkeypatch):
+    from src.lib.openai_agents.config import get_validation_review_model
+
+    sol = next(model for model in loader.list_models() if model.default)
+    monkeypatch.setenv("VALIDATION_REVIEW_MODEL", sol.replaces[0])
+    assert get_validation_review_model() == sol.model_id
+    monkeypatch.setenv("VALIDATION_REVIEW_MODEL", "")
+    assert get_validation_review_model() == ""  # empty keeps the supervisor's own model

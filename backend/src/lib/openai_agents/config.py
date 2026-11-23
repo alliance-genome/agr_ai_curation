@@ -630,9 +630,11 @@ def requested_reasoning_effort(model_def: object, value: object) -> Optional[Rea
     """The effort actually requested: the saved level when the model offers it, else
     the catalog entry's reviewed ``reasoning_map`` level; with neither, refused."""
     effort = normalize_reasoning_effort(value)
-    if effort is None or not getattr(model_def, "supports_reasoning", False):
+    offered = tuple(getattr(model_def, "reasoning_options", ()) or ())
+    # An entry that declares no levels does not constrain the effort here.
+    if effort is None or not getattr(model_def, "supports_reasoning", False) or not offered:
         return effort
-    if effort in tuple(getattr(model_def, "reasoning_options", ()) or ()):
+    if effort in offered:
         return effort
     mapped = (getattr(model_def, "reasoning_map", None) or {}).get(effort)
     if mapped is None:
@@ -1315,8 +1317,13 @@ def build_model_settings(
     reasoning = None
     reasoning_effort = normalize_reasoning_effort(reasoning_effort)
     if reasoning_effort and supports_reasoning(model):
-        reasoning_effort = requested_reasoning_effort(
-            _get_model_definition(model), reasoning_effort)
+        from src.lib.config.models_loader import get_model
+
+        # Catalog models apply their offered levels and reviewed reasoning_map; a
+        # provider-override model outside the catalog has no catalog policy to apply.
+        catalog_model = get_model(model)
+        if catalog_model is not None:
+            reasoning_effort = requested_reasoning_effort(catalog_model, reasoning_effort)
         summary_settings = reasoning_summary_request_settings(
             model=model,
             reasoning_effort=reasoning_effort,
@@ -4386,7 +4393,10 @@ def get_validation_review_source_group_records() -> int:
 
 def get_validation_review_model() -> str:
     """Model for supervisor review; empty keeps the supervisor's own model."""
-    return _get_env("VALIDATION_REVIEW_MODEL", "gpt-6.1-sol").strip()
+    from src.lib.config.models_loader import resolve_model_id
+
+    # Review records name the model actually requested (ALL-1708).
+    return resolve_model_id(_get_env("VALIDATION_REVIEW_MODEL", "gpt-6.1-sol").strip())
 
 
 def get_validation_review_reasoning() -> str:
