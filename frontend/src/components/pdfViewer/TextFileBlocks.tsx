@@ -17,9 +17,10 @@ import type { DisplayBlock, DisplayTableRow } from './viewerFiles'
 /** Rows per part of a large table (a rendering constant; about 0.1 s for 500 rows of 8 cells). */
 export const TABLE_ROWS_PER_PART = 500
 /**
- * A part takes the rest of the table when fewer rows than this would be left, so a
- * "Show the next" button never offers fewer than 100 rows; a table of up to 600 rows
- * renders whole. Row counts include the header row, as a spreadsheet numbers it.
+ * A part takes the rest of the table when fewer rows than this would be left. So a table
+ * of up to 600 rows renders whole; "Show the next" always offers exactly 500 rows, and
+ * when the next part is the rest (500 to 599 rows) only "Show all" is offered. Row
+ * counts include the header row, as a spreadsheet numbers it.
  */
 export const TABLE_PART_MIN_REMAINDER = 100
 

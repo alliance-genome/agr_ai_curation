@@ -126,12 +126,13 @@ describe('TextFileBlocks: large tables in parts', () => {
     expect(renderedRows()).toHaveLength(1001)
   })
 
-  it('never offers fewer than 100 rows: a 1,100-row table ends on "Show the next 100 rows"', async () => {
+  it('"Show the next" always offers 500 rows: a 1,100-row table ends on one "Show all" button', async () => {
     const user = userEvent.setup()
     renderSheet(sheet(1099))
 
-    await user.click(screen.getByRole('button', { name: 'Show the next 500 rows' }))
     expect(screen.getByRole('button', { name: 'Show all 1,100 rows' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Show the next 500 rows' }))
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Show all 1,100 rows'])
     expect(renderedRows()).toHaveLength(1000)
   })
 

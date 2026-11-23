@@ -251,6 +251,34 @@ describe('P9b review fixes', () => {
       expect(document.querySelectorAll('tbody tr')).toHaveLength(7500)
     }, 20000)
 
+    it('a hover changes nothing in the header: the last click\'s message stays', async () => {
+      stubViewerFetch({ textBlocks: [TEXT_SUPPLEMENT_BLOCKS.blocks[0]!, longSheet(8999)] })
+      await showFourFilePaper()
+      const notFound = chatCommand({
+        verified_quote: 'A sentence that is not in this file.',
+        section: null,
+        file_id: TEXT_SUPPLEMENT_FILE_ID,
+        file_name: 'Table_S1.xlsx',
+      })
+      act(() => { dispatchPDFViewerNavigateEvidence(notFound) })
+      const header = (await screen.findByRole('alert')).textContent
+      expect(header).toBeTruthy()
+
+      const shownRow = twoRowRecord(['| XS10 | 25 C |', '| XS11 | 25 C |'])
+      const hiddenRow = twoRowRecord(['| XS7000 | 25 C |', '| XS7001 | 25 C |'])
+      for (const hover of [shownRow, hiddenRow]) {
+        act(() => { dispatchPDFViewerNavigateEvidence({ ...hover, mode: 'hover' }) })
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        expect(screen.getByRole('alert').textContent).toBe(header)
+        expect(screen.queryByText('Exact quote')).not.toBeInTheDocument()
+      }
+      // The hover ends: the curation workspace sends the click again; the chat sends nothing.
+      act(() => { dispatchPDFViewerNavigateEvidence(notFound) })
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(screen.getByRole('alert').textContent).toBe(header)
+      expect(document.querySelectorAll('tbody tr')).toHaveLength(500)
+    }, 20000)
+
     it('a section mark on a block after a long table, in a later section, is shown', async () => {
       stubViewerFetch({
         textBlocks: [
