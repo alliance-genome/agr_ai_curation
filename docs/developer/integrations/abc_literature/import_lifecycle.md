@@ -389,6 +389,11 @@ completed import job then carries one `left_out` entry per chosen file with
   job stays active until the curator cancels it (finalized at once by the
   dead-wait rule), a delete ends it, or the stale sweep fails it. The paper
   stays completed and usable throughout.
+  When the dead-wait cancel or the stale sweep finalizes the stage job, every
+  entry of `metadata.supplements` not yet ended is closed in the same
+  transaction as `left_out`: `import_cancelled` for a cancel,
+  `supplement_stage_failed` for the sweep. Ended entries are kept, so a reader
+  never meets an open entry on an ended job.
 - **Shutdown.** The backend cancels running stages at shutdown, with the same
   outcome as a restart.
 - **Unexpected failure.** If the stage itself fails, every file still open ends as
