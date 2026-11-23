@@ -2767,7 +2767,7 @@ def test_serialize_message_omits_internal_flow_summary_payload_keys():
     }
 
 
-@pytest.mark.parametrize(("role", "message_type"), [("flow", chat.FLOW_SUMMARY_MESSAGE_TYPE), ("assistant", "text")])
+@pytest.mark.parametrize(("role", "message_type"), [("flow", chat_common.FLOW_SUMMARY_MESSAGE_TYPE), ("assistant", "text")])
 def test_serialize_message_projects_each_chat_table_set_aside_receipt(role, message_type):
     def chat_table(text, formatter, receipt):
         return {"type": "CHAT_OUTPUT_READY", "details": {
@@ -2782,7 +2782,7 @@ def test_serialize_message_projects_each_chat_table_set_aside_receipt(role, mess
         message_id=uuid4(), session_id="session", chat_kind=ASSISTANT_CHAT_KIND, turn_id="turn",
         role=role, message_type=message_type, content="First 🧪 table\n\nUnreviewed table\n\nLast table\n\nOld",
         trace_id=None, created_at=_ts(9, 32),
-        payload_json={chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: [
+        payload_json={chat_common._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: [
             {"type": "FILE_READY", "details": {"filename": "separate-file.tsv"}},
             chat_table("First 🧪 table", "first", first),
             {"type": "CHAT_OUTPUT_READY", "details": {"output": "Unreviewed table"}},
@@ -2792,7 +2792,7 @@ def test_serialize_message_projects_each_chat_table_set_aside_receipt(role, mess
         ]},
     )
 
-    assert chat._serialize_message(record).payload_json == {"set_aside_notices": [
+    assert chat_common._serialize_message(record).payload_json == {"set_aside_notices": [
         {"content_end_utf16": 14, "formatter_node_id": "first", "flow_run_id": "run", "document_id": "doc",
          "set_aside": first},
         {"content_end_utf16": 44, "formatter_node_id": "last", "flow_run_id": "run", "document_id": "doc",
