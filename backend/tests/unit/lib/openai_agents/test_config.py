@@ -2612,8 +2612,25 @@ def _clear_wait_settings(monkeypatch):
         "DOCUMENT_SOURCE_DEAD_WAIT_POLLS",
         "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS",
         "DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS",
+        "DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS",
     ):
         monkeypatch.delenv(name, raising=False)
+
+
+def test_supplement_wait_concurrency_default_override_and_minimum(monkeypatch):
+    from src.lib.openai_agents.config import (
+        DocumentSourceWaitSettingsError,
+        get_document_supplement_max_concurrent_waits,
+        validate_document_source_wait_settings,
+    )
+
+    _clear_wait_settings(monkeypatch)
+    assert get_document_supplement_max_concurrent_waits() == 10
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS", "3")
+    assert get_document_supplement_max_concurrent_waits() == 3
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS", "0")
+    with pytest.raises(DocumentSourceWaitSettingsError, match="DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS"):
+        validate_document_source_wait_settings()
 
 
 def test_supplement_wait_settings_defaults_and_overrides(monkeypatch):

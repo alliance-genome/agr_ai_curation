@@ -2142,6 +2142,15 @@ def get_document_supplement_add_reserve_seconds() -> float:
     return value
 
 
+def get_document_supplement_max_concurrent_waits() -> int:
+    """Most supplement waits running at once in one backend process; the rest queue."""
+    name = "DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS"
+    value = _get_env_int_with_fallback(name, 10)
+    if value < 1:
+        raise ValueError(f"{name} is {value}; it must be at least 1")
+    return value
+
+
 def validate_document_source_wait_settings() -> None:
     """Startup check: wait settings that would poll the provider unsafely fail the deploy.
 
@@ -2154,6 +2163,7 @@ def validate_document_source_wait_settings() -> None:
         dead_wait_polls = get_document_source_dead_wait_polls()
         supplement_wait_seconds = get_document_supplement_wait_timeout_seconds()
         add_reserve_seconds = get_document_supplement_add_reserve_seconds()
+        get_document_supplement_max_concurrent_waits()
     except ValueError as error:
         raise DocumentSourceWaitSettingsError(str(error)) from error
     for wait_name, wait_seconds in (
