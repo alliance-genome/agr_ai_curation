@@ -41,6 +41,14 @@ class FileReason(str, Enum):
     # The curator already has this paper: an import answers ``duplicate``; files are added
     # through that paper's own listing (``existing_document_id``).
     PAPER_ALREADY_IN_LIBRARY = "paper_already_in_library"
+    # The supplement is a PDF, and a PDF supplement is added as its PDF only from P7c2 on;
+    # until then the per-paper listing shows this and the add leaves the file out with it,
+    # so it is never stored as text. Written into add jobs' ``metadata.supplements``: P7c2
+    # stops writing it but keeps this member, so older jobs still load.
+    PDF_SUPPLEMENT_NOT_SUPPORTED_YET = "pdf_supplement_not_supported_yet"
+    # Per-paper listing only: the provider's main file is not the main this paper was made
+    # from (the provider replaced it). A paper's main is never added; listing code only.
+    MAIN_DIFFERS_FROM_PAPER = "main_differs_from_paper"
 
     # What the provider last told an import about a chosen file (P7b writes, P6f reads).
     # The provider's answer was final and the file had neither converted text nor a failure.
@@ -99,6 +107,8 @@ NOT_TICKABLE_REASONS: frozenset[FileReason] = frozenset({
     FileReason.ALREADY_IN_PAPER,
     FileReason.PAPER_NOT_IMPORTABLE,
     FileReason.PAPER_ALREADY_IN_LIBRARY,
+    FileReason.PDF_SUPPLEMENT_NOT_SUPPORTED_YET,
+    FileReason.MAIN_DIFFERS_FROM_PAPER,
 })
 
 PROVIDER_OBSERVATION_REASONS: frozenset[FileReason] = frozenset({
@@ -120,6 +130,8 @@ ADD_REFUSAL_REASONS: frozenset[FileReason] = CHECK_REASONS | frozenset({
     FileReason.MARKDOWN_INVALID,
     FileReason.PAPER_TEXT_LIMIT,
     FileReason.PAPER_FILE_LIMIT,
+    # Until P7c2 (then kept, never written, so older jobs still load).
+    FileReason.PDF_SUPPLEMENT_NOT_SUPPORTED_YET,
 })
 
 

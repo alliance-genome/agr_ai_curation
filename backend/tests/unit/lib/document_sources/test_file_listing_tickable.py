@@ -160,13 +160,61 @@ async def test_the_per_paper_route_never_marks_unconverted_files_tickable():
     assert ticks["10"] == (False, FileReason.ALREADY_IN_PAPER)
     assert ticks["20"] == (True, None)
     assert ticks["30"] == (False, FileReason.PROVIDER_NOT_CONVERTED_YET)
-    assert ticks["40"] == (False, FileReason.PROVIDER_NOT_CONVERTED_YET)
+    # A PDF supplement could not be added here even once converted (until P7c2).
+    assert ticks["40"] == (False, FileReason.PDF_SUPPLEMENT_NOT_SUPPORTED_YET)
+
+
+@pytest.mark.asyncio
+async def test_on_the_per_paper_listing_a_main_file_is_never_tickable():
+    # The paper's stored main is ABC's main: already in the paper.
+    listing, _ = await _listing(_wb_rows(_main_text(11)), route=ListingRoute.PAPER, in_paper=("10",))
+    assert _tick(listing)["10"] == (False, FileReason.ALREADY_IN_PAPER)
+    # ABC's main is now another file than the one the paper was made from: still never addable.
+    listing, _ = await _listing(_wb_rows(_main_text(11)), route=ListingRoute.PAPER, in_paper=("9",))
+    assert _tick(listing)["10"] == (False, FileReason.MAIN_DIFFERS_FROM_PAPER)
+    payload = {item["provider_file_id"]: item for item in listing_to_payload(listing)["files"]}
+    assert payload["10"]["not_tickable_reason"] == "main_differs_from_paper"
+
+
+@pytest.mark.asyncio
+async def test_on_the_identifier_listing_the_main_file_stays_tickable():
+    listing, _ = await _listing(_wb_rows(_main_text(11)))
+    assert _tick(listing)["10"] == (True, None)
 
 
 @pytest.mark.asyncio
 async def test_a_supplement_already_in_the_paper_is_not_tickable():
     listing, _ = await _listing(_wb_rows(_main_text(11)), route=ListingRoute.PAPER, in_paper=("10", "20"))
     assert _tick(listing)["20"] == (False, FileReason.ALREADY_IN_PAPER)
+
+
+@pytest.mark.asyncio
+async def test_a_converted_pdf_supplement_is_not_tickable_on_the_per_paper_listing_until_p7c2():
+    # Adding a PDF supplement as its PDF is P7c2; until then a hand add would take it as text.
+    rows = [*_wb_rows(_main_text(11)), *_pair(70, "WB", extension="pdf")]
+    listing, _ = await _listing(rows, route=ListingRoute.PAPER, in_paper=("10",), payloads={"71": GOOD_TABLE})
+    ticks = _tick(listing)
+    assert ticks["70"] == (False, FileReason.PDF_SUPPLEMENT_NOT_SUPPORTED_YET)
+    assert ticks["40"] == (False, FileReason.PDF_SUPPLEMENT_NOT_SUPPORTED_YET)  # unconverted PDF too
+    assert ticks["20"] == (True, None)  # a converted Excel supplement is unchanged
+    payload = listing_to_payload(listing)
+    entry = {item["provider_file_id"]: item for item in payload["files"]}["70"]
+    assert entry["not_tickable_reason"] == "pdf_supplement_not_supported_yet"
+
+
+@pytest.mark.asyncio
+async def test_a_pdf_supplement_already_in_the_paper_says_so_first():
+    rows = [*_wb_rows(_main_text(11)), *_pair(70, "WB", extension="pdf")]
+    listing, _ = await _listing(rows, route=ListingRoute.PAPER, in_paper=("10", "70"), payloads={"71": GOOD_TABLE})
+    assert _tick(listing)["70"] == (False, FileReason.ALREADY_IN_PAPER)
+
+
+@pytest.mark.asyncio
+async def test_the_identifier_listing_keeps_pdf_supplements_as_they_were():
+    # Only the per-paper listing feeds an add today; the identifier route is unchanged here.
+    rows = [*_wb_rows(_main_text(11)), *_pair(70, "WB", extension="pdf")]
+    listing, _ = await _listing(rows, payloads={"71": GOOD_TABLE})
+    assert _tick(listing)["70"] == (True, None)
 
 
 @pytest.mark.asyncio
@@ -185,9 +233,14 @@ async def test_a_converted_main_never_makes_an_unconverted_file_tickable(route, 
     """No request asks the provider for supplements of a converted paper (P7d is not part of P6f)."""
 
     listing, _ = await _listing(_wb_rows(_main_text(11)), route=route, bearer_kind=bearer_kind)
-    unconverted = [item for item in listing.files if item.provider_file_id in {"30", "40"}]
-    assert [item.tickable for item in unconverted] == [False, False]
-    assert {item.not_tickable_reason for item in unconverted} == {FileReason.PROVIDER_NOT_CONVERTED_YET}
+    unconverted = {item.provider_file_id: item for item in listing.files if item.provider_file_id in {"30", "40"}}
+    assert [item.tickable for item in unconverted.values()] == [False, False]
+    assert unconverted["30"].not_tickable_reason is FileReason.PROVIDER_NOT_CONVERTED_YET
+    # File 40 is a PDF: on the per-paper listing that reason comes first (until P7c2).
+    assert unconverted["40"].not_tickable_reason is (
+        FileReason.PDF_SUPPLEMENT_NOT_SUPPORTED_YET if route is ListingRoute.PAPER
+        else FileReason.PROVIDER_NOT_CONVERTED_YET
+    )
 
 
 @pytest.mark.asyncio
@@ -266,7 +319,8 @@ async def test_a_last_observation_is_shown_on_its_file_and_in_the_payload():
     }
     assert entries["30"]["last_provider_observation"] is None
     assert entries["40"]["tickable"] is False
-    assert entries["40"]["not_tickable_reason"] == "provider_not_converted_yet"
+    # File 40 is a PDF: on the per-paper listing that reason comes first (until P7c2).
+    assert entries["40"]["not_tickable_reason"] == "pdf_supplement_not_supported_yet"
     assert entries["20"]["tickable"] is True and entries["20"]["not_tickable_reason"] is None
 
 
