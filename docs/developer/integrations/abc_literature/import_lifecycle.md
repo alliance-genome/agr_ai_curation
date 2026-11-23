@@ -310,6 +310,63 @@ AI Curation does not attempt to cancel ABC Literature conversion work. Even when
 AI Curation initiated `conversion_request`, the ABC endpoint does not provide a
 cancel contract for this flow.
 
+## The Supplement Stage (KANBAN-1976 / ALL-1460, P7b)
+
+An import with chosen supplements runs its main paper exactly as an import
+without them. When the main paper is ready, the job, still active, enters stage
+`waiting_for_supplements`, and the paper stays `completed` and usable throughout.
+
+- **Its own task.** The stage runs as its own in-process task (kept referenced;
+  it inherits the import's cost and trace context), so the next paper of the
+  same request starts at once. At most `DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS`
+  (default 10) stages run at once in one process. Others queue, recording
+  activity at the poll interval, so neither the dead-wait cancel nor the stale
+  sweep takes them for dead.
+- **The wait.** It polls the main phase's own request, only while ABC answers
+  `running`, at `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS`, and records activity at
+  every poll. It re-lists the paper's files only when ABC reports a chosen file
+  converted, or when ABC's answer is final.
+- **When it ends.** At the first of:
+  - every chosen file classified;
+  - a final answer (the request is never sent after one);
+  - `DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS` (default 10,800 s) after the main
+    paper became ready (a queued stage's time counts too);
+  - the curator's login expiry minus `DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS`
+    (default 900 s);
+  - the first provider error (no retries);
+  - a cancel;
+  - the job made terminal elsewhere (a dead-wait cancel): nothing more is written
+    then.
+- **Then.** The stage (`adding_supplements`) adds the converted files with one
+  `add_files_to_paper` call. Its checkpoint stops the add when the job is
+  cancel-requested or no longer active. The job then completes.
+- **Progress.** `metadata.supplements` (state from `SupplementState`, reason codes
+  from `PROVIDER_OBSERVATION_REASONS` or the add's own codes) and
+  `metadata.supplement_wait_ends_at`.
+- **Restart.** A restart or deploy ends the stage; it is not resumed. The job
+  stays active until the curator cancels it (finalized at once by the dead-wait
+  rule) or the stale sweep fails it. The paper stays completed and usable; the
+  files not added can be added later from the Library.
+- **Shutdown.** The backend cancels running stages at shutdown, with the same
+  outcome as a restart.
+- **Unexpected failure.** If the stage itself fails, the job ends failed with a
+  named message ("The main paper is ready, but adding its supplements failed.
+  You can add them later from the Library.", proposed wording), and one Sentry
+  event is sent (see `SENTRY_OBSERVABILITY.md`).
+
+**An expired curator login** is a named failure (`DocumentSourceLoginExpired`):
+- ABC's 401 on the conversion request, the listing, the checksum lookup or a
+  download becomes it;
+- a paper queued behind others whose login is inside the add reserve fails with
+  it before any request to ABC;
+- the job message is "Your sign-in expired before this import finished. Sign in
+  again, then import the paper again." (proposed wording), with no Sentry event.
+
+`supplement_wait_active(session, document_id)` (in `pdf_jobs/service.py`) is true
+while a living import waits for this paper's supplements. It uses the dead-wait
+liveness test, and a job asked to stop does not count. The reading outline reads
+it.
+
 ## Classifying An Answer For Chosen Supplements
 
 `classify_conversion_answer` (`backend/src/lib/document_sources/supplement_wait.py`)

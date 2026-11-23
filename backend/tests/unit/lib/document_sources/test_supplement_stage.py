@@ -528,3 +528,28 @@ async def test_the_stage_task_inherits_the_import_cost_context(job):
     await task
 
     assert seen == [JOB_ID]
+
+
+@pytest.mark.asyncio
+async def test_the_stage_failure_report_carries_no_paper_or_curator_content(job, monkeypatch):
+    """The Sentry contract: a fixed, chain-free message and a type-name tag only."""
+
+    reported = []
+    monkeypatch.setattr(
+        stage, "report_runtime_exception",
+        lambda exc, **kwargs: reported.append((exc, kwargs)),
+    )
+    secret_title = "Private paper title about made-up-gene-1"
+    secret_token = "curator-token-" + "0123456789"
+
+    async def _boom():
+        raise RuntimeError(f"{secret_title} {secret_token}")
+
+    await stage.start_supplement_stage(job_id=JOB_ID, run=_boom, outcomes=_Outcomes())
+
+    (exc, kwargs), = reported
+    assert str(exc) == "Supplement stage failed"
+    assert exc.__cause__ is None and exc.__context__ is None
+    assert kwargs["tags"] == {"failure_type": "RuntimeError"}
+    flattened = repr((str(exc), kwargs))
+    assert secret_title not in flattened and secret_token not in flattened
