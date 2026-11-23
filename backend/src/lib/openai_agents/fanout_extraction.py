@@ -34,6 +34,8 @@ model (AGENTS.md section 8):
 from __future__ import annotations
 
 import asyncio
+
+from agr_ai_curation_runtime.document_errors import FILES_CHANGED_ERROR_CODE
 import json
 import logging
 import math
@@ -1227,6 +1229,10 @@ class FanoutExtraction:
         finally:
             if token is not None:
                 ACTIVE_HISTORY.reset(token)
+        if isinstance(raw, dict) and raw.get("error_code") == FILES_CHANGED_ERROR_CODE:
+            # Withheld because the paper's files changed: never shared with later
+            # writers; the next writer that cites this chunk reads it again.
+            self._chunk_views.pop(chunk_index, None)
         call = ResponseFunctionToolCall(
             type="function_call", call_id=call_id, name=_tool_name(tool), arguments=arguments,
         )

@@ -50,6 +50,7 @@ def identity_function_tool(monkeypatch):
     )
     monkeypatch.setattr(weaviate_search, "record_files_shown", AsyncMock())
     monkeypatch.setattr(weaviate_search, "retain_issued_spans", AsyncMock())
+    # Search hits are reported to the call's source binding, which this test replaces.
     monkeypatch.setattr(weaviate_search, "function_tool", _identity_function_tool)
     monkeypatch.setattr(record_evidence, "function_tool", _identity_function_tool)
     monkeypatch.setattr(evidence_workspace, "function_tool", _identity_function_tool)

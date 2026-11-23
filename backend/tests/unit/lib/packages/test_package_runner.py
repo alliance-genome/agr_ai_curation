@@ -1282,7 +1282,7 @@ def _write_fake_weaviate_backend(tmp_path: Path) -> Path:
         """from contextlib import asynccontextmanager
 
 @asynccontextmanager
-async def document_reference_scope(document_id, user_id):
+async def document_reference_scope(document_id, user_id, *, tool_name, call_id):
     assert document_id == "doc-42" and user_id == "user-9"
     yield
 

@@ -13,11 +13,12 @@ from dataclasses import dataclass, field
 from copy import deepcopy
 import hashlib
 import json
+import logging
 from uuid import UUID, uuid4
 
 from sqlalchemy import select, text
 
-from agr_ai_curation_runtime.document_errors import DocumentReadError
+from agr_ai_curation_runtime.document_errors import DocumentFilesChanged, DocumentReadError
 from agr_ai_curation_runtime.document_references import DocumentSelection
 from agr_ai_curation_runtime.evidence_spans import resolve_evidence_span_id
 from src.lib.context import get_current_session_id, get_current_trace_id, get_current_user_id
@@ -34,12 +35,13 @@ from src.models.sql.agent_run_history import AgentHistoryEvent, AgentHistoryPayl
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.user import User
-from .run_history import ACTIVE_HISTORY, HistoryScope, HistoryStore, exact_json
+from .run_history import ACTIVE_HISTORY, HistoryScope, HistoryStore, exact_json, record_runtime_payload
 from .tool_surface import canonical_tool_name
 
 _SOURCE_KIND = "document_source_binding"
 _SPAN_KIND = "document_span_binding"
 _WINDOW_KIND = "document_span_window"
+logger = logging.getLogger(__name__)
 _ACTIVE_SOURCE: ContextVar["SourceBinding | None"] = ContextVar("document_source_binding", default=None)
 
 
@@ -120,6 +122,11 @@ class SourceBinding:
     # The files this tool call may read, resolved with the generation check.
     readable: ReadableFiles
     staged_updates: list[tuple[dict, dict, dict]] = field(default_factory=list)
+    # Chunk indexes whose text this call showed or used (reads, search hits,
+    # evidence selections), all through ``note_shown``. The end-of-call check needs
+    # to know whether any came from a file that stopped being readable, and their
+    # files become the call's files-read row once the call stands (``record_files_read``).
+    shown_chunk_indexes: set[int] = field(default_factory=set)
 
     def stage_update(self, target: dict, replacement: dict) -> None:
         self.staged_updates.append((target, deepcopy(target), deepcopy(replacement)))
@@ -165,6 +172,7 @@ class SourceBinding:
                 raise DocumentReferenceError("Issued window contains an undefined span")
             previous = definitions.get(index, (definition, set()))[1]
             definitions[index] = (definition, previous | set(issued_indexes))
+        self.note_shown(definitions)
         with self._locked_transaction() as db:
             defined = {}
             issued = {}
@@ -184,7 +192,6 @@ class SourceBinding:
                 if added:
                     # Retain each definition once; later reads add only ordinal coverage.
                     self.append(_WINDOW_KIND, {"chunk_index": index, "issued_indexes": sorted(added)}, db=db)
-            self._record_files_read(definitions, db=db)
 
     @contextmanager
     def _locked_transaction(self):
@@ -199,39 +206,62 @@ class SourceBinding:
             self.pin_generation(db=db)
             yield db
 
-    def record_files_shown(self, chunk_indexes: list[int]) -> None:
-        """Record the files of pieces shown to the model without issuing spans (search hits).
+    def note_shown(self, chunk_indexes) -> None:
+        """Pieces whose text this call shows the model: reads, search hits, evidence selections.
 
         Search snippets are not evidence, so nothing becomes selectable; the files
         whose text the model saw still count as read (ALL-1460, Q2).
         """
-        if not chunk_indexes:
+        self.shown_chunk_indexes.update(int(index) for index in chunk_indexes)
+
+    def record_files_read(self) -> None:
+        """Write the files-read row for the pieces this call showed, once the call stands.
+
+        Runs after the end-of-call check, so a call that is withheld (files changed),
+        fails, or ends the run leaves no row. Span issuance (``retain``) stays immediate.
+        """
+        if not self.shown_chunk_indexes:
+            return
+        # Files-read rows are append-only, so a file already in this invocation's
+        # records (re-read under the lock by ``retain``, or loaded with the binding)
+        # stays recorded: skip the locked scan when every shown file is there.
+        if {self._shown_file(index).file_id for index in self.shown_chunk_indexes} <= self._files_recorded():
             return
         with self._locked_transaction() as db:
-            self._record_files_read(chunk_indexes, db=db)
+            self._record_files_read(sorted(self.shown_chunk_indexes), db=db)
 
-    def _record_files_read(self, chunk_indexes, *, db) -> None:
-        """Record the files these pieces belong to that the invocation had not been shown.
+    def _shown_file(self, index: int):
+        file = self.readable.file_for(index)
+        if file is None:
+            raise DocumentReferenceError("A shown chunk is not part of a readable file")
+        return file
 
-        One row per newly shown set of files (ALL-1460, Q8), so a long run writes at
-        most one row per file per invocation, in the read's own transaction. The
-        "already shown" set comes from the bindings scanned under the same lock.
-        Every agent run with history enabled has its own invocation; with history
-        disabled each tool call gets a fresh one, so each read then writes a row.
-        """
-        shown: dict[str, str] = {}
-        for index in chunk_indexes:
-            file = self.readable.file_for(index)
-            if file is None:
-                raise DocumentReferenceError("A shown chunk is not part of a readable file")
-            shown.setdefault(file.file_id, file.display_name)
+    def _files_recorded(self) -> set[str]:
+        """The files this invocation's files-read records name, from ``self.records``."""
         invocation_id = self.history_scope.invocation_id
-        already = {
+        return {
             entry["file_id"]
             for record in self.records
             if record["kind"] == FILES_READ_KIND and record["invocation_id"] == invocation_id
             for entry in record["files"]
         }
+
+    def _record_files_read(self, chunk_indexes, *, db) -> None:
+        """Record the files these pieces belong to that the invocation had not been shown.
+
+        One row per newly shown set of files (ALL-1460, Q8), so a long run writes at
+        most one row per file per invocation, written by ``record_files_read`` once the
+        call stands. The "already shown" set comes from the bindings scanned under the
+        same lock.
+        Every agent run with history enabled has its own invocation; with history
+        disabled each tool call gets a fresh one, so each read then writes a row.
+        """
+        shown: dict[str, str] = {}
+        for index in chunk_indexes:
+            file = self._shown_file(index)
+            shown.setdefault(file.file_id, file.display_name)
+        invocation_id = self.history_scope.invocation_id
+        already = self._files_recorded()
         new_files = [
             {"file_id": file_id, "file_name": name}
             for file_id, name in shown.items()
@@ -307,14 +337,39 @@ def _load_source_binding(document_id: str, user_id: str, scope: HistoryScope, st
 
 
 def _verify_source_generation(binding: SourceBinding) -> None:
+    """The end-of-call check: the paper is the one the call read, and so is every file it showed.
+
+    - A new generation (the paper reprocessed, deleted or not completed) is terminal.
+    - Readable files only added (an add or a supplement wait finishing): the call's
+      text is still right; the result stands and the next call sees the new files.
+    - A file the call could read stopped being readable (removed, or no longer
+      ready): terminal if the call showed text from it; otherwise the call is
+      withheld with a recoverable answer (``DocumentFilesChanged``).
+    """
     with SessionLocal() as db:
         if _generation(db, binding.document_id, binding.user_id) != binding.generation:
             raise DocumentReferenceError("Document changed while reading or verifying source")
-        # A file that became readable during the call is harmless; one the call
-        # could read that stopped being readable (removed, or no longer ready) is not.
         now_readable = set(readable_files_in_session(db, binding.document_id, binding.user_id).fingerprint)
-        if not set(binding.readable.fingerprint) <= now_readable:
-            raise DocumentReferenceError("A readable file changed while reading or verifying source")
+    gone = [
+        file for file in binding.readable.files
+        if (file.file_id, file.chunk_index_start, file.chunk_index_end) not in now_readable
+    ]
+    if not gone:
+        return
+    if any(file.contains(index) for file in gone for index in binding.shown_chunk_indexes):
+        raise DocumentReferenceError("A readable file changed while reading or verifying source")
+    raise DocumentFilesChanged()
+
+
+def _files_changed_only(binding: SourceBinding) -> None:
+    """After a failed fetch: raise ``DocumentFilesChanged`` only if a readable file the
+    call showed nothing from is gone; otherwise return and let the read failure stand."""
+    try:
+        _verify_source_generation(binding)
+    except DocumentFilesChanged:
+        raise
+    except DocumentReferenceError:
+        return
 
 
 async def _finish(task):
@@ -330,7 +385,7 @@ async def _finish(task):
 
 
 @asynccontextmanager
-async def document_reference_scope(document_id: str, user_id: str):
+async def document_reference_scope(document_id: str, user_id: str, *, tool_name: str, call_id: str):
     owner, run_id, session_id = get_current_user_id(), get_current_trace_id(), get_current_session_id()
     if not owner or owner != user_id or not run_id:
         raise DocumentReadError("document_reference") from DocumentReferenceError("Missing authenticated source scope")
@@ -349,13 +404,35 @@ async def document_reference_scope(document_id: str, user_id: str):
         if cancelled:
             raise asyncio.CancelledError
         token = _ACTIVE_SOURCE.set(binding)
-        yield binding
+        try:
+            yield binding
+        except DocumentReadError:
+            # A fetch can fail because its file stopped being readable during the call
+            # (a removal deletes the file's row, then its pieces). The readable-files
+            # comparison decides, never the error: a file gone that the call showed
+            # nothing from is "files changed"; anything else stays the failed read.
+            _, cancelled = await _finish(asyncio.create_task(asyncio.to_thread(_files_changed_only, binding)))
+            if cancelled:
+                raise asyncio.CancelledError
+            raise
         # Ingestion commits processing status before changing Weaviate, then a
         # new completion timestamp. Check both sides of the read/verify operation.
         _, cancelled = await _finish(asyncio.create_task(asyncio.to_thread(_verify_source_generation, binding)))
         if cancelled:
             raise asyncio.CancelledError
+        # Before the evidence update takes effect: a failed write saves no evidence.
+        _, cancelled = await _finish(asyncio.create_task(asyncio.to_thread(binding.record_files_read)))
+        if cancelled:
+            raise asyncio.CancelledError
         binding.commit_updates()
+    except DocumentFilesChanged:
+        logger.info("Withheld a document tool call: the paper's readable files changed",
+                    extra={"document_id": document_id, "run_id": run_id, "tool_name": tool_name, "call_id": call_id})
+        # Ids only, never text: a trace ties the event to the withheld call.
+        await record_runtime_payload("document_files_changed", {
+            "document_id": document_id, "tool_name": tool_name, "call_id": call_id},
+            tool_name=tool_name, call_id=call_id)
+        raise
     except DocumentReadError:
         raise
     except Exception as exc:
@@ -382,11 +459,14 @@ async def retain_issued_spans(reads: list[tuple[dict, list[dict], list[int]]]) -
 
 
 async def record_files_shown(chunk_indexes: list[int]) -> None:
-    """Record the files of pieces a tool showed without issuing spans (search hits)."""
+    """Pieces a tool showed without issuing spans (search hits, recorded quotes).
+
+    Their files count as read when the call stands; see ``SourceBinding.record_files_read``.
+    """
     binding = _ACTIVE_SOURCE.get()
     if binding is None:
         raise DocumentReferenceError("Missing source binding")
-    await asyncio.to_thread(binding.record_files_shown, chunk_indexes)
+    binding.note_shown(chunk_indexes)
 
 
 def stage_evidence_update(target: dict, replacement: dict) -> None:
