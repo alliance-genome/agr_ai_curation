@@ -53,6 +53,17 @@ def _assert_nullable_protected_viewer_url(viewer_url: Dict[str, Any]) -> None:
         assert "/uploads" not in pattern
 
 
+def _assert_positive_file_size_or_null(file_size: Dict[str, Any]) -> None:
+    """file_size is the main file's size in bytes, or null for a paper without a main file (P7a)."""
+    any_of = file_size.get("anyOf", [])
+    integer_schema = next((item for item in any_of if item.get("type") == "integer"), None)
+    null_schema = next((item for item in any_of if item.get("type") == "null"), None)
+    assert integer_schema is not None, "file_size must be an integer when the paper has a main file"
+    assert null_schema is not None, "file_size must allow null for a paper without a main file"
+    assert integer_schema.get("exclusiveMinimum") == 0
+    assert "maximum" not in integer_schema
+
+
 def test_pdf_viewer_list_contract():
     """Ensure OpenAPI contract matches the documented PDF list response."""
     schema = _load_openapi_schema()
@@ -98,6 +109,7 @@ def test_pdf_viewer_list_contract():
         "file_size",
         "upload_timestamp",
         "viewer_url",
+        "has_main_file",
     }
     assert expected_fields.issubset(doc_required), "Document summary missing required fields"
 
@@ -105,6 +117,4 @@ def test_pdf_viewer_list_contract():
         document_schema.get("properties", {}).get("viewer_url", {})
     )
 
-    file_size = document_schema.get("properties", {}).get("file_size", {})
-    assert file_size.get("exclusiveMinimum") == 0
-    assert "maximum" not in file_size
+    _assert_positive_file_size_or_null(document_schema.get("properties", {}).get("file_size", {}))
