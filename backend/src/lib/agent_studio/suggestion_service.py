@@ -292,7 +292,7 @@ Use this tool when:
 Always ask the user for confirmation before submitting unless they explicitly
 told you to submit suggestions automatically.
 
-The suggestion will be sent to the development team for review.""",
+The suggestion is recorded for the development team; the result says whether a notification was sent.""",
     "input_schema": {
         "type": "object",
         "properties": {

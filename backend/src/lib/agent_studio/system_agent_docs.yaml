@@ -32,9 +32,9 @@ curation_prep:
       description: "Checks that each item is complete and well-formed, and flags anything incomplete or uncertain before you open the review session."
       example_query: "Validate the candidate structure before opening the curation workspace"
       example_result: "Returns only the in-scope items, plus warnings where a field still needs your attention."
-    - name: "Flow-final curation handoff"
-      description: "Works best as the last step after extraction/validation agents have already gathered the evidence that should enter curation review"
-      example_query: "Use this as the final step after gene extraction and validation"
+    - name: "Internal step of the Curation Handoff Agent"
+      description: "Runs inside the Curation Handoff Agent step, which curators add as the last step of a flow; it is not offered in the flow palette on its own"
+      example_query: "Add the Curation Handoff Agent as the final step after gene extraction"
       example_result: "Hands the curator a review-ready session rather than acting like a standalone extractor or summarizer"
   limitations:
     - "Requires upstream extraction output and evidence records; it does not discover new evidence on its own"

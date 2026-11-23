@@ -1,31 +1,31 @@
-# Curator-facing documentation for the Disease Validation Agent.
-summary: "Confirms disease names against the Disease Ontology (DOID) and gives you the matching official disease term and its ID, so a disease annotation can be submitted with confidence."
+# Curator-facing documentation for the Disease Ontology Agent (agent_id disease_validation).
+summary: "Can look up Disease Ontology (DOID) terms by name, synonym, or ID, but is not used anywhere at present: no check attaches it and AI Chat cannot call it."
 capabilities:
   - name: "Disease name lookup"
-    description: "Find DOID identifiers for disease names using case-insensitive search"
-    example_query: "Look up Alzheimer's disease"
-    example_result: "Returns DOID:10652, name, definition, and synonyms"
+    description: "Finds the DOID for a disease name, ignoring capitalization"
+    example_query: "Alzheimer's disease"
+    example_result: "DOID:10652 with its name, definition, and synonyms"
   - name: "DOID lookup"
-    description: "Retrieve disease information by DOID identifier"
-    example_query: "What is DOID:14330?"
-    example_result: "Returns Parkinson's disease with definition and relationships"
+    description: "Retrieves a disease term by its DOID"
+    example_query: "DOID:14330"
+    example_result: "Parkinson's disease with its definition and synonyms"
   - name: "Synonym search"
-    description: "Find diseases by synonym names when the exact term is not found"
-    example_query: "Look up Alzheimers dementia"
-    example_result: "Finds DOID:10652 via synonym match"
+    description: "Finds a disease by one of its synonyms when the exact name does not match"
+    example_query: "Alzheimers dementia"
+    example_result: "DOID:10652 through a synonym match"
 data_sources:
   - name: "Alliance disease term records"
     description: "The Alliance's curated copy of the Disease Ontology — official disease names, their IDs, definitions, and synonyms."
     species_supported: null
     data_types: ["disease terms", "DOIDs", "definitions", "synonyms"]
-note: "The disease term itself is confirmed automatically by the ontology term check in the disease pack. This agent runs only as a domain-pack validation attachment; clone it in the Agent Workshop when you want a custom disease check with a changed prompt or different tools."
+# KANBAN-2166 / ALL-1649: the note and use_when below describe an agent nothing uses.
+# Revise both (and the summary) when the Disease Ontology Agent is attached, fixed or retired.
+note: "This agent is not used anywhere at present: no domain pack attaches it and AI Chat cannot call it, and a saved flow that has it as a step cannot run until that step is removed. The disease term on an extracted record is confirmed automatically by the Ontology Term Resolver Agent, and in chat you can look a disease up through that agent."
+# KANBAN-2166 / ALL-1649: revise this line when the agent is given a use or retired.
 use_when:
-  - "After any extractor that names a disease, on papers that assert a gene, allele, or model to disease link."
-  - "When you have a disease name, synonym, or DOID and want the official term and its definition."
-  - "Before curation handoff, so disease IDs are settled."
+  - "Not at present: nothing uses this agent."
 avoid_when:
-  - "For gene to disease associations; use the Gene Validation Agent."
-  - "For parent or child disease terms and obsolete history; use the Ontology Term Resolver Agent."
+  - "For gene to disease associations; those come from the Disease Extraction Agent, and the genes on its records are checked automatically by the Gene Validation Agent."
   - "For disease vocabularies other than the Disease Ontology."
   - "For disease prevalence or statistics."
 limitations:

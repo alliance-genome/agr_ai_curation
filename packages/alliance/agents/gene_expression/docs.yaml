@@ -14,7 +14,7 @@ capabilities:
     example_query: "Find tissues where the gene is not expressed"
     example_result: "Flags these as negative results — for example 'not detected in neurons'."
   - name: "Hands expression details to the validators"
-    description: "Retains each expression observation with its supporting quote. Active specialist validators check declared gene, tissue/cell-type, stage and provider fields. Reagent context is retained, but reagent, specimen and allele validation remain under development; a retained answer is not automatically confirmed."
+    description: "Retains each expression observation with its supporting quote. Active specialist validators check declared gene, source reference, tissue/cell-type, cellular component, stage, assay, relation, condition relation, experimental condition and provider fields. Reagent context is retained, but reagent, specimen and allele validation remain under development; a retained answer is not automatically confirmed."
     example_query: "Extract the expression observations and pass them on for confirmation"
     example_result: "Returns each expression observation with its supporting quote, ready for the validators to confirm the official terms"
 data_sources:

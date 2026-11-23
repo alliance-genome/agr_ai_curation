@@ -1191,7 +1191,7 @@ current repository checkout and never executes code.""",
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum number of matches to return.",
+                    "description": "Maximum number of matches to return; content searches stop at the server's configured result limit.",
                     "minimum": 1,
                     "maximum": 200,
                     "default": 20,

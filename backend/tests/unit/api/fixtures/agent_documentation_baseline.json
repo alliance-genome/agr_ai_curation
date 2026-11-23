@@ -1,8 +1,8 @@
 {
   "agm": {
     "avoid_when": [
-      "For gene or allele subjects; use the Gene Validation Agent or the Allele Validation Agent.",
-      "To pull model names out of a paper; run an extractor first and validate its output here."
+      "For gene or allele subjects; the Gene and Allele Validation Agents check those automatically.",
+      "To pull model names out of a paper; that is an extractor's job."
     ],
     "capabilities": [
       {
@@ -52,18 +52,16 @@
       "Cannot create missing model records or assign new provider identifiers.",
       "Only reports lookup evidence available from Alliance curation data."
     ],
-    "note": "Validation runs automatically on every disease record whose subject is a model. This check is not scheduled for phenotype records yet, and this agent runs only as a domain-pack validation attachment. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically on every disease record whose subject is a model. This check is not scheduled for phenotype records yet, and this agent runs only as a domain-pack validation attachment.",
     "summary": "Validates affected genomic model (AGM) subjects by matching supplied identifiers or labels to Alliance model-organism records.\n",
     "use_when": [
-      "After an extractor or a curation form supplies a strain, genotype, or other model subject that needs to match an Alliance model record.",
-      "When a paper's subject is a model (a strain, genotype, or fish line) rather than a single gene or allele.",
-      "Before curation handoff, so each model subject carries a confirmed Alliance identifier."
+      "When you want to review how a disease record's model subject (a strain, genotype, or fish line) is matched to an Alliance model record."
     ]
   },
   "agm_validation": {
     "avoid_when": [
-      "For gene or allele subjects; use the Gene Validation Agent or the Allele Validation Agent.",
-      "To pull model names out of a paper; run an extractor first and validate its output here."
+      "For gene or allele subjects; the Gene and Allele Validation Agents check those automatically.",
+      "To pull model names out of a paper; that is an extractor's job."
     ],
     "capabilities": [
       {
@@ -113,12 +111,10 @@
       "Cannot create missing model records or assign new provider identifiers.",
       "Only reports lookup evidence available from Alliance curation data."
     ],
-    "note": "Validation runs automatically on every disease record whose subject is a model. This check is not scheduled for phenotype records yet, and this agent runs only as a domain-pack validation attachment. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically on every disease record whose subject is a model. This check is not scheduled for phenotype records yet, and this agent runs only as a domain-pack validation attachment.",
     "summary": "Validates affected genomic model (AGM) subjects by matching supplied identifiers or labels to Alliance model-organism records.\n",
     "use_when": [
-      "After an extractor or a curation form supplies a strain, genotype, or other model subject that needs to match an Alliance model record.",
-      "When a paper's subject is a model (a strain, genotype, or fish line) rather than a single gene or allele.",
-      "Before curation handoff, so each model subject carries a confirmed Alliance identifier."
+      "When you want to review how a disease record's model subject (a strain, genotype, or fish line) is matched to an Alliance model record."
     ]
   },
   "allele_extractor": {
@@ -180,9 +176,9 @@
   },
   "allele_validation": {
     "avoid_when": [
-      "To get alleles validated in a flow; the domain pack already runs this check automatically on every allele an extractor produces.",
-      "For genes; use the Gene Validation Agent.",
-      "For diseases or phenotypes; use the Disease Ontology Agent or the phenotype validators.",
+      "To get alleles validated in a flow; the domain pack already runs this check automatically on the alleles in allele records and on the allele a disease record is about.",
+      "For genes; the Gene Validation Agent checks genes in gene, disease, gene expression, and GO records.",
+      "For disease or phenotype terms; the Ontology Term Resolver Agent checks those automatically.",
       "To find the alleles a paper studies; that is the Allele/Variant Extraction Agent's job."
     ],
     "capabilities": [
@@ -239,11 +235,10 @@
       "Allele symbols written with angle brackets are matched to their superscript form automatically \u2014 you don't need to reformat them.",
       "Very broad searches return at most 500 matches (100 by default), so narrow your search if you don't see the allele you expect."
     ],
-    "note": "Validation runs automatically. This check runs on every allele an extractor produces, including the allele a disease record is about, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically. This check runs on the alleles in allele records and on the allele a disease record is about, so you do not need to set it up yourself. A clone made in the Agent Workshop does not change this automatic check; you can attach your clone as the validator on an allele detail of your own Custom Output Structure, as long as the clone keeps this agent's answer format.",
     "summary": "Validates allele/variant identifiers against the Alliance Curation Database by symbol, ID, or gene association.",
     "use_when": [
-      "When you want a custom allele check: a changed prompt, different tools, or a stricter or looser match than the automatic check.",
-      "When you have an allele symbol or ID and want to confirm it exists and see the gene it belongs to.",
+      "When you want your own version of this check, with a changed prompt or different tools, to attach as the validator on an allele detail of a Custom Output Structure.",
       "When you want to review how alleles in extracted records are confirmed against Alliance records."
     ]
   },
@@ -348,7 +343,7 @@
       "Multiple results for common names (e.g., 'glucose' matches many stereoisomers) - selects most biologically relevant form",
       "Every answer comes from a fresh, live lookup against ChEBI \u2014 it never answers from memory."
     ],
-    "note": "This check does not run automatically yet. No domain pack includes chemical validation, so add this agent to your flow when you need ChEBI terms and IDs confirmed. Other checks declared by the domain packs run automatically.",
+    "note": "This check does not run automatically on extracted records. Chemicals inside an experimental condition are checked by the Experimental Condition Validation Agent; to confirm other ChEBI terms and IDs, add this agent to your flow or ask for it in chat. Checks that are switched on run automatically; some are still being built.",
     "summary": "Confirms chemical compound names against ChEBI (Chemical Entities of Biological Interest) and gives you the matching official ChEBI term and ID for a chemical annotation.",
     "use_when": [
       "After an extractor names a chemical, drug, or treatment compound that needs an official ChEBI term and ID.",
@@ -360,7 +355,7 @@
     "avoid_when": [
       "To get pick-list values validated; the domain pack already runs this check automatically on every disease, phenotype, and gene expression record an extractor produces.",
       "For ontology terms such as anatomy, life stage, or GO; use the Ontology Term Resolver Agent.",
-      "For genes, alleles, or diseases; use the matching validation agent.",
+      "For genes or alleles; the Gene Validation Agent checks genes in gene, disease, gene expression, and GO records, and the Allele Validation Agent checks the alleles in allele records and the allele a disease record is about.",
       "To decide whether a term is the biologically right choice for the paper; that judgment stays with you."
     ],
     "capabilities": [
@@ -372,7 +367,7 @@
       },
       {
         "description": "Resolves vocabulary terms from abbreviations or synonyms when the canonical term name was not supplied.\n",
-        "example_query": "Resolve abbreviation 'IDA' in the evidence code vocabulary",
+        "example_query": "Resolve the abbreviation a paper uses for a disease qualifier term",
         "example_result": "Returns the canonical vocabulary term or ambiguous candidates for curator review.\n",
         "name": "Abbreviation and synonym matching"
       },
@@ -403,19 +398,17 @@
       "Cannot create or update controlled vocabulary rows.",
       "Common abbreviations may produce ambiguous results unless the vocabulary is specified."
     ],
-    "note": "Validation runs automatically. This check runs on every pick-list value (relations, qualifiers, annotation types, condition relations) in the disease, phenotype, and gene expression records an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or a different term list.",
+    "note": "Validation runs automatically. This check runs on every pick-list value (relations, qualifiers, annotation types, condition relations) in the disease, phenotype, and gene expression records an extractor produces, so you do not need to set it up yourself.",
     "summary": "Validates controlled vocabulary terms by vocabulary name, term name, abbreviation, synonym, and obsolete state.\n",
     "use_when": [
-      "When you want a custom pick-list check: a changed prompt, a different term list, or a stricter or looser match than the automatic check.",
-      "When you have an abbreviation or synonym and want the official term name and its status.",
-      "When you want to review how pick-list values (evidence codes, relations, qualifiers) are matched against the Alliance list."
+      "When you want to review how pick-list values (relations, qualifiers, annotation types) are matched against the Alliance list."
     ]
   },
   "controlled_vocabulary_validation": {
     "avoid_when": [
       "To get pick-list values validated; the domain pack already runs this check automatically on every disease, phenotype, and gene expression record an extractor produces.",
       "For ontology terms such as anatomy, life stage, or GO; use the Ontology Term Resolver Agent.",
-      "For genes, alleles, or diseases; use the matching validation agent.",
+      "For genes or alleles; the Gene Validation Agent checks genes in gene, disease, gene expression, and GO records, and the Allele Validation Agent checks the alleles in allele records and the allele a disease record is about.",
       "To decide whether a term is the biologically right choice for the paper; that judgment stays with you."
     ],
     "capabilities": [
@@ -427,7 +420,7 @@
       },
       {
         "description": "Resolves vocabulary terms from abbreviations or synonyms when the canonical term name was not supplied.\n",
-        "example_query": "Resolve abbreviation 'IDA' in the evidence code vocabulary",
+        "example_query": "Resolve the abbreviation a paper uses for a disease qualifier term",
         "example_result": "Returns the canonical vocabulary term or ambiguous candidates for curator review.\n",
         "name": "Abbreviation and synonym matching"
       },
@@ -458,12 +451,10 @@
       "Cannot create or update controlled vocabulary rows.",
       "Common abbreviations may produce ambiguous results unless the vocabulary is specified."
     ],
-    "note": "Validation runs automatically. This check runs on every pick-list value (relations, qualifiers, annotation types, condition relations) in the disease, phenotype, and gene expression records an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or a different term list.",
+    "note": "Validation runs automatically. This check runs on every pick-list value (relations, qualifiers, annotation types, condition relations) in the disease, phenotype, and gene expression records an extractor produces, so you do not need to set it up yourself.",
     "summary": "Validates controlled vocabulary terms by vocabulary name, term name, abbreviation, synonym, and obsolete state.\n",
     "use_when": [
-      "When you want a custom pick-list check: a changed prompt, a different term list, or a stricter or looser match than the automatic check.",
-      "When you have an abbreviation or synonym and want the official term name and its status.",
-      "When you want to review how pick-list values (evidence codes, relations, qualifiers) are matched against the Alliance list."
+      "When you want to review how pick-list values (relations, qualifiers, annotation types) are matched against the Alliance list."
     ]
   },
   "csv_formatter": {
@@ -545,10 +536,10 @@
         "name": "Structural validation before handoff"
       },
       {
-        "description": "Works best as the last step after extraction/validation agents have already gathered the evidence that should enter curation review",
-        "example_query": "Use this as the final step after gene extraction and validation",
+        "description": "Runs inside the Curation Handoff Agent step, which curators add as the last step of a flow; it is not offered in the flow palette on its own",
+        "example_query": "Add the Curation Handoff Agent as the final step after gene extraction",
         "example_result": "Hands the curator a review-ready session rather than acting like a standalone extractor or summarizer",
-        "name": "Flow-final curation handoff"
+        "name": "Internal step of the Curation Handoff Agent"
       }
     ],
     "data_sources": [],
@@ -565,9 +556,9 @@
   "data_provider": {
     "avoid_when": [
       "To get providers validated; the domain pack already runs this check automatically on every disease and gene expression record an extractor produces.",
-      "To confirm gene, allele, or model identifiers; use the validation agent for that entity type.",
-      "For paper and citation lookups; use the Reference Validation Agent.",
-      "For pick-list terms or ontology terms; use the Controlled Vocabulary Validation Agent or the Ontology Term Resolver Agent."
+      "To confirm gene, allele, or model identifiers; the Gene and Allele Validation Agents check them on the kinds of record where that check is switched on, and the AGM Validation Agent checks the model a disease record is about.",
+      "For the reference on a record; the Reference Validation Agent checks it automatically on gene expression and GO records.",
+      "For pick-list terms or ontology terms; the Controlled Vocabulary Validation Agent and the Ontology Term Resolver Agent check those automatically."
     ],
     "capabilities": [
       {
@@ -617,20 +608,18 @@
       "Cannot create new provider records or taxon relationships.",
       "Provider-to-taxon checks are limited to relationships present in Alliance curation data."
     ],
-    "note": "Validation runs automatically. This check runs on the data provider of every disease and gene expression record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt.",
+    "note": "Validation runs automatically. This check runs on the data provider of every disease and gene expression record an extractor produces, so you do not need to set it up yourself.",
     "summary": "Validates Alliance data provider abbreviations, display names, and provider-to-taxon consistency for submitted curation records.\n",
     "use_when": [
-      "When you want a custom provider check: a changed prompt or a stricter or looser species match than the automatic check.",
-      "When you have a provider abbreviation and want to confirm it is a recognized Alliance provider.",
       "When you want to review how records are checked for a valid provider that matches their species."
     ]
   },
   "data_provider_validation": {
     "avoid_when": [
       "To get providers validated; the domain pack already runs this check automatically on every disease and gene expression record an extractor produces.",
-      "To confirm gene, allele, or model identifiers; use the validation agent for that entity type.",
-      "For paper and citation lookups; use the Reference Validation Agent.",
-      "For pick-list terms or ontology terms; use the Controlled Vocabulary Validation Agent or the Ontology Term Resolver Agent."
+      "To confirm gene, allele, or model identifiers; the Gene and Allele Validation Agents check them on the kinds of record where that check is switched on, and the AGM Validation Agent checks the model a disease record is about.",
+      "For the reference on a record; the Reference Validation Agent checks it automatically on gene expression and GO records.",
+      "For pick-list terms or ontology terms; the Controlled Vocabulary Validation Agent and the Ontology Term Resolver Agent check those automatically."
     ],
     "capabilities": [
       {
@@ -680,18 +669,16 @@
       "Cannot create new provider records or taxon relationships.",
       "Provider-to-taxon checks are limited to relationships present in Alliance curation data."
     ],
-    "note": "Validation runs automatically. This check runs on the data provider of every disease and gene expression record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt.",
+    "note": "Validation runs automatically. This check runs on the data provider of every disease and gene expression record an extractor produces, so you do not need to set it up yourself.",
     "summary": "Validates Alliance data provider abbreviations, display names, and provider-to-taxon consistency for submitted curation records.\n",
     "use_when": [
-      "When you want a custom provider check: a changed prompt or a stricter or looser species match than the automatic check.",
-      "When you have a provider abbreviation and want to confirm it is a recognized Alliance provider.",
       "When you want to review how records are checked for a valid provider that matches their species."
     ]
   },
   "disease_extractor": {
     "avoid_when": [
       "To confirm disease terms against the Disease Ontology; the domain pack's validators do that automatically on everything this agent extracts.",
-      "To look a disease up on its own, outside a paper; use the Disease Ontology Agent.",
+      "To look a disease up on its own, outside a paper; use the Ontology Term Resolver Agent.",
       "For observable traits in model organisms; those are phenotypes, so use the Phenotype Extraction Agent.",
       "When there is no uploaded paper, since it cannot work from chat text alone."
     ],
@@ -715,9 +702,9 @@
         "name": "Gene-disease association typing"
       },
       {
-        "description": "Retains paper wording, the subject kind, relation, provider and supporting quote. Active specialist validators check their assigned fields: the Disease Validation Agent confirms the disease term, and subject validation routes separately to the gene, allele or affected-genomic-model validator. Unresolved checks remain visible for review.",
+        "description": "Retains paper wording, the subject kind, relation, provider and supporting quote. Active specialist validators check their assigned fields: the Ontology Term Resolver Agent confirms the disease term and the evidence codes, and subject validation routes separately to the gene, allele or affected-genomic-model validator. Unresolved checks remain visible for review.",
         "example_query": "Extract the diseases and pass them on for confirmation",
-        "example_result": "Returns each proposed disease, its relationship, provider, and subject, with the supporting quote, ready for the Disease Validation Agent to confirm",
+        "example_result": "Returns each proposed disease, its relationship, provider, and subject, with the supporting quote, ready for the Ontology Term Resolver Agent to confirm the disease term",
         "name": "Hands diseases to the validator"
       }
     ],
@@ -749,28 +736,27 @@
   },
   "disease_validation": {
     "avoid_when": [
-      "For gene to disease associations; use the Gene Validation Agent.",
-      "For parent or child disease terms and obsolete history; use the Ontology Term Resolver Agent.",
+      "For gene to disease associations; those come from the Disease Extraction Agent, and the genes on its records are checked automatically by the Gene Validation Agent.",
       "For disease vocabularies other than the Disease Ontology.",
       "For disease prevalence or statistics."
     ],
     "capabilities": [
       {
-        "description": "Find DOID identifiers for disease names using case-insensitive search",
-        "example_query": "Look up Alzheimer's disease",
-        "example_result": "Returns DOID:10652, name, definition, and synonyms",
+        "description": "Finds the DOID for a disease name, ignoring capitalization",
+        "example_query": "Alzheimer's disease",
+        "example_result": "DOID:10652 with its name, definition, and synonyms",
         "name": "Disease name lookup"
       },
       {
-        "description": "Retrieve disease information by DOID identifier",
-        "example_query": "What is DOID:14330?",
-        "example_result": "Returns Parkinson's disease with definition and relationships",
+        "description": "Retrieves a disease term by its DOID",
+        "example_query": "DOID:14330",
+        "example_result": "Parkinson's disease with its definition and synonyms",
         "name": "DOID lookup"
       },
       {
-        "description": "Find diseases by synonym names when the exact term is not found",
-        "example_query": "Look up Alzheimers dementia",
-        "example_result": "Finds DOID:10652 via synonym match",
+        "description": "Finds a disease by one of its synonyms when the exact name does not match",
+        "example_query": "Alzheimers dementia",
+        "example_result": "DOID:10652 through a synonym match",
         "name": "Synonym search"
       }
     ],
@@ -791,12 +777,10 @@
       "Does not walk up or down the disease hierarchy (parent or child terms) and does not track a term's obsolete history.",
       "Every answer comes from a live lookup against the Alliance's disease terms \u2014 it never answers from memory."
     ],
-    "note": "The disease term itself is confirmed automatically by the ontology term check in the disease pack. This agent runs only as a domain-pack validation attachment; clone it in the Agent Workshop when you want a custom disease check with a changed prompt or different tools.",
-    "summary": "Confirms disease names against the Disease Ontology (DOID) and gives you the matching official disease term and its ID, so a disease annotation can be submitted with confidence.",
+    "note": "This agent is not used anywhere at present: no domain pack attaches it and AI Chat cannot call it, and a saved flow that has it as a step cannot run until that step is removed. The disease term on an extracted record is confirmed automatically by the Ontology Term Resolver Agent, and in chat you can look a disease up through that agent.",
+    "summary": "Can look up Disease Ontology (DOID) terms by name, synonym, or ID, but is not used anywhere at present: no check attaches it and AI Chat cannot call it.",
     "use_when": [
-      "After any extractor that names a disease, on papers that assert a gene, allele, or model to disease link.",
-      "When you have a disease name, synonym, or DOID and want the official term and its definition.",
-      "Before curation handoff, so disease IDs are settled."
+      "Not at present: nothing uses this agent."
     ]
   },
   "experimental_condition": {
@@ -854,11 +838,9 @@
       "Cannot create missing ontology, chemical, vocabulary, taxon, or provider records.",
       "Quantity and unit validation depends on the submitted field context and available vocabulary evidence."
     ],
-    "note": "Validation runs automatically. This check runs on every experimental condition in the disease, phenotype, and gene expression records an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically. This check runs on every experimental condition in the disease, phenotype, and gene expression records an extractor produces, so you do not need to set it up yourself.",
     "summary": "Validates composite Alliance experimental-condition payloads by checking ontology, chemical, taxon, vocabulary, quantity, and provider components together.\n",
     "use_when": [
-      "When you want a custom condition check: a changed prompt, extra tools, or a stricter or looser check on ontology terms, chemicals, or units.",
-      "When you have a condition (a treatment, temperature, chemical exposure, or diet) and want its parts checked together.",
       "When you want to review how conditions on disease, phenotype, and expression annotations are confirmed."
     ]
   },
@@ -917,11 +899,9 @@
       "Cannot create missing ontology, chemical, vocabulary, taxon, or provider records.",
       "Quantity and unit validation depends on the submitted field context and available vocabulary evidence."
     ],
-    "note": "Validation runs automatically. This check runs on every experimental condition in the disease, phenotype, and gene expression records an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically. This check runs on every experimental condition in the disease, phenotype, and gene expression records an extractor produces, so you do not need to set it up yourself.",
     "summary": "Validates composite Alliance experimental-condition payloads by checking ontology, chemical, taxon, vocabulary, quantity, and provider components together.\n",
     "use_when": [
-      "When you want a custom condition check: a changed prompt, extra tools, or a stricter or looser check on ontology terms, chemicals, or units.",
-      "When you have a condition (a treatment, temperature, chemical exposure, or diet) and want its parts checked together.",
       "When you want to review how conditions on disease, phenotype, and expression annotations are confirmed."
     ]
   },
@@ -951,7 +931,7 @@
         "name": "Negative Evidence Capture"
       },
       {
-        "description": "Retains each expression observation with its supporting quote. Active specialist validators check declared gene, tissue/cell-type, stage and provider fields. Reagent context is retained, but reagent, specimen and allele validation remain under development; a retained answer is not automatically confirmed.",
+        "description": "Retains each expression observation with its supporting quote. Active specialist validators check declared gene, source reference, tissue/cell-type, cellular component, stage, assay, relation, condition relation, experimental condition and provider fields. Reagent context is retained, but reagent, specimen and allele validation remain under development; a retained answer is not automatically confirmed.",
         "example_query": "Extract the expression observations and pass them on for confirmation",
         "example_result": "Returns each expression observation with its supporting quote, ready for the validators to confirm the official terms",
         "name": "Hands expression details to the validators"
@@ -1007,7 +987,7 @@
         "name": "Negative Evidence Capture"
       },
       {
-        "description": "Retains each expression observation with its supporting quote. Active specialist validators check declared gene, tissue/cell-type, stage and provider fields. Reagent context is retained, but reagent, specimen and allele validation remain under development; a retained answer is not automatically confirmed.",
+        "description": "Retains each expression observation with its supporting quote. Active specialist validators check declared gene, source reference, tissue/cell-type, cellular component, stage, assay, relation, condition relation, experimental condition and provider fields. Reagent context is retained, but reagent, specimen and allele validation remain under development; a retained answer is not automatically confirmed.",
         "example_query": "Extract the expression observations and pass them on for confirmation",
         "example_result": "Returns each expression observation with its supporting quote, ready for the validators to confirm the official terms",
         "name": "Hands expression details to the validators"
@@ -1135,7 +1115,7 @@
   "gene_ontology": {
     "avoid_when": [
       "For the GO annotations already recorded on a gene; use the Gene GO Annotations Agent.",
-      "To find which genes carry a given GO term; use the Gene GO Annotations Agent.",
+      "To find which genes carry a given GO term; no agent here looks that up, and the Gene GO Annotations Agent starts from a gene, not a term.",
       "For GO enrichment analysis, which no agent performs."
     ],
     "capabilities": [
@@ -1199,7 +1179,7 @@
   "gene_ontology_lookup": {
     "avoid_when": [
       "For the GO annotations already recorded on a gene; use the Gene GO Annotations Agent.",
-      "To find which genes carry a given GO term; use the Gene GO Annotations Agent.",
+      "To find which genes carry a given GO term; no agent here looks that up, and the Gene GO Annotations Agent starts from a gene, not a term.",
       "For GO enrichment analysis, which no agent performs."
     ],
     "capabilities": [
@@ -1262,9 +1242,9 @@
   },
   "gene_validation": {
     "avoid_when": [
-      "To get genes validated in a flow; the domain pack already runs this check automatically on the genes in every gene, disease, and gene expression record an extractor produces.",
-      "For alleles or variants; use the Allele Validation Agent.",
-      "For diseases, chemicals, or ontology terms; use the matching validation agent.",
+      "To get genes validated in a flow; the domain pack already runs this check automatically on the genes in every gene, disease, gene expression, and GO record an extractor produces.",
+      "For alleles or variants; the Allele Validation Agent checks the alleles in allele records and the allele a disease record is about.",
+      "For disease or other ontology terms; the Ontology Term Resolver Agent checks those automatically. For chemicals, use the Chemical Ontology Agent.",
       "To find the genes a paper studies; that is the Gene Extraction Agent's job."
     ],
     "capabilities": [
@@ -1306,12 +1286,11 @@
       "Only validates against Alliance group data",
       "Some newly published genes may not be in the database yet"
     ],
-    "note": "Validation runs automatically. This check runs on the genes in every gene, disease, and gene expression record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically. This check runs on the genes in every gene, disease, gene expression, and GO record an extractor produces, so you do not need to set it up yourself. A clone made in the Agent Workshop does not change this automatic check; you can attach your clone as the validator on a gene detail of your own Custom Output Structure, as long as the clone keeps this agent's answer format.",
     "summary": "Validates gene identifiers against the Alliance Curation Database.",
     "use_when": [
-      "When you want a custom gene check: a changed prompt, different tools, or a stricter or looser match than the automatic check.",
-      "When you have a gene symbol, name, or ID and want to confirm it exists and get its Alliance identifier.",
-      "When you want to review how genes in extracted records are confirmed, or need a confirmed gene ID before an ortholog lookup."
+      "When you want your own version of this check, with a changed prompt or different tools, to attach as the validator on a gene detail of a Custom Output Structure.",
+      "When you want to review how genes in extracted records are confirmed."
     ]
   },
   "go_annotations": {
@@ -1469,9 +1448,9 @@
   "ontology_term_validation": {
     "avoid_when": [
       "To get ontology terms validated; the domain pack already runs this check automatically on every term an extractor supplies.",
-      "For gene symbols; use the Gene Validation Agent.",
+      "For gene symbols; the Gene Validation Agent checks genes in gene, disease, gene expression, and GO records.",
       "For chemicals; use the Chemical Ontology Agent.",
-      "For fixed pick-list values such as evidence codes; use the Controlled Vocabulary Validation Agent.",
+      "For fixed pick-list values such as relations or qualifiers; the Controlled Vocabulary Validation Agent checks those automatically.",
       "To pull terms out of a paper; that is an extractor's job."
     ],
     "capabilities": [
@@ -1529,19 +1508,18 @@
       "Requires ontology_term_type for generic label or synonym lookup.",
       "Requires data_provider for provider-scoped anatomy and life-stage lookup."
     ],
-    "note": "Validation runs automatically. This check runs on every disease, phenotype, anatomy, life stage, assay, and evidence code term an extractor produces, so you do not need to add this agent to a flow. Clone it in the Agent Workshop when you want a custom version with a changed prompt or different tools.",
+    "note": "Validation runs automatically. This check runs on every disease, phenotype, anatomy, life stage, assay, cellular component, evidence code, and GO term an extractor produces, so you do not need to add this agent to a flow.",
     "summary": "Resolves exact ontology CURIEs and typed ontology-term labels with package lookup helpers while preserving ambiguous or unresolved candidates.\n",
     "use_when": [
-      "When you want a custom ontology check: a changed prompt, a different ontology, or a stricter or looser match than the automatic check.",
-      "When you have an exact ontology ID and want to confirm it is current, see its label, or browse its parent and child terms and obsolete history.",
+      "When you have an exact ontology ID and want to confirm it exists as a current term and see its label; obsolete terms are not returned.",
       "When you want to review how anatomy, life stage, GO, and other ontology wording in extracted records gets its official ID."
     ]
   },
   "orthologs": {
     "avoid_when": [
       "For paralogs (duplicated genes within one species), which the agent does not find.",
-      "When you only have a gene symbol; confirm it with the Gene Validation Agent first.",
-      "For GO annotations or disease links on the orthologs; use the Gene GO Annotations Agent or the Disease Ontology Agent."
+      "When you only have a gene symbol; it needs a gene ID, such as the one on a gene record an extractor produced.",
+      "For GO annotations on the orthologs; use the Gene GO Annotations Agent."
     ],
     "capabilities": [
       {
@@ -1592,7 +1570,7 @@
     ],
     "limitations": [
       "Gene ID must be in Alliance format with prefix (e.g., WB:WBGene00000898, not just WBGene00000898)",
-      "Needs a confirmed gene ID, not just a symbol \u2014 run the gene through the Gene Validation Agent first.",
+      "Needs a gene ID, not just a symbol.",
       "Some genes have no orthologs in certain species (this is valid biological data, not an error)"
     ],
     "note": "This lookup does not run automatically; add it to a flow or ask for it in chat when you need it.",
@@ -1606,8 +1584,8 @@
   "orthologs_lookup": {
     "avoid_when": [
       "For paralogs (duplicated genes within one species), which the agent does not find.",
-      "When you only have a gene symbol; confirm it with the Gene Validation Agent first.",
-      "For GO annotations or disease links on the orthologs; use the Gene GO Annotations Agent or the Disease Ontology Agent."
+      "When you only have a gene symbol; it needs a gene ID, such as the one on a gene record an extractor produced.",
+      "For GO annotations on the orthologs; use the Gene GO Annotations Agent."
     ],
     "capabilities": [
       {
@@ -1658,7 +1636,7 @@
     ],
     "limitations": [
       "Gene ID must be in Alliance format with prefix (e.g., WB:WBGene00000898, not just WBGene00000898)",
-      "Needs a confirmed gene ID, not just a symbol \u2014 run the gene through the Gene Validation Agent first.",
+      "Needs a gene ID, not just a symbol.",
       "Some genes have no orthologs in certain species (this is valid biological data, not an error)"
     ],
     "note": "This lookup does not run automatically; add it to a flow or ask for it in chat when you need it.",
@@ -1672,7 +1650,7 @@
   "pdf_extraction": {
     "avoid_when": [
       "To extract genes, alleles, diseases, phenotypes, or expression patterns for curation; use the matching extraction agent.",
-      "To confirm any identifier against a database; use a validation agent.",
+      "To confirm a single ontology term or chemical; use the Ontology Term Resolver Agent or the Chemical Ontology Agent. This agent's own records get no automatic check; only validators you attach to its output structure check them.",
       "For content inside figures beyond their captions."
     ],
     "capabilities": [
@@ -1709,8 +1687,7 @@
       }
     ],
     "limitations": [
-      "Document must be loaded in Weaviate before use",
-      "Very large tables may be truncated",
+      "A paper must be loaded and processed before this agent can read it",
       "Figure analysis is limited to captions only"
     ],
     "note": "",
@@ -1782,9 +1759,9 @@
   },
   "reference": {
     "avoid_when": [
-      "To get the reference on a gene expression record validated; the domain pack already runs this check automatically.",
+      "To get the reference on a gene expression or GO record validated; the domain pack already runs this check automatically.",
       "To read or summarize the paper's content; use the General PDF Extraction Agent.",
-      "To confirm the genes, alleles, or diseases the paper reports; use the matching validation agent.",
+      "To confirm the genes, alleles, or disease terms the paper reports; their own validators check them on the kinds of record where that check is switched on.",
       "To add a paper that is missing from the Alliance literature database."
     ],
     "capabilities": [
@@ -1802,7 +1779,7 @@
       },
       {
         "description": "Preserves lookup evidence for source_reference fields used by downstream curation payloads.\n",
-        "example_query": "Validate the source reference for this allele association",
+        "example_query": "Validate the source reference for this gene expression annotation",
         "example_result": "Returns a per-reference result with matched CURIE, identifier evidence, and unresolved notes.\n",
         "name": "Source-reference materialization"
       }
@@ -1828,19 +1805,18 @@
       "Cannot create missing literature records or correct external reference metadata.",
       "Lookup quality depends on the Alliance literature service and indexed reference metadata."
     ],
-    "note": "Validation runs automatically. This check runs on the reference of every gene expression record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt.",
+    "note": "Validation runs automatically. This check runs on the reference of every gene expression and GO record an extractor produces, so you do not need to set it up yourself. A clone made in the Agent Workshop does not change this automatic check; you can attach your clone as the validator on a reference detail of your own Custom Output Structure, as long as the clone keeps this agent's answer format.",
     "summary": "Resolves source-paper references by PMID, DOI, AGRKB CURIE, MOD reference ID, title, or citation text through Alliance literature lookup.\n",
     "use_when": [
-      "When you want a custom reference check: a changed prompt or a stricter or looser match against the Alliance literature database.",
-      "When you have a PMID, DOI, Alliance reference ID, MOD reference ID, title, or citation text and want the matching Alliance literature record.",
+      "When you want your own version of this check, with a changed prompt, to attach as the validator on a reference detail of a Custom Output Structure.",
       "When you want to review how annotations are tied to a confirmed reference."
     ]
   },
   "reference_validation": {
     "avoid_when": [
-      "To get the reference on a gene expression record validated; the domain pack already runs this check automatically.",
+      "To get the reference on a gene expression or GO record validated; the domain pack already runs this check automatically.",
       "To read or summarize the paper's content; use the General PDF Extraction Agent.",
-      "To confirm the genes, alleles, or diseases the paper reports; use the matching validation agent.",
+      "To confirm the genes, alleles, or disease terms the paper reports; their own validators check them on the kinds of record where that check is switched on.",
       "To add a paper that is missing from the Alliance literature database."
     ],
     "capabilities": [
@@ -1858,7 +1834,7 @@
       },
       {
         "description": "Preserves lookup evidence for source_reference fields used by downstream curation payloads.\n",
-        "example_query": "Validate the source reference for this allele association",
+        "example_query": "Validate the source reference for this gene expression annotation",
         "example_result": "Returns a per-reference result with matched CURIE, identifier evidence, and unresolved notes.\n",
         "name": "Source-reference materialization"
       }
@@ -1884,11 +1860,10 @@
       "Cannot create missing literature records or correct external reference metadata.",
       "Lookup quality depends on the Alliance literature service and indexed reference metadata."
     ],
-    "note": "Validation runs automatically. This check runs on the reference of every gene expression record an extractor produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt.",
+    "note": "Validation runs automatically. This check runs on the reference of every gene expression and GO record an extractor produces, so you do not need to set it up yourself. A clone made in the Agent Workshop does not change this automatic check; you can attach your clone as the validator on a reference detail of your own Custom Output Structure, as long as the clone keeps this agent's answer format.",
     "summary": "Resolves source-paper references by PMID, DOI, AGRKB CURIE, MOD reference ID, title, or citation text through Alliance literature lookup.\n",
     "use_when": [
-      "When you want a custom reference check: a changed prompt or a stricter or looser match against the Alliance literature database.",
-      "When you have a PMID, DOI, Alliance reference ID, MOD reference ID, title, or citation text and want the matching Alliance literature record.",
+      "When you want your own version of this check, with a changed prompt, to attach as the validator on a reference detail of a Custom Output Structure.",
       "When you want to review how annotations are tied to a confirmed reference."
     ]
   },
@@ -1926,10 +1901,9 @@
       "Runs automatically only for authenticated RGD group context through the GO domain-pack binding.",
       "Does not resolve gene-product identity, search for evidence, alter disease curation, or submit annotations."
     ],
-    "note": "Validation runs automatically. For RGD curators, this check runs on every GO recommendation the RGD GO Paper Curator produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt.",
+    "note": "Validation runs automatically. For RGD curators, this check runs on every GO recommendation the RGD GO Paper Curator produces, so you do not need to set it up yourself.",
     "summary": "Validates RGD GO paper-curation candidates against the approved experimental evidence policy.",
     "use_when": [
-      "When you are an RGD curator and want a custom evidence policy check: a changed prompt or a stricter or looser reading of the approved evidence codes.",
       "When you want to review how GO recommendations from the RGD GO Paper Curator are checked against the RGD evidence policy."
     ]
   },
@@ -1967,10 +1941,9 @@
       "Runs automatically only for authenticated RGD group context through the GO domain-pack binding.",
       "Does not resolve gene-product identity, search for evidence, alter disease curation, or submit annotations."
     ],
-    "note": "Validation runs automatically. For RGD curators, this check runs on every GO recommendation the RGD GO Paper Curator produces, so you do not need to set it up yourself. Clone it in the Agent Workshop when you want a custom version with a changed prompt.",
+    "note": "Validation runs automatically. For RGD curators, this check runs on every GO recommendation the RGD GO Paper Curator produces, so you do not need to set it up yourself.",
     "summary": "Validates RGD GO paper-curation candidates against the approved experimental evidence policy.",
     "use_when": [
-      "When you are an RGD curator and want a custom evidence policy check: a changed prompt or a stricter or looser reading of the approved evidence codes.",
       "When you want to review how GO recommendations from the RGD GO Paper Curator are checked against the RGD evidence policy."
     ]
   },
@@ -2020,14 +1993,14 @@
     "capabilities": [
       {
         "description": "Automatically determines which specialist agent should handle your question",
-        "example_query": "Find the gene daf-2",
-        "example_result": "Hands the question to the Gene Validation Agent",
+        "example_query": "What does this ontology term mean?",
+        "example_result": "Hands the question to the specialist agent that looks up that kind of term",
         "name": "Query routing"
       },
       {
         "description": "Coordinates complex queries that need multiple agents",
-        "example_query": "Find all genes mentioned in the paper and validate them",
-        "example_result": "Sends the paper to the PDF Specialist first, then passes the genes it finds to the Gene Validation Agent",
+        "example_query": "Find the items this paper reports, then look each one up",
+        "example_result": "Sends the paper to an extraction agent first, then asks a lookup agent about each item it found",
         "name": "Multi-step coordination"
       }
     ],

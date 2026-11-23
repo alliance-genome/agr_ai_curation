@@ -25,14 +25,14 @@ These agents have different roles. Some retrieve existing annotations or relatio
 
 | Agent | Purpose | Example request |
 |-------|---------|-----------------|
-| **Gene Validation Agent** | Resolve gene symbols, names, identifiers, or cross-references against Alliance curation records | “Resolve daf-16 in C. elegans.” |
-| **Allele Validation Agent** | Resolve allele mentions using identifiers, symbols, or descriptions, with species or gene context when known | “Resolve e1370 in C. elegans, associated with daf-16.” |
+| **Gene Validation Agent** | Resolve gene symbols, names, identifiers, or cross-references against Alliance curation records | Not available in chat: it runs automatically as a check on the genes in gene, disease, gene expression, and GO records. A clone made in the Agent Workshop does not change that check; you can attach your clone as the validator on a gene detail of your own Custom Output Structure, as long as the clone keeps this agent's answer format. |
+| **Allele Validation Agent** | Resolve allele mentions using identifiers, symbols, or descriptions, with species or gene context when known | Not available in chat: it runs automatically as a check on the alleles in allele records and on the allele a disease record is about. A clone made in the Agent Workshop does not change that check; you can attach your clone as the validator on an allele detail of your own Custom Output Structure, as long as the clone keeps this agent's answer format. |
 | **Ontology Term Resolver Agent** | Resolve identifiers, labels, or synonyms within supported ontology types | “Resolve linker cell using WormBase anatomy terms.” |
-| **Disease Ontology Agent** | Look up disease terms and relationships | “Show the definition and parent terms for DOID:162.” |
+| **Disease Ontology Agent** | Look up Disease Ontology terms by name, synonym, or DOID | Not available in chat and not used by any automatic check; disease terms on extracted records are checked by the Ontology Term Resolver Agent. |
 | **Chemical Ontology Agent** | Look up chemicals in ChEBI | “Find cytidine and its ChEBI identifier.” |
 | **GO Term Lookup Agent** | Look up GO definitions and relationships through QuickGO | “Show child terms of DNA repair.” |
-| **Gene GO Annotations Agent** | Retrieve existing GO annotations and evidence codes | “Show human TP53 annotations with IDA evidence.” |
-| **Ortholog Lookup Agent** | Retrieve cross-species orthology relationships | “Find mouse orthologs of human TP53.” |
+| **Gene GO Annotations Agent** | Retrieve existing GO annotations and evidence codes | “Show the GO annotations for human TP53 (HGNC:11998) and their evidence codes.” |
+| **Ortholog Lookup Agent** | Retrieve cross-species orthology relationships | “Find mouse orthologs of human TP53 (HGNC:11998).” |
 
 ## Output Formatter Agents
 
