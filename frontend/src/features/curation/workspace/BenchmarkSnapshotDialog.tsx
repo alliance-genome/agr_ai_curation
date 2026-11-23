@@ -41,7 +41,7 @@ interface BenchmarkSnapshotDialogProps {
   sessionId: string
 }
 
-/** Proposal, awaiting sign-off (the backend's proposed text for `snapshot_quotes_supplement`). */
+/** Approved by Chris (23 Nov 2026) (the backend's proposed text for `snapshot_quotes_supplement`). */
 const SNAPSHOT_QUOTES_SUPPLEMENT_MESSAGE =
   'This review quotes a supplement. A Benchmark snapshot can only hold evidence from the main paper.'
 

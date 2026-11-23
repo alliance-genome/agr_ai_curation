@@ -20,24 +20,24 @@ import type { DisplayBlock } from './viewerFiles'
 /** Chris's chosen text (Q4, 20 Nov 2026). Do not change without his sign-off. */
 export const EVIDENCE_WITHOUT_FILE_MESSAGE = 'This evidence was saved before files were recorded'
 
-/** Proposal, awaiting sign-off. */
+/** Approved by Chris (23 Nov 2026). */
 export const FILE_REMOVED_MESSAGE = 'This file is no longer part of the paper, so this evidence cannot be shown.'
 
-/** Proposal, awaiting sign-off. */
+/** Approved by Chris (23 Nov 2026). */
 export const FILE_NOT_READY_MESSAGE = 'This evidence\'s file is still being added to the paper, so it cannot be shown yet.'
 
-/** Proposal, awaiting sign-off. */
+/** Approved by Chris (23 Nov 2026). */
 export const TEXT_QUOTE_NOT_FOUND_MESSAGE = 'This quote could not be found in the file\'s text.'
 
-/** Proposal, awaiting sign-off: the quote was not found, and the evidence's section is shown instead. */
+/** Approved by Chris (23 Nov 2026): the quote was not found, and the evidence's section is shown instead. */
 export const TEXT_QUOTE_SECTION_SHOWN_MESSAGE = 'This quote could not be found in the file\'s text. Its section is shown instead.'
 
-/** Proposal, awaiting sign-off: a PDF file opened for page-less evidence whose quote was not located. */
+/** Approved by Chris (23 Nov 2026): a PDF file opened for page-less evidence whose quote was not located. */
 export function pageLessQuoteNotLocatedMessage(fileName: string): string {
   return `Opened ${fileName}, but this quote could not be located in it.`
 }
 
-/** Proposal, awaiting sign-off: announced to screen readers when evidence opens another file's tab. */
+/** Approved by Chris (23 Nov 2026): announced to screen readers when evidence opens another file's tab. */
 export function openedFileAnnouncement(fileName: string): string {
   return `Opened ${fileName}`
 }
@@ -299,15 +299,15 @@ export function locateEvidenceInBlocks(
   }
 }
 
-/** Proposal, awaiting sign-off: some fragments of the evidence were found and are highlighted, others not. */
+/** Approved by Chris (23 Nov 2026): some fragments of the evidence were found and are highlighted, others not. */
 export const TEXT_EVIDENCE_PARTLY_FOUND_MESSAGE = 'Only part of this evidence was found in the file\'s text. The part that was found is highlighted.'
 
-/** Proposal, awaiting sign-off: the chip for a partial find, so it never reads "Exact quote". */
+/** Approved by Chris (23 Nov 2026): the chip for a partial find, so it never reads "Exact quote". */
 export const TEXT_EVIDENCE_PARTLY_FOUND_CHIP = 'Partly found'
 
-/** Shown under the chips when a text quote is found (proposals, awaiting sign-off). */
+/** Shown under the chips when a text quote is found (approved by Chris, 23 Nov 2026). */
 export const TEXT_QUOTE_FOUND_NOTE = 'The quote was found exactly in this text file.'
-export const TEXT_QUOTE_FOUND_AMONG_SEVERAL_NOTE = 'The quote appears more than once in this text file; the first place in the evidence\'s section (or in reading order) is highlighted.'
+export const TEXT_QUOTE_FOUND_AMONG_SEVERAL_NOTE = 'This quote appears more than once in this file. The highlighted place is the first one in the evidence\'s section, or the first in the file if that section has none.'
 
 /** The navigation result for a text file, after locating the evidence in its blocks. */
 export function buildTextNavigationResult(

@@ -7,7 +7,7 @@ import { fileDisplayLabel, isPdfFile, type ViewerFile } from './viewerFiles'
 /** Above this many files the strip gains an "All files (N)" menu (Q15, 21 Nov 2026). */
 export const FILES_MENU_THRESHOLD = 6
 
-/** Proposals, awaiting sign-off. */
+/** Approved by Chris (23 Nov 2026). */
 const MAIN_PAPER_SUFFIX = '(main paper)'
 const TEXT_MARKER = 'Text'
 

@@ -101,7 +101,7 @@ describe('PdfViewer document ownership', () => {
     showPaperFilesInViewer('doc-external', [{ ...singleMainPdfFile({ documentId: 'doc-external', displayName: 'external.pdf', pageCount: 3 }), content_url: 'https://example.org/external.pdf' }])
 
     expect(
-      await screen.findByText('The PDF viewer only supports same-origin document URLs.'),
+      await screen.findByText('The viewer only opens files from this site.'),
     ).toBeInTheDocument()
     expect(screen.queryByText('external.pdf')).not.toBeInTheDocument()
   })
@@ -116,7 +116,7 @@ describe('PdfViewer document ownership', () => {
     showPaperFilesInViewer('doc-external', [{ ...singleMainPdfFile({ documentId: 'doc-external', displayName: 'external.pdf', pageCount: 3 }), content_url: 'https://example.org/external.pdf' }])
 
     expect(
-      await screen.findByText('The PDF viewer only supports same-origin document URLs.'),
+      await screen.findByText('The viewer only opens files from this site.'),
     ).toBeInTheDocument()
     await waitFor(() => {
       expect(screen.queryByText('home.pdf')).not.toBeInTheDocument()

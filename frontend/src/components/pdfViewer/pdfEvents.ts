@@ -42,7 +42,7 @@ export function buildCurationPDFViewerOwner(sessionId: string): string {
   return `curation:${sessionId}`
 }
 
-/** Proposals, awaiting sign-off. */
+/** Approved by Chris (23 Nov 2026). */
 export const MAIN_FILE_UNAVAILABLE_MESSAGE = 'This paper\'s main file is not available to show.'
 export const FILES_NOT_READY_MESSAGE = 'This paper\'s files are still being added.'
 

@@ -632,7 +632,7 @@ export function PdfViewerChrome({
                   size="small"
                   onClick={onRetry}
                 >
-                  Retry
+                  Try again
                 </Button>
               )}
             >

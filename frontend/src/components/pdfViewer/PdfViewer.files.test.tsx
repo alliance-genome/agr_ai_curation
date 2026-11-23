@@ -177,7 +177,7 @@ describe('PdfViewer with a paper\'s files', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Table_S1.xlsx, file 2 of 3, converted text' }))
 
-    expect(await screen.findByText('Could not load this file\'s text. Try again.')).toBeInTheDocument()
+    expect(await screen.findByText('Could not load this file\'s text.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
   })
 

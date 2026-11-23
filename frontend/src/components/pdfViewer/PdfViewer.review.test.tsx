@@ -316,6 +316,23 @@ describe('P9b review fixes', () => {
     expect({ rows: rowReads, heading: headingReads }).toEqual(readsAfterFirstRender)
   })
 
+  it('F6: a fragment found in more than one place shows the plainer note under the chips', async () => {
+    stubViewerFetch({
+      textBlocks: [
+        { ...TEXT_SUPPLEMENT_BLOCKS.blocks[2]!, text: 'Strain A grew.' },
+        { ...TEXT_SUPPLEMENT_BLOCKS.blocks[2]!, text: 'Strain A grew.' },
+      ],
+    })
+    await showFourFilePaper()
+    act(() => {
+      dispatchPDFViewerNavigateEvidence(chatCommand({ verified_quote: 'Strain A grew.', file_id: TEXT_SUPPLEMENT_FILE_ID, file_name: 'Table_S1.xlsx' }))
+    })
+
+    expect(await screen.findByText(
+      'This quote appears more than once in this file. The highlighted place is the first one in the evidence\'s section, or the first in the file if that section has none.',
+    )).toBeInTheDocument()
+  })
+
   it('F6: a found text quote shows its note under the chips', async () => {
     stubViewerFetch()
     await showFourFilePaper()
@@ -337,7 +354,7 @@ describe('P9b review fixes', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Figure_S2.pdf, file 3 of 3' }))
 
-    expect(await screen.findByText('This supplement could not be loaded. Use Retry to try again.')).toBeInTheDocument()
+    expect(await screen.findByText('This supplement could not be loaded.')).toBeInTheDocument()
     window.removeEventListener(DOCUMENT_LOAD_ERROR_EVENT, listener)
     expect(errors).toEqual([])
   })
@@ -359,7 +376,7 @@ describe('P9b review fixes', () => {
 
       fireEvent.click(screen.getByRole('tab', { name: 'Figure_S2.pdf, file 2 of 2' }))
 
-      expect(await screen.findByText('This supplement could not be loaded. Use Retry to try again.')).toBeInTheDocument()
+      expect(await screen.findByText('This supplement could not be loaded.')).toBeInTheDocument()
       stop()
       expect(errors).toEqual([])
     })
@@ -374,7 +391,7 @@ describe('P9b review fixes', () => {
 
       fireEvent.click(screen.getByRole('tab', { name: 'Figure_S2.pdf, file 3 of 3' }))
 
-      expect(await screen.findByText('This supplement could not be loaded. Use Retry to try again.')).toBeInTheDocument()
+      expect(await screen.findByText('This supplement could not be loaded.')).toBeInTheDocument()
       stop()
       expect(errors).toEqual([])
     })
@@ -385,6 +402,9 @@ describe('P9b review fixes', () => {
       await showFourFilePaper()
 
       expect(await screen.findByText('Unable to reach the PDF document. Please retry or re-upload.')).toBeInTheDocument()
+      // One word for retry (approved 23 Nov 2026), on the main file's error overlay too.
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
       stop()
       expect(errors).toEqual(['Unable to reach the PDF document. Please retry or re-upload.'])
     })
@@ -404,7 +424,7 @@ describe('P9b review fixes', () => {
       showPaperFilesInViewer(DOCUMENT_ID, [{ ...FOUR_FILES_PAYLOAD.files[1]!, role: 'main', text_url: 'https://elsewhere.example/text' }])
     })
 
-    expect(await screen.findByText('The PDF viewer only supports same-origin document URLs.')).toBeInTheDocument()
+    expect(await screen.findByText('The viewer only opens files from this site.')).toBeInTheDocument()
     expect(fetchMock.mock.calls.map(([url]) => String(url))).not.toContain('https://elsewhere.example/text')
   })
 

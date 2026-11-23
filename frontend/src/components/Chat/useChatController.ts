@@ -1240,7 +1240,7 @@ export function useChatController({
             failDocumentLoad({
               documentId: detail.document.id,
               filename: detail.document.filename,
-              message: `Document loaded for chat, but the PDF viewer could not be restored. ${pdfError instanceof Error ? pdfError.message : 'Please retry from Documents.'}`,
+              message: `Paper loaded for chat, but the viewer could not show it. ${pdfError instanceof Error ? pdfError.message : 'Please retry from Documents.'}`,
             })
           }
         }
@@ -1603,7 +1603,7 @@ export function useChatController({
       return
     }
 
-    if (!window.confirm(`Are you sure you want to unload "${activeDocument.filename || 'the active PDF'}"? You can reload it later from the Documents panel.`)) {
+    if (!window.confirm(`Are you sure you want to unload "${activeDocument.filename || 'the active paper'}"? You can reload it later from the Documents panel.`)) {
       return
     }
 
@@ -1642,14 +1642,14 @@ export function useChatController({
         )
       } else {
         console.error('Failed to unload PDF')
-        alert('Failed to unload PDF. Please try again.')
+        alert('Failed to unload the paper. Please try again.')
       }
     } catch (error) {
       if (!operation.ownsLatest()) {
         return
       }
       console.error('Error unloading PDF:', error)
-      alert('An error occurred while unloading the PDF.')
+      alert('An error occurred while unloading the paper.')
     } finally {
       if (operation.ownsLatest()) {
         setIsUnloadingPDF(false)

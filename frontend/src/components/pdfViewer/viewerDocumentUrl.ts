@@ -9,7 +9,7 @@ export function normalizePdfViewerDocumentUrl(
   origin: string = window.location.origin,
 ): string {
   if (typeof input !== 'string' || input.trim().length === 0) {
-    throw new Error('A PDF document URL is required.')
+    throw new Error('This file has no address to open.')
   }
 
   let baseOrigin: URL
@@ -19,15 +19,15 @@ export function normalizePdfViewerDocumentUrl(
     baseOrigin = new URL(origin)
     resolvedUrl = new URL(input, baseOrigin)
   } catch (_error) {
-    throw new Error('The PDF document URL is invalid.')
+    throw new Error('This file\'s address is not valid.')
   }
 
   if (!SUPPORTED_VIEWER_PROTOCOLS.has(resolvedUrl.protocol)) {
-    throw new Error('Unsupported PDF document URL protocol.')
+    throw new Error('This file\'s address is not supported.')
   }
 
   if (resolvedUrl.origin !== baseOrigin.origin) {
-    throw new Error('The PDF viewer only supports same-origin document URLs.')
+    throw new Error('The viewer only opens files from this site.')
   }
 
   return toRelativeViewerPath(resolvedUrl)

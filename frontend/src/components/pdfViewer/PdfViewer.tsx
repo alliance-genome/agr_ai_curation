@@ -124,8 +124,8 @@ function sameIds(left: readonly string[], right: readonly string[]): boolean {
 }
 
 const MAIN_FILE_UNREACHABLE_MESSAGE = 'Unable to reach the PDF document. Please retry or re-upload.'
-/** Proposal, awaiting sign-off: a supplement's PDF that cannot be reached (no re-upload offered). */
-export const SUPPLEMENT_UNREACHABLE_MESSAGE = 'This supplement could not be loaded. Use Retry to try again.'
+/** Approved by Chris (23 Nov 2026): a supplement's PDF that cannot be reached (no re-upload offered). */
+export const SUPPLEMENT_UNREACHABLE_MESSAGE = 'This supplement could not be loaded.'
 
 export function PdfViewer({
   activeDocumentOwnerToken,

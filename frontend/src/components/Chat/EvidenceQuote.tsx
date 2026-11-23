@@ -83,7 +83,7 @@ export default function EvidenceQuote({
     <EvidenceNavigationQuoteCard
       command={command}
       quote={evidenceRecord.verified_quote}
-      ariaLabel={`Highlight evidence on PDF: ${evidenceRecord.verified_quote}`}
+      ariaLabel={`Show this evidence in the paper: ${evidenceRecord.verified_quote}`}
       appearance="chat"
       accentColor={borderColor}
       debugContext={{

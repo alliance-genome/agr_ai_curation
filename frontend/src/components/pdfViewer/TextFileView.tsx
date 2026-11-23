@@ -15,9 +15,9 @@ import { TextFileBlocks } from './TextFileBlocks'
 
 export const VIEWER_FILE_PANEL_ID = 'viewer-file-panel'
 
-/** Proposals, awaiting sign-off. */
+/** Approved by Chris (23 Nov 2026). */
 const LOADING_TEXT = 'Loading the file\'s text...'
-const LOAD_ERROR_TEXT = 'Could not load this file\'s text. Try again.'
+const LOAD_ERROR_TEXT = 'Could not load this file\'s text.'
 
 export function viewerFileTabId(fileId: string): string {
   return `viewer-file-tab-${fileId}`

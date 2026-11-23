@@ -632,7 +632,7 @@ describe('HomePage durable session bootstrap', () => {
     expect(uploadOperation.ownsLatest()).toBe(true)
     dispatchChatDocumentChanged(uploadPayload)
 
-    expect(await screen.findByText('Active PDF: upload.pdf')).toBeInTheDocument()
+    expect(await screen.findByText('Active paper: upload.pdf')).toBeInTheDocument()
     await waitFor(() => {
       expect(viewerDocumentChangedSpy).toHaveBeenCalledTimes(1)
     })
@@ -649,8 +649,8 @@ describe('HomePage durable session bootstrap', () => {
     expect(Number(loadBodies[1].intent_generation)).toBeGreaterThan(
       Number(loadBodies[0].intent_generation),
     )
-    expect(screen.getByText('Active PDF: upload.pdf')).toBeInTheDocument()
-    expect(screen.queryByText('Active PDF: route.pdf')).not.toBeInTheDocument()
+    expect(screen.getByText('Active paper: upload.pdf')).toBeInTheDocument()
+    expect(screen.queryByText('Active paper: route.pdf')).not.toBeInTheDocument()
     expect(localStorage.getItem(chatStorageKeys.activeDocument)).toContain('doc-upload')
     expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toContain('doc-upload')
     expect(viewerDocumentChangedSpy).toHaveBeenCalledTimes(1)
@@ -668,7 +668,7 @@ describe('HomePage durable session bootstrap', () => {
   it('shows a viewer restore error instead of a stale timeout after route-state backend load succeeds', async () => {
     actualChatMode.enabled = true
     const viewerMetadataResponse = deferred<Response>()
-    const viewerRestoreMessage = 'Document loaded for chat, but the PDF viewer could not be restored. Failed to fetch document viewer metadata'
+    const viewerRestoreMessage = 'Paper loaded for chat, but the viewer could not show it. Failed to fetch document viewer metadata'
     const realSetTimeout = window.setTimeout.bind(window)
     const realClearTimeout = window.clearTimeout.bind(window)
     const clearedTimeouts = new Set<number>()
@@ -809,7 +809,7 @@ describe('HomePage durable session bootstrap', () => {
   })
 
   it('clears document loading storage and emits an error when the handoff safety timeout fires', async () => {
-    const timeoutMessage = 'Document loading timed out before the chat handoff completed. The PDF may still be processing, unavailable, or too large.'
+    const timeoutMessage = 'Document loading timed out before the chat handoff completed. The paper may still be processing, unavailable, or too large.'
     const loadErrorSpy = vi.fn()
     const realSetTimeout = window.setTimeout.bind(window)
     let loadingTimeoutCallback: (() => void) | undefined
@@ -1121,7 +1121,7 @@ describe('HomePage durable session bootstrap', () => {
       renderHomePage('/?session=session-42')
 
       expect(await screen.findByText('Restored response')).toBeInTheDocument()
-      expect(await screen.findByText('Active PDF: resume.pdf')).toBeInTheDocument()
+      expect(await screen.findByText('Active paper: resume.pdf')).toBeInTheDocument()
 
       await waitFor(() => {
         expect(pdfDocumentChangedSpy).toHaveBeenCalled()
@@ -1899,7 +1899,7 @@ describe('flow document selection', () => {
 
   async function openChat() {
     renderHomePage('/?session=session-a')
-    await screen.findByText('Active PDF: paper.pdf')
+    await screen.findByText('Active paper: paper.pdf')
     await waitFor(() => expect(localStorage.getItem(keys.activeDocument)).toContain('selected-paper'))
   }
 
@@ -1987,7 +1987,7 @@ describe('flow document selection', () => {
       session: { session_id: 'session-b' }, active_document: selectedDocument,
       messages: [], next_message_cursor: null,
     })) })
-    await screen.findByText('Active PDF: next.pdf')
+    await screen.findByText('Active paper: next.pdf')
     await act(async () => { await runFlow() })
     expect(chatStreamStub.executeFlow).toHaveBeenCalledWith('flow-1', 'session-b', 'next-paper')
   })

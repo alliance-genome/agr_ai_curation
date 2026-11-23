@@ -91,7 +91,7 @@ describe('EvidenceCard', () => {
 
     expect(
       await screen.findByRole('button', {
-        name: /Highlight evidence on PDF: Crumb is essential for maintaining epithelial polarity\./i,
+        name: /Show this evidence in the paper: Crumb is essential for maintaining epithelial polarity\./i,
       })
     ).toBeInTheDocument()
     expect(screen.getByText('p. 4 · Results › Gene Expression Analysis')).toBeInTheDocument()
@@ -133,7 +133,7 @@ describe('EvidenceCard', () => {
     await user.click(screen.getByRole('button', { name: 'crumb 2' }))
     await user.click(
       await screen.findByRole('button', {
-        name: /Highlight evidence on PDF: Crumb is essential for maintaining epithelial polarity\./i,
+        name: /Show this evidence in the paper: Crumb is essential for maintaining epithelial polarity\./i,
       }),
     )
 
@@ -190,7 +190,7 @@ describe('EvidenceCard', () => {
     await user.click(crumbChip)
     expect(
       await screen.findByRole('button', {
-        name: /Highlight evidence on PDF: Crumb expression increased in the mutant embryo\./i,
+        name: /Show this evidence in the paper: Crumb expression increased in the mutant embryo\./i,
       })
     ).toBeInTheDocument()
 
@@ -199,7 +199,7 @@ describe('EvidenceCard', () => {
     await waitFor(() => {
       expect(
         screen.queryByRole('button', {
-          name: /Highlight evidence on PDF: Crumb expression increased in the mutant embryo\./i,
+          name: /Show this evidence in the paper: Crumb expression increased in the mutant embryo\./i,
         })
       ).not.toBeInTheDocument()
     })
@@ -212,7 +212,7 @@ describe('EvidenceCard', () => {
     await user.click(screen.getByRole('button', { name: 'crumb 2' }))
     expect(
       await screen.findByRole('button', {
-        name: /Highlight evidence on PDF: Crumb is essential for maintaining epithelial polarity\./i,
+        name: /Show this evidence in the paper: Crumb is essential for maintaining epithelial polarity\./i,
       })
     ).toBeInTheDocument()
 
@@ -220,14 +220,14 @@ describe('EvidenceCard', () => {
 
     expect(
       await screen.findByRole('button', {
-        name: /Highlight evidence on PDF: Notch signaling remained unchanged in the treatment arm\./i,
+        name: /Show this evidence in the paper: Notch signaling remained unchanged in the treatment arm\./i,
       })
     ).toBeInTheDocument()
 
     await waitFor(() => {
       expect(
         screen.queryByRole('button', {
-          name: /Highlight evidence on PDF: Crumb is essential for maintaining epithelial polarity\./i,
+          name: /Show this evidence in the paper: Crumb is essential for maintaining epithelial polarity\./i,
         })
       ).not.toBeInTheDocument()
     })
@@ -241,7 +241,7 @@ describe('EvidenceCard', () => {
 
     expect(
       await screen.findByRole('button', {
-        name: /Highlight evidence on PDF: Crumb is essential for maintaining epithelial polarity\./i,
+        name: /Show this evidence in the paper: Crumb is essential for maintaining epithelial polarity\./i,
       })
     ).toBeInTheDocument()
 

@@ -728,7 +728,7 @@ describe('Chat persistence', () => {
 
       renderChat()
 
-      expect(await screen.findByText('Active PDF: doc-7.pdf')).toBeInTheDocument()
+      expect(await screen.findByText('Active paper: doc-7.pdf')).toBeInTheDocument()
 
       await waitFor(() => {
         expect(listener).toHaveBeenCalled()
@@ -813,7 +813,7 @@ describe('Chat persistence', () => {
 
       const { unmount } = renderChat()
 
-      expect(await screen.findByText('Active PDF: doc-late.pdf')).toBeInTheDocument()
+      expect(await screen.findByText('Active paper: doc-late.pdf')).toBeInTheDocument()
 
       unmount()
 
@@ -840,6 +840,52 @@ describe('Chat persistence', () => {
       expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toBeNull()
     } finally {
       window.removeEventListener('pdf-viewer-document-changed', listener as EventListener)
+    }
+  })
+
+  // Wording approved by Chris on 23 Nov 2026: the active document is "the paper" (it can be a text file).
+  it.each([
+    ['a refused unload', 'refused', 'Failed to unload the paper. Please try again.'],
+    ['an unload that errors', 'throws', 'An error occurred while unloading the paper.'],
+  ])('says so about the paper after %s, and asks about "the active paper" when it has no name', async (_label, outcome, message) => {
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => undefined)
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    try {
+      vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if (url === '/health/deep') {
+          return { ok: true, json: async () => ({ services: { weaviate: 'connected', curation_db: 'connected' } }) } as Response
+        }
+        if (url === '/api/chat/conversation') {
+          return { ok: true, json: async () => ({ is_active: true }) } as Response
+        }
+        if (url === '/api/chat/document' && init?.method === 'DELETE') {
+          if (outcome === 'throws') throw new Error('network down')
+          return { ok: false, json: async () => ({}) } as Response
+        }
+        if (url === '/api/chat/document') {
+          return { ok: true, json: async () => ({ active: true, document: { id: 'doc-a', filename: null } }) } as Response
+        }
+        const viewerDocumentId = url.match(/^\/api\/pdf-viewer\/documents\/([^/]+)\/files$/)?.[1]
+        if (viewerDocumentId) {
+          return {
+            ok: true,
+            json: async () => ({ document_id: viewerDocumentId, files: [singleMainPdfFile({ documentId: viewerDocumentId })] }),
+          } as Response
+        }
+        return { ok: true, json: async () => ({ filename: 'made-up-paper.pdf' }) } as Response
+      })
+
+      renderChat()
+      fireEvent.click(await screen.findByRole('button', { name: 'Unload paper' }))
+
+      await waitFor(() => expect(alertSpy).toHaveBeenCalledWith(message))
+      expect(confirmSpy).toHaveBeenCalledWith(
+        'Are you sure you want to unload "the active paper"? You can reload it later from the Documents panel.',
+      )
+    } finally {
+      alertSpy.mockRestore()
+      confirmSpy.mockRestore()
     }
   })
 
@@ -920,9 +966,9 @@ describe('Chat persistence', () => {
       })
 
       renderChat()
-      expect(await screen.findByText('Active PDF: doc-a.pdf')).toBeInTheDocument()
+      expect(await screen.findByText('Active paper: doc-a.pdf')).toBeInTheDocument()
 
-      fireEvent.click(screen.getByRole('button', { name: 'Unload PDF' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Unload paper' }))
       expect(await screen.findByRole('button', { name: 'Unloading...' })).toBeDisabled()
 
       await act(async () => {
@@ -934,8 +980,8 @@ describe('Chat persistence', () => {
         }))
       })
 
-      expect(await screen.findByText('Active PDF: doc-b.pdf')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Unload PDF' })).not.toBeDisabled()
+      expect(await screen.findByText('Active paper: doc-b.pdf')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Unload paper' })).not.toBeDisabled()
 
       await waitFor(() => {
         expect(localStorage.getItem(chatStorageKeys.activeDocument)).toContain('"id":"doc-b"')
@@ -950,8 +996,8 @@ describe('Chat persistence', () => {
         await Promise.resolve()
       })
 
-      expect(screen.getByText('Active PDF: doc-b.pdf')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Unload PDF' })).not.toBeDisabled()
+      expect(screen.getByText('Active paper: doc-b.pdf')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Unload paper' })).not.toBeDisabled()
       expect(alertSpy).not.toHaveBeenCalled()
       expect(localStorage.getItem(chatStorageKeys.activeDocument)).toContain('"id":"doc-b"')
       expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toContain('"documentId":"doc-b"')
@@ -1113,7 +1159,7 @@ describe('Chat persistence', () => {
 
     expect(
       await screen.findByRole('button', {
-        name: 'Highlight evidence on PDF: Crumb is essential for maintaining epithelial polarity.',
+        name: 'Show this evidence in the paper: Crumb is essential for maintaining epithelial polarity.',
       })
     ).toBeInTheDocument()
   })
@@ -2567,7 +2613,7 @@ describe('Chat flow evidence rendering', () => {
 
     expect(
       screen.getByRole('button', {
-        name: 'Highlight evidence on PDF: TP53 increased in the treated samples.',
+        name: 'Show this evidence in the paper: TP53 increased in the treated samples.',
       }),
     ).toBeInTheDocument()
   })
@@ -2621,7 +2667,7 @@ describe('Chat flow evidence rendering', () => {
 
     expect(
       screen.getByRole('button', {
-        name: 'Highlight evidence on PDF: TP53 increased in the treated samples.',
+        name: 'Show this evidence in the paper: TP53 increased in the treated samples.',
       }),
     ).toBeInTheDocument()
   })

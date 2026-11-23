@@ -119,7 +119,7 @@ function requireOneOf<T extends string>(
   return match
 }
 
-/** Proposal, awaiting sign-off: the label of a file the backend serves with an empty name. */
+/** Approved by Chris (23 Nov 2026): the label of a file the backend serves with an empty name. */
 export const UNNAMED_FILE_LABEL = 'Unnamed file'
 
 /** The name the viewer shows for a file. */
