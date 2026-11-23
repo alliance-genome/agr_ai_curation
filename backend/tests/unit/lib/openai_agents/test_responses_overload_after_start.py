@@ -147,11 +147,12 @@ def harness(monkeypatch):
     monkeypatch.setenv("OPENAI_MODEL_RETRY_INITIAL_DELAY", "0")
     monkeypatch.setenv("OPENAI_MODEL_RETRY_MAX_DELAY", "8")
 
-    async def run(scripts, *, streamed=False, previous_response_id=None, tools=(), wrap=None):
+    async def run(scripts, *, streamed=False, previous_response_id=None, tools=(), wrap=None,
+                  model_name="gpt-test"):
         sent, raw_types = [], []
         scripts = [list(script) for script in scripts]
         client = AsyncOpenAI(api_key="fixture", max_retries=0)
-        model = OpenAIResponsesWSModel(model="gpt-test", openai_client=client)
+        model = OpenAIResponsesWSModel(model=model_name, openai_client=client)
         def open_socket(*args, **kwargs):
             opened[0] += 1
             return _Socket(scripts, sent)
@@ -438,3 +439,20 @@ def test_the_sdk_private_names_the_guard_relies_on():
     assert _RETRY_SAFE_STREAM_EVENT_TYPES == frozenset({"response.created", "response.in_progress"})
     install_responses_websocket_output_observation()
     assert OpenAIResponsesWSModel._iter_websocket_response_events._agr_output_observation is True
+
+
+@pytest.mark.asyncio
+@both_modes
+async def test_a_review_request_on_a_replaced_model_object_is_refused_before_sending(harness, monkeypatch, streamed):
+    """ALL-1708: the validation review's run goes through the resolving SDK boundary, which
+    refuses a model object that still names a replaced catalog id (configured string ids
+    resolve there instead)."""
+    from src.lib.config.models_loader import list_models
+    from src.lib.openai_agents.model_request_measurement import ReplacedModelRequestError
+    from src.lib.validation_review import provider as review
+
+    replaced = next(old for model in list_models() for old in model.replaces)
+    budget, _admissions, _settlements = _review_budget(monkeypatch)
+    with review.budget_scope(budget), pytest.raises(ReplacedModelRequestError, match=replaced):
+        await harness([_success()], streamed=streamed, model_name=replaced)
+    assert harness.sockets_opened() == 0
