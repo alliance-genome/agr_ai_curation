@@ -11,12 +11,16 @@ from unittest.mock import Mock
 from uuid import UUID
 
 import pytest
+import sentry_sdk
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.starlette import StarletteIntegration
+from sentry_sdk.transport import Transport
 
 from src.api import pdf_viewer
 from src.api.auth import _get_user_from_cookie_impl
-from src.lib.observability import runtime
+from src.lib.observability import runtime, sentry
 from src.lib.pipeline.pdfx_parser import markdown_to_pipeline_elements
 from src.models.sql.database import get_db
 from src.models.sql.pdf_document import PDFDocument, PDFDocumentFile
@@ -189,6 +193,7 @@ def assert_artifact_report(reporter, request, caplog, storage):
         assert reporter.call_args.kwargs == {
             "component": "pdf_viewer",
             "operation": operation,
+            "include_request": False,
             "context": {"exception_type": exception_type} if exception_type else {},
         }
         records = [r for r in caplog.records if r.name == pdf_viewer.__name__]
@@ -203,6 +208,51 @@ def assert_artifact_report(reporter, request, caplog, storage):
             assert private not in diagnostics
 
     return check
+
+
+def test_ready_artifact_event_redacts_request(storage):
+    files = _four_files()
+    files[1].hierarchy_metadata = {"sections": [{"header": "private document text"}]}
+    (storage / files[2].file_path).unlink()
+    events = []
+
+    class MemoryTransport(Transport):
+        def capture_envelope(self, envelope):
+            for item in envelope.items:
+                if item.headers["type"] == "event":
+                    events.append(item.get_event())
+
+    with sentry_sdk.Client(
+        dsn="https://public@example.invalid/1",
+        transport=MemoryTransport,
+        before_send=sentry.before_send,
+        include_local_variables=False,
+        default_integrations=False,
+        integrations=[
+            StarletteIntegration(failed_request_status_codes=set()),
+            FastApiIntegration(failed_request_status_codes=set()),
+        ],
+    ) as sdk, sentry_sdk.isolation_scope() as scope:
+        scope.set_client(sdk)
+        with _client(_paper(files=files)) as client:
+            assert client.get(_content_url(PDF_SUPPLEMENT_ID)).status_code == 404
+            assert client.get(_text_url(TEXT_ID)).status_code == 500
+            (storage / files[1].processed_json_path).unlink()
+            assert client.get(_text_url(TEXT_ID)).status_code == 404
+        sdk.flush()
+
+    assert [event["tags"]["operation"] for event in events] == [
+        "pdf_viewer_ready_file_bytes_missing",
+        "pdf_viewer_stored_display_data_invalid",
+        "pdf_viewer_ready_file_elements_missing",
+    ]
+    serialized = json.dumps(events)
+    assert all("request" not in event for event in events)
+    for private in (
+        str(DOCUMENT_ID), str(PDF_SUPPLEMENT_ID), str(TEXT_ID),
+        OWNER_SUB, str(storage), "private document text",
+    ):
+        assert private not in serialized
 
 
 # --- the files list ---------------------------------------------------------------

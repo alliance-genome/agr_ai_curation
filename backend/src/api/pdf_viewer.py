@@ -350,6 +350,7 @@ def _report_ready_artifact_failure(operation: str, message: str, *, exception_ty
             runtime.sanitized_runtime_error(message),
             component="pdf_viewer",
             operation=operation,
+            include_request=False,
             context={"exception_type": exception_type} if exception_type is not None else {},
         )
     except Exception:

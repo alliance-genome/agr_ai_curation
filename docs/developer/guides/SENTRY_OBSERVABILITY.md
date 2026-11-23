@@ -559,8 +559,10 @@ path or file produces `pdf_viewer_ready_file_elements_missing`. Both return
 404. Unsupported stored elements or section maps produce
 `pdf_viewer_stored_display_data_invalid` and return 500. Only this last event
 has an underlying exception class to record. All three use fixed, chain-free
-errors and omit paths, identifiers, and stored content. Companion warnings
-skip log promotion. Ordinary file lookup and readiness failures stay quiet.
+errors and omit paths, identifiers, and stored content. These reports drop
+the SDK's HTTP request metadata because the URL contains both the document
+and file identifiers. Companion warnings skip log promotion. Ordinary file
+lookup and readiness failures stay quiet.
 
 Canonical agent history reports failed writes, searches, reads and integrity
 checks with component `agent_history` and operations `write_failed`,

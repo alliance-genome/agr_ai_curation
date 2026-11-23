@@ -68,6 +68,12 @@ def sanitized_runtime_error(message: str) -> RuntimeError:
         return sanitized
 
 
+def _omit_request(event: dict[str, Any], _hint: dict[str, Any]) -> dict[str, Any]:
+    """Remove request metadata added by framework integrations to this capture."""
+    event.pop("request", None)
+    return event
+
+
 def report_runtime_exception(
     exc: BaseException,
     *,
@@ -77,11 +83,13 @@ def report_runtime_exception(
     context: Mapping[str, Any] | None = None,
     level: Literal["fatal", "error", "warning", "info", "debug"] = "error",
     fingerprint: Sequence[str] | None = None,
+    include_request: bool = True,
 ) -> bool:
     """Best-effort Sentry capture for caught runtime exceptions.
 
     ``fingerprint`` overrides Sentry grouping with stable, low-cardinality
     parts; never include per-run identifiers in it.
+    Set ``include_request=False`` when the concrete request can identify private resources.
     """
 
     cause: BaseException | None = exc
@@ -104,6 +112,8 @@ def report_runtime_exception(
 
     try:
         with sentry_sdk.new_scope() as scope:
+            if not include_request:
+                scope.add_event_processor(_omit_request)
             scope.set_level(level)
             if fingerprint:
                 scope.fingerprint = [
