@@ -118,3 +118,16 @@ def test_the_line_goes_when_the_wait_died_and_when_the_sweep_ends_it(owner, monk
     with SessionLocal() as db:
         assert db.get(PdfProcessingJob, job.job_id).status == "failed"
     assert _converting(document_id, auth_sub) is False
+
+
+def test_a_wait_queued_behind_the_cap_is_told_to_the_run_too(owner):
+    """A stage job starts pending in the wait stage until its first heartbeat; while it is
+    alive by the dead-wait test the run is told, and a batch still never is."""
+    owner_id, auth_sub = owner
+    document_id, job = _waiting(owner_id)
+    with SessionLocal.begin() as db:
+        db.execute(update(PdfProcessingJob).where(PdfProcessingJob.id == job.job_id).values(status="pending"))
+
+    assert _converting(document_id, auth_sub) is True
+    with reading_scope(ReadingScope.MAIN_FILE_ONLY):
+        assert _converting(document_id, auth_sub) is False
