@@ -14,10 +14,20 @@ from src.models.strategy import ChunkingStrategy
 from ..exceptions import PDFCancellationError, PDFParsingError
 from src.lib.openai_agents.config import get_pdf_document_error_message_max_chars
 from src.lib.observability.cost_context import costed_document_processing
-from src.lib.observability.runtime import report_runtime_exception
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from .processing_receipt import PDFProcessingReceipt
 
 logger = logging.getLogger(__name__)
+
+
+def _report_pipeline_failure(error: Exception, *, operation: str, context: dict[str, Any]) -> bool:
+    try:
+        return report_runtime_exception(
+            error, component="document_pipeline", operation=operation, context=context,
+        )
+    except Exception:
+        logger.warning("Pipeline failure reporting unavailable for %s", operation, extra={"sentry_skip_event": True})
+        return False
 
 
 def _public_pipeline_error_message(error: Exception) -> str:
@@ -234,7 +244,7 @@ class DocumentPipelineOrchestrator:
                         await self._store_hierarchy_metadata(self._current_file_id, hierarchy_metadata)
                         hierarchy_duration_ms = (time.monotonic() - hierarchy_start) * 1000
                         logger.info(
-                            "Stored hierarchy metadata with %s top-level sections",
+                            "Resolved hierarchy with %s top-level sections",
                             len(hierarchy_metadata.top_level_sections),
                             extra={"duration_ms": round(hierarchy_duration_ms, 1), "operation": "hierarchy_resolution"},
                         )
@@ -357,9 +367,8 @@ class DocumentPipelineOrchestrator:
                 "extraction_strategy": extraction_strategy,
             }
             runtime_context.update(_pdfx_runtime_context(e))
-            sentry_reported = report_runtime_exception(
+            sentry_reported = _report_pipeline_failure(
                 e,
-                component="document_pipeline",
                 operation="process_pdf_document_failed",
                 context=runtime_context,
             )
@@ -578,37 +587,43 @@ class DocumentPipelineOrchestrator:
         from src.models.sql.database import SessionLocal
         from src.models.sql.pdf_document import PDFDocumentFile
 
-        session = SessionLocal()
         try:
-            file_row = session.get(PDFDocumentFile, file_id)
-            if file_row:
+            with SessionLocal.begin() as session:
+                file_row = session.get_one(PDFDocumentFile, file_id)
                 file_row.pdfx_json_path = pdfx_json_path
                 file_row.processed_json_path = processed_json_path
-                session.commit()
-                logger.info("Updated file paths for file %s", file_id)
-        except Exception as e:
-            logger.error("Error updating file paths for file %s: %s", file_id, e)
-            session.rollback()
-        finally:
-            session.close()
+        except Exception as exc:
+            logger.warning(
+                "Could not persist file paths (%s)", type(exc).__name__, extra={"sentry_skip_event": True},
+            )
+        else:
+            logger.info("Updated file paths for file %s", file_id)
+            return
+
+        # Raise outside the handler so the database exception cannot reach the failure owner.
+        raise PipelineError("The paper's processed files could not be saved. Please upload it again.")
 
     async def _store_hierarchy_metadata(self, file_id: Any, hierarchy_metadata):
         """Store the main file's hierarchy metadata for later trace injection."""
         from src.models.sql.database import SessionLocal
         from src.models.sql.pdf_document import PDFDocumentFile
 
-        session = SessionLocal()
         try:
-            file_row = session.get(PDFDocumentFile, file_id)
-            if file_row:
+            with SessionLocal.begin() as session:
+                file_row = session.get_one(PDFDocumentFile, file_id)
                 file_row.hierarchy_metadata = hierarchy_metadata.model_dump()
-                session.commit()
-                logger.info("Stored hierarchy metadata for file %s", file_id)
-        except Exception as e:
-            logger.error("Error storing hierarchy metadata for file %s: %s", file_id, e)
-            session.rollback()
-        finally:
-            session.close()
+        except Exception as exc:
+            exception_type = type(exc).__name__
+            logger.warning(
+                "Could not persist hierarchy metadata (%s)", exception_type, extra={"sentry_skip_event": True},
+            )
+            _report_pipeline_failure(
+                sanitized_runtime_error("Pipeline hierarchy metadata write failed"),
+                operation="pipeline_hierarchy_metadata_write_failed",
+                context={"exception_type": exception_type},
+            )
+        else:
+            logger.info("Stored hierarchy metadata for file %s", file_id)
 
     async def _fail_current_file(self, error_message: str) -> None:
         """Record that the file being processed failed; the paper status is set separately."""
