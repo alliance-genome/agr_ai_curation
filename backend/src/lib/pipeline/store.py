@@ -681,7 +681,7 @@ async def update_document_metadata(
         try:
             from ..weaviate_helpers import get_user_collections
 
-            with weaviate_client.session() as client:
+            with weaviate_client.session(caller_reports_failure=True) as client:
                 _, pdf_collection = get_user_collections(client, user_id)
                 pdf_collection.data.update(
                     uuid=document_id,

@@ -3,6 +3,9 @@
 import asyncio
 import importlib
 import logging
+import subprocess
+import sys
+import textwrap
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -373,6 +376,52 @@ async def test_update_document_metadata_best_effort(caplog, failure_at, reporter
     ]
     assert len(warnings) == (2 if reporter_fails else 1)
     assert all(record.sentry_skip_event for record in warnings)
+
+
+def test_metadata_connection_failure_emits_one_sanitized_event():
+    # Isolate the real Sentry logging integration and its process-wide hooks.
+    script = textwrap.dedent("""
+        import asyncio
+        import logging
+        from unittest.mock import patch
+
+        import sentry_sdk
+        from sentry_sdk.integrations.logging import LoggingIntegration
+
+        from src.lib.observability.sentry import before_send
+        from src.lib.pipeline.store import update_document_metadata
+        from src.lib.weaviate_client.connection import WeaviateConnection
+
+        events = []
+        logging.basicConfig(level=logging.INFO)
+        sentry_sdk.init(
+            dsn="http://public@example.invalid/1",
+            transport=events.append,
+            before_send=before_send,
+            include_local_variables=False,
+            default_integrations=False,
+            integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+        )
+        failure = OSError("fake-private-sdk-detail")
+        with patch("weaviate.connect_to_local", side_effect=failure) as connect:
+            asyncio.run(update_document_metadata(
+                "private-document", {"stored_chunks": 2}, WeaviateConnection(), "private-user"
+            ))
+            connect.assert_called_once()
+
+        event, = events
+        assert event["contexts"]["runtime_exception"] == {
+            "component": "document_pipeline",
+            "operation": "pipeline_final_index_metadata_write_failed",
+            "exception_type": "OSError",
+        }
+        error, = event["exception"]["values"]
+        assert error["value"] == "Final index metadata write failed"
+        assert all(secret not in repr(event) for secret in (str(failure), "private-document", "private-user"))
+    """)
+    result = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert "fake-private-sdk-detail" not in result.stdout + result.stderr
 
 
 @pytest.mark.asyncio
