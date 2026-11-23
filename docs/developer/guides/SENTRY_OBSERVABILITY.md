@@ -766,6 +766,12 @@ the reference and raw ids are omitted. The companion WARNING log names the raw
 ids and the reference and skips event promotion. The paper's other files are
 still listed.
 
+If a request is cancelled while acquiring a paper lock, acquisition and any
+necessary release finish in the background. Under `document_files`, a failed
+acquisition reports `paper_lock_acquire_failed_after_cancel` and a failed release
+uses the usual `paper_lock_release_failed` operation. Both warnings carry only
+the exception type as failure detail and preserve the request's cancellation.
+
 Adding converted supplements to a paper (`supplement_add.py`) sends no event for
 a file it leaves out. When every chosen file is left out, it reports one warning
 under component `document_files` and operation `supplement_add_nothing_added`,
