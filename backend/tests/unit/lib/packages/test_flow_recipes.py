@@ -70,7 +70,7 @@ def test_shipped_alliance_flow_recipe_contract_uses_canonical_validator_ids():
         "Gene Expression Analysis",
         "Phenotype Extraction",
         "Allele/Variant Extraction",
-        "GO Annotation Pipeline",
+        "GO Term Lookup",
         "RGD GO and Disease Paper Review",
         "RGD GO Paper Review",
     ]

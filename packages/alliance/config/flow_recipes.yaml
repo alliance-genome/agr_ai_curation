@@ -50,10 +50,10 @@ recipes:
       - agent_id: chemical_validation
         step_goal: Map to ChEBI identifiers
   - name: Gene Expression Analysis
-    description: Extract gene expression data from methods sections
+    description: Extract gene expression observations from papers, each with its supporting quote
     steps:
       - agent_id: pdf_extraction
-        step_goal: Find experimental methods
+        step_goal: Find expression findings and their context
       - agent_id: gene_expression
         step_goal: Extract expression patterns
       - agent_id: chat_output
@@ -79,11 +79,11 @@ recipes:
       - agent_id: chat_output
         step_goal: Display extraction results
         source_steps: [2]
-  - name: GO Annotation Pipeline
+  - name: GO Term Lookup
     description: Find Gene Ontology term mentions in papers and look up their GO terms
     steps:
       - agent_id: pdf_extraction
-        step_goal: Find GO term mentions and gene functions
+        step_goal: Find GO term mentions
       - agent_id: gene_ontology
         step_goal: Look up GO terms
       - agent_id: chat_output

@@ -373,7 +373,7 @@ def test_get_flow_templates_handler_filters_missing_steps_and_resolves_installed
     result = handler()
 
     assert {template["name"] for template in result["templates"]} == {
-        "GO Annotation Pipeline",
+        "GO Term Lookup",
     }
     assert result["templates"][0]["steps"][0]["agent_id"] == "pdf_extraction"
     assert all(
@@ -427,8 +427,8 @@ def test_flow_templates_bind_outputs_to_canonical_validator_sources(monkeypatch)
         for template in flow_tools._filter_flow_templates(installed_agent_ids)
     }
 
-    assert templates["GO Annotation Pipeline"]["steps"][-1]["source_steps"] == [2]
-    for name in ("GO Annotation Pipeline",):
+    assert templates["GO Term Lookup"]["steps"][-1]["source_steps"] == [2]
+    for name in ("GO Term Lookup",):
         definition = flow_tools._build_simplified_flow_definition(
             steps=templates[name]["steps"],
             task_instructions=name,
@@ -490,7 +490,7 @@ def test_all_nine_alliance_recipes_appear_when_required_agents_are_flow_eligible
         "Gene Expression Analysis",
         "Phenotype Extraction",
         "Allele/Variant Extraction",
-        "GO Annotation Pipeline",
+        "GO Term Lookup",
         "RGD GO and Disease Paper Review",
         "RGD GO Paper Review",
     ]
@@ -800,7 +800,10 @@ def test_startup_validation_rejects_a_recipe_step_that_is_an_attachment_only_val
     # One refused step reads in the singular and names the setting an operator can act on,
     # including the runtime override folder that can change it.
     assert "names a step that cannot be a flow step" in message
-    assert "'gene_validation' has category Validation with supervisor routing not enabled" in message
+    assert (
+        "'gene_validation' has category Validation with supervisor routing not enabled, "
+        "so it can run only as an automatic check on extraction steps"
+    ) in message
     assert str(get_runtime_config_dir() / "agents") in message
 
 

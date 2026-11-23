@@ -1073,7 +1073,7 @@ def _refused_recipe_step_reason(agent_id: str) -> str:
         return f"'{agent_id}' is an internal agent that is never a flow step"
     return (
         f"'{agent_id}' has category Validation with supervisor routing not enabled, so it "
-        "runs only as an automatic check on extraction steps"
+        "can run only as an automatic check on extraction steps"
     )
 
 
