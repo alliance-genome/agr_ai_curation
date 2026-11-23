@@ -106,6 +106,15 @@ describe('paperFileReasonText: one table for every code', () => {
     expect(listingRefusalText('document_source_import_disabled', 503, 'P')).toBeNull()
   })
 
+  it('tells a file not checked yet to refresh, since a reopen soon after checks nothing', () => {
+    const [file] = parsePaperSourceListing({
+      ...PAPER_LISTING,
+      files: [{ ...PAPER_LISTING.files[2], check: { ...PAPER_LISTING.files[2]!.check, status: 'check_limit_reached', reason: null } }],
+    }).files
+
+    expect(sourceFileStatusText(file!, 'P')).toBe('Not checked yet. Refresh this paper\'s details to check it.')
+  })
+
   it('states the little-text note as a count, not a guess about images', () => {
     expect(fewCharactersNote(1200)).toBe('Little text: about 1,200 characters')
   })

@@ -178,6 +178,14 @@ describe('DocumentFilesSection (read only)', () => {
     expect(screen.queryByText(/Could not check/)).not.toBeInTheDocument()
   })
 
+  it('keeps the dialog whole when a file is neither tickable nor gives a reason', async () => {
+    stubApi({ status: 200, payload: listingWith([{ ...PAPER_LISTING.files[4], not_tickable_reason: null }]) })
+    renderSection(PROVIDER)
+
+    expect(await screen.findByText('This paper\'s files in ABC Literature could not be shown.')).toBeInTheDocument()
+    expect(await screen.findByRole('list', { name: 'Files in this paper' })).toBeInTheDocument()
+  })
+
   it('asks to sign in again only when the sign-in is missing', async () => {
     stubApi({ status: 409, payload: { detail: { error: 'document_source_curator_token_unavailable' } } })
     renderSection(PROVIDER)

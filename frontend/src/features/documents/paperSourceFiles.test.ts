@@ -46,6 +46,16 @@ describe('paperSourceFiles', () => {
     ])
   })
 
+  it('refuses a file that is neither tickable nor gives a reason, or both', () => {
+    for (const shape of [
+      { tickable: false, not_tickable_reason: null },
+      { tickable: true, not_tickable_reason: 'large_data_file' },
+    ]) {
+      expect(() => parsePaperSourceListing({ ...PAPER_LISTING, files: [{ ...PAPER_LISTING.files[1], ...shape }] }))
+        .toThrow(PaperSourceFilesContractError)
+    }
+  })
+
   it('refuses a malformed file or code as a contract error', () => {
     expect(() => parsePaperSourceListing({ ...PAPER_LISTING, files: [{ ...PAPER_LISTING.files[1], not_tickable_reason: 7 }] }))
       .toThrow(PaperSourceFilesContractError)

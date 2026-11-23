@@ -77,7 +77,14 @@ export interface PaperSourceFileCheck {
   few_characters_count: number | null
 }
 
-export interface PaperSourceFile {
+/** A file is either tickable with no reason, or not tickable with one (checked when parsed). */
+export type PaperSourceFileTickability =
+  | { tickable: true; not_tickable_reason: null }
+  | { tickable: false; not_tickable_reason: NotTickableReasonCode }
+
+export type PaperSourceFile = PaperSourceFileFields & PaperSourceFileTickability
+
+interface PaperSourceFileFields {
   recognized: true
   provider_file_id: string
   display_name: string | null
@@ -87,8 +94,6 @@ export interface PaperSourceFile {
   category: (typeof CATEGORIES)[number] | null
   status: (typeof FILE_STATUSES)[number]
   in_this_paper: boolean
-  tickable: boolean
-  not_tickable_reason: NotTickableReasonCode | null
   last_provider_observation: { code: ObservationCode; observed_at: string } | null
   check: PaperSourceFileCheck
 }
@@ -223,6 +228,7 @@ function parseFile(value: unknown): PaperSourceListedFile {
   if (value.tickable && convertedMd5 === null) {
     throw new PaperSourceFilesContractError('A supplement that can be added must have converted text')
   }
+  const tickable = value.tickable
   const known = {
     provider_file_id: value.provider_file_id,
     display_name: displayName,
@@ -231,13 +237,21 @@ function parseFile(value: unknown): PaperSourceListedFile {
     category: oneOfOrNull(value.category, CATEGORIES, 'category'),
     status: oneOf(value.status, FILE_STATUSES, 'status'),
     in_this_paper: value.in_this_paper,
-    tickable: value.tickable,
   }
   try {
+    const reason = codeOrNull(value.not_tickable_reason, NOT_TICKABLE_REASON_CODES, 'not_tickable_reason')
+    let tickability: PaperSourceFileTickability
+    if (tickable && reason === null) {
+      tickability = { tickable: true, not_tickable_reason: null }
+    } else if (!tickable && reason !== null) {
+      tickability = { tickable: false, not_tickable_reason: reason }
+    } else {
+      throw new PaperSourceFilesContractError('A listed file must be either tickable or give a reason, not both or neither')
+    }
     return {
       recognized: true,
       ...known,
-      not_tickable_reason: codeOrNull(value.not_tickable_reason, NOT_TICKABLE_REASON_CODES, 'not_tickable_reason'),
+      ...tickability,
       last_provider_observation: observation === null
         ? null
         : {

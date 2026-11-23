@@ -48,7 +48,8 @@ export const CHECK_STATUS_TEXT: Record<Exclude<CheckStatus, 'passed' | 'refused'
   text_missing: (provider) => `Its converted text is missing in ${provider}`,
   text_access_denied: (provider) => `${provider} refused access to its converted text`,
   text_without_checksum: (provider) => `${provider} did not give the details needed to add its converted text safely`,
-  check_limit_reached: () => 'Not checked yet; it is checked the next time this list is opened',
+  // Reopening within PAPER_SOURCE_FILES_STALE_MS checks nothing; only a refresh does.
+  check_limit_reached: () => 'Not checked yet. Refresh this paper\'s details to check it.',
   not_checked: () => 'Not checked yet',
 }
 
@@ -124,9 +125,6 @@ export function sourceFileStatusText(file: PaperSourceListedFile, provider: stri
   if (file.tickable) {
     // Only a supplement with converted text is ever tickable (checked when parsed).
     return ADDABLE_TEXT(provider)
-  }
-  if (file.not_tickable_reason === null) {
-    throw new Error(`Listed file ${file.provider_file_id} is neither tickable nor gives a reason`)
   }
   if (file.not_tickable_reason === 'check_not_passed') {
     if (file.check.reason !== null) {
