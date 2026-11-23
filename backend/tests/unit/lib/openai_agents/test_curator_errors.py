@@ -145,3 +145,15 @@ def test_pdf_read_failure_survives_wrappers_and_timeout_causes(wrapped):
     failure = classify_failure(error)
     assert failure.category == "pdf_read_failed"
     assert "PRIVATE" not in failure.message
+
+
+def test_a_result_quoting_a_removed_file_has_its_own_category_through_a_tool_wrapper():
+    # A flow's handoff tool (or a batch's flow) raises it; the SDK wraps tool errors.
+    from src.lib.curation_workspace.removed_file_gate import ResultQuotesRemovedFile
+
+    wrapped = RuntimeError("tool call wrapper")
+    wrapped.__cause__ = ResultQuotesRemovedFile()
+    result = classify_failure(wrapped)
+    assert (result.category, result.retryable) == ("result_quotes_removed_file", True)
+    assert "removed" in result.message and "ResultQuotesRemovedFile" not in result.message
+    assert failure_for_event({"error_type": "ResultQuotesRemovedFile"}).category == "result_quotes_removed_file"

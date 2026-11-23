@@ -16,11 +16,17 @@ Nothing that names the file elsewhere is cascaded away or rewritten
 - Chat evidence and files-read records keep the file's id and name. The viewer and
   the model's listings show such evidence as not openable.
 
-The file row goes first, in one transaction under the paper and file row locks.
-Every reader takes readable piece ranges from ``ready`` rows, so the file's pieces
-are unreadable from that commit. Its pieces, stored files and the paper's piece
-counts follow. A failure there leaves only orphans nobody can read (piece numbers
-are never reused); it is reported, and the removal stands.
+Two phases (decided 23 Nov 2026, option A):
+
+1. One transaction under the paper and file row locks makes every check and sets the
+   file's status to ``removed``. Every reader keeps to ``ready`` rows, so the file is
+   gone for them from that commit, and no evidence can name it any more.
+2. Its piece range, its stored files and the paper's piece counts are cleared, then
+   the row is deleted last. A failed step is reported and leaves the row ``removed``
+   with its range and paths, so nothing is left that the system cannot find: removing
+   the file again finishes the job, and so does deleting the paper (which clears every
+   row's files and every piece of the paper). Piece numbers are never reused, so a
+   leftover range never meets a later add's range.
 """
 
 from __future__ import annotations
@@ -36,6 +42,7 @@ from src.models.sql.pdf_document import (
     FILE_ROLE_SUPPLEMENT,
     FILE_STATUS_FAILED,
     FILE_STATUS_READY,
+    FILE_STATUS_REMOVED,
     PDFDocument,
     PDFDocumentFile,
 )
@@ -78,6 +85,10 @@ class FileRemoved:
     ready_piece_total: int
     cleanup_failures: list[str] = field(default_factory=list)
 
+    @property
+    def cleanup_finished(self) -> bool:
+        return not self.cleanup_failures
+
 
 def quoting_session_ids(session: Any, *, document_id: UUID, file_id: UUID) -> list[str]:
     """The review sessions that quote the file, by an evidence anchor or by session envelope evidence."""
@@ -110,8 +121,112 @@ def quoting_session_ids(session: Any, *, document_id: UUID, file_id: UUID) -> li
     return sorted({str(session_id) for session_id in (*by_anchor, *by_envelope)})
 
 
-def _remove_row(document_id: UUID, owner_user_id: int, file_id: UUID) -> FileRemoved:
-    """Every check and the row delete, in one transaction (worker thread)."""
+def _refuse_unless_removable(
+    session: Any, *, document_id: UUID, paper: PDFDocument, file_row: PDFDocumentFile | None,
+) -> list[PDFDocumentFile]:
+    """Every removal check, shared by the removal and its read-only pre-check.
+
+    Raises ``FileRemovalRefused``; returns the paper's other ready files. A file already
+    ``removed`` passes (its clean-up is unfinished; it was checked when it was marked).
+    """
+
+    if session.scalar(select(exists().where(
+        PdfProcessingJob.document_id == document_id,
+        PdfProcessingJob.status.in_(_ACTIVE_JOB_STATUSES),
+    ))):
+        raise FileRemovalRefused(409, "import_in_progress")
+    if paper.status != PAPER_STATUS_COMPLETED:
+        raise FileRemovalRefused(409, "paper_not_completed")
+    if file_row is None or file_row.document_id != document_id:
+        raise FileRemovalRefused(404, "file_not_in_paper")
+    if file_row.role != FILE_ROLE_SUPPLEMENT:
+        raise FileRemovalRefused(409, "main_file_not_removable")
+    if file_row.status not in (FILE_STATUS_READY, FILE_STATUS_FAILED, FILE_STATUS_REMOVED):
+        raise RuntimeError(f"File {file_row.id} is {file_row.status} with no active job on its paper")
+    other_ready = [row for row in paper.files if row.id != file_row.id and row.status == FILE_STATUS_READY]
+    if file_row.status != FILE_STATUS_REMOVED:
+        if not other_ready:
+            raise FileRemovalRefused(409, "last_file_not_removable")
+        sessions = quoting_session_ids(session, document_id=document_id, file_id=file_row.id)
+        if sessions:
+            raise FileRemovalRefused(409, "file_quoted_in_review", session_ids=sessions)
+    return other_ready
+
+
+def newest_result_quotes_file(session: Any, *, document_id: UUID, owner_subject: str, file_id: UUID) -> bool:
+    """Whether the result the Library's Review & Curate would replay quotes the file.
+
+    The bootstrap's own selection (the owner's newest prepared result for the paper, no
+    adapter or flow filter, as the Library sends it), then a file id comparison over its
+    envelopes' stored evidence. Structural only.
+    """
+
+    from fastapi import HTTPException
+
+    from src.lib.curation_workspace.bootstrap_service import (
+        _replayable_prep_output,
+        _select_bootstrap_extraction_result,
+    )
+    from src.lib.curation_workspace.models import DomainEnvelopeModel
+    from src.lib.curation_workspace.removed_file_gate import quoted_file_ids
+    from src.schemas.curation_workspace import CurationDocumentBootstrapRequest
+
+    try:
+        newest = _select_bootstrap_extraction_result(
+            session, document_id=str(document_id), request=CurationDocumentBootstrapRequest(),
+            current_user_id=owner_subject,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return False  # no prepared result: Review & Curate has nothing to replay
+        raise
+    for envelope_ref in _replayable_prep_output(newest).envelope_refs:
+        envelope = session.get(DomainEnvelopeModel, envelope_ref.envelope_id)
+        if envelope is not None and str(file_id) in quoted_file_ids(envelope.envelope_json):
+            return True
+    return False
+
+
+def removal_check(document_id: UUID, owner_user_id: int, file_id: UUID) -> dict[str, Any]:
+    """Read-only: what removing the file would do now, for the screen's confirmation (codes only)."""
+
+    from src.lib.pdf_jobs import service as pdf_job_service
+    from src.models.sql.database import SessionLocal
+    from src.models.sql.user import User
+    from src.services.document_access import require_owned_document
+
+    pdf_job_service.get_latest_job_for_document(
+        document_id=document_id, user_id=owner_user_id, reconcile_stale=True,
+    )
+    with SessionLocal() as session:
+        paper = require_owned_document(session, document_id, owner_user_id)
+        file_row = session.get(PDFDocumentFile, file_id)
+        refusal: FileRemovalRefused | None = None
+        try:
+            _refuse_unless_removable(session, document_id=document_id, paper=paper, file_row=file_row)
+        except FileRemovalRefused as refused:
+            refusal = refused
+        subject = session.scalar(select(User.auth_sub).where(User.id == owner_user_id))
+        quotes = newest_result_quotes_file(session, document_id=document_id, owner_subject=subject, file_id=file_id)
+    answer: dict[str, Any] = {
+        "document_id": str(document_id),
+        "file_id": str(file_id),
+        "removable": refusal is None,
+        "error": refusal.code if refusal else None,
+        "newest_result_quotes_file": quotes,
+    }
+    if refusal is not None:
+        answer.update(refusal.details)
+    return answer
+
+
+def _mark_removed(document_id: UUID, owner_user_id: int, file_id: UUID) -> FileRemoved:
+    """Phase 1: every check, then status ``removed``, in one transaction (worker thread).
+
+    A file already ``removed`` (an earlier removal whose clean-up failed) passes
+    straight to the clean-up: it was checked when it was marked, and nothing can
+    have come to quote it since (evidence names only ready files).
+    """
 
     from src.lib.pdf_jobs import service as pdf_job_service
     from src.models.sql.database import SessionLocal
@@ -132,31 +247,13 @@ def _remove_row(document_id: UUID, owner_user_id: int, file_id: UUID) -> FileRem
             select(PDFDocument).where(PDFDocument.id == document_id)
             .with_for_update(nowait=True).execution_options(populate_existing=True)
         ).scalar_one()
-        if session.scalar(select(exists().where(
-            PdfProcessingJob.document_id == document_id,
-            PdfProcessingJob.status.in_(_ACTIVE_JOB_STATUSES),
-        ))):
-            raise FileRemovalRefused(409, "import_in_progress")
-        if paper.status != PAPER_STATUS_COMPLETED:
-            raise FileRemovalRefused(409, "paper_not_completed")
         file_row = session.execute(
             select(PDFDocumentFile).where(PDFDocumentFile.id == file_id)
             .with_for_update(nowait=True).execution_options(populate_existing=True)
         ).scalar_one_or_none()
-        if file_row is None or file_row.document_id != document_id:
-            raise FileRemovalRefused(404, "file_not_in_paper")
-        if file_row.role != FILE_ROLE_SUPPLEMENT:
-            raise FileRemovalRefused(409, "main_file_not_removable")
-        if file_row.status not in (FILE_STATUS_READY, FILE_STATUS_FAILED):
-            raise RuntimeError(f"File {file_id} is {file_row.status} with no active job on its paper")
-        other_ready = [
-            row for row in paper.files if row.id != file_row.id and row.status == FILE_STATUS_READY
-        ]
-        if not other_ready:
-            raise FileRemovalRefused(409, "last_file_not_removable")
-        sessions = quoting_session_ids(session, document_id=document_id, file_id=file_id)
-        if sessions:
-            raise FileRemovalRefused(409, "file_quoted_in_review", session_ids=sessions)
+        other_ready = _refuse_unless_removable(session, document_id=document_id, paper=paper, file_row=file_row)
+        if file_row.status != FILE_STATUS_REMOVED:
+            file_row.status = FILE_STATUS_REMOVED
 
         subject = session.scalar(select(User.auth_sub).where(User.id == owner_user_id))
         if not subject:
@@ -167,9 +264,10 @@ def _remove_row(document_id: UUID, owner_user_id: int, file_id: UUID) -> FileRem
             else None
         )
         stored_paths = tuple(dict.fromkeys(
-            path for path in (file_row.source_markdown_path, file_row.processed_json_path, file_row.file_path) if path
+            path for path in (
+                file_row.source_markdown_path, file_row.processed_json_path, file_row.pdfx_json_path, file_row.file_path,
+            ) if path
         ))
-        session.delete(file_row)
         return FileRemoved(
             document_id=document_id,
             file_id=file_id,
@@ -181,25 +279,32 @@ def _remove_row(document_id: UUID, owner_user_id: int, file_id: UUID) -> FileRem
         )
 
 
-def _remove_row_or_refuse(document_id: UUID, owner_user_id: int, file_id: UUID) -> FileRemoved:
-    """``_remove_row``; an anchor written at the same moment makes the commit fail on its foreign key."""
+def _mark_removed_or_busy(document_id: UUID, owner_user_id: int, file_id: UUID) -> FileRemoved:
+    """``_mark_removed``; a row lock held elsewhere is ``PaperRowsBusy`` (NOWAIT)."""
 
-    from sqlalchemy.exc import IntegrityError, OperationalError
-
-    from src.models.sql.database import SessionLocal
+    from sqlalchemy.exc import OperationalError
 
     try:
-        return _remove_row(document_id, owner_user_id, file_id)
+        return _mark_removed(document_id, owner_user_id, file_id)
     except OperationalError as exc:
         if getattr(exc.orig, "pgcode", None) == "55P03":  # lock_not_available (NOWAIT)
             raise PaperRowsBusy(str(document_id)) from None
         raise
-    except IntegrityError as exc:
-        if "fk_evidence_anchors_source_file_id" not in str(exc.orig):
-            raise
-        with SessionLocal() as session:
-            sessions = quoting_session_ids(session, document_id=document_id, file_id=file_id)
-        raise FileRemovalRefused(409, "file_quoted_in_review", session_ids=sessions) from None
+
+
+def _delete_removed_row(document_id: UUID, file_id: UUID) -> None:
+    """Phase 2's last step: the ``removed`` row goes once everything it named is cleared."""
+
+    from src.models.sql.database import SessionLocal
+
+    with SessionLocal() as session, session.begin():
+        file_row = session.execute(
+            select(PDFDocumentFile).where(PDFDocumentFile.id == file_id)
+            .with_for_update(nowait=True).execution_options(populate_existing=True)
+        ).scalar_one()
+        if file_row.document_id != document_id or file_row.status != FILE_STATUS_REMOVED:
+            raise RuntimeError(f"File {file_id} is not a removed file of paper {document_id}")
+        session.delete(file_row)
 
 
 async def remove_paper_file(
@@ -212,7 +317,9 @@ async def remove_paper_file(
     from src.lib.pipeline.store import update_document_piece_count
     from src.lib.weaviate_client.chunks import delete_chunk_range
 
-    removed = await asyncio.to_thread(_remove_row_or_refuse, document_id, owner_user_id, file_id)
+    removed = await asyncio.to_thread(_mark_removed_or_busy, document_id, owner_user_id, file_id)
+    # From here a cancelled request stops the clean-up part way: the row stays ``removed``
+    # with its range and paths, and a retry or the paper delete finishes it.
     subject = removed.owner_subject
     if removed.chunk_range is not None:
         start, end = removed.chunk_range
@@ -222,7 +329,7 @@ async def remove_paper_file(
             removed.cleanup_failures.append("pieces")
             _report_cleanup_failure(exc, document_id, "pieces")
     try:
-        await asyncio.to_thread(remove_stored_files, removed.stored_paths)
+        await asyncio.to_thread(remove_stored_files, removed.stored_paths, owner_subject=subject)
     except Exception as exc:
         removed.cleanup_failures.append("stored_files")
         _report_cleanup_failure(exc, document_id, "stored_files")
@@ -231,12 +338,27 @@ async def remove_paper_file(
     except Exception as exc:
         removed.cleanup_failures.append("piece_count")
         _report_cleanup_failure(exc, document_id, "piece_count")
-    invalidate_cache(subject, str(document_id))
+    if removed.cleanup_finished:
+        # Only now: until here the row is how a retry or the paper delete finds the leftovers.
+        try:
+            await asyncio.to_thread(_delete_removed_row, document_id, file_id)
+        except Exception as exc:
+            removed.cleanup_failures.append("file_row")
+            _report_cleanup_failure(exc, document_id, "file_row")
+    try:
+        invalidate_cache(subject, str(document_id))
+    except Exception as exc:
+        # The outline cache is keyed to the readable files, so a stale entry never matches.
+        _report_cleanup_failure(exc, document_id, "cache")
     return removed
 
 
 def _report_cleanup_failure(exc: Exception, document_id: UUID, step: str) -> None:
-    """The file is removed and unreadable; something it left behind could not be cleared."""
+    """The file is removed and unreadable; something it left behind could not be cleared yet.
+
+    The row stays ``removed`` with its range and paths. Operators find such rows with
+    ``SELECT id, document_id FROM pdf_document_files WHERE status = 'removed'``.
+    """
 
     from src.lib.observability.runtime import report_runtime_exception
 

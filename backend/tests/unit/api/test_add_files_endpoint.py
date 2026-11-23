@@ -93,6 +93,17 @@ async def test_a_second_active_job_is_a_409(monkeypatch, wired):
 
 
 @pytest.mark.asyncio
+async def test_a_file_whose_removal_has_not_finished_is_a_409_with_its_code(monkeypatch, wired):
+    def unfinished(*_):
+        raise supplement_add.FileRemovalUnfinished(DOCUMENT_ID)
+
+    monkeypatch.setattr(supplement_add, "start_supplement_add", unfinished)
+    with pytest.raises(HTTPException) as raised:
+        await _call()
+    assert (raised.value.status_code, raised.value.detail) == (409, {"error": "file_removal_unfinished"})
+
+
+@pytest.mark.asyncio
 async def test_too_many_files_is_a_422_with_the_limit(monkeypatch, wired):
     def refuse(*_):
         raise supplement_add.SupplementAddRequestError("paper_file_limit", limit_value=20)

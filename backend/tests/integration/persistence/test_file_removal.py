@@ -124,6 +124,8 @@ def _session_quoting(paper: UUID, *, anchor_file: UUID | None = None, envelope_f
 @pytest.mark.asyncio
 async def test_a_supplement_is_removed_with_its_pieces_files_and_counts_and_nothing_else(owner_id, index, monkeypatch):
     paper = await _paper_with_supplements(owner_id, index, 20, 40)
+    other_paper = await _paper_with_supplements(owner_id, index, 20, 40)
+    (_, _, other_second) = _rows(other_paper)
     main, first, second = _rows(paper)
     first_paths = [app_config.get_pdf_storage_path() / path for path in (first.source_markdown_path, first.processed_json_path)]
     assert all(path.is_file() for path in first_paths)
@@ -131,12 +133,18 @@ async def test_a_supplement_is_removed_with_its_pieces_files_and_counts_and_noth
 
     answer = await _remove(paper, first.id)
 
-    assert answer == {"document_id": str(paper), "file_id": str(first.id), "removed": True, "ready_file_count": 2}
+    assert answer == {
+        "document_id": str(paper), "file_id": str(first.id), "removed": True, "cleanup_finished": True,
+        "ready_file_count": 2,
+    }
     remaining = _rows(paper)
     assert [row.id for row in remaining] == [main.id, second.id]
     expected = [*range(0, 3), *range(second.chunk_index_start, second.chunk_index_end + 1)]
     assert _indexes(index, str(paper)) == expected  # only the removed file's range is gone
     assert not any(path.exists() for path in first_paths)
+    # Exactly that file's copies: the other supplement's stay, and so does every other paper's.
+    assert all(path.is_file() for path in _stored_paths(second))
+    assert all(path.is_file() for path in _stored_paths(other_second))
     stored = _paper_object(index, paper)
     assert stored["chunkCount"] == stored["vectorCount"] == 3 + second.chunk_count
     assert (stored["processingStatus"], stored["embeddingStatus"]) == ("completed", "completed")
@@ -301,67 +309,225 @@ async def test_two_removals_of_one_file_give_one_removal(owner_id, index, monkey
     assert len(removed) == 1 and len(refused) == 1 and refused[0].status_code in (404, 409)
 
 
+_FAILING_STEPS = {
+    # The clean-up step that fails, and what to patch to make it fail.
+    "pieces": "src.lib.weaviate_client.chunks.delete_chunk_range",
+    "stored_files": "src.lib.document_files.service.remove_stored_files",
+    "piece_count": "src.lib.pipeline.store.update_document_piece_count",
+    "file_row": "src.lib.document_files.file_removal._delete_removed_row",
+}
+
+
+def _stored_paths(row) -> list:
+    root = app_config.get_pdf_storage_path()
+    return [root / path for path in (row.source_markdown_path, row.processed_json_path) if path]
+
+
+def _assert_gone_for_every_reader(paper: UUID, file_id: UUID, owner_id: int) -> None:
+    """No reader sees a file being removed: reads, viewer, Library count, listing, evidence, Prepare."""
+
+    from src.api import pdf_viewer
+    from src.lib.curation_workspace.evidence_files import require_paper_file
+    from src.lib.curation_workspace.removed_file_gate import ResultQuotesRemovedFile, require_quoted_files_ready
+    from src.lib.document_files.service import ready_file_count
+    from src.lib.document_sources import file_listing_service
+    from src.lib.pdf_viewer.files import find_paper_file
+
+    readable = resolve_readable_files(str(paper), TEST_USER_ID)
+    assert str(file_id) not in {f.file_id for f in readable.files}
+    with SessionLocal() as db:
+        listed = pdf_viewer.list_document_files(document_id=paper, db=db, user={"sub": TEST_USER_ID})
+        assert file_id not in {item.file_id for item in listed.files}
+        paper_row = db.get(PDFDocument, paper)
+        assert find_paper_file(paper_row, file_id) is None  # content routes answer 404
+        assert ready_file_count(paper_row) == 1
+    removed_row = next(row for row in _rows(paper) if row.id == file_id)
+    in_paper = file_listing_service._paper_lookup(paper, owner_id).file_ids
+    assert removed_row.source_provider_source_file_id not in in_paper
+    with SessionLocal() as db:
+        with pytest.raises(HTTPException) as refused:
+            require_paper_file(db, document_id=paper, file_id=str(file_id))
+        assert refused.value.status_code == 400 and refused.value.detail["code"] == "file_not_in_paper"
+        with pytest.raises(ResultQuotesRemovedFile):
+            require_quoted_files_ready(
+                db, document_id=str(paper), envelope_jsons=[{"evidence": [{"file_id": str(file_id)}]}],
+            )
+
+
 @pytest.mark.asyncio
-async def test_a_piece_delete_failing_after_the_row_is_gone_still_removes_the_file(owner_id, index, monkeypatch):
+@pytest.mark.parametrize("step", sorted(_FAILING_STEPS))
+@pytest.mark.parametrize("finisher", ["retry", "paper_delete"])
+async def test_a_failed_clean_up_step_leaves_a_removed_row_that_a_retry_or_the_paper_delete_finishes(
+    owner_id, index, monkeypatch, step, finisher,
+):
+    paper = await _paper_with_supplements(owner_id, index, 20)
+    (main, supplement) = _rows(paper)
+    leftover = list(range(supplement.chunk_index_start, supplement.chunk_index_end + 1))
+    paths = _stored_paths(supplement)
+    assert all(path.is_file() for path in paths)
+    _wire(monkeypatch, owner_id)
+    reports = []
+    monkeypatch.setattr(
+        "src.lib.observability.runtime.report_runtime_exception", lambda exc, **kwargs: reports.append(kwargs),
+    )
+    target = _FAILING_STEPS[step]
+    module_path, name = target.rsplit(".", 1)
+    module = __import__(module_path, fromlist=[name])
+    real = getattr(module, name)
+
+    async def failing_async(*_args, **_kwargs):
+        raise RuntimeError("made-up failure")
+
+    def failing(*_args, **_kwargs):
+        raise RuntimeError("made-up failure")
+
+    monkeypatch.setattr(module, name, failing_async if asyncio.iscoroutinefunction(real) else failing)
+    answer = await _remove(paper, supplement.id)
+    monkeypatch.setattr(module, name, real)
+
+    assert answer["removed"] is True and answer["cleanup_finished"] is False
+    assert [(r["operation"], r["context"]["step"]) for r in reports] == [("file_removal_cleanup_failed", step)]
+    (_, lingering) = _rows(paper)
+    assert lingering.id == supplement.id and lingering.status == "removed"
+    assert (lingering.chunk_index_start, lingering.source_markdown_path) == (
+        supplement.chunk_index_start, supplement.source_markdown_path,
+    )
+    _assert_gone_for_every_reader(paper, supplement.id, owner_id)
+
+    if finisher == "retry":
+        again = await _remove(paper, supplement.id)
+        assert again["removed"] is True and again["cleanup_finished"] is True
+        assert [row.id for row in _rows(paper)] == [main.id]
+        assert _indexes(index, str(paper)) == [0, 1, 2]
+        stored = _paper_object(index, paper)
+        assert stored["chunkCount"] == stored["vectorCount"] == 3
+        # A third removal finds nothing: the file is gone.
+        with pytest.raises(HTTPException) as gone:
+            await _remove(paper, supplement.id)
+        assert gone.value.status_code == 404
+    else:
+        _wire_delete(monkeypatch, owner_id)
+        result = await documents_api.delete_document_endpoint(document_id=str(paper), user={"sub": TEST_USER_ID})
+        assert result.success is True
+        assert _rows(paper) == [] and _indexes(index, str(paper)) == []
+    assert not any(path.exists() for path in paths)
+    assert not set(leftover) & set(_indexes(index, str(paper)))
+
+
+@pytest.mark.asyncio
+async def test_a_leftover_range_never_meets_a_later_add_and_a_re_add_waits_for_the_removal(owner_id, index, monkeypatch):
+    from src.lib.document_sources.supplement_add import FileRemovalUnfinished
+
     paper = await _paper_with_supplements(owner_id, index, 20)
     (_, supplement) = _rows(paper)
+    leftover = list(range(supplement.chunk_index_start, supplement.chunk_index_end + 1))
+    _wire(monkeypatch, owner_id)
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", lambda exc, **kwargs: None)
+    real_delete = chunk_reads.delete_chunk_range
+
+    def failing_delete(*_args, **_kwargs):
+        raise RuntimeError("made-up index failure")
+
+    monkeypatch.setattr(chunk_reads, "delete_chunk_range", failing_delete)
+    await _remove(paper, supplement.id)
+    monkeypatch.setattr(chunk_reads, "delete_chunk_range", real_delete)
+    assert _indexes(index, str(paper)) == [0, 1, 2, *leftover]  # the range is still there
+    from src.lib.weaviate_client.documents import re_embed_document
+
+    assert (await re_embed_document(str(paper), TEST_USER_ID))["total_chunks"] == 3  # readable pieces only
+
+    # The same provider file cannot come back while its removed row lingers.
+    with pytest.raises(FileRemovalUnfinished):
+        supplement_add.start_supplement_add(paper, owner_id, [_chosen(20)])
+
+    # Another file gets a range above every number ever used, and the leftover stays unreadable.
+    job = await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(40)])
+    await _add(paper, owner_id, index, [_chosen(40)], job_id=UUID(job.job_id))
+    from src.lib.pdf_jobs import service as pdf_job_service
+
+    pdf_job_service.mark_completed(job_id=job.job_id, message="made-up")
+    other = next(row for row in _rows(paper) if row.source_provider_source_file_id == "40")
+    assert other.chunk_index_start > max(leftover)
+    readable = resolve_readable_files(str(paper), TEST_USER_ID)
+    assert [(f.chunk_index_start, f.chunk_index_end) for f in readable.files] == [
+        (0, 2), (other.chunk_index_start, other.chunk_index_end),
+    ]
+
+    # Removing it again finishes the removal; then the file can be added again.
+    assert (await _remove(paper, supplement.id))["cleanup_finished"] is True
+    job = await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20)])
+    await _add(paper, owner_id, index, [_chosen(20)], job_id=UUID(job.job_id))
+    readded = next(row for row in _rows(paper) if row.source_provider_source_file_id == "20")
+    assert readded.status == "ready" and readded.chunk_index_start > other.chunk_index_end
+
+
+@pytest.mark.asyncio
+async def test_a_failing_cache_clear_is_reported_and_the_removal_stands(owner_id, index, monkeypatch):
+    paper = await _paper_with_supplements(owner_id, index, 20)
+    (main, supplement) = _rows(paper)
     _wire(monkeypatch, owner_id)
     reports = []
     monkeypatch.setattr(
         "src.lib.observability.runtime.report_runtime_exception", lambda exc, **kwargs: reports.append(kwargs),
     )
 
-    def failing_delete(*_args, **_kwargs):
-        raise RuntimeError("made-up index failure")
+    def failing(*_args, **_kwargs):
+        raise RuntimeError("made-up cache failure")
 
-    monkeypatch.setattr(chunk_reads, "delete_chunk_range", failing_delete)
+    monkeypatch.setattr("src.lib.document_cache.invalidate_cache", failing)
     answer = await _remove(paper, supplement.id)
-
-    assert answer["removed"] is True and len(_rows(paper)) == 1
-    assert [r["operation"] for r in reports] == ["file_removal_cleanup_failed"]
-    readable = resolve_readable_files(str(paper), TEST_USER_ID)
-    assert [(f.chunk_index_start, f.chunk_index_end) for f in readable.files] == [(0, 2)]  # orphans unreadable
+    assert answer["removed"] is True and answer["cleanup_finished"] is True
+    assert [row.id for row in _rows(paper)] == [main.id]
+    assert [r["context"]["step"] for r in reports] == ["cache"]
 
 
 @pytest.mark.asyncio
-async def test_a_leftover_range_never_meets_a_later_add_and_the_paper_delete_clears_it(owner_id, index, monkeypatch):
+async def test_a_request_cancelled_after_the_file_is_marked_leaves_a_removed_row_a_retry_finishes(
+    owner_id, index, monkeypatch,
+):
+    paper = await _paper_with_supplements(owner_id, index, 20)
+    (main, supplement) = _rows(paper)
+    paths = _stored_paths(supplement)
+    _wire(monkeypatch, owner_id)
+    real_delete = chunk_reads.delete_chunk_range
+
+    def cancelled(*_args, **_kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(chunk_reads, "delete_chunk_range", cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        await _remove(paper, supplement.id)
+    monkeypatch.setattr(chunk_reads, "delete_chunk_range", real_delete)
+    (_, lingering) = _rows(paper)
+    assert lingering.status == "removed" and all(path.is_file() for path in paths)
+    _assert_gone_for_every_reader(paper, supplement.id, owner_id)
+
+    again = await _remove(paper, supplement.id)  # the paper lock was released: the retry gets it
+    assert again["cleanup_finished"] is True
+    assert [row.id for row in _rows(paper)] == [main.id] and not any(path.exists() for path in paths)
+    assert _indexes(index, str(paper)) == [0, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_a_removed_row_never_counts_against_the_paper_file_limit(owner_id, index, monkeypatch):
     paper = await _paper_with_supplements(owner_id, index, 20)
     (_, supplement) = _rows(paper)
-    leftover = list(range(supplement.chunk_index_start, supplement.chunk_index_end + 1))
     _wire(monkeypatch, owner_id)
     monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", lambda exc, **kwargs: None)
 
-    def failing_delete(*_args, **_kwargs):
-        raise RuntimeError("made-up index failure")
+    def failing(*_args, **_kwargs):
+        raise RuntimeError("made-up failure")
 
-    real_delete = chunk_reads.delete_chunk_range
-    monkeypatch.setattr(chunk_reads, "delete_chunk_range", failing_delete)
+    monkeypatch.setattr("src.lib.document_files.file_removal._delete_removed_row", failing)
     await _remove(paper, supplement.id)
-    monkeypatch.setattr(chunk_reads, "delete_chunk_range", real_delete)
-    assert _indexes(index, str(paper)) == [0, 1, 2, *leftover]  # the range was left behind
-
-    # The same provider file added again gets a fresh range above every number ever used.
-    job = await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20)])
-    await _add(paper, owner_id, index, [_chosen(20)], job_id=UUID(job.job_id))
-    (_, again) = _rows(paper)
-    assert again.chunk_index_start > max(leftover)
-    readable = resolve_readable_files(str(paper), TEST_USER_ID)
-    assert [(f.chunk_index_start, f.chunk_index_end) for f in readable.files] == [
-        (0, 2), (again.chunk_index_start, again.chunk_index_end),
-    ]
-    from src.lib.pdf_jobs import service as pdf_job_service
-
-    pdf_job_service.mark_completed(job_id=job.job_id, message="made-up")
-
-    # Deleting the paper removes every piece by document id, the leftover range included.
-    _wire_delete(monkeypatch, owner_id)
-    result = await documents_api.delete_document_endpoint(document_id=str(paper), user={"sub": TEST_USER_ID})
-    assert result.success is True
-    assert _indexes(index, str(paper)) == []
+    # The main file plus one more: the lingering removed row does not take a place.
+    monkeypatch.setattr("src.lib.openai_agents.config.get_document_max_files_per_paper", lambda: 2)
+    job = await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(40)])
+    assert job.job_id
 
 
 @pytest.mark.asyncio
-async def test_with_a_pool_of_two_a_removal_never_blocks_the_loop_and_a_timeout_is_a_503(owner_id, index, monkeypatch):
+async def test_with_a_one_connection_pool_a_removal_never_blocks_the_loop_and_a_timeout_is_a_503(owner_id, index, monkeypatch):
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
@@ -444,6 +610,15 @@ async def test_preparation_refuses_a_result_that_quotes_a_removed_file(owner_id,
         await asyncio.to_thread(prepare, quoting_first)
     assert raised.value.code == "result_quotes_removed_file"
     await asyncio.to_thread(prepare, quoting_second)  # a result quoting a remaining file prepares
+
+    # A ready file of ANOTHER paper is not a file of this paper: refused too.
+    other_paper = await asyncio.to_thread(_paper, owner_id, index, main_end=1)
+    (other_main,) = _rows(other_paper)
+    with pytest.raises(ResultQuotesRemovedFile):
+        with SessionLocal.begin() as db:
+            require_quoted_files_ready(
+                db, document_id=str(paper), envelope_jsons=[{"evidence": [{"file_id": str(other_main.id)}]}],
+            )
 
 
 def test_a_result_saved_before_files_were_recorded_prepares():
@@ -608,6 +783,7 @@ async def test_the_list_adds_no_query_per_row(owner_id, index, monkeypatch):
         statements.append(statement)
 
     await asyncio.to_thread(_paper, owner_id, index, main_end=1)
+    await _list_rows()  # warm: a first call loads things once (a cache), not per row
     event.listen(engine, "before_cursor_execute", count)
     try:
         await _list_rows()
@@ -620,4 +796,106 @@ async def test_the_list_adds_no_query_per_row(owner_id, index, monkeypatch):
         many = len(statements)
     finally:
         event.remove(engine, "before_cursor_execute", count)
-    assert many == few  # four more papers, the same number of queries
+    # Four more papers add no query (a query per row would add four). The total itself can
+    # differ by one between listings for reasons unrelated to rows, so it is not pinned.
+    assert many <= few, (few, many)
+
+
+# --- the read-only pre-check for the removal confirmation ---------------------------------------
+
+
+def _prepared_result_quoting(paper: UUID, envelope_id: str) -> None:
+    """A prepared result of the owner for the paper, replaying one envelope (what Review & Curate replays)."""
+
+    from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
+    from src.lib.curation_workspace.models import CurationExtractionResultRecord
+    from src.schemas.curation_prep import CurationPrepAgentOutput
+    from src.schemas.curation_workspace import CurationExtractionSourceKind
+
+    with SessionLocal.begin() as db:
+        envelope = db.get(DomainEnvelopeModel, envelope_id)
+        prep = CurationPrepAgentOutput.model_validate({"envelope_refs": [{
+            "envelope_id": envelope.envelope_id, "envelope_revision": envelope.revision,
+            "source_extraction_result_id": envelope.source_extraction_result_id,
+            "domain_pack_id": "example", "review_row_count": 1, "retired_record_count": 0}],
+            "review_row_count": 1, "run_metadata": {"model_name": "deterministic_programmatic_mapper_v1",
+                "token_usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}}})
+        db.add(CurationExtractionResultRecord(
+            document_id=paper, adapter_key="example", agent_key=CURATION_PREP_AGENT_ID,
+            source_kind=CurationExtractionSourceKind.CHAT, user_id=TEST_USER_ID, candidate_count=1,
+            payload_json=prep.model_dump(mode="json"),
+            extraction_metadata={"final_run_metadata": prep.run_metadata.model_dump(mode="json")},
+        ))
+
+
+async def _check(paper: UUID, file_id: UUID) -> dict:
+    return await documents_api.removal_check_endpoint(
+        document_id=str(paper), file_id=str(file_id), user={"sub": TEST_USER_ID},
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_pre_check_says_whether_review_and_curate_would_refuse_after_the_removal(
+    owner_id, index, monkeypatch, cleanup_sessions,
+):
+    paper = await _paper_with_supplements(owner_id, index, 20, 40)
+    (main, first, second) = _rows(paper)
+    _wire(monkeypatch, owner_id)
+    assert await _check(paper, first.id) == {
+        "document_id": str(paper), "file_id": str(first.id), "removable": True, "error": None,
+        "newest_result_quotes_file": False,  # nothing prepared yet
+    }
+    envelope_id = await asyncio.to_thread(_envelope_quoting, paper, first.id)
+    await asyncio.to_thread(_prepared_result_quoting, paper, envelope_id)
+    assert (await _check(paper, first.id))["newest_result_quotes_file"] is True
+    assert (await _check(paper, second.id))["newest_result_quotes_file"] is False
+    checked = await _check(paper, main.id)
+    assert (checked["removable"], checked["error"]) == (False, "main_file_not_removable")
+
+    session_id = await asyncio.to_thread(_session_quoting, paper, anchor_file=second.id)
+    checked = await _check(paper, second.id)
+    assert (checked["removable"], checked["error"], checked["session_ids"]) == (
+        False, "file_quoted_in_review", [str(session_id)],
+    )
+    # The pre-check changes nothing: both files are still ready.
+    assert [row.status for row in _rows(paper)] == ["ready", "ready", "ready"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status, swept_to", [
+    ("pending", "failed"), ("running", "failed"), ("cancel_requested", "cancelled"),
+])
+async def test_a_dead_job_stops_blocking_a_removal_even_after_a_refused_attempt(
+    owner_id, index, monkeypatch, status, swept_to,
+):
+    """Review R-stale / M16: through the endpoint, a refusal while the job is live, then the retry once it is dead."""
+
+    from sqlalchemy import text
+
+    from src.lib.pdf_jobs import service as pdf_job_service
+    from src.models.sql.pdf_processing_job import PdfProcessingJob
+
+    paper = await _paper_with_supplements(owner_id, index, 20)
+    (main, supplement) = _rows(paper)
+    _wire(monkeypatch, owner_id)
+    job = await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(40)])
+    with SessionLocal.begin() as db:
+        db.execute(text("UPDATE pdf_processing_jobs SET status = :s WHERE id = :i"), {"s": status, "i": job.job_id})
+
+    with pytest.raises(HTTPException) as refused:
+        await _remove(paper, supplement.id)  # the job is live: refused
+    assert (refused.value.status_code, refused.value.detail) == (409, {"error": "import_in_progress"})
+
+    # The job goes silent for longer than the stale limit (an add that died).
+    silent = pdf_job_service._stale_timeout_seconds() + 60
+    with SessionLocal.begin() as db:
+        db.execute(text(
+            "UPDATE pdf_processing_jobs SET updated_at = now() - make_interval(secs => :s), "
+            "started_at = now() - make_interval(secs => :s) WHERE id = :i"
+        ), {"s": silent, "i": job.job_id})
+
+    answer = await _remove(paper, supplement.id)  # the same removal, retried
+    assert answer["removed"] is True and answer["cleanup_finished"] is True
+    assert [row.id for row in _rows(paper)] == [main.id]
+    with SessionLocal() as db:
+        assert db.get(PdfProcessingJob, UUID(job.job_id)).status == swept_to

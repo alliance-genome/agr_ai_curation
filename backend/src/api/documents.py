@@ -432,18 +432,12 @@ def validate_user_file_path(
         Path("/runtime/state/pdf_storage/00u1abc2/doc.pdf")
     """
     try:
-        # Resolve to absolute path (eliminates ../, symlinks, etc.)
-        resolved_path = file_path.resolve()
-        storage_root_resolved = storage_root.resolve()
+        # One rule for every stored path (document_files/storage_paths.py).
+        from src.lib.document_files.storage_paths import StoredPathOutsideOwnerStorage, owner_storage_path
 
-        # User's storage must be under: storage_root / user_id /
-        user_storage_root = (storage_root_resolved / user_id).resolve()
-
-        # Check if resolved path is within user's storage directory
-        # Using relative_to() - raises ValueError if path is outside
         try:
-            resolved_path.relative_to(user_storage_root)
-        except ValueError as exc:
+            resolved_path = owner_storage_path(file_path, storage_root, user_id)
+        except StoredPathOutsideOwnerStorage as exc:
             logger.warning(
                 'Path traversal attempt detected: %s resolves outside user storage for %s', file_path, user_id)
             raise HTTPException(
@@ -1972,6 +1966,7 @@ async def add_files_to_paper_endpoint(
     """
     from ..lib.document_sources.supplement_add import (
         ChosenFile,
+        FileRemovalUnfinished,
         SupplementAddJobRequest,
         SupplementAddRequestError,
         run_supplement_add_job,
@@ -1999,6 +1994,8 @@ async def add_files_to_paper_endpoint(
         ) from None
     except ActiveJobExistsError:
         raise HTTPException(status_code=409, detail={"error": "import_in_progress"}) from None
+    except FileRemovalUnfinished as refused:
+        raise HTTPException(status_code=409, detail={"error": refused.code}) from None
     add_observed_background_task(
         background_tasks,
         run_supplement_add_job,
@@ -2010,6 +2007,30 @@ async def add_files_to_paper_endpoint(
         tags={"document_id": str(document_uuid), "job_id": job.job_id},
     )
     return job
+
+
+@router.get("/documents/{document_id}/files/{file_id}/removal-check")
+async def removal_check_endpoint(
+    document_id: str = Path(..., description="Document ID"),
+    file_id: str = Path(..., description="The paper file the curator may remove (pdf_document_files id)"),
+    user: dict[str, Any] = get_auth_dependency(),
+):
+    """Read-only: what removing this file would do now, for the removal confirmation (codes only).
+
+    ``removable`` and ``error`` (plus ``session_ids``) are the removal's own checks, made
+    without locks; ``newest_result_quotes_file`` says whether the result the Library's
+    Review & Curate would replay quotes the file, so after the removal that button would
+    answer ``result_quotes_removed_file`` until the extraction is run again. Owner only.
+    """
+    from ..lib.document_files.file_removal import removal_check
+
+    document_uuid = _parse_document_uuid(document_id)
+    try:
+        file_uuid = uuid.UUID(file_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail={"error": "file_not_in_paper"}) from None
+    db_user = await provision_user_async(principal_from_claims(user))
+    return await asyncio.to_thread(removal_check, document_uuid, db_user.id, file_uuid)
 
 
 @router.delete("/documents/{document_id}/files/{file_id}")
@@ -2060,6 +2081,9 @@ async def remove_paper_file_endpoint(
         "document_id": str(removed.document_id),
         "file_id": str(removed.file_id),
         "removed": True,
+        # False when part of the clean-up failed: the file is gone for every reader, and
+        # removing it again (or deleting the paper) finishes the clean-up.
+        "cleanup_finished": removed.cleanup_finished,
         "ready_file_count": removed.ready_file_count,
     }
 

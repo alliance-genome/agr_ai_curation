@@ -787,18 +787,15 @@ async def re_embed_document(
         try:
             # Get tenant-scoped collection (FR-011: user-specific data isolation)
             from ..weaviate_helpers import get_user_collections
-            chunk_collection, pdf_collection = get_user_collections(client, user_id)
+            _, pdf_collection = get_user_collections(client, user_id)
             collection = pdf_collection
 
-            # Count chunks for this document
-            def count_chunks():
-                chunks_result = chunk_collection.query.fetch_objects(
-                    filters=Filter.by_property("documentId").equal(document_id),
-                    limit=10000  # Large limit to count all chunks
-                )
-                return len(chunks_result.objects)
+            # The paper's readable pieces: the ranges of its ready files. A leftover range of a
+            # file being removed is in the index under this paper but is not the paper's.
+            from ..document_files.readable import resolve_readable_files
 
-            total_chunks = await asyncio.get_event_loop().run_in_executor(None, count_chunks)
+            readable = await asyncio.to_thread(resolve_readable_files, document_id, user_id)
+            total_chunks = sum(file.chunk_count for file in readable.files)
 
             # Update document status to trigger re-embedding
             await asyncio.get_event_loop().run_in_executor(

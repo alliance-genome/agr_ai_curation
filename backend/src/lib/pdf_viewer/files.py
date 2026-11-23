@@ -9,6 +9,7 @@ from src.models.sql.pdf_document import (
     DISPLAY_MODE_PROVIDER_PDF_PROXY,
     DISPLAY_MODE_TEXT,
     FILE_STATUS_READY,
+    FILE_STATUS_REMOVED,
     PDFDocument,
     PDFDocumentFile,
 )
@@ -42,9 +43,12 @@ def serves_text(file_row: PDFDocumentFile) -> bool:
 
 
 def find_paper_file(document: PDFDocument, file_id: UUID) -> PDFDocumentFile | None:
-    """The file with this id among this paper's own files; a file of another paper is never found."""
+    """The file with this id among this paper's own files; another paper's file, or one being removed, is never found."""
 
-    return next((file_row for file_row in document.files if file_row.id == file_id), None)
+    return next(
+        (file_row for file_row in document.files if file_row.id == file_id and file_row.status != FILE_STATUS_REMOVED),
+        None,
+    )
 
 
 def viewer_file_refs(document: PDFDocument) -> list[ViewerFileRef]:
@@ -64,4 +68,6 @@ def viewer_file_refs(document: PDFDocument) -> list[ViewerFileRef]:
             text_url=file_text_url(document.id, file_row.id) if serves_text(file_row) else None,
         )
         for file_row in sorted(document.files, key=lambda file_row: file_row.tab_order)
+        # A file being removed is gone for every reader.
+        if file_row.status != FILE_STATUS_REMOVED
     ]

@@ -231,16 +231,38 @@ def owned_paper_by_main_file_hash(owner_user_id: int, hashes: Iterable[str]):
     )
 
 
-def remove_stored_files(paths: Iterable[str]) -> None:
-    """Delete a file's stored copies (paths relative to the storage root); a missing one is fine."""
+class StoredFilesNotRemoved(RuntimeError):
+    """Some stored files could not be deleted; every other path was still tried."""
+
+
+def remove_stored_files(paths: Iterable[str], *, owner_subject: str) -> None:
+    """Delete stored files, one file at a time; the one helper for removals, adds and paper deletes.
+
+    Every path (relative to the storage root) must stay inside the owner's storage
+    folder (``storage_paths.owner_storage_path``): if any does not, nothing is deleted
+    and ``StoredPathOutsideOwnerStorage`` is raised. Each path is then unlinked on its
+    own: a missing one is fine, a directory is never removed (it fails like any other
+    path), and one failing path does not stop the others. ``StoredFilesNotRemoved``
+    reports the failures after every path was tried, so a retry has the same work left.
+    """
 
     from pathlib import Path
 
     from src.config import get_pdf_storage_path
+    from src.lib.document_files.storage_paths import owner_storage_path
 
     root = Path(get_pdf_storage_path())
-    for relative in paths:
-        (root / relative).unlink(missing_ok=True)
+    targets = [owner_storage_path(root / relative, root, owner_subject) for relative in dict.fromkeys(paths)]
+    failures: list[str] = []
+    for target in targets:
+        try:
+            if target.is_dir():
+                raise IsADirectoryError("a stored path names a directory")
+            target.unlink(missing_ok=True)
+        except OSError as exc:
+            failures.append(type(exc).__name__)
+    if failures:
+        raise StoredFilesNotRemoved(f"{len(failures)} of {len(targets)} stored files not removed ({', '.join(failures)})")
 
 
 def ready_file_count(paper: PDFDocument) -> int:

@@ -26,8 +26,9 @@ from sqlalchemy.orm import Session
 from src.models.sql.pdf_document import FILE_STATUS_READY, PDFDocumentFile
 
 RESULT_QUOTES_REMOVED_FILE = "result_quotes_removed_file"
-# Model-visible (chat preparation answers with it) and curator-visible: a proposal
-# awaiting Chris's sign-off (ALL-1460 P10b-api).
+# The exception's own text, for logs: routes send only the code, and a flow or batch
+# shows ``curator_errors``' message for it. No model reads it. A proposal awaiting
+# Chris's sign-off (ALL-1460 P10b-api).
 _MESSAGE = "This result quotes a file that was removed from the paper. Run the extraction again to review it."
 
 

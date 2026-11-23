@@ -37,6 +37,8 @@ _FAILURES = {
     "persistence_failed": CuratorFailure("persistence_failed", "The result could not be saved. This run did not complete, and unsaved output is not ready for curation. Keep any visible text and report the problem using the feedback menu.", False),
     "unknown": CuratorFailure("unknown", "This request could not be completed. Review the request before sending it again later. If it keeps failing, report it using the feedback menu.", True),
     "provider_content_policy": CuratorFailure("provider_content_policy", PROVIDER_POLICY_CHAT_MESSAGE, False, "openai"),
+    # A flow's or batch's results quote a file removed from the paper while it ran (ALL-1460 P10b).
+    "result_quotes_removed_file": CuratorFailure("result_quotes_removed_file", "A file of this paper was removed while this run was working, so its results could not be prepared for review. Run it again to use the paper's current files.", True),
 }
 _EVENT_CATEGORIES = {
     "DocumentReadError": "pdf_read_failed",
@@ -49,6 +51,7 @@ _EVENT_CATEGORIES = {
     "BuilderFinalizationMissing": "invalid_result",
     "MissingEvidenceRecords": "invalid_result",
     "GuardrailTriggered": "invalid_result",
+    "ResultQuotesRemovedFile": "result_quotes_removed_file",
     "extraction_persistence_failed": "persistence_failed",
     "validator_result_persistence_failed": "persistence_failed",
     "inline_extraction_persistence_failed": "persistence_failed",
