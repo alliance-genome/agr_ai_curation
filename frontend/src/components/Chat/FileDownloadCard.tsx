@@ -266,6 +266,7 @@ function FileDownloadCard({
           </Box>
           {file.set_aside && (
             <OutputSetAsideNotice
+              key={file.file_id}
               counts={file.set_aside}
               noun="file"
               outputName={file.filename}

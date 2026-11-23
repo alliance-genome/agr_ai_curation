@@ -931,9 +931,12 @@ def test_batch_document_response_keeps_each_files_set_aside_counts():
         "result_files": [
             {"file_id": "file-1", "filename": "genes.tsv", "download_url": "/api/files/file-1/download",
              "set_aside": {"included": 0, "left_out": 1}},
-            {"file_id": "file-2", "filename": "other.tsv", "download_url": "/api/files/file-2/download"},
+            {"file_id": "file-2", "filename": "other.tsv", "download_url": "/api/files/file-2/download",
+             "set_aside": {"included": 1, "left_out": 0, "included_keys": ["extract|r|object_id:x"]}},
         ],
         "review_details": {"set_aside": summary},
     }).model_dump(mode="json")
-    assert [item["set_aside"] for item in response["result_files"]] == [{"included": 0, "left_out": 1}, None]
+    assert [item["set_aside"] for item in response["result_files"]] == [
+        {"included": 0, "left_out": 1}, {"included": 1, "left_out": 0, "included_keys": ["extract|r|object_id:x"]},
+    ]
     assert response["review_details"] == {"set_aside": summary}

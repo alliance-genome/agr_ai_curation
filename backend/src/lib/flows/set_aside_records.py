@@ -48,7 +48,9 @@ def _set_aside_state(user_id: str, document_id: str, reference: dict) -> str | N
         return "covered" if selections.set_aside_in_transaction(db, artifact_id, manifest) else "held"
 
 
-def list_set_aside_records(*, user_id: str, flow_run_id: str, document_id: str) -> FlowRunSetAsideRecordsResponse:
+def list_set_aside_records(
+    *, user_id: str, flow_run_id: str, document_id: str, included_keys: set[str] | None = None,
+) -> FlowRunSetAsideRecordsResponse:
     """The owner's set-aside records of one run and document, grouped by saved result.
 
     Only the owner's own results are read (owner, document and run identity
@@ -63,6 +65,10 @@ def list_set_aside_records(*, user_id: str, flow_run_id: str, document_id: str) 
     )
     if not records:
         raise FlowRunResultsNotFound(f"Flow run {flow_run_id} has no saved results for this document")
+    if included_keys is not None and not included_keys:
+        return FlowRunSetAsideRecordsResponse(
+            flow_run_id=flow_run_id, document_id=document_id, set_aside_count=0, results=[],
+        )
     results = []
     for record in records:
         # Results of steps without a configured review carry no review reference.
@@ -75,7 +81,9 @@ def list_set_aside_records(*, user_id: str, flow_run_id: str, document_id: str) 
             profile_resolver=load_receipt_profile,
         )
         artifact, = bundle.artifacts
-        views = set_aside_record_views(bundle) if state == "covered" else []
+        views = set_aside_record_views(bundle, included_keys=included_keys) if state == "covered" else []
+        if included_keys is not None and not views:
+            continue
         results.append({
             "extraction_result_id": str(record.extraction_result_id),
             "node_id": record.metadata.get("flow_step_key"),

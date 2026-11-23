@@ -2150,6 +2150,8 @@ def _step_from_extraction_result(
     )
     return {
         "step": step_number,
+        # Reviewed flow results persist the graph node alongside the review reference.
+        "node_id": metadata["flow_step_key"] if metadata.get("flow_review") else None,
         "extraction_result_id": extraction_result.extraction_result_id,
         "agent_id": extraction_result.agent_key,
         "agent_name": extraction_result.agent_key.replace("_", " ").title(),
@@ -3810,7 +3812,9 @@ def apply_projection_plan(
     )
 
 
-def set_aside_record_views(bundle: FlowOutputArtifactBundle) -> list[dict[str, Any]]:
+def set_aside_record_views(
+    bundle: FlowOutputArtifactBundle, *, included_keys: set[str] | None = None,
+) -> list[dict[str, Any]]:
     """Each set-aside record of a bundle, read only, with the curator's own fields.
 
     One entry per record the review set aside (``FlowOutputArtifact.set_aside_records``):
@@ -3836,7 +3840,10 @@ def set_aside_record_views(bundle: FlowOutputArtifactBundle) -> list[dict[str, A
         keys = {key for record in artifact.set_aside_records for key in record}
         refs = [field["ref"] for field in artifact.source_fields]
         for row in artifact.rows_by_source.get("object") or []:
-            if not keys.intersection(_object_keys(row)):
+            object_keys = _object_keys(row)
+            if not keys.intersection(object_keys):
+                continue
+            if included_keys is not None and _set_aside_record_key(artifact, object_keys) not in included_keys:
                 continue
             object_type = str(row.get("object.object_type") or "")
             columns = [

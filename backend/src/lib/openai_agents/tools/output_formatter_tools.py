@@ -70,6 +70,7 @@ from src.lib.openai_agents.config import (
     get_formatter_preview_max_depth,
     get_output_tool_catalog_page_size,
 )
+from src.schemas.set_aside_records import OutputSetAsideReceipt
 
 
 FormatterSaveCallback = Callable[
@@ -633,16 +634,17 @@ def _projection_plan_from_tool_payload(
     return plan.model_copy(update={"format": output_format})
 
 
-def _set_aside_summary(projections: Sequence[FlowOutputProjectionResult]) -> dict[str, int] | None:
+def _set_aside_summary(projections: Sequence[FlowOutputProjectionResult]) -> OutputSetAsideReceipt | None:
     """Records the review set aside in one output's sources: in the output, or left out (ALL-1561).
 
     An output made of several projections (a chat report's sections) counts each
     record once: it is in the output when any projection shows it.
     """
     records = {key for projection in projections for key in projection.set_aside_record_keys}
-    included = len({key for projection in projections for key in projection.set_aside_included_keys})
-    left_out = len(records) - included
-    return {"included": included, "left_out": left_out} if included or left_out else None
+    if not records:
+        return None
+    included = sorted({key for projection in projections for key in projection.set_aside_included_keys})
+    return {"included": len(included), "left_out": len(records) - len(included), "included_keys": included}
 
 
 def _is_intentional_empty_projection(projection: FlowOutputProjectionResult) -> bool:
@@ -1474,7 +1476,7 @@ def build_output_formatter_tools(
             )
         return errors, warnings
 
-    def render_chat_report(report_json: str) -> tuple[str, dict[str, Any], dict[str, int] | None]:
+    def render_chat_report(report_json: str) -> tuple[str, dict[str, Any], OutputSetAsideReceipt | None]:
         """Validate/render all sections without delivering any partial report."""
         if not is_chat:
             raise ValueError("Reports are supported only for chat output.")

@@ -39,6 +39,7 @@ def _object(key, statement):
 
 def _reviewed_step(objects, pack=PACK, agent="gene_expression", node_id="node_1"):
     step = _envelope_step(agent, pack, objects, node_id=node_id)
+    step["extraction_result_id"] = f"result-{node_id}"
     step["candidate"].payload_json["metadata"] = {
         "validation_history": {"artifact_id": f"artifact-{node_id}", "session_id": "history-session"},
         # The envelope's evidence inventory; records cite it by ID.
@@ -107,7 +108,7 @@ def test_a_file_without_review_status_leaves_set_aside_records_out(reviewed, out
                   output_format) == [["statement"], ["in the gut"]]
     assert (plain.set_aside_left_out, plain.set_aside_included) == (1, 0)
     assert plain.export_accounting.candidate_row_count == 1
-    assert _set_aside_summary([plain]) == {"included": 0, "left_out": 1}
+    assert _set_aside_summary([plain]) == {"included": 0, "left_out": 1, "included_keys": []}
 
     marked = apply_projection_plan(bundle, _object_plan(output_format, [("statement", STATEMENT),
                                                                          ("Review status", STATUS)]))
@@ -181,7 +182,9 @@ def test_a_source_without_review_status_never_contributes_set_aside_records(revi
     assert [row["status"] for row in result.rows if row["statement"]] == ["accepted", "set aside"]
     assert [row["label"] for row in result.rows if row["statement"] is None] == ["VT1"]
     assert (result.set_aside_included, result.set_aside_left_out) == (1, 1)
-    assert _set_aside_summary([result]) == {"included": 1, "left_out": 1}
+    assert _set_aside_summary([result]) == {
+        "included": 1, "left_out": 1, "included_keys": result.set_aside_included_keys,
+    }
 
 
 def test_review_status_is_blank_for_a_pending_record_no_finished_run_set_aside(reviewed):
@@ -439,7 +442,7 @@ def test_a_chat_report_counts_each_set_aside_record_once_across_its_sections(rev
     one = apply_projection_plan(bundle, _object_plan("chat", [("statement", STATEMENT)]))
     two = apply_projection_plan(bundle, _object_plan("chat", [("statement", STATEMENT)]))
     assert (one.set_aside_left_out, two.set_aside_left_out) == (1, 1)
-    assert _set_aside_summary([one, two]) == {"included": 0, "left_out": 1}
+    assert _set_aside_summary([one, two]) == {"included": 0, "left_out": 1, "included_keys": []}
 
 
 def test_a_chat_report_counts_a_record_one_section_shows_as_in_the_report(reviewed):
@@ -448,5 +451,29 @@ def test_a_chat_report_counts_a_record_one_section_shows_as_in_the_report(review
     bundle = _bundle(reviewed, [_object("kept", "in the gut"), _object("aside", "near the gut")], aside={"aside"})
     plain = apply_projection_plan(bundle, _object_plan("chat", [("statement", STATEMENT)]))
     marked = apply_projection_plan(bundle, _object_plan("chat", [("statement", STATEMENT), ("status", STATUS)]))
-    assert _set_aside_summary([plain, marked]) == {"included": 1, "left_out": 0}
-    assert _set_aside_summary([marked, plain]) == {"included": 1, "left_out": 0}
+    expected = {"included": 1, "left_out": 0, "included_keys": marked.set_aside_included_keys}
+    assert _set_aside_summary([marked, marked]) == expected
+    assert _set_aside_summary([plain, marked]) == expected
+    assert _set_aside_summary([marked, plain]) == expected
+
+
+def test_output_set_aside_views_follow_receipts_for_disjoint_sources_and_partial_selection(reviewed):
+    from src.lib.openai_agents.models import file_ready_event_details
+
+    # Both sources use the same local object ID. The first output keeps one of two rows.
+    bundle = _bundle(reviewed, [_object("shared", "first"), _object("other", "omitted")],
+                     aside={"shared", "other"},
+                     extra_steps=[_reviewed_step([_object("shared", "second")], node_id="node_2")])
+    plan = _object_plan("csv", [("statement", STATEMENT), ("status", STATUS)])
+    for artifact, expected_statement in zip(bundle.artifacts, ("first", "second"), strict=True):
+        projection = apply_projection_plan(bundle, plan.model_copy(update={
+            "source_extraction_result_ids": [artifact.extraction_result_id], "max_rows": 1}))
+        assert projection.rows == [{"statement": expected_statement, "status": "set aside"}]
+        receipt = _set_aside_summary([projection])
+        assert receipt["included"] == 1
+        keys = file_ready_event_details({"set_aside": receipt})["set_aside"]["included_keys"]
+        [view] = set_aside_record_views(bundle, included_keys=set(keys))
+        assert view["extraction_result_id"] == artifact.extraction_result_id
+        assert next(field["value"] for field in view["fields"] if field["field_ref"] == STATEMENT) == expected_statement
+    assert len(set_aside_record_views(bundle)) == 3
+    assert set_aside_record_views(bundle, included_keys=set()) == []

@@ -1691,7 +1691,8 @@ async def test_set_aside_records_are_read_for_the_caller_only(monkeypatch):
     response = await module.get_flow_run_set_aside_records(
         flow_run_id="flow-alpha", document_id=document_id, user={"sub": "user-1"})
     assert response is expected
-    assert captured == {"user_id": "user-1", "flow_run_id": "flow-alpha", "document_id": str(document_id)}
+    assert captured == {"user_id": "user-1", "flow_run_id": "flow-alpha",
+                        "document_id": str(document_id), "included_keys": None}
 
 
 @pytest.mark.asyncio

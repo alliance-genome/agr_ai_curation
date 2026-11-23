@@ -7,7 +7,7 @@ import logging
 from typing import Annotated, Any, Callable, NoReturn, TypeVar
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
@@ -649,11 +649,28 @@ async def get_flow_run_set_aside_records(
     document_id: UUID = Query(...),
     user: dict = get_auth_dependency(),
 ) -> FlowRunSetAsideRecordsResponse:
-    """Read-only: the records this run's review set aside for one document (ALL-1561)."""
+    """Read the run-wide list, including for historical count-only receipts."""
+    return await _read_set_aside_records(flow_run_id, document_id, user, included_keys=None)
+
+
+@router.post("/flow-runs/{flow_run_id}/set-aside-records", response_model=FlowRunSetAsideRecordsResponse)
+async def get_output_set_aside_records(
+    flow_run_id: str,
+    included_keys: Annotated[set[str], Body(embed=True)],
+    document_id: UUID = Query(...),
+    user: dict = get_auth_dependency(),
+) -> FlowRunSetAsideRecordsResponse:
+    """Read the selected output's records. Its full receipt membership travels in the body."""
+    return await _read_set_aside_records(flow_run_id, document_id, user, included_keys)
+
+
+async def _read_set_aside_records(
+    flow_run_id: str, document_id: UUID, user: dict, included_keys: set[str] | None,
+) -> FlowRunSetAsideRecordsResponse:
     await provision_user_async(principal_from_claims(user))
     try:
         return await run_in_threadpool(list_set_aside_records, user_id=_require_current_user_id(user),
-                                       flow_run_id=flow_run_id, document_id=str(document_id))
+                                       flow_run_id=flow_run_id, document_id=str(document_id), included_keys=included_keys)
     except FlowRunResultsNotFound as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail=f"Flow run {flow_run_id} not found") from exc

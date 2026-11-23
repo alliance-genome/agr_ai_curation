@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypedDict
 
 from pydantic import BaseModel, ConfigDict
+
+
+class OutputSetAsideReceipt(TypedDict):
+    """A formatter output's exact membership after source selection, filters and row limits."""
+
+    included: int
+    left_out: int
+    included_keys: list[str]
 
 
 class SetAsideField(BaseModel):

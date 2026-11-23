@@ -90,6 +90,8 @@ export function setAsidePlacement(summary: FlowSetAsideSummary): SetAsidePlaceme
 
 /** One output's own counts (FILE_READY / CHAT_OUTPUT_READY `details.set_aside`). */
 export interface OutputSetAsideCounts {
+  /** Absent on historical count-only receipts. An empty list selects no records. */
+  included_keys?: string[]
   included: number
   left_out: number
 }
@@ -99,6 +101,10 @@ export function isOutputSetAsideCounts(value: unknown): value is OutputSetAsideC
   const candidate = value as Record<string, unknown>
   return isCount(candidate.included) && isCount(candidate.left_out)
     && candidate.included + candidate.left_out > 0
+    && (candidate.included_keys === undefined
+      || (Array.isArray(candidate.included_keys)
+        && candidate.included_keys.length === candidate.included
+        && candidate.included_keys.every((key) => typeof key === 'string')))
 }
 
 /**

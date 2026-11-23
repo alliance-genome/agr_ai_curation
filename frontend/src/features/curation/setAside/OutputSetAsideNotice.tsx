@@ -71,11 +71,12 @@ export default function OutputSetAsideNotice({
           open={viewerOpen}
           onClose={() => setViewerOpen(false)}
           flowName={null}
+          includedKeys={counts.included_keys}
           papers={[{
             flowRunId,
             documentId,
             title: outputName,
-            count: counts.left_out + counts.included,
+            count: counts.included_keys?.length ?? (counts.left_out + counts.included),
             placement: outputSetAsidePlacement(counts),
           }]}
         />

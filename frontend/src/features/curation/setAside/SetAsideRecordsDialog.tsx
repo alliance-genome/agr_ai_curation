@@ -59,6 +59,8 @@ interface SetAsideRecordsDialogProps {
   /** Null where the page has no flow name (a chat file card). */
   flowName: string | null
   papers: SetAsidePaper[]
+  /** File and chat receipts carry the exact record keys for their one paper. */
+  includedKeys?: string[]
 }
 
 type PaperLoad =
@@ -150,10 +152,12 @@ function RecordPanel({
 function PaperRecords({
   load,
   placement,
+  outputScoped,
   onRetry,
 }: {
   load: PaperLoad
   placement: SetAsidePlacement
+  outputScoped: boolean
   onRetry: () => void
 }) {
   if (load.state === 'loading') {
@@ -186,7 +190,8 @@ function PaperRecords({
     <Stack spacing={2}>
       {results.map((result) => {
         const heading = showHeadings ? resultHeading(result) : null
-        const tag = result.review_fields_available ? setAsidePlacementTag(placement) : 'Not in the file'
+        const unprofiled = !outputScoped && !result.review_fields_available
+        const tag = unprofiled ? 'Not in the file' : setAsidePlacementTag(placement)
         return (
           <Stack key={result.extraction_result_id} spacing={1.5}>
             {heading && (
@@ -197,7 +202,7 @@ function PaperRecords({
             {result.held_by_curator && (
               <Alert severity="info">{SET_ASIDE_HELD_BY_CURATOR_NOTE}</Alert>
             )}
-            {!result.held_by_curator && !result.review_fields_available && (
+            {!result.held_by_curator && unprofiled && (
               <Alert severity="info">{SET_ASIDE_UNPROFILED_NOTE}</Alert>
             )}
             {result.records.map((record, index) => (
@@ -224,6 +229,7 @@ export default function SetAsideRecordsDialog({
   onClose,
   flowName,
   papers,
+  includedKeys,
 }: SetAsideRecordsDialogProps) {
   const titleId = React.useId()
   const [loads, setLoads] = React.useState<Record<string, PaperLoad>>({})
@@ -233,7 +239,7 @@ export default function SetAsideRecordsDialog({
   const loadPaper = React.useCallback((paper: SetAsidePaper, signal: AbortSignal) => {
     const key = paperKey(paper)
     setLoads((current) => ({ ...current, [key]: { state: 'loading' } }))
-    fetchFlowRunSetAsideRecords(paper.flowRunId, paper.documentId, { signal })
+    fetchFlowRunSetAsideRecords(paper.flowRunId, paper.documentId, { signal, includedKeys })
       .then((data) => {
         if (signal.aborted) return
         setLoads((current) => ({ ...current, [key]: { state: 'loaded', data } }))
@@ -245,7 +251,7 @@ export default function SetAsideRecordsDialog({
           [key]: { state: 'error', message: error instanceof Error ? error.message : String(error) },
         }))
       })
-  }, [])
+  }, [includedKeys])
 
   React.useEffect(() => {
     if (!open) return
@@ -265,7 +271,8 @@ export default function SetAsideRecordsDialog({
   const paperText = papers.length === 1 ? papers[0].title : null
   const subtitle = [paperText, flowText].filter((part): part is string => Boolean(part)).join(' · ')
 
-  const placements = papers.map((paper) => paper.placement)
+  const outputScoped = includedKeys !== undefined
+  const placements = papers.map((paper) => outputScoped ? 'included' : paper.placement)
   const loadedResults = papers.flatMap((paper) => {
     const load = loads[paperKey(paper)]
     return load?.state === 'loaded' ? load.data.results : []
@@ -314,6 +321,7 @@ export default function SetAsideRecordsDialog({
             <PaperRecords
               load={loads[paperKey(papers[0])] ?? { state: 'loading' }}
               placement={placements[0]}
+              outputScoped={outputScoped}
               onRetry={() => retry(papers[0])}
             />
           ) : (
@@ -346,6 +354,7 @@ export default function SetAsideRecordsDialog({
                     <PaperRecords
                       load={loads[paperKey(paper)] ?? { state: 'loading' }}
                       placement={placements[index]}
+                      outputScoped={outputScoped}
                       onRetry={() => retry(paper)}
                     />
                   </AccordionDetails>
