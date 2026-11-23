@@ -79,6 +79,19 @@ class PerFileOutlineTests(unittest.TestCase):
         self.assertEqual([s["name"] for s in result["files"][1]["sections"]], ["Sheet1"])
         self.assertFalse(DocumentHierarchyAnalyzer.analyze({}, _observations(OUTLINE))["files_being_added"])
 
+    def test_the_abc_wait_line_is_reported(self):
+        waiting = OUTLINE.replace(
+            "**Sheet1** (19 chunks)\n",
+            "**Sheet1** (19 chunks)\n\nABC is still converting this paper's supplements; they cannot be read yet.\n")
+
+        result = DocumentHierarchyAnalyzer.analyze({}, _observations(waiting))
+
+        self.assertTrue(result["supplements_converting"])
+        self.assertFalse(result["files_being_added"])
+        self.assertEqual([s["name"] for s in result["files"][1]["sections"]], ["Sheet1"])
+        self.assertFalse(DocumentHierarchyAnalyzer.analyze({}, _observations(OUTLINE))["supplements_converting"])
+        self.assertFalse(DocumentHierarchyAnalyzer.analyze({}, [])["supplements_converting"])
+
     def test_an_outline_recorded_before_the_per_file_outline_still_reads(self):
         result = DocumentHierarchyAnalyzer.analyze({}, _observations(OLD_OUTLINE))
 

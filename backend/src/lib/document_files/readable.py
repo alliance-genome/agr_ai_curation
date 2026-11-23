@@ -155,6 +155,10 @@ class ReadableFiles:
     # only counted so the model can be told. A dead add's rows stop counting
     # when the reconciler marks them failed. Not part of the fingerprint.
     files_being_added: int = 0
+    # A living import of the paper is waiting for ABC to convert its supplements
+    # (``supplement_wait_active``). Read per run like files_being_added; never in
+    # main-file-only scope; not part of the fingerprint.
+    supplements_converting: bool = False
 
     def contains(self, chunk_index: int) -> bool:
         return self.file_for(chunk_index) is not None
@@ -189,7 +193,7 @@ class ReadableFiles:
 
         if file not in self.files:
             raise ReadableFilesError("The file is not one of this paper's readable files")
-        return ReadableFiles(self.document_id, (file,), self.files_being_added)
+        return ReadableFiles(self.document_id, (file,), self.files_being_added, self.supplements_converting)
 
     def ranges_text(self) -> str:
         """The readable ranges as the model is told them.
@@ -245,8 +249,13 @@ def readable_files_in_session(
             file_pages_trusted(row.display_mode, row.source_markdown_path),
         ))
     being_added = sum(1 for row, _label in in_scope if row.status == FILE_STATUS_PENDING)
+    converting = False
+    if scope is not ReadingScope.MAIN_FILE_ONLY:
+        from src.lib.pdf_jobs.service import supplement_wait_active
+
+        converting = supplement_wait_active(session, paper_id)
     # Keep the caller's spelling: read functions compare it with the documentId they filter on.
-    return ReadableFiles(str(document_id), tuple(files), being_added)
+    return ReadableFiles(str(document_id), tuple(files), being_added, converting)
 
 
 def resolve_readable_files(document_id: str, owner_auth_sub: str) -> ReadableFiles:
