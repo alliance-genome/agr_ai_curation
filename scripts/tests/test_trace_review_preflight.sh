@@ -8,7 +8,7 @@ preflight_script="${REPO_ROOT}/scripts/testing/trace_review_preflight.sh"
 assert_contains() {
   local pattern="$1"
   local file="$2"
-  if ! rg -n --fixed-strings "$pattern" "$file" >/dev/null 2>&1; then
+  if ! grep -n -F -- "$pattern" "$file" >/dev/null 2>&1; then
     echo "Expected to find '$pattern' in $file" >&2
     cat "$file" >&2
     exit 1
