@@ -225,11 +225,27 @@ describe('P9b review fixes', () => {
 
       await waitFor(() => expect(document.querySelectorAll('tr[aria-current="true"]')).toHaveLength(2), { timeout: 8000 })
       expect(document.querySelectorAll('tbody tr')).toHaveLength(7500)
-      expect(screen.getByText('Showing rows 1 to 7,500 of 9,000.')).toBeInTheDocument()
+      expect(screen.getByText(/^Showing rows 1 to 7,500 of 9,000\./)).toBeInTheDocument()
       // Every shown row is page text the browser's find can reach; rows not yet shown are not in the page.
       const pageText = document.body.textContent ?? ''
       expect(pageText).toContain('XS7499')
       expect(pageText).not.toContain('XS7500')
+    }, 20000)
+
+    it('a hover over evidence on a hidden row reveals nothing; a click then does', async () => {
+      stubViewerFetch({ textBlocks: [TEXT_SUPPLEMENT_BLOCKS.blocks[0]!, longSheet(8999)] })
+      await showFourFilePaper()
+      fireEvent.click(screen.getByRole('tab', { name: 'Table_S1.xlsx, file 2 of 3, converted text' }))
+      await screen.findByText(/^Showing rows 1 to 500 of 9,000\./)
+      const click = twoRowRecord(['| XS7000 | 25 C |', '| XS7001 | 25 C |'])
+
+      act(() => { dispatchPDFViewerNavigateEvidence({ ...click, mode: 'hover' }) })
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(document.querySelectorAll('tbody tr')).toHaveLength(500)
+
+      act(() => { dispatchPDFViewerNavigateEvidence(click) })
+      await waitFor(() => expect(document.querySelectorAll('tr[aria-current="true"]')).toHaveLength(2), { timeout: 8000 })
+      expect(document.querySelectorAll('tbody tr')).toHaveLength(7500)
     }, 20000)
 
     it('a section mark on a block after a long table, in a later section, is shown', async () => {
@@ -371,7 +387,7 @@ describe('P9b review fixes', () => {
       bump = () => setCount((value) => value + 1)
       return (
         <div data-count={count}>
-          <TextFileBlocks blocks={blocks} highlightedBlocks={null} sectionBlockIndex={null} firstHighlightRef={ref} />
+          <TextFileBlocks blocks={blocks} highlightedBlocks={null} highlightMode="select" sectionBlockIndex={null} firstHighlightRef={ref} />
         </div>
       )
     }

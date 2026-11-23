@@ -1,9 +1,9 @@
-import { Fragment, memo, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Fragment, memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Box, Button, Stack, Typography } from '@mui/material'
 import { alpha, useTheme } from '@mui/material/styles'
 
 import type { TextQuoteBlockSpan } from './viewerFileNavigation'
-import type { DisplayBlock } from './viewerFiles'
+import type { DisplayBlock, DisplayTableRow } from './viewerFiles'
 
 /**
  * Rendering of a text file's display blocks (ALL-1460, P9b and P9c).
@@ -14,12 +14,20 @@ import type { DisplayBlock } from './viewerFiles'
  * copy and screen readers work on what is shown.
  */
 
-/** Rows per part of a large table (a rendering constant; about 0.1 s for 500 rows of 8 cells in jsdom). */
+/** Rows per part of a large table (a rendering constant; about 0.1 s for 500 rows of 8 cells). */
 export const TABLE_ROWS_PER_PART = 500
+/**
+ * A part takes the rest of the table when fewer rows than this would be left, so the
+ * last button never offers a tiny number; a table of up to 600 rows renders whole.
+ */
+export const TABLE_PART_MIN_REMAINDER = 100
 
 /** Proposals, awaiting sign-off. */
 function shownRowsText(shown: number, total: number): string {
-  return `Showing rows 1 to ${shown.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}.`
+  return `Showing rows 1 to ${shown.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}. Find in your browser searches only the rows shown.`
+}
+function allRowsShownText(total: number): string {
+  return `Showing all ${total.toLocaleString('en-US')} rows.`
 }
 function showNextRowsText(count: number): string {
   return `Show the next ${count.toLocaleString('en-US')} rows`
@@ -28,14 +36,27 @@ function showAllRowsText(total: number): string {
   return `Show all ${total.toLocaleString('en-US')} rows`
 }
 
-/** How many rows to render: a whole part holding every highlighted row, and at least what was shown. */
-function rowsToRender(total: number, shown: number, highlightedRowIndexes: readonly number[]): number {
-  if (total <= TABLE_ROWS_PER_PART) {
+function rendersWhole(total: number): boolean {
+  return total <= TABLE_ROWS_PER_PART + TABLE_PART_MIN_REMAINDER
+}
+
+/** Where the part starting at `start` ends: a whole part, or the rest when little would be left. */
+function partEnd(total: number, start: number): number {
+  const end = start + TABLE_ROWS_PER_PART
+  return total - end < TABLE_PART_MIN_REMAINDER ? total : end
+}
+
+/** How many rows to render: what was shown, extended by whole parts until every revealed row is in. */
+function rowsToRender(total: number, shown: number, revealRowIndexes: readonly number[]): number {
+  if (rendersWhole(total)) {
     return total
   }
-  const lastHighlighted = highlightedRowIndexes.length > 0 ? Math.max(...highlightedRowIndexes) : -1
-  const neededForHighlight = (Math.floor(lastHighlighted / TABLE_ROWS_PER_PART) + 1) * TABLE_ROWS_PER_PART
-  return Math.min(total, Math.max(shown, lastHighlighted >= 0 ? neededForHighlight : 0))
+  const lastRevealed = revealRowIndexes.length > 0 ? Math.max(...revealRowIndexes) : -1
+  let visible = Math.min(total, shown)
+  while (visible <= lastRevealed && visible < total) {
+    visible = partEnd(total, visible)
+  }
+  return visible
 }
 
 export interface HighlightStyle {
@@ -55,6 +76,8 @@ export interface TextTableBlockProps {
   block: DisplayBlock
   /** Rows the located quote covers; empty when none. */
   highlightedRowIndexes: readonly number[]
+  /** A click reveals hidden parts to show its rows; a hover never does. */
+  revealForHighlight: boolean
   /** Receives the first highlighted row, so the view can scroll to it. */
   firstHighlightRef: ((element: HTMLElement | null) => void) | undefined
   highlightStyle: HighlightStyle
@@ -62,59 +85,157 @@ export interface TextTableBlockProps {
 
 const NO_ROWS: readonly number[] = []
 
-/** Memoised: a large sheet renders again only when its rows or its highlight change. */
+interface TablePartProps {
+  rows: readonly DisplayTableRow[]
+  start: number
+  end: number
+  inParts: boolean
+  /** Highlighted row indexes inside this part only. */
+  highlighted: readonly number[]
+  firstHighlighted: number | undefined
+  firstHighlightRef: ((element: HTMLElement | null) => void) | undefined
+  highlightStyle: HighlightStyle
+}
+
+function samePart(previous: TablePartProps, next: TablePartProps): boolean {
+  return previous.rows === next.rows
+    && previous.start === next.start
+    && previous.end === next.end
+    && previous.inParts === next.inParts
+    && previous.firstHighlighted === next.firstHighlighted
+    && previous.firstHighlightRef === next.firstHighlightRef
+    && previous.highlightStyle === next.highlightStyle
+    && previous.highlighted.length === next.highlighted.length
+    && previous.highlighted.every((index, position) => index === next.highlighted[position])
+}
+
+/**
+ * One part of a table in its own `<tbody>`, memoised: revealing more rows adds new
+ * parts and never re-renders or re-inserts the shown ones (one insert per part, not
+ * one per row after the existing rows).
+ */
+const TablePart = memo(function TablePart({
+  rows,
+  start,
+  end,
+  inParts,
+  highlighted,
+  firstHighlighted,
+  firstHighlightRef,
+  highlightStyle,
+}: TablePartProps) {
+  const cellsOf: ReactNode[] = []
+  for (let rowIndex = start; rowIndex < end; rowIndex += 1) {
+    const row = rows[rowIndex]!
+    const isHighlighted = highlighted.includes(rowIndex)
+    cellsOf.push(
+      <tr
+        key={rowIndex}
+        ref={rowIndex === firstHighlighted ? firstHighlightRef : undefined}
+        aria-current={isHighlighted ? true : undefined}
+        aria-rowindex={inParts ? rowIndex + 1 : undefined}
+        style={isHighlighted ? highlightStyle : undefined}
+      >
+        {row.cells.map((cell, cellIndex) => (
+          <Fragment key={cellIndex}>
+            {row.is_header ? <th scope="col">{cell}</th> : <td>{cell}</td>}
+          </Fragment>
+        ))}
+      </tr>,
+    )
+  }
+  return <tbody>{cellsOf}</tbody>
+}, samePart)
+
+/** Memoised: a large sheet renders again only when its rows, its highlight or its parts change. */
 export const TextTableBlock = memo(function TextTableBlock({
   block,
   highlightedRowIndexes,
+  revealForHighlight,
   firstHighlightRef,
   highlightStyle,
 }: TextTableBlockProps) {
   const rows = block.rows ?? []
-  const [shown, setShown] = useState(TABLE_ROWS_PER_PART)
-  const visible = rowsToRender(rows.length, shown, highlightedRowIndexes)
-  // Rows revealed for evidence stay shown when the highlight moves on.
+  const total = rows.length
+  const [shown, setShown] = useState(() => partEnd(total, 0))
+  const visible = rowsToRender(total, shown, revealForHighlight ? highlightedRowIndexes : NO_ROWS)
+  // Rows revealed for evidence stay shown when the highlight moves on. Set during
+  // render (state derived from props), so a reveal renders its rows once.
+  if (visible > shown) {
+    setShown(visible)
+  }
+  const inParts = !rendersWhole(total)
+  const remaining = total - visible
+  const statusRef = useRef<HTMLDivElement | null>(null)
+  const focusStatusAfterRevealRef = useRef(false)
   useEffect(() => {
-    if (visible > shown) {
-      setShown(visible)
+    if (focusStatusAfterRevealRef.current && remaining === 0) {
+      focusStatusAfterRevealRef.current = false
+      statusRef.current?.focus()
     }
-  }, [shown, visible])
-  const inParts = rows.length > TABLE_ROWS_PER_PART
-  const remaining = rows.length - visible
-  const firstHighlighted = highlightedRowIndexes[0]
+  }, [remaining])
+
+  const parts: Array<{ start: number; end: number }> = []
+  for (let start = 0; start < visible; start = partEnd(total, start)) {
+    parts.push({ start, end: Math.min(visible, partEnd(total, start)) })
+  }
+  const firstHighlighted = highlightedRowIndexes.find((index) => index < visible)
+  const nextEnd = partEnd(total, visible)
+
   return (
     <>
-      <table aria-rowcount={inParts ? rows.length : undefined}>
-        <tbody>
-          {rows.slice(0, visible).map((row, rowIndex) => {
-            const highlighted = highlightedRowIndexes.includes(rowIndex)
-            return (
-              <Box
-                component="tr"
-                key={rowIndex}
-                ref={rowIndex === firstHighlighted ? firstHighlightRef : undefined}
-                aria-current={highlighted ? true : undefined}
-                aria-rowindex={inParts ? rowIndex + 1 : undefined}
-                sx={highlighted ? highlightStyle : undefined}
-              >
-                {row.cells.map((cell, cellIndex) => (
-                  <Fragment key={cellIndex}>
-                    {row.is_header ? <th scope="col">{cell}</th> : <td>{cell}</td>}
-                  </Fragment>
-                ))}
-              </Box>
-            )
-          })}
-        </tbody>
+      <table aria-rowcount={inParts ? total : undefined}>
+        {parts.map(({ start, end }) => (
+          <TablePart
+            key={start}
+            rows={rows}
+            start={start}
+            end={end}
+            inParts={inParts}
+            highlighted={highlightedRowIndexes.filter((index) => index >= start && index < end)}
+            firstHighlighted={firstHighlighted !== undefined && firstHighlighted >= start && firstHighlighted < end ? firstHighlighted : undefined}
+            firstHighlightRef={firstHighlightRef}
+            highlightStyle={highlightStyle}
+          />
+        ))}
       </table>
-      {inParts && remaining > 0 ? (
+      {inParts ? (
         <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap', mb: 1.5 }}>
-          <Typography variant="body2" color="text.secondary">{shownRowsText(visible, rows.length)}</Typography>
-          <Button size="small" variant="outlined" onClick={() => setShown(visible + TABLE_ROWS_PER_PART)}>
-            {showNextRowsText(Math.min(TABLE_ROWS_PER_PART, remaining))}
-          </Button>
-          <Button size="small" onClick={() => setShown(rows.length)}>
-            {showAllRowsText(rows.length)}
-          </Button>
+          <Typography
+            ref={statusRef}
+            role="status"
+            aria-live="polite"
+            tabIndex={-1}
+            variant="body2"
+            color="text.secondary"
+          >
+            {remaining > 0 ? shownRowsText(visible, total) : allRowsShownText(total)}
+          </Typography>
+          {remaining > 0 ? (
+            <>
+              <Button
+                size="small"
+                variant="outlined"
+                sx={{ textTransform: 'none' }}
+                onClick={() => {
+                  focusStatusAfterRevealRef.current = nextEnd === total
+                  setShown(nextEnd)
+                }}
+              >
+                {showNextRowsText(nextEnd - visible)}
+              </Button>
+              <Button
+                size="small"
+                sx={{ textTransform: 'none' }}
+                onClick={() => {
+                  focusStatusAfterRevealRef.current = true
+                  setShown(total)
+                }}
+              >
+                {showAllRowsText(total)}
+              </Button>
+            </>
+          ) : null}
         </Stack>
       ) : null}
     </>
@@ -125,6 +246,8 @@ export interface TextFileBlocksProps {
   blocks: readonly DisplayBlock[]
   /** The blocks (and rows) the located evidence covers; null when none. */
   highlightedBlocks: readonly TextQuoteBlockSpan[] | null
+  /** A click ('select') reveals hidden rows of a long table; a hover never does. */
+  highlightMode: 'hover' | 'select'
   /** The block shown as the evidence's section when its quote was not found; null otherwise. */
   sectionBlockIndex: number | null
   /** Receives the first highlighted block or row. */
@@ -135,6 +258,7 @@ export interface TextFileBlocksProps {
 export const TextFileBlocks = memo(function TextFileBlocks({
   blocks,
   highlightedBlocks,
+  highlightMode,
   sectionBlockIndex,
   firstHighlightRef,
 }: TextFileBlocksProps) {
@@ -179,6 +303,7 @@ export const TextFileBlocks = memo(function TextFileBlocks({
             <TextTableBlock
               block={block}
               highlightedRowIndexes={span?.rowIndexes ?? NO_ROWS}
+              revealForHighlight={highlightMode === 'select'}
               firstHighlightRef={isFirst ? firstHighlightRef : undefined}
               highlightStyle={highlightStyle}
             />

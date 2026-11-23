@@ -33,9 +33,19 @@ function renderedRows(): HTMLTableRowElement[] {
   return Array.from(screen.getByRole('table').querySelectorAll('tr'))
 }
 
-function renderSheet(block: DisplayBlock, highlightedBlocks: TextQuoteBlockSpan[] | null = null) {
+function renderSheet(
+  block: DisplayBlock,
+  highlightedBlocks: TextQuoteBlockSpan[] | null = null,
+  highlightMode: 'hover' | 'select' = 'select',
+) {
   return render(
-    <TextFileBlocks blocks={[block]} highlightedBlocks={highlightedBlocks} sectionBlockIndex={null} firstHighlightRef={noRef} />,
+    <TextFileBlocks
+      blocks={[block]}
+      highlightedBlocks={highlightedBlocks}
+      highlightMode={highlightMode}
+      sectionBlockIndex={null}
+      firstHighlightRef={noRef}
+    />,
   )
 }
 
@@ -47,7 +57,7 @@ describe('TextFileBlocks: large tables in parts', () => {
     expect(renderedRows()).toHaveLength(TABLE_ROWS_PER_PART)
     expect(table).toHaveAttribute('aria-rowcount', '9800')
     expect(renderedRows()[499]).toHaveAttribute('aria-rowindex', '500')
-    expect(screen.getByText('Showing rows 1 to 500 of 9,800.')).toBeInTheDocument()
+    expect(screen.getByText(/^Showing rows 1 to 500 of 9,800\./)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Show the next 500 rows' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Show all 9,800 rows' })).toBeInTheDocument()
   })
@@ -72,10 +82,10 @@ describe('TextFileBlocks: large tables in parts', () => {
     const nextAgain = screen.getByRole('button', { name: 'Show the next 200 rows' })
     expect(nextAgain).toBe(next)
     expect(nextAgain).toHaveFocus()
-    expect(screen.getByText('Showing rows 1 to 1,000 of 1,200.')).toBeInTheDocument()
+    expect(screen.getByText(/^Showing rows 1 to 1,000 of 1,200\./)).toBeInTheDocument()
   })
 
-  it('shows every row on request, then no buttons', async () => {
+  it('shows every row on request, then no buttons, and moves focus to the count line, which says all are shown', async () => {
     const user = userEvent.setup()
     renderSheet(sheet(1199))
 
@@ -83,6 +93,74 @@ describe('TextFileBlocks: large tables in parts', () => {
 
     expect(renderedRows()).toHaveLength(1200)
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
+    const status = screen.getByRole('status')
+    expect(status).toHaveTextContent('Showing all 1,200 rows.')
+    expect(status).toHaveFocus()
+  })
+
+  it('moves focus to the count line after the last "Show the next" too', async () => {
+    const user = userEvent.setup()
+    renderSheet(sheet(1199))
+
+    await user.click(screen.getByRole('button', { name: 'Show the next 500 rows' }))
+    await user.click(screen.getByRole('button', { name: 'Show the next 200 rows' }))
+
+    expect(screen.getByRole('status')).toHaveFocus()
+  })
+
+  it('announces a reveal politely, and its buttons read as written (not in capitals)', () => {
+    renderSheet(sheet(9799))
+
+    expect(screen.getByRole('status')).toHaveAttribute('aria-live', 'polite')
+    expect(screen.getByRole('status')).toHaveTextContent('Find in your browser searches only the rows shown.')
+    expect(screen.getByRole('button', { name: 'Show the next 500 rows' })).toHaveStyle({ textTransform: 'none' })
+  })
+
+  it('never offers a tiny last part: a part takes the rest when fewer than 100 rows would be left', async () => {
+    const user = userEvent.setup()
+    renderSheet(sheet(1000))
+
+    expect(screen.getByRole('button', { name: 'Show the next 501 rows' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Show the next 501 rows' }))
+    expect(renderedRows()).toHaveLength(1001)
+  })
+
+  it('shows a table of up to 600 rows whole', () => {
+    renderSheet(sheet(599))
+
+    expect(renderedRows()).toHaveLength(600)
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  })
+
+  it('never reveals rows for a hover; only a click does', () => {
+    renderSheet(sheet(9799), [{ blockIndex: 0, rowIndexes: [7000] }], 'hover')
+
+    expect(renderedRows()).toHaveLength(500)
+    expect(screen.getByRole('table').querySelector('tr[aria-current="true"]')).toBeNull()
+  })
+
+  it('highlights a hovered row that is already shown', () => {
+    renderSheet(sheet(9799), [{ blockIndex: 0, rowIndexes: [10] }], 'hover')
+
+    expect(screen.getByRole('table').querySelector('tr[aria-current="true"]')).toHaveTextContent('XS10')
+  })
+
+  it('renders the rows of a reveal once, not twice', () => {
+    let cellReads = 0
+    const block = sheet(9799)
+    const counted: DisplayBlock = {
+      ...block,
+      rows: block.rows!.map((row) => ({
+        line: row.line,
+        is_header: row.is_header,
+        get cells() { cellReads += 1; return row.cells },
+      })),
+    }
+    renderSheet(counted, [{ blockIndex: 0, rowIndexes: [7000] }])
+
+    expect(renderedRows()).toHaveLength(7500)
+    // Each shown row is rendered once: keeping the reveal in state must not render them again.
+    expect(cellReads).toBe(7500)
   })
 
   it('reveals the part holding highlighted evidence, and keeps it shown when the highlight moves on', () => {
@@ -96,7 +174,7 @@ describe('TextFileBlocks: large tables in parts', () => {
 
     act(() => {
       view.rerender(
-        <TextFileBlocks blocks={[block]} highlightedBlocks={null} sectionBlockIndex={null} firstHighlightRef={noRef} />,
+        <TextFileBlocks blocks={[block]} highlightedBlocks={null} highlightMode="select" sectionBlockIndex={null} firstHighlightRef={noRef} />,
       )
     })
     expect(renderedRows()).toHaveLength(7500)

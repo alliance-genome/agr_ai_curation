@@ -54,6 +54,7 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
   const [loadState, setLoadState] = useState<TextLoadState>({ kind: 'loading' })
   const [reloadKey, setReloadKey] = useState(0)
   const [highlight, setHighlight] = useState<TextQuoteBlockSpan[] | null>(null)
+  const [highlightMode, setHighlightMode] = useState<'hover' | 'select'>('select')
   // The evidence's section, shown when its quote is not found.
   const [sectionBlockIndex, setSectionBlockIndex] = useState<number | null>(null)
   const highlightedRef = useRef<HTMLElement | null>(null)
@@ -97,6 +98,7 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
     const location = locateEvidenceInBlocks(loadState.blocks, textEvidence, commandQuote(navigation.command))
     const sectionIndex = location.found > 0 ? null : locateSectionInBlocks(loadState.blocks, textEvidence)
     setHighlight(location.found > 0 ? location.blocks : null)
+    setHighlightMode(navigation.command.mode)
     setSectionBlockIndex(sectionIndex)
     onNavigationResult(navigation, buildTextNavigationResult(navigation, documentId, location, sectionIndex))
   }, [documentId, fileId, loadState, navigation, onNavigationResult])
@@ -145,6 +147,7 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
         <TextFileBlocks
           blocks={loadState.blocks}
           highlightedBlocks={highlight}
+          highlightMode={highlightMode}
           sectionBlockIndex={sectionBlockIndex}
           firstHighlightRef={setHighlightedElement}
         />
