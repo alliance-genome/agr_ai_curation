@@ -1231,10 +1231,20 @@ class IdentifierImportService:
             session.close()
 
         try:
+            job_values: dict[str, Any] = {}
+            if wait_for_conversion and decision.conversion_answer is not None:
+                # This import sent the provider's on-demand request: the job keeps
+                # that fact, so its wait never sends it again (KANBAN-2191 / ALL-1725).
+                job_values["metadata"] = {
+                    pdf_job_service.CONVERSION_REQUESTS_KEY: {
+                        "on_demand_sent_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                }
             job = self._create_job(
                 document_id=document_id,
                 user_id=db_user.id,
                 filename=filename,
+                **job_values,
             )
             if decision.selected.converted_artifact is not None:
                 await self.upload_execution_service.dispatch_provider_markdown_execution(
@@ -1281,6 +1291,7 @@ class IdentifierImportService:
                         file_path=saved_path,
                         supplements=supplements,
                         login_expires_at=login_expires_at,
+                        conversion_answer=decision.conversion_answer,
                     ),
                 )
             else:

@@ -209,11 +209,12 @@ main-paper imports do not pass a limit; file listing and supplement import
 
 Configured knobs:
 
-- `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS`: provider-conversion poll interval
-  (default 30 seconds). Every poll re-sends ABC's conversion request, which
-  answers with the current state; ABC recycles a worker, restarting its running
-  conversion, after about 1,000 requests, so the interval bounds how many
-  requests one wait sends (at most 121 in an hour at 30 seconds). Minimum 5
+- `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS`: the main paper's wait interval
+  (default 30 seconds). Every poll is one read of ABC's read-only file listing
+  (`show_all`), not a conversion request (see "The main paper's wait" below);
+  ABC recycles a worker, restarting its running conversion, after about 1,000
+  requests of any kind, so the interval bounds how many requests one wait sends
+  (at most 121 in an hour at 30 seconds). Minimum 5
   seconds. Start-up refuses settings whose deadline divided by this interval
   exceeds 400 polls in one wait (`DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT`: under
   half of ABC's roughly 1,000 requests per worker, which other callers share),
@@ -233,6 +234,14 @@ Configured knobs:
   extraction machine and allows itself 30 minutes per file; a median main
   conversion from a cold machine takes about 12 minutes. KANBAN-1976 /
   ALL-1460 (P7w) raised it from 600 seconds, which failed such imports.
+  **ABC fact this depends on:** near the deadline the wait asks ABC once more
+  why the main text has not appeared. ABC reports a failed conversion, without
+  converting again, for one hour after the failure (`FAILED_JOB_HOLD` in ABC's
+  `conversion_job_manager.py`). At 3,600 seconds or less, that one late request
+  always falls inside the hour. **Above 3,600 seconds, the late request can make
+  ABC start a new conversion job** for a paper that failed early, converting
+  its main text and pending supplements again. AI Curation does not check this:
+  it is ABC's rule, so an operator raising the deadline must know it.
 - `DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS`: individual provider HTTP timeout.
 - `DOCUMENT_SOURCE_DEAD_WAIT_POLLS`: missed polls after which a cancel
   finalizes a provider wait that no task is polling (default 3, minimum 2,
@@ -260,7 +269,43 @@ import batches: one request's identifiers run one after another.
 
 While a main paper waits, it stays in progress in the Library and cannot be
 deleted, imported again or given files (one active job per paper); the jobs
-panel shows ABC's progress messages, refreshed at each poll.
+panel shows ABC's progress message from its last answer (the import's own
+request, or the one at the end), which the listing reads do not refresh.
+
+### The main paper's wait (KANBAN-2191 / ALL-1725)
+
+Chris's decision of 23 Nov 2026. ABC has no status-only route: its on-demand
+`conversion_request` is the only route that reports a conversion's state, and
+every call can start a job (a job whose worker exited, or whose state ABC lost,
+is started again, converting the main text and the paper's pending supplements).
+So:
+
+- **One on-demand request per import.** The import sends it while deciding
+  (the identifier import), and the job created for the paper records it
+  (`metadata.provider_conversion_requests.on_demand_sent_at`). When the import
+  did not need to send it (ABC's listing already showed the main text being
+  converted), the wait sends it once at its start and records it first.
+- **Then only reads.** The wait reads `show_all` every
+  `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS` and ingests the main text as soon as
+  it is listed.
+- **At most one more request, at the end.** When another read would no longer
+  fit before the deadline (`DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS` minus one
+  poll interval and one request timeout), the wait asks ABC once more, recorded
+  first (`end_sent_at`), only to learn why: `failed` fails the import with ABC's
+  reason, `no_sources` as today, a main text now listed is ingested, `running`
+  times out at the deadline as today. This relies on ABC's one-hour failure
+  hold (see the deadline above).
+- **A first answer that ends the wait** (nothing to convert, an immediate
+  failure) ends it at once, as before.
+- **Never twice.** Each request is recorded on the job before it is sent, and a
+  run of the job reads that record, so neither request is sent again. A backend
+  restart ends the wait's task; nothing resumes a started job (the execution's
+  replay guard skips any job that is no longer pending), and a cancel or the
+  stale sweep ends it.
+- **What curators notice.** A paper ABC converts is imported as soon as the
+  text is listed, as before. A paper ABC fails is reported at the end of the
+  wait (up to the deadline, 60 minutes) with ABC's reason, instead of within one
+  poll interval.
 
 Retry policy:
 

@@ -167,6 +167,23 @@ Document-source operational limits are env-configurable in `.env.example`:
 - ABC Literature live-smoke timeout/evidence knobs
 - READY upload and identifier-import smoke timeout/evidence knobs
 
+**Operators: `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS` depends on an ABC rule.**
+Near the end of a main paper's wait, AI Curation asks ABC once more why the main
+text has not appeared. ABC answers a failed conversion with that failure,
+without converting again, for one hour after it failed. Keep the deadline at
+3,600 seconds or less: above it, that late request can make ABC start a new
+conversion job (main text and pending supplements) for a paper that failed
+early. Nothing in AI Curation refuses a longer deadline.
+
+**Release step (unchanged from KANBAN-1976 P7w):** production's prod-state
+override and dev's `.env` files still pin `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=2`
+and `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=600`. Remove both pins (or set
+30 / 3600) in `.env` and every private override before pulling or starting the
+release image, render the config with each environment's exact Compose
+invocation, and check the start-up line "Document-source wait settings: ..."
+shows 30 and 3600. A pinned poll of 2 makes start-up refuse; a pinned deadline of
+600 silently keeps the old 10-minute wait.
+
 General provider limits are passed through both Compose files. The development
 reader renewal skew is intentionally passed through development Compose only;
 production Compose continues to force `DEV_MODE=false`.

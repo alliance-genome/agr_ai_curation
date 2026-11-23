@@ -42,6 +42,7 @@ from src.lib.observability.background_tasks import (
 from src.lib.openai_agents.config import (
     get_document_source_import_timeout_seconds,
     get_document_source_poll_interval_seconds,
+    get_document_source_request_timeout_seconds,
 )
 from src.lib.pipeline.orchestrator import DocumentPipelineOrchestrator, ProcessingResult
 from src.lib.pipeline.processing_receipt import PDF_PROCESSING_RECEIPT_KEY
@@ -217,6 +218,8 @@ class ProviderConversionExecutionRequest:
     figure_metadata_artifact_ids: tuple[str, ...] = ()
     supplements: SupplementPlan | None = None
     login_expires_at: float | None = None
+    # The provider's answer to the import's own on-demand request, when it sent one.
+    conversion_answer: SourceConversionResult | None = None
 
 
 class _JobFinalizedElsewhere(Exception):
@@ -611,7 +614,14 @@ class UploadExecutionService:
 
         provider: DocumentSourceProvider | None = None
         poll_interval_seconds = get_document_source_poll_interval_seconds()
-        last_result: SourceConversionResult | None = None
+        # The end request is sent when another listing read would no longer fit
+        # before the import deadline (KANBAN-2191 / ALL-1725).
+        loop_clock = asyncio.get_running_loop()
+        end_request_at = loop_clock.time() + get_document_source_import_timeout_seconds() - (
+            poll_interval_seconds + get_document_source_request_timeout_seconds()
+        )
+        sent = pdf_job_service.conversion_requests_sent(existing_job)
+        last_result: SourceConversionResult | None = request.conversion_answer
         try:
             curator_token = (request.curator_token or "").strip()
             if not curator_token:
@@ -619,43 +629,55 @@ class UploadExecutionService:
             _refuse_if_login_expired(request)
 
             provider = self._document_source_provider_factory()
+            # The provider's on-demand request is sent once per import: by the import
+            # itself (recorded on the job), or here when the import did not need to.
+            # Each request is recorded before it is sent, so it is never repeated.
+            if not sent.get("on_demand_sent_at"):
+                await asyncio.to_thread(
+                    pdf_job_service.record_provider_conversion_request,
+                    job_id=request.job_id, which="on_demand_sent_at",
+                )
+                last_result = await provider.request_conversion(
+                    request.reference, wait=False, request_bearer_token=curator_token,
+                )
             while True:
                 if pdf_job_service.is_cancel_requested(job_id=request.job_id):
                     raise PDFCancellationError("Processing cancelled by user request")
 
-                last_result = await provider.request_conversion(
-                    request.reference,
-                    wait=False,
-                    request_bearer_token=curator_token,
-                )
+                # Watch the provider's read-only listing for the main text; never
+                # re-send the conversion request, which can start or restart a job.
                 (
                     selected_artifact,
                     selected_figure_metadata_artifact_ids,
                 ) = await self._select_converted_main_artifact(
                     provider=provider,
                     request=request,
-                    conversion_result=last_result,
                     curator_token=curator_token,
                 )
-                # The poll above can take a while; a cancel may have finalized
+                # The read above can take a while; a cancel may have finalized
                 # the job meanwhile (a wait taken for dead). Write nothing then.
                 if _job_was_finalized_elsewhere(request.job_id):
                     raise _JobFinalizedElsewhere()
-                progress_metadata = _conversion_job_metadata(last_result)
+                progress_metadata = (
+                    _conversion_job_metadata(last_result) if last_result is not None else None
+                )
                 progress_percentage = (
                     35
                     if selected_artifact is not None
                     else provider.conversion_progress_percentage(last_result)
+                    if last_result is not None
+                    else 20
                 )
-                message = provider.conversion_progress_message(last_result)
-                pdf_job_service.update_progress(
-                    job_id=request.job_id,
-                    stage=pdf_job_service.PROVIDER_CONVERSION_STAGE,
-                    progress_percentage=progress_percentage,
-                    message=message,
-                    status=PdfJobStatus.RUNNING.value,
-                    metadata=progress_metadata,
-                )
+                progress = {
+                    "job_id": request.job_id,
+                    "stage": pdf_job_service.PROVIDER_CONVERSION_STAGE,
+                    "progress_percentage": progress_percentage,
+                    "status": PdfJobStatus.RUNNING.value,
+                    "metadata": progress_metadata,
+                }
+                if last_result is not None:
+                    progress["message"] = provider.conversion_progress_message(last_result)
+                pdf_job_service.update_progress(**progress)
 
                 if selected_artifact is not None:
                     source_provenance = _source_provenance_with_converted_artifact(
@@ -694,12 +716,28 @@ class UploadExecutionService:
                     )
                     return
 
-                if last_result.status is SourceConversionStatus.FAILED:
-                    raise RuntimeError(provider.conversion_failure_message(last_result))
-                if last_result.status is SourceConversionStatus.NO_SOURCES:
-                    raise RuntimeError("Provider conversion found no convertible source files")
-                if last_result.status is SourceConversionStatus.CONVERTED:
-                    raise RuntimeError("Provider conversion completed without canonical converted Markdown")
+                if last_result is not None:
+                    if last_result.status is SourceConversionStatus.FAILED:
+                        raise RuntimeError(provider.conversion_failure_message(last_result))
+                    if last_result.status is SourceConversionStatus.NO_SOURCES:
+                        raise RuntimeError("Provider conversion found no convertible source files")
+                    if last_result.status is SourceConversionStatus.CONVERTED:
+                        raise RuntimeError("Provider conversion completed without canonical converted Markdown")
+
+                if not sent.get("end_sent_at") and loop_clock.time() >= end_request_at:
+                    # Nothing appeared in time: ask the provider once more, only to
+                    # learn why. Inside ABC's one-hour failure hold this reports a
+                    # failure rather than starting a new job (the deadline is at most
+                    # an hour; see DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS).
+                    await asyncio.to_thread(
+                        pdf_job_service.record_provider_conversion_request,
+                        job_id=request.job_id, which="end_sent_at",
+                    )
+                    sent["end_sent_at"] = "sent"
+                    last_result = await provider.request_conversion(
+                        request.reference, wait=False, request_bearer_token=curator_token,
+                    )
+                    continue
 
                 await asyncio.sleep(poll_interval_seconds)
         except _ProviderMainMarkdownAccessDenied:
@@ -778,11 +816,8 @@ class UploadExecutionService:
         *,
         provider: DocumentSourceProvider,
         request: ProviderConversionExecutionRequest,
-        conversion_result: SourceConversionResult,
         curator_token: str,
     ) -> tuple[SourceArtifact | None, tuple[str, ...]]:
-        if not provider.conversion_exposes_main_text(conversion_result):
-            return None, ()
         artifacts = await provider.list_artifacts(
             request.reference,
             request_bearer_token=curator_token,

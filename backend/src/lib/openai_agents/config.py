@@ -2106,6 +2106,12 @@ def get_document_source_import_timeout_seconds() -> float:
     """Main-paper import deadline, covering the provider's conversion and the ingestion.
 
     In-flight storage drains before terminal failure.
+
+    ABC fact (KANBAN-2191 / ALL-1725): near the deadline the wait asks ABC once
+    more why the main text has not appeared. ABC reports a failure without
+    converting again for one hour after it failed, so at 3,600 s or less that
+    late request always falls inside the hour; above it, the late request can
+    start a new ABC conversion job. Not checked here: it is ABC's rule.
     """
     name = "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS"
     value = _get_env_float_with_fallback(name, 3600.0)
