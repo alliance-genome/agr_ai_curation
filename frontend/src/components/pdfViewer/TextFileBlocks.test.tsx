@@ -79,9 +79,8 @@ describe('TextFileBlocks: large tables in parts', () => {
     await user.click(next)
 
     expect(renderedRows()).toHaveLength(1000)
-    const nextAgain = screen.getByRole('button', { name: 'Show the next 200 rows' })
-    expect(nextAgain).toBe(next)
-    expect(nextAgain).toHaveFocus()
+    // The rest is now one part, so a single "Show all" button remains; focus is on it.
+    expect(screen.getByRole('button', { name: 'Show all 1,200 rows' })).toHaveFocus()
     expect(screen.getByText(/^Showing rows 1 to 1,000 of 1,200\./)).toBeInTheDocument()
   })
 
@@ -103,7 +102,8 @@ describe('TextFileBlocks: large tables in parts', () => {
     renderSheet(sheet(1199))
 
     await user.click(screen.getByRole('button', { name: 'Show the next 500 rows' }))
-    await user.click(screen.getByRole('button', { name: 'Show the next 200 rows' }))
+    // The rest (200 rows) is one part: one button, which shows all.
+    await user.click(screen.getByRole('button', { name: 'Show all 1,200 rows' }))
 
     expect(screen.getByRole('status')).toHaveFocus()
   })
@@ -120,9 +120,25 @@ describe('TextFileBlocks: large tables in parts', () => {
     const user = userEvent.setup()
     renderSheet(sheet(1000))
 
-    expect(screen.getByRole('button', { name: 'Show the next 501 rows' })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Show the next 501 rows' }))
+    // 1,001 rows: after the first 500, the rest (501) is one part, so only "Show all" is offered.
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Show all 1,001 rows'])
+    await user.click(screen.getByRole('button', { name: 'Show all 1,001 rows' }))
     expect(renderedRows()).toHaveLength(1001)
+  })
+
+  it('never offers fewer than 100 rows: a 1,100-row table ends on "Show the next 100 rows"', async () => {
+    const user = userEvent.setup()
+    renderSheet(sheet(1099))
+
+    await user.click(screen.getByRole('button', { name: 'Show the next 500 rows' }))
+    expect(screen.getByRole('button', { name: 'Show all 1,100 rows' })).toBeInTheDocument()
+    expect(renderedRows()).toHaveLength(1000)
+  })
+
+  it('shows one button when the next part is the rest of the table', () => {
+    renderSheet(sheet(600))
+
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Show all 601 rows'])
   })
 
   it('shows a table of up to 600 rows whole', () => {

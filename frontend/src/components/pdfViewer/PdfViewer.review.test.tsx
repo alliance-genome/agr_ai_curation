@@ -242,6 +242,9 @@ describe('P9b review fixes', () => {
       act(() => { dispatchPDFViewerNavigateEvidence({ ...click, mode: 'hover' }) })
       await new Promise((resolve) => setTimeout(resolve, 50))
       expect(document.querySelectorAll('tbody tr')).toHaveLength(500)
+      // Nothing is marked, so the header says nothing either.
+      expect(screen.queryByText('Exact quote')).not.toBeInTheDocument()
+      expect(screen.queryByText('The quote was found exactly in this text file.')).not.toBeInTheDocument()
 
       act(() => { dispatchPDFViewerNavigateEvidence(click) })
       await waitFor(() => expect(document.querySelectorAll('tr[aria-current="true"]')).toHaveLength(2), { timeout: 8000 })

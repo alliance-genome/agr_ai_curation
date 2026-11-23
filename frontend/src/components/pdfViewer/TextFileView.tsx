@@ -30,7 +30,8 @@ interface TextFileViewProps {
   documentId: string
   file: ViewerFile
   navigation: TextNavigationRequest | null
-  onNavigationResult: (request: TextNavigationRequest, result: PdfViewerNavigationResult) => void
+  /** Null for a hover: nothing is said in the header (a hovered row may not be shown at all). */
+  onNavigationResult: (request: TextNavigationRequest, result: PdfViewerNavigationResult | null) => void
 }
 
 type TextLoadState =
@@ -100,7 +101,10 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
     setHighlight(location.found > 0 ? location.blocks : null)
     setHighlightMode(navigation.command.mode)
     setSectionBlockIndex(sectionIndex)
-    onNavigationResult(navigation, buildTextNavigationResult(navigation, documentId, location, sectionIndex))
+    onNavigationResult(
+      navigation,
+      navigation.command.mode === 'hover' ? null : buildTextNavigationResult(navigation, documentId, location, sectionIndex),
+    )
   }, [documentId, fileId, loadState, navigation, onNavigationResult])
 
   useEffect(() => {

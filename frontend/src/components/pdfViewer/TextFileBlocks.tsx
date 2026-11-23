@@ -17,8 +17,9 @@ import type { DisplayBlock, DisplayTableRow } from './viewerFiles'
 /** Rows per part of a large table (a rendering constant; about 0.1 s for 500 rows of 8 cells). */
 export const TABLE_ROWS_PER_PART = 500
 /**
- * A part takes the rest of the table when fewer rows than this would be left, so the
- * last button never offers a tiny number; a table of up to 600 rows renders whole.
+ * A part takes the rest of the table when fewer rows than this would be left, so a
+ * "Show the next" button never offers fewer than 100 rows; a table of up to 600 rows
+ * renders whole. Row counts include the header row, as a spreadsheet numbers it.
  */
 export const TABLE_PART_MIN_REMAINDER = 100
 
@@ -213,6 +214,10 @@ export const TextTableBlock = memo(function TextTableBlock({
           </Typography>
           {remaining > 0 ? (
             <>
+              {/*
+                When the next part is the rest of the table, one button shows it all. It is
+                the same element as "Show the next", so focus stays on it after a part.
+              */}
               <Button
                 size="small"
                 variant="outlined"
@@ -222,18 +227,20 @@ export const TextTableBlock = memo(function TextTableBlock({
                   setShown(nextEnd)
                 }}
               >
-                {showNextRowsText(nextEnd - visible)}
+                {nextEnd === total ? showAllRowsText(total) : showNextRowsText(nextEnd - visible)}
               </Button>
-              <Button
-                size="small"
-                sx={{ textTransform: 'none' }}
-                onClick={() => {
-                  focusStatusAfterRevealRef.current = true
-                  setShown(total)
-                }}
-              >
-                {showAllRowsText(total)}
-              </Button>
+              {nextEnd < total ? (
+                <Button
+                  size="small"
+                  sx={{ textTransform: 'none' }}
+                  onClick={() => {
+                    focusStatusAfterRevealRef.current = true
+                    setShown(total)
+                  }}
+                >
+                  {showAllRowsText(total)}
+                </Button>
+              ) : null}
             </>
           ) : null}
         </Stack>

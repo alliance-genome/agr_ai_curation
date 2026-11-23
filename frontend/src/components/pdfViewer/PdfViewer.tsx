@@ -1698,7 +1698,7 @@ export function PdfViewer({
   /** The text pane located (or did not locate) the quote of the current text navigation. */
   const handleTextNavigationResult = useCallback((
     request: TextNavigationRequest,
-    result: PdfViewerNavigationResult,
+    result: PdfViewerNavigationResult | null,
   ) => {
     if (request.requestId !== textNavigationRequestIdRef.current) {
       return

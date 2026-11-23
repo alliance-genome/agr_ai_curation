@@ -47,7 +47,7 @@ interface PdfViewerChromeProps {
   idleNotice: string | null
   onSelectFile: (fileId: string) => void
   textNavigation: TextNavigationRequest | null
-  onTextNavigationResult: (request: TextNavigationRequest, result: PdfViewerNavigationResult) => void
+  onTextNavigationResult: (request: TextNavigationRequest, result: PdfViewerNavigationResult | null) => void
   /** Closes the navigation banner (the result chips and message go with it). */
   onDismissNavigationResult: () => void
   status: ViewerStatus
