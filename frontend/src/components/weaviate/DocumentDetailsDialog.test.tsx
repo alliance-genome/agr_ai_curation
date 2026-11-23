@@ -86,7 +86,7 @@ describe('DocumentDetailsDialog', () => {
       expect(calls(sourceFiles)).toBe(1);
     });
 
-    await userEvent.click(screen.getByRole('button', { name: 'Refresh details' }));
+    await userEvent.click(screen.getByRole('button', { name: 'refresh details' }));
 
     await waitFor(() => {
       expect(calls(paperFiles)).toBe(2);
