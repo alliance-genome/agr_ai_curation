@@ -33,7 +33,7 @@ use_when:
   - "When several GO terms need looking up at once."
 avoid_when:
   - "For the GO annotations already recorded on a gene; use the Gene GO Annotations Agent."
-  - "To find which genes carry a given GO term; use the Gene GO Annotations Agent."
+  - "To find which genes carry a given GO term; no agent here looks that up, and the Gene GO Annotations Agent starts from a gene, not a term."
   - "For GO enrichment analysis, which no agent performs."
 limitations:
   - "Every answer comes from a fresh, live lookup against the Gene Ontology — it never answers from memory."

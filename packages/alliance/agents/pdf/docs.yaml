@@ -24,7 +24,7 @@ use_when:
   - "As a general reading tool when no specialized extractor fits the question."
 avoid_when:
   - "To extract genes, alleles, diseases, phenotypes, or expression patterns for curation; use the matching extraction agent."
-  - "To confirm any identifier against a database; use a validation agent."
+  - "To confirm an identifier against a database; identifiers on extracted records are checked automatically, and for a single ontology term or chemical use the Ontology Term Resolver Agent or the Chemical Ontology Agent."
   - "For content inside figures beyond their captions."
 limitations:
   - "A paper must be loaded and processed before this agent can read it"

@@ -37,7 +37,7 @@ data_sources:
       - "MOD reference IDs"
       - "titles"
       - "citation metadata"
-note: "Validation runs automatically. This check runs on the reference of every gene expression and GO record an extractor produces, so you do not need to set it up yourself. A clone made in the Agent Workshop does not change this automatic check; you can attach your clone as the validator on a reference detail of your own Custom Output Structure."
+note: "Validation runs automatically. This check runs on the reference of every gene expression and GO record an extractor produces, so you do not need to set it up yourself. A clone made in the Agent Workshop does not change this automatic check; you can attach your clone as the validator on a reference detail of your own Custom Output Structure, as long as the clone keeps this agent's answer format."
 use_when:
   - "When you want your own version of this check, with a changed prompt, to attach as the validator on a reference detail of a Custom Output Structure."
   - "When you want to review how annotations are tied to a confirmed reference."

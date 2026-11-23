@@ -235,7 +235,7 @@
       "Allele symbols written with angle brackets are matched to their superscript form automatically \u2014 you don't need to reformat them.",
       "Very broad searches return at most 500 matches (100 by default), so narrow your search if you don't see the allele you expect."
     ],
-    "note": "Validation runs automatically. This check runs on every allele an extractor produces, including the allele a disease record is about, so you do not need to set it up yourself. A clone made in the Agent Workshop does not change this automatic check; you can attach your clone as the validator on an allele detail of your own Custom Output Structure.",
+    "note": "Validation runs automatically. This check runs on every allele an extractor produces, including the allele a disease record is about, so you do not need to set it up yourself. A clone made in the Agent Workshop does not change this automatic check; you can attach your clone as the validator on an allele detail of your own Custom Output Structure, as long as the clone keeps this agent's answer format.",
     "summary": "Validates allele/variant identifiers against the Alliance Curation Database by symbol, ID, or gene association.",
     "use_when": [
       "When you want your own version of this check, with a changed prompt or different tools, to attach as the validator on an allele detail of a Custom Output Structure.",
@@ -742,21 +742,21 @@
     ],
     "capabilities": [
       {
-        "description": "Find DOID identifiers for disease names using case-insensitive search",
-        "example_query": "Look up Alzheimer's disease",
-        "example_result": "Returns DOID:10652, name, definition, and synonyms",
+        "description": "Finds the DOID for a disease name, ignoring capitalization",
+        "example_query": "Alzheimer's disease",
+        "example_result": "DOID:10652 with its name, definition, and synonyms",
         "name": "Disease name lookup"
       },
       {
-        "description": "Retrieve disease information by DOID identifier",
-        "example_query": "What is DOID:14330?",
-        "example_result": "Returns Parkinson's disease with its definition and synonyms",
+        "description": "Retrieves a disease term by its DOID",
+        "example_query": "DOID:14330",
+        "example_result": "Parkinson's disease with its definition and synonyms",
         "name": "DOID lookup"
       },
       {
-        "description": "Find diseases by synonym names when the exact term is not found",
-        "example_query": "Look up Alzheimers dementia",
-        "example_result": "Finds DOID:10652 via synonym match",
+        "description": "Finds a disease by one of its synonyms when the exact name does not match",
+        "example_query": "Alzheimers dementia",
+        "example_result": "DOID:10652 through a synonym match",
         "name": "Synonym search"
       }
     ],
@@ -778,7 +778,7 @@
       "Every answer comes from a live lookup against the Alliance's disease terms \u2014 it never answers from memory."
     ],
     "note": "This agent is not used anywhere at present: no domain pack attaches it and AI Chat cannot call it. The disease term on an extracted record is confirmed automatically by the Ontology Term Resolver Agent, and in chat you can look a disease up through that agent.",
-    "summary": "Confirms disease names against the Disease Ontology (DOID) and gives you the matching official disease term and its ID, so a disease annotation can be submitted with confidence.",
+    "summary": "Can look up Disease Ontology (DOID) terms by name, synonym, or ID, but is not used anywhere at present: no check attaches it and AI Chat cannot call it.",
     "use_when": []
   },
   "experimental_condition": {
@@ -1113,7 +1113,7 @@
   "gene_ontology": {
     "avoid_when": [
       "For the GO annotations already recorded on a gene; use the Gene GO Annotations Agent.",
-      "To find which genes carry a given GO term; use the Gene GO Annotations Agent.",
+      "To find which genes carry a given GO term; no agent here looks that up, and the Gene GO Annotations Agent starts from a gene, not a term.",
       "For GO enrichment analysis, which no agent performs."
     ],
     "capabilities": [
@@ -1177,7 +1177,7 @@
   "gene_ontology_lookup": {
     "avoid_when": [
       "For the GO annotations already recorded on a gene; use the Gene GO Annotations Agent.",
-      "To find which genes carry a given GO term; use the Gene GO Annotations Agent.",
+      "To find which genes carry a given GO term; no agent here looks that up, and the Gene GO Annotations Agent starts from a gene, not a term.",
       "For GO enrichment analysis, which no agent performs."
     ],
     "capabilities": [
@@ -1284,7 +1284,7 @@
       "Only validates against Alliance group data",
       "Some newly published genes may not be in the database yet"
     ],
-    "note": "Validation runs automatically. This check runs on the genes in every gene, disease, gene expression, and GO record an extractor produces, so you do not need to set it up yourself. A clone made in the Agent Workshop does not change this automatic check; you can attach your clone as the validator on a gene detail of your own Custom Output Structure.",
+    "note": "Validation runs automatically. This check runs on the genes in every gene, disease, gene expression, and GO record an extractor produces, so you do not need to set it up yourself. A clone made in the Agent Workshop does not change this automatic check; you can attach your clone as the validator on a gene detail of your own Custom Output Structure, as long as the clone keeps this agent's answer format.",
     "summary": "Validates gene identifiers against the Alliance Curation Database.",
     "use_when": [
       "When you want your own version of this check, with a changed prompt or different tools, to attach as the validator on a gene detail of a Custom Output Structure.",
@@ -1509,7 +1509,7 @@
     "note": "Validation runs automatically. This check runs on every disease, phenotype, anatomy, life stage, assay, cellular component, evidence code, and GO term an extractor produces, so you do not need to add this agent to a flow.",
     "summary": "Resolves exact ontology CURIEs and typed ontology-term labels with package lookup helpers while preserving ambiguous or unresolved candidates.\n",
     "use_when": [
-      "When you have an exact ontology ID and want to confirm it is current (not obsolete) and see its label.",
+      "When you have an exact ontology ID and want to confirm it exists as a current term and see its label; obsolete terms are not returned.",
       "When you want to review how anatomy, life stage, GO, and other ontology wording in extracted records gets its official ID."
     ]
   },
@@ -1648,7 +1648,7 @@
   "pdf_extraction": {
     "avoid_when": [
       "To extract genes, alleles, diseases, phenotypes, or expression patterns for curation; use the matching extraction agent.",
-      "To confirm any identifier against a database; use a validation agent.",
+      "To confirm an identifier against a database; identifiers on extracted records are checked automatically, and for a single ontology term or chemical use the Ontology Term Resolver Agent or the Chemical Ontology Agent.",
       "For content inside figures beyond their captions."
     ],
     "capabilities": [
@@ -1803,7 +1803,7 @@
       "Cannot create missing literature records or correct external reference metadata.",
       "Lookup quality depends on the Alliance literature service and indexed reference metadata."
     ],
-    "note": "Validation runs automatically. This check runs on the reference of every gene expression and GO record an extractor produces, so you do not need to set it up yourself. A clone made in the Agent Workshop does not change this automatic check; you can attach your clone as the validator on a reference detail of your own Custom Output Structure.",
+    "note": "Validation runs automatically. This check runs on the reference of every gene expression and GO record an extractor produces, so you do not need to set it up yourself. A clone made in the Agent Workshop does not change this automatic check; you can attach your clone as the validator on a reference detail of your own Custom Output Structure, as long as the clone keeps this agent's answer format.",
     "summary": "Resolves source-paper references by PMID, DOI, AGRKB CURIE, MOD reference ID, title, or citation text through Alliance literature lookup.\n",
     "use_when": [
       "When you want your own version of this check, with a changed prompt, to attach as the validator on a reference detail of a Custom Output Structure.",
@@ -1858,7 +1858,7 @@
       "Cannot create missing literature records or correct external reference metadata.",
       "Lookup quality depends on the Alliance literature service and indexed reference metadata."
     ],
-    "note": "Validation runs automatically. This check runs on the reference of every gene expression and GO record an extractor produces, so you do not need to set it up yourself. A clone made in the Agent Workshop does not change this automatic check; you can attach your clone as the validator on a reference detail of your own Custom Output Structure.",
+    "note": "Validation runs automatically. This check runs on the reference of every gene expression and GO record an extractor produces, so you do not need to set it up yourself. A clone made in the Agent Workshop does not change this automatic check; you can attach your clone as the validator on a reference detail of your own Custom Output Structure, as long as the clone keeps this agent's answer format.",
     "summary": "Resolves source-paper references by PMID, DOI, AGRKB CURIE, MOD reference ID, title, or citation text through Alliance literature lookup.\n",
     "use_when": [
       "When you want your own version of this check, with a changed prompt, to attach as the validator on a reference detail of a Custom Output Structure.",
@@ -1991,14 +1991,14 @@
     "capabilities": [
       {
         "description": "Automatically determines which specialist agent should handle your question",
-        "example_query": "What does GO:0006281 mean?",
-        "example_result": "Hands the question to the GO Term Lookup Agent",
+        "example_query": "What does this ontology term mean?",
+        "example_result": "Hands the question to the specialist agent that looks up that kind of term",
         "name": "Query routing"
       },
       {
         "description": "Coordinates complex queries that need multiple agents",
-        "example_query": "Find the genes studied in this paper, then their GO annotations",
-        "example_result": "Sends the paper to the Gene Extraction Agent, then asks the Gene GO Annotations Agent about the genes it found",
+        "example_query": "Find the items this paper reports, then look each one up",
+        "example_result": "Sends the paper to an extraction agent first, then asks a lookup agent about each item it found",
         "name": "Multi-step coordination"
       }
     ],

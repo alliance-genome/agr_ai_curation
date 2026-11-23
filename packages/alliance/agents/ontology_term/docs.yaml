@@ -47,7 +47,7 @@ data_sources:
       - "GO terms"
 note: "Validation runs automatically. This check runs on every disease, phenotype, anatomy, life stage, assay, cellular component, evidence code, and GO term an extractor produces, so you do not need to add this agent to a flow."
 use_when:
-  - "When you have an exact ontology ID and want to confirm it is current (not obsolete) and see its label."
+  - "When you have an exact ontology ID and want to confirm it exists as a current term and see its label; obsolete terms are not returned."
   - "When you want to review how anatomy, life stage, GO, and other ontology wording in extracted records gets its official ID."
 avoid_when:
   - "To get ontology terms validated; the domain pack already runs this check automatically on every term an extractor supplies."
