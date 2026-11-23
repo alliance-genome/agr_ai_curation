@@ -32,6 +32,7 @@ PREFIX = "abc_wait_outline_test_"
 @pytest.fixture
 def owner(monkeypatch):
     monkeypatch.delenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", raising=False)
+    monkeypatch.delenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", raising=False)
     monkeypatch.delenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", raising=False)
     command.upgrade(Config(str(BACKEND_ROOT / "alembic.ini")), "head")
