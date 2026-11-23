@@ -137,8 +137,15 @@ def test_get_chunks_bubbles_internal_error_as_500(client: TestClient):
     assert "backend blew up" not in response.text
 
 
-def test_get_chunks_answers_404_without_reading_when_no_file_is_readable(client: TestClient):
-    with _patch_resolver(side_effect=ReadableFilesError("no readable file")), patch(
+def test_get_chunks_answers_404_without_reading_when_the_paper_is_not_the_users(client: TestClient):
+    """The resolver raises ReadableFilesError only for a paper that is not the signed-in user's.
+
+    A paper of the user's with no ready file resolves to no files and gets the empty-result 404
+    (readable_pieces_filter in tests/unit/lib/test_weaviate_chunks_navigation.py).
+    """
+    with _patch_resolver(
+        side_effect=ReadableFilesError(f"Document {DOCUMENT_ID} is not a paper of this user")
+    ), patch(
         "src.api.chunks.get_chunks", new_callable=AsyncMock
     ) as mock_get_chunks:
         response = client.get(f"/weaviate/documents/{DOCUMENT_ID}/chunks?page=1&page_size=20")

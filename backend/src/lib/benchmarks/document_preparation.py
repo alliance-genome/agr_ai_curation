@@ -30,6 +30,7 @@ from src.lib.document_sources.ingestion import (
     _sync_sql_document_status,
     finalize_new_paper,
     index_owned_document_elements,
+    model_sections,
 )
 from src.lib.storage_permissions import ensure_writable_directory
 from src.lib.weaviate_client.documents import create_document
@@ -188,6 +189,7 @@ async def prepare_frozen_document(
             elements, document_id=str(document_id), file_id=file_id, user_id=curator.subject,
             owner_user_id=curator.db_user_id, weaviate_client=weaviate_client,
             strategy=ChunkingStrategy.get_research_strategy(),
+            sectioning=model_sections(str(document_id)),
             stage_checkpoint=stage_checkpoint,
         )
         receipt = PreparedBenchmarkDocument(

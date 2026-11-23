@@ -730,6 +730,15 @@ the reference and raw ids are omitted. The companion WARNING log names the raw
 ids and the reference and skips event promotion. The paper's other files are
 still listed.
 
+Adding converted supplements to a paper (`supplement_add.py`) sends no event for
+a file it leaves out. When every chosen file is left out, it reports one warning
+under component `document_files` and operation `supplement_add_nothing_added`,
+with a fixed fingerprint and context holding the hashed `document_id` and, per
+file, only the reason code, the measured value, the limit and the hashed
+`artifact_id_hash`. The exception is fixed and chain-free; file names, the
+reference, the curator and any text are omitted. A failure that stops the add is
+reported once by the background task's own failure capture.
+
 ## Sensitive Database Wrappers
 
 Some exception types should not be logged or captured directly. SQLAlchemy

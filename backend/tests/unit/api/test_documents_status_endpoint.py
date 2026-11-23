@@ -45,7 +45,7 @@ async def test_status_endpoint_prefers_pipeline_failed_stage(monkeypatch):
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id="user-1"))
     monkeypatch.setattr(documents, "get_document", fake_get_document)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", fake_pipeline_status)
-    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
 
     result = await documents.get_document_processing_status(document_id, {"sub": "dev-user-123"})
     assert result["processing_status"] == "failed"
@@ -81,7 +81,7 @@ async def test_status_endpoint_maps_upload_stage_to_processing(monkeypatch):
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id="user-1"))
     monkeypatch.setattr(documents, "get_document", fake_get_document)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", fake_pipeline_status)
-    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
 
     result = await documents.get_document_processing_status(document_id, {"sub": "dev-user-123"})
     assert result["processing_status"] == "processing"
@@ -142,7 +142,7 @@ async def test_status_endpoint_does_not_let_completed_job_hide_active_reembed(mo
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id="user-1"))
     monkeypatch.setattr(documents, "get_document", fake_get_document)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", fake_pipeline_status)
-    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: terminal_job)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: terminal_job)
 
     result = await documents.get_document_processing_status(document_id, {"sub": "dev-user-123"})
 
@@ -201,7 +201,7 @@ async def test_status_endpoint_prefers_active_job_when_pipeline_is_stale_termina
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id="user-1"))
     monkeypatch.setattr(documents, "get_document", fake_get_document)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", fake_pipeline_status)
-    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: active_job)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: active_job)
 
     result = await documents.get_document_processing_status(document_id, {"sub": "dev-user-123"})
 
@@ -270,7 +270,7 @@ async def test_status_endpoint_exposes_no_job_orphan_failure_without_document_co
     )
     monkeypatch.setattr(
         documents.pdf_job_service,
-        "get_latest_job_for_document",
+        "get_latest_paper_job_for_document",
         lambda **_kwargs: orphan_job,
     )
 
@@ -335,7 +335,7 @@ async def test_status_endpoint_keeps_cancel_requested_job_active_with_live_pipel
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id="user-1"))
     monkeypatch.setattr(documents, "get_document", fake_get_document)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", fake_pipeline_status)
-    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: cancel_requested_job)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: cancel_requested_job)
 
     result = await documents.get_document_processing_status(document_id, {"sub": "dev-user-123"})
 
@@ -395,7 +395,7 @@ async def test_status_endpoint_prefers_terminal_cancelled_job_over_stale_pipelin
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id="user-1"))
     monkeypatch.setattr(documents, "get_document", fake_get_document)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", fake_pipeline_status)
-    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: cancelled_job)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: cancelled_job)
 
     result = await documents.get_document_processing_status(document_id, {"sub": "dev-user-123"})
 
@@ -454,7 +454,7 @@ async def test_status_endpoint_prefers_cancelled_job_over_stale_pipeline(monkeyp
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id="user-1"))
     monkeypatch.setattr(documents, "get_document", fake_get_document)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", fake_pipeline_status)
-    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: cancelled_job)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: cancelled_job)
 
     result = await documents.get_document_processing_status(document_id, {"sub": "dev-user-123"})
 
@@ -513,7 +513,7 @@ async def test_status_endpoint_prefers_cancel_requested_job_when_pipeline_is_sta
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id="user-1"))
     monkeypatch.setattr(documents, "get_document", fake_get_document)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", fake_pipeline_status)
-    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: active_job)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: active_job)
 
     result = await documents.get_document_processing_status(document_id, {"sub": "dev-user-123"})
 
@@ -572,7 +572,7 @@ async def test_status_endpoint_prefers_cancel_requested_job_over_stale_terminal_
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id="user-1"))
     monkeypatch.setattr(documents, "get_document", fake_get_document)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", fake_pipeline_status)
-    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: cancel_requested_job)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: cancel_requested_job)
 
     result = await documents.get_document_processing_status(document_id, {"sub": "dev-user-123"})
 
@@ -631,7 +631,7 @@ async def test_status_endpoint_prefers_cancelled_terminal_job_over_active_pipeli
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id="user-1"))
     monkeypatch.setattr(documents, "get_document", fake_get_document)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", fake_pipeline_status)
-    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: cancelled_job)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: cancelled_job)
 
     result = await documents.get_document_processing_status(document_id, {"sub": "dev-user-123"})
 

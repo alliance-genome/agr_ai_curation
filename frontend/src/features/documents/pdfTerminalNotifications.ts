@@ -8,7 +8,14 @@ export interface PdfTerminalNotificationJob {
   filename?: string | null;
   document_id?: string | null;
   cancel_requested?: boolean | null;
+  metadata?: { job_kind?: string | null } | Record<string, unknown> | null;
 }
+
+// A job that adds files to an existing paper (backend ``SUPPLEMENT_ADD_JOB_KIND``).
+const SUPPLEMENT_ADD_JOB_KIND = 'supplement_add';
+
+export const isSupplementAddJob = (job: Pick<PdfTerminalNotificationJob, 'metadata'>): boolean =>
+  Boolean(job.metadata) && (job.metadata as { job_kind?: unknown }).job_kind === SUPPLEMENT_ADD_JOB_KIND;
 
 export interface PdfTerminalNotificationDetail {
   key: string;
@@ -50,6 +57,20 @@ export const buildPdfTerminalNotification = (
   }
 
   const filename = job.filename ?? job.document_id ?? job.job_id;
+  if (isSupplementAddJob(job)) {
+    // Wording proposals awaiting sign-off (ALL-1460 P7c1); the paper itself is unchanged by an add.
+    const messages: Record<PdfTerminalStatus, string> = {
+      completed: `Files added to ${filename}`,
+      cancelled: `Adding files to ${filename} was cancelled`,
+      failed: `Adding files to ${filename} did not finish`,
+    };
+    const severities: Record<PdfTerminalStatus, PdfTerminalNotificationSeverity> = {
+      completed: 'success',
+      cancelled: 'info',
+      failed: 'error',
+    };
+    return { key: `${job.job_id}:${status}`, status, message: messages[status], severity: severities[status] };
+  }
   if (status === 'completed') {
     return {
       key: `${job.job_id}:${status}`,

@@ -443,11 +443,8 @@ npm run lint -- --fix
 
 ### Type Checking
 ```bash
-# Run TypeScript compiler checks
+# Run TypeScript compiler checks (CI's Frontend Type Check job runs this)
 npm run type-check
-
-# Run a scoped branch guard that ignores existing repo-wide debt
-npm run type-check:changed -- --base origin/main
 ```
 
 ## Nginx Configuration
@@ -503,8 +500,7 @@ View network requests:
 - `npm test` - Run test suite
 - `npm run test:stable` - Run the frontend suite with stable low-concurrency Vitest settings
 - `npm run lint` - Run ESLint
-- `npm run type-check` - Check TypeScript types
-- `npm run type-check:changed` - Run TypeScript and fail only on changed frontend TypeScript files or unscoped/config-level errors
+- `npm run type-check` - Check TypeScript types (must report no errors; CI enforces it)
 
 ## Contributing
 

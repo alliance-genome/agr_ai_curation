@@ -38,8 +38,12 @@ PASS_COUNT=0
 FAIL_COUNT=0
 CHECKS_TSV="$(mktemp)"
 PR_BODY_FILE="$(mktemp)"
+# Per-run check output files: a nested gate (the standalone-suites regression
+# runs one in a sandbox) or a second gate on the same host must not share them.
+GATE_OUT="$(mktemp)"
+GATE_ERR="$(mktemp)"
 printf '%s' "${AGENT_GATE_IGNORE_JUSTIFICATION:-}" > "${PR_BODY_FILE}"
-trap 'rm -f "${CHECKS_TSV}" "${PR_BODY_FILE}" /tmp/agent_gate.out /tmp/agent_gate.err' EXIT
+trap 'rm -f "${CHECKS_TSV}" "${PR_BODY_FILE}" "${GATE_OUT}" "${GATE_ERR}"' EXIT
 
 record_check() {
   local name="$1"
@@ -77,13 +81,13 @@ record_skip() {
 run_check() {
   local name="$1"
   local cmd="$2"
-  if bash -lc "${cmd}" >/tmp/agent_gate.out 2>/tmp/agent_gate.err; then
-    record_check "${name}" "pass" "$(cat /tmp/agent_gate.out)"
+  if bash -lc "${cmd}" >"${GATE_OUT}" 2>"${GATE_ERR}"; then
+    record_check "${name}" "pass" "$(cat "${GATE_OUT}")"
   else
     local error_output
-    error_output="$(cat /tmp/agent_gate.err)"
+    error_output="$(cat "${GATE_ERR}")"
     if [[ -z "${error_output}" ]]; then
-      error_output="$(cat /tmp/agent_gate.out)"
+      error_output="$(cat "${GATE_OUT}")"
     fi
     record_check "${name}" "fail" "${error_output}"
   fi
@@ -144,10 +148,10 @@ run_path_scoped_check() {
 
   local changed_summary
   changed_summary="$(summarize_changed_paths "${changed_paths}")"
-  if bash -lc "${cmd}" >/tmp/agent_gate.out 2>/tmp/agent_gate.err; then
+  if bash -lc "${cmd}" >"${GATE_OUT}" 2>"${GATE_ERR}"; then
     local output
     local output_summary
-    output="$(cat /tmp/agent_gate.out)"
+    output="$(cat "${GATE_OUT}")"
     output_summary="$(summarize_output_tail "${output}")"
     if [[ -n "${output_summary}" ]]; then
       record_check "${name}" "pass" \
@@ -158,9 +162,9 @@ run_path_scoped_check() {
   else
     local error_output
     local error_summary
-    error_output="$(cat /tmp/agent_gate.err)"
+    error_output="$(cat "${GATE_ERR}")"
     if [[ -z "${error_output}" ]]; then
-      error_output="$(cat /tmp/agent_gate.out)"
+      error_output="$(cat "${GATE_OUT}")"
     fi
     error_summary="$(summarize_output_tail "${error_output}")"
     record_check "${name}" "fail" \
@@ -292,6 +296,14 @@ run_path_scoped_check \
   "scripts/utilities/agent_lsp.py, scripts/tests/test_agent_lsp_diagnostics.sh, scripts/tests/test_agent_lsp_typescript_prep.sh" \
   scripts/utilities/agent_lsp.py scripts/tests/test_agent_lsp_diagnostics.sh scripts/tests/test_agent_lsp_typescript_prep.sh
 
+# The gate's own regression test runs the gate in a sandbox copy of the repository
+# (installer and publish scenarios included), so it runs only when the gate changes.
+run_path_scoped_check \
+  "agent-pr-gate-standalone-suites-regression" \
+  "bash scripts/tests/test_agent_pr_gate_standalone_suites.sh" \
+  "scripts/testing/agent_pr_gate.sh, scripts/tests/test_agent_pr_gate_standalone_suites.sh" \
+  scripts/testing/agent_pr_gate.sh scripts/tests/test_agent_pr_gate_standalone_suites.sh
+
 run_path_scoped_check \
   "installer-shell-regression-suite" \
   "bash scripts/install/tests/run.sh" \
@@ -306,14 +318,14 @@ run_path_scoped_check \
 
 CHANGED_BACKEND_FILES="$(git diff --name-only "${DIFF_RANGE}" -- backend || true)"
 if [[ -n "${CHANGED_BACKEND_FILES}" ]]; then
-  if bash scripts/testing/agent_pr_gate_backend_smoke.sh >/tmp/agent_gate.out 2>/tmp/agent_gate.err; then
-    record_check "backend-unit-smoke" "pass" "$(cat /tmp/agent_gate.out)"
+  if bash scripts/testing/agent_pr_gate_backend_smoke.sh >"${GATE_OUT}" 2>"${GATE_ERR}"; then
+    record_check "backend-unit-smoke" "pass" "$(cat "${GATE_OUT}")"
   else
     smoke_status=$?
     if [[ "${smoke_status}" == 3 ]]; then
-      record_skip "backend-unit-smoke" "$(cat /tmp/agent_gate.out)"
+      record_skip "backend-unit-smoke" "$(cat "${GATE_OUT}")"
     else
-      record_check "backend-unit-smoke" "fail" "$(cat /tmp/agent_gate.err /tmp/agent_gate.out)"
+      record_check "backend-unit-smoke" "fail" "$(cat "${GATE_ERR}" "${GATE_OUT}")"
     fi
   fi
 else

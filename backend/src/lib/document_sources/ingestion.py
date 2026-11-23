@@ -216,6 +216,7 @@ async def ingest_provider_markdown_document(
             owner_user_id=owner_user_id,
             weaviate_client=weaviate_client,
             strategy=strategy,
+            sectioning=model_sections(document_id),
             provider_figure_metadata=request.provider_figure_metadata,
         )
         stages_completed.extend((ProcessingStage.CHUNKING, ProcessingStage.STORING))
@@ -259,6 +260,122 @@ async def ingest_provider_markdown_document(
         raise DocumentSourceIngestionError("Provider Markdown ingestion failed") from exc
 
 
+# How a file's elements get their sections: ``model_sections`` for a paper's main
+# file, ``structural_sections`` for a supplement. Returns the sectioned elements and
+# the record kept in the file's ``hierarchy_metadata`` column (or ``None``).
+FileSectioning = Callable[[list[dict[str, Any]]], Awaitable[tuple[list[dict[str, Any]], Any]]]
+
+
+def model_sections(document_id: str) -> FileSectioning:
+    """Sections from the hierarchy model, for a paper's main file.
+
+    A model or storage failure leaves the elements flat and is reported, as before.
+    """
+
+    async def sectioning(elements: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], Any]:
+        try:
+            from src.lib.pipeline.hierarchy_resolution import resolve_document_hierarchy
+
+            return await resolve_document_hierarchy(elements)
+        except Exception as exc:
+            _report_hierarchy_failure(exc, document_id)
+            return elements, None
+
+    return sectioning
+
+
+def structural_sections(*, file_title_is_first_heading: bool, fallback_section: str) -> FileSectioning:
+    """Sections from the heading structure alone, for a supplement (no model)."""
+
+    async def sectioning(elements: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], Any]:
+        from src.lib.pipeline.structural_sections import apply_structural_sections
+
+        return apply_structural_sections(
+            elements, file_title_is_first_heading=file_title_is_first_heading,
+            fallback_section=fallback_section,
+        ), None
+
+    return sectioning
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedFile:
+    """One file's sectioned elements and pieces, before any piece number is reserved."""
+
+    elements: list[dict[str, Any]]
+    chunks: list[Any]
+    text_bytes: int
+    hierarchy_metadata: Any
+
+
+async def prepare_file_pieces(
+    elements: list[dict[str, Any]],
+    *,
+    document_id: str,
+    sectioning: FileSectioning,
+    strategy: ChunkingStrategy,
+    stage_checkpoint: Callable[[str], Awaitable[None]] | None = None,
+) -> PreparedFile:
+    """Section and chunk one file's elements. Nothing is stored."""
+
+    from src.lib.document_files.service import element_text_bytes
+    from src.lib.pipeline.chunk import chunk_parsed_document
+
+    # Sectioning never changes element text, so this is the size of the saved elements.
+    text_bytes = element_text_bytes(elements)
+    if stage_checkpoint is not None:
+        await stage_checkpoint("hierarchy")
+    sectioned, hierarchy_metadata = await sectioning(elements)
+    if stage_checkpoint is not None:
+        await stage_checkpoint("chunking")
+    chunks = await chunk_parsed_document(sectioned, strategy, document_id)
+    return PreparedFile(
+        elements=sectioned, chunks=chunks, text_bytes=text_bytes, hierarchy_metadata=hierarchy_metadata,
+    )
+
+
+async def store_file_pieces(
+    prepared: PreparedFile,
+    *,
+    document_id: str,
+    file_id: UUID,
+    user_id: str,
+    weaviate_client: Any,
+    added_to_finished_paper: bool,
+    provider_figure_metadata: tuple[Mapping[str, Any], ...] = (),
+    stage_checkpoint: Callable[[str], Awaitable[None]] | None = None,
+) -> tuple[int, int]:
+    """Reserve the file's piece range and store its pieces there; returns the range.
+
+    A paper's main file: figure locators run (its text came from the paper's PDF)
+    and storing marks the paper's own search-index object as embedding. A file
+    added to a finished paper (``added_to_finished_paper``): no figure locators (a
+    supplement's tables are never figure candidates) and the paper's own object is
+    never written. The file is not marked ready here.
+    """
+
+    from src.lib.document_files.service import reserve_file_chunk_range
+    from src.lib.pipeline.chunk import offset_chunk_indices
+    from src.lib.pipeline.store import store_added_file_pieces, store_to_weaviate
+
+    range_start = await asyncio.to_thread(
+        reserve_file_chunk_range, document_id, file_id, len(prepared.chunks)
+    )
+    chunks = offset_chunk_indices(prepared.chunks, range_start)
+    if not added_to_finished_paper:
+        from src.lib.pipeline.figure_locator_resolution import resolve_figure_locators
+
+        if stage_checkpoint is not None:
+            await stage_checkpoint("figure_locators")
+        chunks = await resolve_figure_locators(chunks, provider_figure_metadata=provider_figure_metadata)
+    if stage_checkpoint is not None:
+        await stage_checkpoint("vector_storage")
+    range_end = range_start + len(chunks) - 1
+    store = store_added_file_pieces if added_to_finished_paper else store_to_weaviate
+    await store(chunks, document_id, weaviate_client, user_id, chunk_range=(range_start, range_end))
+    return range_start, range_end
+
+
 async def index_owned_document_elements(
     elements: list[dict[str, Any]],
     *,
@@ -268,10 +385,11 @@ async def index_owned_document_elements(
     owner_user_id: int,
     weaviate_client: Any,
     strategy: ChunkingStrategy,
+    sectioning: FileSectioning,
     provider_figure_metadata: tuple[Mapping[str, Any], ...] = (),
     stage_checkpoint: Callable[[str], Awaitable[None]] | None = None,
 ) -> int:
-    """Index one file of a paper: hierarchy, chunking, figures and vector storage.
+    """Index one main file of a paper: sections, chunking, figures and vector storage.
 
     This is the per-file part. It reserves the file's piece range, stores and
     verifies that range, and marks the file ready with its text size. The
@@ -280,54 +398,26 @@ async def index_owned_document_elements(
     """
 
     await _require_owned_document(document_id, user_id, owner_user_id)
-    from src.lib.document_files.service import element_text_bytes, mark_file_ready, reserve_file_chunk_range
+    from src.lib.document_files.service import mark_file_ready
 
-    # The elements as saved in the file's processed JSON, before hierarchy.
-    text_bytes = element_text_bytes(elements)
-    # Keep lease/cancellation failures outside the normal hierarchy fallback.
-    if stage_checkpoint is not None:
-        await stage_checkpoint("hierarchy")
-    try:
-        from src.lib.pipeline.hierarchy_resolution import resolve_document_hierarchy
-
-        elements, hierarchy_metadata = await resolve_document_hierarchy(elements)
-        if hierarchy_metadata:
+    prepared = await prepare_file_pieces(
+        elements, document_id=document_id, sectioning=sectioning, strategy=strategy,
+        stage_checkpoint=stage_checkpoint,
+    )
+    if prepared.hierarchy_metadata:
+        try:
             await _store_hierarchy_metadata(
-                document_id, file_id, user_id, owner_user_id, hierarchy_metadata
+                document_id, file_id, user_id, owner_user_id, prepared.hierarchy_metadata
             )
-    except Exception as exc:
-        _report_hierarchy_failure(exc, document_id)
-
-    from src.lib.pipeline.chunk import chunk_parsed_document, offset_chunk_indices
-
-    if stage_checkpoint is not None:
-        await stage_checkpoint("chunking")
-    chunks = await chunk_parsed_document(elements, strategy, document_id)
-    range_start = await asyncio.to_thread(
-        reserve_file_chunk_range, document_id, file_id, len(chunks)
+        except Exception as exc:
+            _report_hierarchy_failure(exc, document_id)
+    await store_file_pieces(
+        prepared, document_id=document_id, file_id=file_id, user_id=user_id,
+        weaviate_client=weaviate_client, added_to_finished_paper=False,
+        provider_figure_metadata=provider_figure_metadata, stage_checkpoint=stage_checkpoint,
     )
-    chunks = offset_chunk_indices(chunks, range_start)
-
-    from src.lib.pipeline.figure_locator_resolution import resolve_figure_locators
-
-    if stage_checkpoint is not None:
-        await stage_checkpoint("figure_locators")
-    chunks = await resolve_figure_locators(
-        chunks, provider_figure_metadata=provider_figure_metadata
-    )
-    from src.lib.pipeline.store import store_to_weaviate
-
-    if stage_checkpoint is not None:
-        await stage_checkpoint("vector_storage")
-    await store_to_weaviate(
-        chunks,
-        document_id,
-        weaviate_client,
-        user_id,
-        chunk_range=(range_start, range_start + len(chunks) - 1),
-    )
-    await asyncio.to_thread(mark_file_ready, file_id, text_bytes=text_bytes)
-    return len(chunks)
+    await asyncio.to_thread(mark_file_ready, file_id, text_bytes=prepared.text_bytes)
+    return len(prepared.chunks)
 
 
 async def finalize_new_paper(

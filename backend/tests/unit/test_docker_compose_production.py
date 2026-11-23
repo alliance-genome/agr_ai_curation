@@ -509,6 +509,8 @@ def test_compose_forwards_provider_import_wait_settings(name, default):
     [
         ("DOCUMENT_FILE_DOWNLOAD_CONCURRENCY", "4"),
         ("DOCUMENT_FILE_LISTING_CHECK_LIMIT", "20"),
+        ("DOCUMENT_MAX_FILES_PER_PAPER", "20"),
+        ("DOCUMENT_PAPER_MAX_TEXT_BYTES", "2000000"),
         ("DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW", "200"),
     ],
 )
