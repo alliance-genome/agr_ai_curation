@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import ErrorBoundary from './ErrorBoundary';
 
@@ -13,6 +13,9 @@ const ThrowError: React.FC<{ shouldThrow?: boolean }> = ({ shouldThrow = false }
 
 describe('ErrorBoundary', () => {
   const originalError = console.error;
+  const originalLocation = window.location;
+  // The two members ErrorBoundary uses; the page starts somewhere other than home.
+  let locationMock: { href: string; reload: ReturnType<typeof vi.fn> };
 
   beforeAll(() => {
     // Suppress console.error for these tests
@@ -21,13 +24,13 @@ describe('ErrorBoundary', () => {
 
   afterAll(() => {
     console.error = originalError;
+    Object.defineProperty(window, 'location', { configurable: true, value: originalLocation });
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
-    // Reset window.location for navigation tests
-    delete (window as any).location;
-    window.location = { ...window.location, href: '/', reload: vi.fn() };
+    locationMock = { href: 'http://localhost/weaviate/documents', reload: vi.fn() };
+    Object.defineProperty(window, 'location', { configurable: true, value: locationMock });
   });
 
   it('renders children when there is no error', () => {
@@ -97,7 +100,7 @@ describe('ErrorBoundary', () => {
     const reloadButton = screen.getByRole('button', { name: /reload page/i });
     fireEvent.click(reloadButton);
 
-    expect(window.location.reload).toHaveBeenCalled();
+    expect(locationMock.reload).toHaveBeenCalled();
   });
 
   it('navigates home when Go Home is clicked', () => {
@@ -110,7 +113,7 @@ describe('ErrorBoundary', () => {
     const goHomeButton = screen.getByRole('button', { name: /go home/i });
     fireEvent.click(goHomeButton);
 
-    expect(window.location.href).toBe('/');
+    expect(locationMock.href).toBe('/');
   });
 
   it('toggles technical details visibility', async () => {

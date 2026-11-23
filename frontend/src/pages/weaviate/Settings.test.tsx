@@ -5,7 +5,7 @@ import Settings from './Settings';
 const getSelectControl = (labelText: string) => {
   const label = screen.getByText(labelText, { selector: 'label' });
   const formControl = label.closest('.MuiFormControl-root');
-  if (!formControl) {
+  if (!(formControl instanceof HTMLElement)) {
     throw new Error(`Form control not found for label: ${labelText}`);
   }
   return within(formControl).getByRole('combobox');
@@ -457,8 +457,7 @@ describe('Settings', () => {
 
       const successMessage = await screen.findByText('Embedding configuration saved successfully');
       const alert = successMessage.closest('.MuiAlert-root');
-      expect(alert).toBeTruthy();
-      if (!alert) {
+      if (!(alert instanceof HTMLElement)) {
         throw new Error('Snackbar alert not found');
       }
       const closeButton = within(alert).getByRole('button');
