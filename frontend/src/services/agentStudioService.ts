@@ -140,7 +140,7 @@ export function parseAgentStudioChatEvent(value: unknown): OpusChatEvent {
   return value as unknown as OpusChatEvent
 }
 
-async function reportAgentStudioStreamProtocolError(
+export async function reportAgentStudioStreamProtocolError(
   reason: AgentStudioStreamProtocolReason,
   sessionId: string | null,
   eventType?: OpusChatEvent['type'],

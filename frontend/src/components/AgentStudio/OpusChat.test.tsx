@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
 
 import OpusChat, { resetSharedOpusChatStateForTests } from './OpusChat'
@@ -23,7 +23,10 @@ const serviceMocks = vi.hoisted(() => ({
   stopAgentStudioChat: vi.fn(),
 }))
 
-vi.mock('@/services/agentStudioService', () => serviceMocks)
+vi.mock('@/services/agentStudioService', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/services/agentStudioService')>(),
+  ...serviceMocks,
+}))
 
 describe('OpusChat', () => {
   beforeEach(() => {
@@ -1267,36 +1270,76 @@ describe('OpusChat', () => {
     expect(errorSpy).not.toHaveBeenCalled()
   })
 
-  it('matches live tool results to the exact call ID rather than the latest tool', async () => {
-    Object.defineProperty(Element.prototype, 'scrollIntoView', {
-      configurable: true,
-      value: vi.fn(),
-      writable: true,
-    })
-    serviceMocks.streamOpusChat.mockImplementation(async function* () {
-      yield { type: 'TOOL_USE', tool_name: 'first_tool', tool_input: {}, call_id: 'call-1' }
-      yield { type: 'TOOL_USE', tool_name: 'second_tool', tool_input: {}, call_id: 'call-2' }
-      yield {
-        type: 'TOOL_RESULT',
-        tool_name: 'first_tool',
-        result: { success: true },
-        call_id: 'call-1',
-      }
-      yield { type: 'DONE' }
+  describe('tool result correlation', () => {
+    const reportFetch = vi.fn<typeof fetch>()
+
+    beforeEach(() => {
+      Element.prototype.scrollIntoView = vi.fn()
+      vi.stubGlobal('fetch', reportFetch)
     })
 
-    render(<OpusChat context={{ active_tab: 'agents' }} />)
-    const input = screen.getByPlaceholderText('Ask about prompts...')
-    fireEvent.change(input, { target: { value: 'Use both tools.' } })
-    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+    afterEach(() => vi.unstubAllGlobals())
 
-    fireEvent.click(await screen.findByText('Tool Calls (2)'))
-    const firstToolRow = screen.getByText('first_tool').parentElement?.parentElement
-    const secondToolRow = screen.getByText('second_tool').parentElement?.parentElement
-    expect(firstToolRow).not.toBeNull()
-    expect(secondToolRow).not.toBeNull()
-    expect(within(firstToolRow as HTMLElement).getByText('✓ Success')).toBeInTheDocument()
-    expect(within(secondToolRow as HTMLElement).queryByText('✓ Success')).not.toBeInTheDocument()
+    it('reports an unmatched tool result once and keeps the retry message when delivery fails', async () => {
+      let rejectDelivery!: (reason: Error) => void
+      reportFetch.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectDelivery = reject }))
+      serviceMocks.streamOpusChat.mockImplementation(async function* () {
+        yield {
+          type: 'TOOL_RESULT',
+          call_id: 'private-call-id',
+          tool_name: 'private-tool-name',
+          result: { detail: 'private-tool-payload' },
+        }
+        yield { type: 'TEXT_DELTA', delta: 'Unexpected continuation' }
+      })
+
+      render(<OpusChat context={{ active_tab: 'agents' }} durableSessionId="private-chat-session" />)
+      const input = screen.getByPlaceholderText('Ask about prompts...')
+      fireEvent.change(input, { target: { value: 'Use the tool.' } })
+      fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+      const retryMessage = 'AI Chat received an unexpected tool result. Please retry.'
+      expect(await screen.findByText(retryMessage)).toBeInTheDocument()
+      expect(input).toBeEnabled()
+      expect(reportFetch).toHaveBeenCalledOnce()
+      const [url, options] = reportFetch.mock.calls[0]
+      expect(url).toBe('/api/agent-studio/chat/protocol-error')
+      expect(JSON.parse(options?.body as string)).toEqual({
+        reason: 'correlation_mismatch',
+        session_id_hash: 'sha256:6d1f9522aea16f66',
+      })
+      expect(JSON.stringify(reportFetch.mock.calls)).not.toContain('private')
+
+      await act(async () => { rejectDelivery(new Error('private delivery failure')) })
+      expect(screen.getByText(retryMessage)).toBeInTheDocument()
+      expect(screen.getByText('Use the tool.')).toBeInTheDocument()
+      expect(screen.queryByText('Unexpected continuation')).not.toBeInTheDocument()
+      expect(reportFetch).toHaveBeenCalledOnce()
+    })
+
+    it.each([
+      { source: 'live', firstId: 'call-1', secondId: 'call-2', matched: 'first_tool', pending: 'second_tool' },
+      { source: 'ID-less replay', firstId: undefined, secondId: undefined, matched: 'second_tool', pending: 'first_tool' },
+    ])('attaches the $source result to the expected tool without a report', async ({ firstId, secondId, matched, pending }) => {
+      serviceMocks.streamOpusChat.mockImplementation(async function* () {
+        yield { type: 'TOOL_USE', tool_name: 'first_tool', tool_input: {}, call_id: firstId }
+        yield { type: 'TOOL_USE', tool_name: 'second_tool', tool_input: {}, call_id: secondId }
+        yield { type: 'TOOL_RESULT', tool_name: matched, result: { success: true }, call_id: firstId }
+        yield { type: 'DONE' }
+      })
+
+      render(<OpusChat context={{ active_tab: 'agents' }} />)
+      const input = screen.getByPlaceholderText('Ask about prompts...')
+      fireEvent.change(input, { target: { value: 'Use both tools.' } })
+      fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+      fireEvent.click(await screen.findByText('Tool Calls (2)'))
+      const matchedRow = screen.getByText(matched).parentElement?.parentElement
+      const pendingRow = screen.getByText(pending).parentElement?.parentElement
+      expect(within(matchedRow as HTMLElement).getByText('✓ Success')).toBeInTheDocument()
+      expect(within(pendingRow as HTMLElement).queryByText('✓ Success')).not.toBeInTheDocument()
+      expect(reportFetch).not.toHaveBeenCalled()
+    })
   })
 
   it('renders the compact header with one context chip, a feedback menu, and a hide control', async () => {
