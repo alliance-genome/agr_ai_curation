@@ -25,6 +25,7 @@ import {
   type HorizontalGridModel,
   type HorizontalGridValidationProjection,
 } from './horizontalGridModel'
+import { singleMainPdfFile } from '@/components/pdfViewer/viewerFilesFixtures'
 
 const serviceMocks = vi.hoisted(() => ({
   fetchCurationWorkspace: vi.fn(),
@@ -231,7 +232,7 @@ function buildWorkspace(candidate = buildCandidate()): CurationWorkspace {
       session_id: 'session-1',
       status: 'in_progress',
       adapter: { adapter_key: 'reference', display_label: 'Reference', metadata: {} },
-      document: { document_id: 'document-1', title: 'Reference paper' },
+      document: { document_id: 'document-1', title: 'Reference paper', files: [singleMainPdfFile({ documentId: 'document-1' })] },
       progress: {
         total_candidates: 1,
         reviewed_candidates: 0,
@@ -680,7 +681,7 @@ describe('InteractiveHorizontalCurationGrid', () => {
       name: /^Show evidence and validation details for Authors:/,
     })
     const objectEvidence = screen.getByRole('button', {
-      name: 'Object evidence 1 for Reference one has no navigable PDF location',
+      name: 'Object evidence 1 for Reference one has no evidence location',
     })
     expect(objectEvidence).toBeDisabled()
 

@@ -299,6 +299,8 @@ describe('navigationSourceAdapters', () => {
 
     expect(command).toEqual({
       anchorId: 'anchor-crb-7',
+      fileId: null,
+      textEvidence: { fragments: null, section: 'Results', subsection: 'Photoreceptor Morphology' },
       anchor: expect.objectContaining({
         locator_quality: 'section_only',
         page_number: 7,
@@ -310,5 +312,141 @@ describe('navigationSourceAdapters', () => {
       sectionTitle: 'Results',
       mode: 'select',
     })
+  })
+})
+
+describe('navigation commands name the evidence file (ALL-1460, P9b)', () => {
+  const FILE_ID = 'aaaaaaaa-0000-0000-0000-000000000002'
+
+  it('a chat record carries its file id into the command', () => {
+    const command = buildNavigationCommandFromChatEvidenceRecord(
+      makeChatEvidenceRecord({ file_id: FILE_ID, file_name: 'Table_S1.xlsx' }),
+    )
+
+    expect(command.fileId).toBe(FILE_ID)
+  })
+
+  it('a chat record saved before files were recorded gives a command with no file', () => {
+    const command = buildNavigationCommandFromChatEvidenceRecord(makeChatEvidenceRecord())
+
+    expect(command.fileId).toBeNull()
+  })
+
+  it('a page-less chat record builds a command without a page and without "pnull" in its anchor id', () => {
+    const command = buildNavigationCommandFromChatEvidenceRecord(
+      makeChatEvidenceRecord({ file_id: FILE_ID, file_name: 'Table_S1.xlsx', page: null }),
+    )
+
+    expect(command.pageNumber).toBeNull()
+    expect(command.anchor.page_number).toBeNull()
+    expect(command.anchorId).not.toContain('pnull')
+    expect(command.anchorId).toContain(FILE_ID)
+  })
+
+  it('two chat records quoting the same text in two files get different anchor ids', () => {
+    const first = buildNavigationCommandFromChatEvidenceRecord(
+      makeChatEvidenceRecord({ file_id: FILE_ID, file_name: 'a.xlsx', page: null }),
+    )
+    const second = buildNavigationCommandFromChatEvidenceRecord(
+      makeChatEvidenceRecord({ file_id: 'aaaaaaaa-0000-0000-0000-000000000003', file_name: 'b.pdf', page: null }),
+    )
+
+    expect(first.anchorId).not.toBe(second.anchorId)
+  })
+
+  it('a review-grid record carries the file id that sits beside its anchor', () => {
+    const command = buildNavigationCommandFromCurationEvidenceRecord(
+      makeCurationEvidenceRecord({ file_id: FILE_ID }),
+    )
+
+    expect(command?.fileId).toBe(FILE_ID)
+  })
+
+  it('a review-grid record saved before files were recorded gives a command with no file', () => {
+    const command = buildNavigationCommandFromCurationEvidenceRecord(makeCurationEvidenceRecord())
+
+    expect(command?.fileId).toBeNull()
+  })
+
+  it('an envelope projection carries its file id', () => {
+    const command = buildNavigationCommandFromEnvelopeEvidenceProjection({
+      ...makeEnvelopeEvidenceProjection(),
+      file_id: FILE_ID,
+    })
+
+    expect(command?.fileId).toBe(FILE_ID)
+  })
+
+  it('an envelope projection saved before files were recorded gives a command with no file', () => {
+    const command = buildNavigationCommandFromEnvelopeEvidenceProjection(makeEnvelopeEvidenceProjection())
+
+    expect(command?.fileId).toBeNull()
+  })
+})
+
+describe('navigation commands carry the stored fragments and raw section names (ALL-1460, P9b)', () => {
+  const FILE_ID = 'aaaaaaaa-0000-0000-0000-000000000002'
+
+  // The record_evidence writer's shape: verified_quote is the span texts joined by a
+  // blank line; each fragment keeps its own exact text, section and subsection.
+  it('a chat record\'s fragments are kept one by one, unchanged', () => {
+    const command = buildNavigationCommandFromChatEvidenceRecord(makeChatEvidenceRecord({
+      verified_quote: '| Strain | Temp |\n\n| XS0401 | 25 C |',
+      page: null,
+      section: 'Table S1',
+      subsection: 'Sheet 1',
+      file_id: FILE_ID,
+      file_name: 'Table_S1.xlsx',
+      source_fragments: [
+        { text: '| Strain | Temp |', span_type: 'table_row', section: 'Table S1', subsection: 'Sheet 1', file_id: FILE_ID },
+        { text: '| XS0401 | 25 C |', span_type: 'table_row', section: 'Table S1', subsection: 'Sheet 1', file_id: FILE_ID },
+      ],
+    }))
+
+    expect(command.textEvidence).toEqual({
+      fragments: [
+        { text: '| Strain | Temp |', section: 'Table S1', subsection: 'Sheet 1' },
+        { text: '| XS0401 | 25 C |', section: 'Table S1', subsection: 'Sheet 1' },
+      ],
+      section: 'Table S1',
+      subsection: 'Sheet 1',
+    })
+  })
+
+  it('a section name containing " > " reaches the text locator unsplit', () => {
+    const command = buildNavigationCommandFromChatEvidenceRecord(makeChatEvidenceRecord({
+      section: 'Growth > 25 C',
+      subsection: undefined,
+      file_id: FILE_ID,
+    }))
+
+    expect(command.textEvidence).toMatchObject({ section: 'Growth > 25 C', subsection: null })
+  })
+
+  it('an envelope projection takes the fragments of its stored record', () => {
+    const projection = makeEnvelopeEvidenceProjection()
+    const command = buildNavigationCommandFromEnvelopeEvidenceProjection({
+      ...projection,
+      file_id: FILE_ID,
+      metadata: {
+        source_record: {
+          source_fragments: [
+            { text: 'Worms were grown.', section: 'Methods' },
+            { text: 'They were kept at 25 C.', section: 'Methods' },
+          ],
+        },
+      },
+    })
+
+    expect(command?.textEvidence.fragments).toEqual([
+      { text: 'Worms were grown.', section: 'Methods', subsection: null },
+      { text: 'They were kept at 25 C.', section: 'Methods', subsection: null },
+    ])
+  })
+
+  it('a review-grid anchor has no fragments: the quote is located', () => {
+    const command = buildNavigationCommandFromCurationEvidenceRecord(makeCurationEvidenceRecord({ file_id: FILE_ID }))
+
+    expect(command?.textEvidence.fragments).toBeNull()
   })
 })

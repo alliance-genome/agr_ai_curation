@@ -9,6 +9,7 @@ import {
   type DomainEnvelopeReviewRowsResponse,
   type CurationWorkspaceResponse,
 } from './types'
+import { singleMainPdfFile } from '@/components/pdfViewer/viewerFilesFixtures'
 
 describe('curation workspace substrate types', () => {
   it('exposes the expected shared enum surfaces', () => {
@@ -119,6 +120,7 @@ describe('curation workspace substrate types', () => {
           },
           document: {
             document_id: 'document-1',
+            files: [singleMainPdfFile({ documentId: 'document-1' })],
             title: 'Shared workspace contract paper',
             pmid: '123456',
             citation_label: 'PMID:123456',

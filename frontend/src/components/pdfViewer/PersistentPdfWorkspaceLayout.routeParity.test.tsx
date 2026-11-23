@@ -10,8 +10,9 @@ import PersistentPdfWorkspaceLayout from './PersistentPdfWorkspaceLayout'
 import {
   HOME_PDF_VIEWER_OWNER,
   buildCurationPDFViewerOwner,
-  dispatchPDFDocumentChanged,
+  showPaperFilesInViewer,
 } from './pdfEvents'
+import { singleMainPdfFile } from './viewerFilesFixtures'
 
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
@@ -46,13 +47,7 @@ function HomeRouteStub() {
       <div>Home route content</div>
       <button
         onClick={() => {
-          dispatchPDFDocumentChanged(
-            'doc-home',
-            '/fixtures/home.pdf',
-            'home.pdf',
-            12,
-            { ownerToken: HOME_PDF_VIEWER_OWNER },
-          )
+          showPaperFilesInViewer('doc-home', [singleMainPdfFile({ documentId: 'doc-home', displayName: 'home.pdf', pageCount: 12 })], { ownerToken: HOME_PDF_VIEWER_OWNER })
         }}
         type="button"
       >
@@ -77,13 +72,7 @@ function CurationRouteStub() {
       <div>Curation route content</div>
       <button
         onClick={() => {
-          dispatchPDFDocumentChanged(
-            'doc-curation',
-            '/fixtures/curation.pdf',
-            'curation.pdf',
-            8,
-            { ownerToken: curationOwnerToken },
-          )
+          showPaperFilesInViewer('doc-curation', [singleMainPdfFile({ documentId: 'doc-curation', displayName: 'curation.pdf', pageCount: 8 })], { ownerToken: curationOwnerToken })
         }}
         type="button"
       >
@@ -91,13 +80,7 @@ function CurationRouteStub() {
       </button>
       <button
         onClick={() => {
-          dispatchPDFDocumentChanged(
-            'doc-home-stale',
-            '/fixtures/home-stale.pdf',
-            'home-stale.pdf',
-            7,
-            { ownerToken: HOME_PDF_VIEWER_OWNER },
-          )
+          showPaperFilesInViewer('doc-home-stale', [singleMainPdfFile({ documentId: 'doc-home-stale', displayName: 'home-stale.pdf', pageCount: 7 })], { ownerToken: HOME_PDF_VIEWER_OWNER })
         }}
         type="button"
       >
@@ -131,13 +114,7 @@ function HydratingCurationRouteStub() {
   )
 
   useEffect(() => {
-    dispatchPDFDocumentChanged(
-      'doc-home',
-      '/fixtures/home.pdf',
-      'home.pdf',
-      12,
-      { ownerToken: curationOwnerToken },
-    )
+    showPaperFilesInViewer('doc-home', [singleMainPdfFile({ documentId: 'doc-home', displayName: 'home.pdf', pageCount: 12 })], { ownerToken: curationOwnerToken })
   }, [curationOwnerToken])
 
   return <div>Curation hydration route content</div>

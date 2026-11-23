@@ -736,7 +736,7 @@ function HomePage() {
 
     const handleLoadError = (event: Event) => {
       const detail = (event as CustomEvent<{ message?: string }>).detail
-      const message = detail?.message ?? 'Document loaded for chat, but the PDF viewer could not be restored.'
+      const message = detail?.message ?? 'Paper loaded for chat, but the viewer could not show it.'
       debug.log('[HomePage] Document load error', message)
       clearDocumentLoadingTimeout()
       setLoadingDocument(true)
@@ -762,7 +762,7 @@ function HomePage() {
     }
 
     const timeoutId = window.setTimeout(() => {
-      const message = 'Document loading timed out before the chat handoff completed. The PDF may still be processing, unavailable, or too large.'
+      const message = 'Document loading timed out before the chat handoff completed. The paper may still be processing, unavailable, or too large.'
       debug.log('[HomePage] Document loading timeout - showing error')
       failDocumentLoad({ message })
     }, 30000) // 30 second timeout

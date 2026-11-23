@@ -1,4 +1,4 @@
-import { readCurationApiError } from './api'
+import { readCurationApiError, readCurationApiErrorCode } from './api'
 import { CurationWorkspaceRequestError } from './curationWorkspaceService'
 
 export interface HistoryReference { id: string; sha256: string }
@@ -57,7 +57,10 @@ async function command<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(`/api/curation-workspace/${path}`, {
     method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   })
-  if (!response.ok) throw new CurationWorkspaceRequestError(response.status, await readCurationApiError(response))
+  if (!response.ok) {
+    const code = await readCurationApiErrorCode(response.clone())
+    throw new CurationWorkspaceRequestError(response.status, await readCurationApiError(response), code)
+  }
   return response.json() as Promise<T>
 }
 export async function requestReview(sessionId: string, candidateIds: string[], guidance: string | null, requestId: string) {

@@ -1,10 +1,16 @@
 import type { EvidenceNavigationCommand } from '@/features/curation/evidence'
+import { defaultActiveFileId, parseViewerFiles, viewerTabFiles, type ViewerFile } from './viewerFiles'
 
 export interface PDFViewerDocumentChangedDetail {
   documentId: string
-  viewerUrl: string
-  filename: string
-  pageCount: number
+  /** The paper's files with a tab (a content or text URL), in tab order; never empty. */
+  files: ViewerFile[]
+  /** The file to show; one of `files`. */
+  activeFileId: string
+  /** The paper has a main file the viewer cannot show (not ready, so no URL). */
+  mainFileUnavailable: boolean
+  /** Files of the paper that exist but are not ready (no URL, so no tab). */
+  notReadyFileIds: string[]
   ownerToken?: string
   viewerState?: {
     currentPage?: number
@@ -36,28 +42,51 @@ export function buildCurationPDFViewerOwner(sessionId: string): string {
   return `curation:${sessionId}`
 }
 
-export function dispatchPDFDocumentChanged(
+/** Approved by Chris (23 Nov 2026). */
+export const MAIN_FILE_UNAVAILABLE_MESSAGE = 'This paper\'s main file is not available to show.'
+export const FILES_NOT_READY_MESSAGE = 'This paper\'s files are still being added.'
+
+export interface PaperFilesViewerOptions {
+  ownerToken?: string
+  viewerState?: PDFViewerDocumentChangedDetail['viewerState']
+}
+
+/**
+ * Show a paper's files in the viewer: one tab per file with a URL, the main file
+ * first (or the first file with a URL). When no file has a URL yet (all being added,
+ * or failed), the viewer is cleared instead. Returns whether a file is shown.
+ */
+export function showPaperFilesInViewer(
   documentId: string,
-  viewerUrl: string,
-  filename: string,
-  pageCount: number,
-  options?: {
-    ownerToken?: string
-    viewerState?: PDFViewerDocumentChangedDetail['viewerState']
-  },
-): void {
+  servedFiles: readonly ViewerFile[],
+  options?: PaperFilesViewerOptions,
+): boolean {
+  // The one parser for both paths (chat restore and the curation session's files).
+  const files = parseViewerFiles(servedFiles)
+  const tabFiles = viewerTabFiles(files)
+  const activeFileId = defaultActiveFileId(tabFiles)
+  const mainFileUnavailable = files.some((file) => file.role === 'main' && !tabFiles.includes(file))
+  if (activeFileId === null) {
+    dispatchPDFViewerDocumentCleared(
+      options?.ownerToken,
+      mainFileUnavailable ? MAIN_FILE_UNAVAILABLE_MESSAGE : FILES_NOT_READY_MESSAGE,
+    )
+    return false
+  }
   window.dispatchEvent(
     new CustomEvent<PDFViewerDocumentChangedDetail>('pdf-viewer-document-changed', {
       detail: {
         documentId,
-        viewerUrl,
-        filename,
-        pageCount,
+        files: tabFiles,
+        activeFileId,
+        mainFileUnavailable,
+        notReadyFileIds: files.filter((file) => !tabFiles.includes(file)).map((file) => file.file_id),
         ownerToken: options?.ownerToken,
         viewerState: options?.viewerState,
       },
     }),
   )
+  return true
 }
 
 export function onPDFDocumentChanged(
@@ -111,16 +140,18 @@ export function onPDFViewerNavigateEvidence(
 
 export interface PDFViewerDocumentClearedDetail {
   ownerToken?: string
+  /** What to tell the curator instead of the empty viewer (a paper with nothing to show yet). */
+  notice?: string
 }
 
 /**
- * The active document has nothing for the PDF viewer to show (a text paper).
- * The viewer ends any pending load and clears the previous PDF.
+ * The active document has nothing for the viewer to show (unloaded, or no file of
+ * the paper has a URL yet). The viewer ends any pending load and clears what it showed.
  */
-export function dispatchPDFViewerDocumentCleared(ownerToken?: string): void {
+export function dispatchPDFViewerDocumentCleared(ownerToken?: string, notice?: string): void {
   window.dispatchEvent(
     new CustomEvent<PDFViewerDocumentClearedDetail>('pdf-viewer-document-cleared', {
-      detail: { ownerToken },
+      detail: notice === undefined ? { ownerToken } : { ownerToken, notice },
     }),
   )
 }

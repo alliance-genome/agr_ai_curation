@@ -57,8 +57,8 @@ function ChatHeader({
     prepButtonDisabled,
   )
   const activeDocumentLabel = activeDocument
-    ? `Active PDF: ${activeDocument.filename ?? activeDocument.id}`
-    : 'No PDF loaded'
+    ? `Active paper: ${activeDocument.filename ?? activeDocument.id}`
+    : 'No paper loaded'
   const memoryFileCount =
     conversationStatus?.memory_stats?.memory_sizes?.short_term?.file_count ?? 0
   const memoryLabel = `${memoryFileCount} memory ${memoryFileCount === 1 ? 'item' : 'items'}`
@@ -165,12 +165,12 @@ function ChatHeader({
                 gap: '4px',
                 whiteSpace: 'nowrap',
               }}
-              title="Unload the active PDF"
+              title="Unload the active paper"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
               </svg>
-              {isUnloadingPDF ? 'Unloading...' : 'Unload PDF'}
+              {isUnloadingPDF ? 'Unloading...' : 'Unload paper'}
             </button>
           )}
 

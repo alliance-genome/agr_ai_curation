@@ -6,8 +6,9 @@ import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 import {
   HOME_PDF_VIEWER_OWNER,
   buildCurationPDFViewerOwner,
-  dispatchPDFDocumentChanged,
+  showPaperFilesInViewer,
 } from './pdfEvents'
+import { singleMainPdfFile } from './viewerFilesFixtures'
 import PdfViewer from './PdfViewer'
 
 function OwnerHarness() {
@@ -47,25 +48,13 @@ describe('PdfViewer document ownership', () => {
 
     render(<PdfViewer activeDocumentOwnerToken={curationOwnerToken} />)
 
-    dispatchPDFDocumentChanged(
-      'doc-home',
-      '/fixtures/home.pdf',
-      'home.pdf',
-      12,
-      { ownerToken: HOME_PDF_VIEWER_OWNER },
-    )
+    showPaperFilesInViewer('doc-home', [singleMainPdfFile({ documentId: 'doc-home', displayName: 'home.pdf', pageCount: 12 })], { ownerToken: HOME_PDF_VIEWER_OWNER })
 
     await waitFor(() => {
       expect(screen.queryByText('home.pdf')).not.toBeInTheDocument()
     })
 
-    dispatchPDFDocumentChanged(
-      'doc-curation',
-      '/fixtures/curation.pdf',
-      'curation.pdf',
-      8,
-      { ownerToken: curationOwnerToken },
-    )
+    showPaperFilesInViewer('doc-curation', [singleMainPdfFile({ documentId: 'doc-curation', displayName: 'curation.pdf', pageCount: 8 })], { ownerToken: curationOwnerToken })
 
     expect(await screen.findByText('curation.pdf')).toBeInTheDocument()
   })
@@ -73,13 +62,7 @@ describe('PdfViewer document ownership', () => {
   it('preserves the current document until the new active owner explicitly replaces it', async () => {
     render(<OwnerHarness />)
 
-    dispatchPDFDocumentChanged(
-      'doc-home',
-      '/fixtures/home.pdf',
-      'home.pdf',
-      12,
-      { ownerToken: HOME_PDF_VIEWER_OWNER },
-    )
+    showPaperFilesInViewer('doc-home', [singleMainPdfFile({ documentId: 'doc-home', displayName: 'home.pdf', pageCount: 12 })], { ownerToken: HOME_PDF_VIEWER_OWNER })
 
     expect(await screen.findByText('home.pdf')).toBeInTheDocument()
 
@@ -95,13 +78,7 @@ describe('PdfViewer document ownership', () => {
 
     render(<PdfViewer activeDocumentOwnerToken={curationOwnerToken} />)
 
-    dispatchPDFDocumentChanged(
-      'doc-curation',
-      '/fixtures/curation.pdf',
-      'curation.pdf',
-      8,
-      { ownerToken: curationOwnerToken },
-    )
+    showPaperFilesInViewer('doc-curation', [singleMainPdfFile({ documentId: 'doc-curation', displayName: 'curation.pdf', pageCount: 8 })], { ownerToken: curationOwnerToken })
 
     expect(await screen.findByText('curation.pdf')).toBeInTheDocument()
 
@@ -121,15 +98,10 @@ describe('PdfViewer document ownership', () => {
   it('rejects cross-origin document viewer urls before loading a document', async () => {
     render(<PdfViewer />)
 
-    dispatchPDFDocumentChanged(
-      'doc-external',
-      'https://example.org/external.pdf',
-      'external.pdf',
-      3,
-    )
+    showPaperFilesInViewer('doc-external', [{ ...singleMainPdfFile({ documentId: 'doc-external', displayName: 'external.pdf', pageCount: 3 }), content_url: 'https://example.org/external.pdf' }])
 
     expect(
-      await screen.findByText('The PDF viewer only supports same-origin document URLs.'),
+      await screen.findByText('The viewer only opens files from this site.'),
     ).toBeInTheDocument()
     expect(screen.queryByText('external.pdf')).not.toBeInTheDocument()
   })
@@ -137,24 +109,14 @@ describe('PdfViewer document ownership', () => {
   it('clears the current document when a replacement viewer url is rejected', async () => {
     render(<PdfViewer />)
 
-    dispatchPDFDocumentChanged(
-      'doc-home',
-      '/fixtures/home.pdf',
-      'home.pdf',
-      12,
-    )
+    showPaperFilesInViewer('doc-home', [singleMainPdfFile({ documentId: 'doc-home', displayName: 'home.pdf', pageCount: 12 })])
 
     expect(await screen.findByText('home.pdf')).toBeInTheDocument()
 
-    dispatchPDFDocumentChanged(
-      'doc-external',
-      'https://example.org/external.pdf',
-      'external.pdf',
-      3,
-    )
+    showPaperFilesInViewer('doc-external', [{ ...singleMainPdfFile({ documentId: 'doc-external', displayName: 'external.pdf', pageCount: 3 }), content_url: 'https://example.org/external.pdf' }])
 
     expect(
-      await screen.findByText('The PDF viewer only supports same-origin document URLs.'),
+      await screen.findByText('The viewer only opens files from this site.'),
     ).toBeInTheDocument()
     await waitFor(() => {
       expect(screen.queryByText('home.pdf')).not.toBeInTheDocument()
@@ -168,12 +130,7 @@ describe('PdfViewer document ownership', () => {
 
     render(<StorageUserHarness />)
 
-    dispatchPDFDocumentChanged(
-      'doc-home',
-      '/fixtures/home.pdf',
-      'home.pdf',
-      12,
-    )
+    showPaperFilesInViewer('doc-home', [singleMainPdfFile({ documentId: 'doc-home', displayName: 'home.pdf', pageCount: 12 })])
 
     expect(await screen.findByText('home.pdf')).toBeInTheDocument()
 

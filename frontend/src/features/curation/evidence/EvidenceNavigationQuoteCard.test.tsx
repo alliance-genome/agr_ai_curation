@@ -26,7 +26,7 @@ it('renders a disabled unavailable state when no navigation command exists', () 
     name: 'Evidence has no navigable PDF location',
   })
   expect(action).toBeDisabled()
-  expect(action).toHaveTextContent('PDF location unavailable')
+  expect(action).toHaveTextContent('This passage cannot be shown in the paper')
   expect(action).toHaveTextContent('PDF navigation is unavailable for this evidence.')
 
   fireEvent.click(action)

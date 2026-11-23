@@ -46,10 +46,60 @@ Alembic revision `c6d7e8f9a0b1`.
 The API still reports `viewer_mode`: it is the main file's display mode. Text
 files now report `text` (previously `text_only`), and plain uploads report
 `local_pdf` (previously no value). `/api/pdf-viewer/documents/{id}` reports
-`page_count: null` for a text paper. Readers must accept that: chat restore
-keeps a text paper active without the PDF viewer, and still refuses a PDF paper
-without a page count (`chatDocumentRehydration.ts`; the shapes are pinned in
+`page_count: null` for a text paper (the shapes are pinned in
 `backend/tests/unit/api/test_pdf_viewer_text_only.py`).
+
+## The viewer: one tab per file
+
+The viewer shows a paper through its files, never through the single main-file
+fields. Both places that open a paper in the shared viewer read the files list
+(`GET /api/pdf-viewer/documents/{id}/files`, or `files` on the curation session's
+document) and send it with `showPaperFilesInViewer` (`pdfEvents.ts`):
+
+- Chat restore (`chatDocumentRehydration.ts`) reads the files route on every
+  restore, because supplements can join a paper after chat stored it. The chat's
+  active document does not carry files.
+- The curation workspace sends `workspace.session.document.files`.
+
+Every file with a `content_url` (a ready PDF, main or supplement) or a `text_url`
+(a ready text file) gets a tab, in `tab_order`; a file still being added gets none.
+The main file opens first; a paper without a main file opens its first file with a
+URL; a paper with no such file clears the viewer and says why ("This paper's main
+file is not available to show." when its main file is not ready, otherwise "This
+paper's files are still being added."). When the main file is not ready but other
+files are, their tabs show with the same main-file note. A text paper therefore shows its
+text tab and never leaves the previous PDF on screen. The page, scroll, pdf.js
+page-text corpus, PDF search, highlight and any waiting evidence navigation are
+kept per file (`PdfViewer.tsx`).
+
+Evidence opens its own file first (`EvidenceNavigationCommand.fileId`):
+
+- no `file_id` (saved before 0.12.0): the viewer shows "This evidence was saved
+  before files were recorded" and opens nothing;
+- a `file_id` that is not one of the paper's tabs: the file was removed; nothing
+  opens;
+- a PDF file: today's quote search, against that file's own pages only. Evidence
+  without a page never falls back to a page;
+- a text file: a record with stored fragments is located fragment by fragment
+  (each fragment is an exact slice of one stored piece; the record's quote joins
+  them with a blank line the file does not have between rows or sentences), and
+  the union is highlighted; when only some fragments are found, the banner says
+  so. A record without fragments (a review-grid anchor) is located by its quote.
+  Each is searched in the blocks' texts joined by a blank line, exactly as the
+  server serves them (every stored piece
+  is an exact slice of that joined text, so a quote may cross blocks); nothing is
+  normalised or loosened in the browser, and pdf.js and the fuzzy matcher are never
+  called. When the quote is not found, the first block of the evidence's section is
+  marked (evidence `section` against the first non-empty of the block's
+  `parent_section` and `section_title`, and `subsection`, field by field; a name
+  containing " > " is never split), and the banner says the
+  quote was not found. The one known miss: a quote across a sentence cut inside an
+  element over 1,500 characters (the piece has one space where the block keeps the
+  original whitespace) takes this "not found" path.
+- evidence naming a file of the paper that is not ready yet says so (not
+  "removed");
+- evidence the viewer cannot show changes nothing but its banner (an alert that
+  can be closed): no tab switch, no scroll, the current highlight stays.
 
 ## A paper without a main file
 

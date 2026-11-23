@@ -23,9 +23,10 @@ import {
   HOME_PDF_VIEWER_OWNER,
   dispatchPDFViewerDocumentCleared,
   dispatchPDFViewerNavigateEvidence,
-  dispatchPDFDocumentChanged,
+  showPaperFilesInViewer,
   onPDFViewerEvidenceAnchorSelected,
 } from './pdfEvents'
+import { MAIN_FILE_ID, singleMainPdfFile } from './viewerFilesFixtures'
 import {
   buildNormalizedTextSourceMap,
   sanitizeEvidenceSearchText,
@@ -838,6 +839,8 @@ const buildNavigationCommand = (
   overrides: Partial<EvidenceNavigationCommand> = {},
 ): EvidenceNavigationCommand => ({
   anchorId: 'anchor-1',
+  fileId: MAIN_FILE_ID,
+  textEvidence: { fragments: null, section: 'Results', subsection: 'Quantification' },
   anchor: {
     anchor_kind: 'snippet',
     locator_quality: 'exact_quote',
@@ -1041,7 +1044,7 @@ describe('PdfViewer evidence navigation', () => {
 
     render(<PdfViewer />)
 
-    dispatchPDFDocumentChanged('doc-1', '/fixtures/sample.pdf', 'sample.pdf', 12)
+    showPaperFilesInViewer('doc-1', [singleMainPdfFile({ documentId: 'doc-1', displayName: 'sample.pdf', pageCount: 12 })])
     await waitFor(() => {
       expect(screen.getByText('sample.pdf')).toBeInTheDocument()
     })
@@ -1122,7 +1125,7 @@ describe('PdfViewer evidence navigation', () => {
 
     render(<PdfViewer />)
 
-    dispatchPDFDocumentChanged('doc-diacritics', '/fixtures/sample.pdf', 'diacritics.pdf', 8)
+    showPaperFilesInViewer('doc-diacritics', [singleMainPdfFile({ documentId: 'doc-diacritics', displayName: 'diacritics.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('diacritics.pdf')).toBeInTheDocument()
     })
@@ -1184,7 +1187,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-2', '/fixtures/sample.pdf', 'typed.pdf', 8)
+    showPaperFilesInViewer('doc-2', [singleMainPdfFile({ documentId: 'doc-2', displayName: 'typed.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('typed.pdf')).toBeInTheDocument()
     })
@@ -1244,7 +1247,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-chat', '/fixtures/sample.pdf', 'chat-evidence.pdf', 8)
+    showPaperFilesInViewer('doc-chat', [singleMainPdfFile({ documentId: 'doc-chat', displayName: 'chat-evidence.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('chat-evidence.pdf')).toBeInTheDocument()
     })
@@ -1300,7 +1303,7 @@ describe('PdfViewer evidence navigation', () => {
   it('asks the quote matcher for a table row\'s served cell text, not its Markdown pipes', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
     render(<PdfViewer />)
-    dispatchPDFDocumentChanged('doc-table', '/fixtures/sample.pdf', 'table-evidence.pdf', 8)
+    showPaperFilesInViewer('doc-table', [singleMainPdfFile({ documentId: 'doc-table', displayName: 'table-evidence.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('table-evidence.pdf')).toBeInTheDocument()
     })
@@ -1317,6 +1320,8 @@ describe('PdfViewer evidence navigation', () => {
       page: 3,
       section: 'Results',
       chunk_id: 'chunk-3',
+      file_id: MAIN_FILE_ID,
+      file_name: 'table-evidence.pdf',
       source_fragments: [{ text: row, span_type: 'table_row', search_text: 'XS1 3 5 4.0' }],
     }))
 
@@ -1343,7 +1348,7 @@ describe('PdfViewer evidence navigation', () => {
     dispatchPDFViewerNavigateEvidence(buildNavigationCommand({ anchorId: 'text-paper-anchor' }))
     // ...then the viewer is cleared for the text paper, and chat's PDF loads later.
     dispatchPDFViewerDocumentCleared(HOME_PDF_VIEWER_OWNER)
-    dispatchPDFDocumentChanged('doc-chat', '/fixtures/sample.pdf', 'chat-evidence.pdf', 8, {
+    showPaperFilesInViewer('doc-chat', [singleMainPdfFile({ documentId: 'doc-chat', displayName: 'chat-evidence.pdf', pageCount: 8 })], {
       ownerToken: HOME_PDF_VIEWER_OWNER,
     })
     await waitFor(() => {
@@ -1378,7 +1383,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-equivalent', '/fixtures/sample.pdf', 'equivalent.pdf', 9)
+    showPaperFilesInViewer('doc-equivalent', [singleMainPdfFile({ documentId: 'doc-equivalent', displayName: 'equivalent.pdf', pageCount: 9 })])
     await waitFor(() => {
       expect(screen.getByText('equivalent.pdf')).toBeInTheDocument()
     })
@@ -1427,6 +1432,8 @@ describe('PdfViewer evidence navigation', () => {
       subsection: 'Photoreceptor Morphology',
       chunk_id: 'chunk-crb-7',
       figure_reference: 'Figure 2',
+      file_id: MAIN_FILE_ID,
+      file_name: 'equivalent.pdf',
     })
     const curationCommand = buildNavigationCommandFromCurationEvidenceRecord({
       anchor_id: 'anchor-crb-7',
@@ -1435,6 +1442,7 @@ describe('PdfViewer evidence navigation', () => {
       field_keys: ['gene_symbol'],
       field_group_keys: ['identity'],
       is_primary: true,
+      file_id: MAIN_FILE_ID,
       anchor: {
         anchor_kind: 'snippet',
         locator_quality: 'normalized_quote',
@@ -1522,7 +1530,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-chat-global-counts', '/fixtures/sample.pdf', 'chat-global-counts.pdf', 8)
+    showPaperFilesInViewer('doc-chat-global-counts', [singleMainPdfFile({ documentId: 'doc-chat-global-counts', displayName: 'chat-global-counts.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('chat-global-counts.pdf')).toBeInTheDocument()
     })
@@ -1613,7 +1621,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-chat-page-context', '/fixtures/sample.pdf', 'chat-page-context.pdf', 8)
+    showPaperFilesInViewer('doc-chat-page-context', [singleMainPdfFile({ documentId: 'doc-chat-page-context', displayName: 'chat-page-context.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('chat-page-context.pdf')).toBeInTheDocument()
     })
@@ -1686,7 +1694,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-chat-native', '/fixtures/sample.pdf', 'chat-native.pdf', 8)
+    showPaperFilesInViewer('doc-chat-native', [singleMainPdfFile({ documentId: 'doc-chat-native', displayName: 'chat-native.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('chat-native.pdf')).toBeInTheDocument()
     })
@@ -1803,7 +1811,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-fragment-preserved', '/fixtures/sample.pdf', 'fragment-preserved.pdf', 8)
+    showPaperFilesInViewer('doc-fragment-preserved', [singleMainPdfFile({ documentId: 'doc-fragment-preserved', displayName: 'fragment-preserved.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('fragment-preserved.pdf')).toBeInTheDocument()
     })
@@ -1888,7 +1896,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-native-no-overlay', '/fixtures/sample.pdf', 'native-no-overlay.pdf', 10)
+    showPaperFilesInViewer('doc-native-no-overlay', [singleMainPdfFile({ documentId: 'doc-native-no-overlay', displayName: 'native-no-overlay.pdf', pageCount: 10 })])
     await waitFor(() => {
       expect(screen.getByText('native-no-overlay.pdf')).toBeInTheDocument()
     })
@@ -1954,7 +1962,7 @@ describe('PdfViewer evidence navigation', () => {
 
     render(<PdfViewer pendingNavigation={buildNavigationCommand({ anchorId: 'anchor-click' })} />)
 
-    dispatchPDFDocumentChanged('doc-click', '/fixtures/sample.pdf', 'clickable.pdf', 8)
+    showPaperFilesInViewer('doc-click', [singleMainPdfFile({ documentId: 'doc-click', displayName: 'clickable.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('clickable.pdf')).toBeInTheDocument()
     })
@@ -2004,7 +2012,7 @@ describe('PdfViewer evidence navigation', () => {
 
     render(<PdfViewer pendingNavigation={buildNavigationCommand({ anchorId: 'anchor-rerender' })} />)
 
-    dispatchPDFDocumentChanged('doc-rerender', '/fixtures/sample.pdf', 'rerender.pdf', 8)
+    showPaperFilesInViewer('doc-rerender', [singleMainPdfFile({ documentId: 'doc-rerender', displayName: 'rerender.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('rerender.pdf')).toBeInTheDocument()
     })
@@ -2067,7 +2075,7 @@ describe('PdfViewer evidence navigation', () => {
 
     render(<PdfViewer pendingNavigation={buildNavigationCommand({ searchText: query })} />)
 
-    dispatchPDFDocumentChanged('doc-2b', '/fixtures/sample.pdf', 'substring.pdf', 8)
+    showPaperFilesInViewer('doc-2b', [singleMainPdfFile({ documentId: 'doc-2b', displayName: 'substring.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('substring.pdf')).toBeInTheDocument()
     })
@@ -2129,7 +2137,7 @@ describe('PdfViewer evidence navigation', () => {
 
     render(<PdfViewer pendingNavigation={buildNavigationCommand({ searchText: query })} />)
 
-    dispatchPDFDocumentChanged('doc-2c', '/fixtures/sample.pdf', 'repeated.pdf', 8)
+    showPaperFilesInViewer('doc-2c', [singleMainPdfFile({ documentId: 'doc-2c', displayName: 'repeated.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('repeated.pdf')).toBeInTheDocument()
     })
@@ -2167,7 +2175,7 @@ describe('PdfViewer evidence navigation', () => {
 
     render(<PdfViewer pendingNavigation={buildNavigationCommand({ searchText: query })} />)
 
-    dispatchPDFDocumentChanged('doc-2d', '/fixtures/sample.pdf', 'delayed-text-layer.pdf', 8)
+    showPaperFilesInViewer('doc-2d', [singleMainPdfFile({ documentId: 'doc-2d', displayName: 'delayed-text-layer.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('delayed-text-layer.pdf')).toBeInTheDocument()
     })
@@ -2272,7 +2280,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-native-match', '/fixtures/sample.pdf', 'native-match.pdf', 8)
+    showPaperFilesInViewer('doc-native-match', [singleMainPdfFile({ documentId: 'doc-native-match', displayName: 'native-match.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('native-match.pdf')).toBeInTheDocument()
     })
@@ -2351,7 +2359,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-window-fragment', '/fixtures/sample.pdf', 'window-fragment.pdf', 8)
+    showPaperFilesInViewer('doc-window-fragment', [singleMainPdfFile({ documentId: 'doc-window-fragment', displayName: 'window-fragment.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('window-fragment.pdf')).toBeInTheDocument()
     })
@@ -2444,7 +2452,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-expanded-fragment', '/fixtures/sample.pdf', 'expanded-fragment.pdf', 8)
+    showPaperFilesInViewer('doc-expanded-fragment', [singleMainPdfFile({ documentId: 'doc-expanded-fragment', displayName: 'expanded-fragment.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('expanded-fragment.pdf')).toBeInTheDocument()
     })
@@ -2512,7 +2520,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-numbered-heading', '/fixtures/sample.pdf', 'numbered-heading.pdf', 8)
+    showPaperFilesInViewer('doc-numbered-heading', [singleMainPdfFile({ documentId: 'doc-numbered-heading', displayName: 'numbered-heading.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('numbered-heading.pdf')).toBeInTheDocument()
     })
@@ -2629,7 +2637,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-wrong-same-page-highlight', '/fixtures/sample.pdf', 'wrong-same-page-highlight.pdf', 8)
+    showPaperFilesInViewer('doc-wrong-same-page-highlight', [singleMainPdfFile({ documentId: 'doc-wrong-same-page-highlight', displayName: 'wrong-same-page-highlight.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('wrong-same-page-highlight.pdf')).toBeInTheDocument()
     })
@@ -2769,7 +2777,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-fuzzy-anchor', '/fixtures/sample.pdf', 'fuzzy-anchor.pdf', 8)
+    showPaperFilesInViewer('doc-fuzzy-anchor', [singleMainPdfFile({ documentId: 'doc-fuzzy-anchor', displayName: 'fuzzy-anchor.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('fuzzy-anchor.pdf')).toBeInTheDocument()
     })
@@ -2903,7 +2911,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-repeated-fuzzy-anchor', '/fixtures/sample.pdf', 'repeated-fuzzy-anchor.pdf', 8)
+    showPaperFilesInViewer('doc-repeated-fuzzy-anchor', [singleMainPdfFile({ documentId: 'doc-repeated-fuzzy-anchor', displayName: 'repeated-fuzzy-anchor.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('repeated-fuzzy-anchor.pdf')).toBeInTheDocument()
     })
@@ -3017,7 +3025,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-repeated-exact-anchor', '/fixtures/sample.pdf', 'repeated-exact-anchor.pdf', 8)
+    showPaperFilesInViewer('doc-repeated-exact-anchor', [singleMainPdfFile({ documentId: 'doc-repeated-exact-anchor', displayName: 'repeated-exact-anchor.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('repeated-exact-anchor.pdf')).toBeInTheDocument()
     })
@@ -3099,7 +3107,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-pdfjs-offset-anchor', '/fixtures/sample.pdf', 'pdfjs-offset-anchor.pdf', 8)
+    showPaperFilesInViewer('doc-pdfjs-offset-anchor', [singleMainPdfFile({ documentId: 'doc-pdfjs-offset-anchor', displayName: 'pdfjs-offset-anchor.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('pdfjs-offset-anchor.pdf')).toBeInTheDocument()
     })
@@ -3150,7 +3158,7 @@ describe('PdfViewer evidence navigation', () => {
 
     const { rerender } = render(<PdfViewer pendingNavigation={hoverCommand} />)
 
-    dispatchPDFDocumentChanged('doc-3', '/fixtures/sample.pdf', 'hover-select.pdf', 8)
+    showPaperFilesInViewer('doc-3', [singleMainPdfFile({ documentId: 'doc-3', displayName: 'hover-select.pdf', pageCount: 8 })])
     await waitFor(() => {
       expect(screen.getByText('hover-select.pdf')).toBeInTheDocument()
     })
@@ -3213,7 +3221,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-4', '/fixtures/sample.pdf', 'section.pdf', 12)
+    showPaperFilesInViewer('doc-4', [singleMainPdfFile({ documentId: 'doc-4', displayName: 'section.pdf', pageCount: 12 })])
     await waitFor(() => {
       expect(screen.getByText('section.pdf')).toBeInTheDocument()
     })
@@ -3302,7 +3310,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-5', '/fixtures/sample.pdf', 'page-fallback.pdf', 10)
+    showPaperFilesInViewer('doc-5', [singleMainPdfFile({ documentId: 'doc-5', displayName: 'page-fallback.pdf', pageCount: 10 })])
     await waitFor(() => {
       expect(screen.getByText('page-fallback.pdf')).toBeInTheDocument()
     })
@@ -3395,7 +3403,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-5b', '/fixtures/sample.pdf', 'strict-gate.pdf', 10)
+    showPaperFilesInViewer('doc-5b', [singleMainPdfFile({ documentId: 'doc-5b', displayName: 'strict-gate.pdf', pageCount: 10 })])
     await waitFor(() => {
       expect(screen.getByText('strict-gate.pdf')).toBeInTheDocument()
     })
@@ -3466,7 +3474,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-zero-count-found', '/fixtures/sample.pdf', 'zero-count-found.pdf', 6)
+    showPaperFilesInViewer('doc-zero-count-found', [singleMainPdfFile({ documentId: 'doc-zero-count-found', displayName: 'zero-count-found.pdf', pageCount: 6 })])
     await waitFor(() => {
       expect(screen.getByText('zero-count-found.pdf')).toBeInTheDocument()
     })
@@ -3535,7 +3543,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-cross-page-quote', '/fixtures/sample.pdf', 'cross-page-quote.pdf', 10)
+    showPaperFilesInViewer('doc-cross-page-quote', [singleMainPdfFile({ documentId: 'doc-cross-page-quote', displayName: 'cross-page-quote.pdf', pageCount: 10 })])
     await waitFor(() => {
       expect(screen.getByText('cross-page-quote.pdf')).toBeInTheDocument()
     })
@@ -3609,7 +3617,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-live-repro', '/fixtures/sample.pdf', 'live-repro.pdf', 10)
+    showPaperFilesInViewer('doc-live-repro', [singleMainPdfFile({ documentId: 'doc-live-repro', displayName: 'live-repro.pdf', pageCount: 10 })])
     await waitFor(() => {
       expect(screen.getByText('live-repro.pdf')).toBeInTheDocument()
     })
@@ -3679,7 +3687,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-stale-async', '/fixtures/sample.pdf', 'stale-async.pdf', 10)
+    showPaperFilesInViewer('doc-stale-async', [singleMainPdfFile({ documentId: 'doc-stale-async', displayName: 'stale-async.pdf', pageCount: 10 })])
     await waitFor(() => {
       expect(screen.getByText('stale-async.pdf')).toBeInTheDocument()
     })
@@ -3822,7 +3830,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-stale-section', '/fixtures/sample.pdf', 'stale-section.pdf', 10)
+    showPaperFilesInViewer('doc-stale-section', [singleMainPdfFile({ documentId: 'doc-stale-section', displayName: 'stale-section.pdf', pageCount: 10 })])
     await waitFor(() => {
       expect(screen.getByText('stale-section.pdf')).toBeInTheDocument()
     })
@@ -3940,7 +3948,7 @@ describe('PdfViewer evidence navigation', () => {
       />,
     )
 
-    dispatchPDFDocumentChanged('doc-6', '/fixtures/sample.pdf', 'unresolved.pdf', 6)
+    showPaperFilesInViewer('doc-6', [singleMainPdfFile({ documentId: 'doc-6', displayName: 'unresolved.pdf', pageCount: 6 })])
     await waitFor(() => {
       expect(screen.getByText('unresolved.pdf')).toBeInTheDocument()
     })
@@ -3968,8 +3976,9 @@ describe('PdfViewer evidence navigation', () => {
       matchedPage: null,
     }))
     expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
+    // Evidence with no page: the file is open, and the banner says the quote was not located in it.
     expect(
-      screen.getAllByText('Evidence localization is unresolved. No trusted page or text highlight could be produced.'),
+      screen.getAllByText('Opened unresolved.pdf, but this quote could not be located in it.'),
     ).toHaveLength(2)
   })
 })

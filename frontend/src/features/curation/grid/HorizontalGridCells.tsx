@@ -273,13 +273,13 @@ export function HorizontalGridContextCellContent({
                 key={projection.anchor_id}
                 title={command
                   ? `Show ${evidenceActionLabel} ${evidenceNumber}`
-                  : 'PDF navigation unavailable'}
+                  : 'Evidence location unavailable'}
               >
                 <span>
                   <IconButton
                     aria-label={command
                       ? `Show ${evidenceActionLabel} ${evidenceNumber} for ${cell.value.identityLabel}`
-                      : `${evidenceLabel} ${evidenceNumber} for ${cell.value.identityLabel} has no navigable PDF location`}
+                      : `${evidenceLabel} ${evidenceNumber} for ${cell.value.identityLabel} has no evidence location`}
                     disabled={!command}
                     onClick={command
                       ? (event) => {

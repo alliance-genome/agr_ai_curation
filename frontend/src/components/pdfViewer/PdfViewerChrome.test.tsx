@@ -4,6 +4,17 @@ import { fireEvent, render, screen } from '../../test/test-utils'
 
 import { PdfViewerChrome } from './PdfViewerChrome'
 import type { PdfViewerNavigationResult } from './pdfEvidenceNavigation'
+import type { ViewerDocument } from './pdfViewerTypes'
+import { MAIN_FILE_ID, singleMainPdfFile } from './viewerFilesFixtures'
+
+const paperDocument: ViewerDocument = {
+  documentId: 'doc-1',
+  files: [singleMainPdfFile({ documentId: 'doc-1', displayName: 'paper.pdf', pageCount: 12 })],
+  activeFileId: MAIN_FILE_ID,
+  mainFileUnavailable: false,
+  notReadyFileIds: [],
+  loadedAt: '2026-04-27T00:00:00.000Z',
+}
 
 const defaultUploadDialog = {
   open: false,
@@ -17,6 +28,13 @@ const defaultUploadDialog = {
 const renderChrome = (overrides: Partial<Parameters<typeof PdfViewerChrome>[0]> = {}) => {
   const props: Parameters<typeof PdfViewerChrome>[0] = {
     activeDocument: null,
+    activeFile: null,
+    fileAnnouncement: '',
+    idleNotice: null,
+    onSelectFile: vi.fn(),
+    textNavigation: null,
+    onTextNavigationResult: vi.fn(),
+    onDismissNavigationResult: vi.fn(),
     status: 'idle',
     error: null,
     retryKey: 0,
@@ -103,13 +121,8 @@ describe('PdfViewerChrome', () => {
     }
 
     renderChrome({
-      activeDocument: {
-        documentId: 'doc-1',
-        viewerUrl: '/documents/doc-1/viewer',
-        filename: 'paper.pdf',
-        pageCount: 12,
-        loadedAt: '2026-04-27T00:00:00.000Z',
-      },
+      activeDocument: paperDocument,
+      activeFile: paperDocument.files[0]!,
       status: 'ready',
       viewerSrc: '/pdfjs/web/viewer.html?file=/documents/doc-1/viewer',
       navigationResult,
@@ -143,13 +156,8 @@ describe('PdfViewerChrome', () => {
     const onSearchPrevious = vi.fn()
 
     renderChrome({
-      activeDocument: {
-        documentId: 'doc-1',
-        viewerUrl: '/documents/doc-1/viewer',
-        filename: 'paper.pdf',
-        pageCount: 12,
-        loadedAt: '2026-04-27T00:00:00.000Z',
-      },
+      activeDocument: paperDocument,
+      activeFile: paperDocument.files[0]!,
       status: 'ready',
       currentPage: 3,
       searchQuery: 'kinase',

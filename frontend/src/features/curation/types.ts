@@ -1,4 +1,5 @@
 import type { AgentExecutionReceipt } from '../../types/agentExecution'
+import type { ViewerFile } from '@/components/pdfViewer/viewerFiles'
 
 export {
   DOMAIN_ENVELOPE_VALIDATION_STATUSES,
@@ -235,6 +236,11 @@ export interface CurationDocumentRef {
   reference_source?: CurationDocumentReferenceSource | null
 }
 
+/** The session's document with the paper's files, in tab order (inventory and workspace viewer). */
+export interface CurationSessionDocumentRef extends CurationDocumentRef {
+  files: ViewerFile[]
+}
+
 export type CurationDocumentReferenceSource = 'imported' | 'curator_link'
 
 export type CurationDocumentReferenceStatus =
@@ -372,6 +378,8 @@ export interface CurationDraft {
 
 export interface EvidenceSourceFragment {
   span_id?: string | null
+  file_id?: string
+  file_name?: string
   chunk_id?: string | null
   document_id?: string | null
   text?: string | null
@@ -395,8 +403,10 @@ export interface EvidenceSourceFragment {
 export interface EvidenceRecord {
   entity: string
   verified_quote: string
-  page: number
-  section: string
+  /** Null when the file has no pages to cite (text files, PDF supplements without page data). */
+  page: number | null
+  /** Null only when the record names its file (text before the file's first heading). */
+  section: string | null
   subsection?: string
   chunk_id: string
   chunk_ids?: string[]
@@ -404,6 +414,12 @@ export interface EvidenceRecord {
   source_span_ids?: string[]
   source_fragments?: EvidenceSourceFragment[]
   figure_reference?: string
+  /**
+   * The file of the paper the quote is in. Every record written from 0.12.0 has it;
+   * a record without it was saved before files were recorded.
+   */
+  file_id?: string
+  file_name?: string
 }
 
 export interface CurationEvidenceRecord {
@@ -414,6 +430,8 @@ export interface CurationEvidenceRecord {
   field_group_keys: string[]
   is_primary: boolean
   anchor: EvidenceAnchor
+  /** The file the anchor is in (beside the anchor); absent on evidence saved before files were recorded. */
+  file_id?: string
   created_at: string
   updated_at: string
   warnings: string[]
@@ -579,7 +597,7 @@ export interface CurationSessionSummary {
   session_id: string
   status: CurationSessionStatus
   adapter: CurationAdapterRef
-  document: CurationDocumentRef
+  document: CurationSessionDocumentRef
   flow_run_id?: string | null
   progress: CurationSessionProgress
   validation?: CurationValidationSummary | null

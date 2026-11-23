@@ -70,6 +70,7 @@ import { persistSession } from './pdfViewerHighlighting'
 import {
   DEFAULT_STATE,
   VIEWER_BASE_PATH,
+  activeViewerFile,
   type PdfViewerProps,
   type ViewerDocument,
   type ViewerState,
@@ -77,6 +78,13 @@ import {
   type ViewerTelemetry,
 } from './pdfViewerTypes'
 import { usePdfViewerUpload } from './usePdfViewerUpload'
+import { fileDisplayLabel, isPdfFile, type ViewerFile } from './viewerFiles'
+import {
+  buildEvidenceFileResult,
+  openedFileAnnouncement,
+  pageLessQuoteNotLocatedMessage,
+  type TextNavigationRequest,
+} from './viewerFileNavigation'
 
 export {
   buildEvidenceSpikeQuoteCandidates,
@@ -96,6 +104,29 @@ export type { PdfViewerProps } from './pdfViewerTypes'
 
 const PDFJS_FIND_STATE_NOT_FOUND = 1
 
+/** Whether two tab lists show the same files the same way (a refreshed list from the server). */
+function sameViewerFiles(left: readonly ViewerFile[], right: readonly ViewerFile[]): boolean {
+  return left.length === right.length && left.every((file, index) => {
+    const other = right[index]!
+    return file.file_id === other.file_id
+      && file.role === other.role
+      && file.display_name === other.display_name
+      && file.display_mode === other.display_mode
+      && file.status === other.status
+      && file.tab_order === other.tab_order
+      && file.content_url === other.content_url
+      && file.text_url === other.text_url
+  })
+}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index])
+}
+
+const MAIN_FILE_UNREACHABLE_MESSAGE = 'Unable to reach the PDF document. Please retry or re-upload.'
+/** Approved by Chris (23 Nov 2026): a supplement's PDF that cannot be reached (no re-upload offered). */
+export const SUPPLEMENT_UNREACHABLE_MESSAGE = 'This supplement could not be loaded.'
+
 export function PdfViewer({
   activeDocumentOwnerToken,
   storageUserId = null,
@@ -113,11 +144,11 @@ export function PdfViewer({
   const loadStartRef = useRef<number | null>(null)
   const handledNavigationKeyRef = useRef<string | null>(null)
   const navigationRequestIdRef = useRef(0)
-  const evidencePageTextCorpusRef = useRef<PdfEvidencePageTextCorpusCache>({
-    cacheKey: null,
-    pages: null,
-    promise: null,
-  })
+  // The pdf.js page-text corpus of each PDF file, keyed by file; never shared across files.
+  const evidencePageTextCorporaRef = useRef<Map<string, PdfEvidencePageTextCorpusCache>>(new Map())
+  // Page and scroll of each file, so a tab switch returns to where the curator was.
+  const fileViewerStatesRef = useRef<Map<string, ViewerState>>(new Map())
+  const textNavigationRequestIdRef = useRef(0)
 
   const [status, setStatus] = useState<ViewerStatus>('idle')
   const [activeDocument, setActiveDocument] = useState<ViewerDocument | null>(null)
@@ -140,13 +171,21 @@ export function PdfViewer({
   })
   const [eventPendingNavigation, setEventPendingNavigation] =
     useState<EvidenceNavigationCommand | null>(null)
+  const [textNavigation, setTextNavigation] = useState<TextNavigationRequest | null>(null)
+  const [fileAnnouncement, setFileAnnouncement] = useState('')
+  // Shown instead of the empty viewer when the loaded paper has nothing to show yet.
+  const [idleNotice, setIdleNotice] = useState<string | null>(null)
   const effectivePendingNavigation = pendingNavigation ?? eventPendingNavigation
   const viewerSessionStorageKey = useMemo(
     () => (storageUserId ? getChatLocalStorageKeys(storageUserId).pdfViewerSession : null),
     [storageUserId],
   )
-  const evidencePageTextCacheKey = activeDocument
-    ? `${activeDocument.documentId}:${activeDocument.loadedAt}`
+  const activeFile: ViewerFile | null = activeDocument ? activeViewerFile(activeDocument) : null
+  const activeFileIsPdf = activeFile !== null && isPdfFile(activeFile)
+  const activeFilePageCount = activeFile?.page_count ?? null
+  const activeFileName = activeFile ? fileDisplayLabel(activeFile) : null
+  const evidencePageTextCacheKey = activeDocument && activeFileIsPdf
+    ? `${activeDocument.documentId}:${activeDocument.activeFileId}`
     : null
   const activeDocumentOwnerRef = useRef(activeDocumentOwnerToken)
   const viewerSessionStorageUserIdRef = useRef<string | null>(storageUserId)
@@ -194,6 +233,13 @@ export function PdfViewer({
     }
     toolbarSearchQueryRef.current = ''
     idleResetErrorRef.current = nextError
+    documentLoadSignalPendingRef.current = false
+    evidencePageTextCorporaRef.current = new Map()
+    fileViewerStatesRef.current = new Map()
+    textNavigationRequestIdRef.current += 1
+    setTextNavigation(null)
+    setFileAnnouncement('')
+    setIdleNotice(null)
     setActiveDocument(null)
     setStatus(nextError ? 'error' : 'idle')
     setError(nextError)
@@ -218,29 +264,43 @@ export function PdfViewer({
   /**
    * Signal terminal document load states to the Home overlay.
    */
+  // Home's load overlay follows the paper's first file only: a later tab (a PDF
+  // supplement) that fails shows its error in its own pane, never Home's backdrop.
+  const documentLoadSignalPendingRef = useRef(false)
   const signalLoadComplete = useCallback(() => {
+    if (!documentLoadSignalPendingRef.current) {
+      return
+    }
+    documentLoadSignalPendingRef.current = false
     completeDocumentLoad({
       documentId: activeDocument?.documentId,
-      filename: activeDocument?.filename,
-      message: `${activeDocument?.filename ?? 'Document'} loaded in the PDF viewer.`,
+      filename: activeFileName ?? undefined,
+      message: `${activeFileName ?? 'Document'} loaded in the PDF viewer.`,
     })
-  }, [activeDocument?.documentId, activeDocument?.filename])
+  }, [activeDocument?.documentId, activeFileName])
 
   const signalLoadError = useCallback((message: string) => {
+    if (!documentLoadSignalPendingRef.current) {
+      return
+    }
+    documentLoadSignalPendingRef.current = false
     failDocumentLoad({
       documentId: activeDocument?.documentId,
-      filename: activeDocument?.filename,
+      filename: activeFileName ?? undefined,
       message,
     })
-  }, [activeDocument?.documentId, activeDocument?.filename])
+  }, [activeDocument?.documentId, activeFileName])
 
-  useEffect(() => {
-    evidencePageTextCorpusRef.current = {
-      cacheKey: evidencePageTextCacheKey,
-      pages: null,
-      promise: null,
+  /** The active PDF file's corpus cache; created on first use, kept for that file only. */
+  const getEvidencePageTextCorpusCache = useCallback((cacheKey: string): PdfEvidencePageTextCorpusCache => {
+    const existing = evidencePageTextCorporaRef.current.get(cacheKey)
+    if (existing) {
+      return existing
     }
-  }, [evidencePageTextCacheKey])
+    const created: PdfEvidencePageTextCorpusCache = { cacheKey, pages: null, promise: null }
+    evidencePageTextCorporaRef.current.set(cacheKey, created)
+    return created
+  }, [])
 
   const getNativeEvidencePageText = useCallback((pdfApp: any, pageNumber: number): string | null => {
     const pageContents = pdfApp?.findController?._pageContents?.[pageNumber - 1]
@@ -250,7 +310,7 @@ export function PdfViewer({
   const getNativeEvidencePageCorpus = useCallback((pdfApp: any): PdfEvidenceFuzzyMatchPage[] | null => {
     const pageCount = pdfApp?.pdfDocument?.numPages
       ?? pdfApp?.pdfViewer?.pdfDocument?.numPages
-      ?? activeDocument?.pageCount
+      ?? activeFilePageCount
       ?? 0
 
     if (!Number.isInteger(pageCount) || pageCount <= 0) {
@@ -271,7 +331,7 @@ export function PdfViewer({
     }
 
     return pages
-  }, [activeDocument?.pageCount, getNativeEvidencePageText])
+  }, [activeFilePageCount, getNativeEvidencePageText])
 
   const extractEvidencePageText = useCallback(async (
     pdfApp: any,
@@ -300,16 +360,10 @@ export function PdfViewer({
 
   const ensureEvidencePageTextCorpus = useCallback(async (pdfApp: any): Promise<PdfEvidenceFuzzyMatchPage[]> => {
     const cacheKey = evidencePageTextCacheKey
-    const cache = evidencePageTextCorpusRef.current
-    if (cache.cacheKey !== cacheKey) {
-      evidencePageTextCorpusRef.current = {
-        cacheKey,
-        pages: null,
-        promise: null,
-      }
+    if (cacheKey === null) {
+      throw new Error('No PDF file is active for evidence page text extraction.')
     }
-
-    const currentCache = evidencePageTextCorpusRef.current
+    const currentCache = getEvidencePageTextCorpusCache(cacheKey)
     if (currentCache.pages) {
       return currentCache.pages
     }
@@ -324,7 +378,7 @@ export function PdfViewer({
       currentCache.promise = (async () => {
         const pageCount = pdfApp?.pdfDocument?.numPages
           ?? pdfApp?.pdfViewer?.pdfDocument?.numPages
-          ?? activeDocument?.pageCount
+          ?? activeFilePageCount
           ?? 0
         if (!Number.isInteger(pageCount) || pageCount <= 0) {
           throw new Error('PDF.js page count is unavailable for evidence page text extraction.')
@@ -347,47 +401,39 @@ export function PdfViewer({
         const pages = warmedNativeCorpus ?? await Promise.all(
           Array.from({ length: pageCount }, (_, pageIndex) => extractEvidencePageText(pdfApp, pageIndex + 1)),
         )
-        if (evidencePageTextCorpusRef.current.cacheKey === cacheKey) {
-          evidencePageTextCorpusRef.current.pages = pages
-          evidencePageTextCorpusRef.current.promise = null
-        }
+        // The cache object belongs to this file; a later document load replaces the map.
+        currentCache.pages = pages
+        currentCache.promise = null
         return pages
       })().catch((error) => {
-        if (evidencePageTextCorpusRef.current.cacheKey === cacheKey) {
-          evidencePageTextCorpusRef.current.promise = null
-        }
+        currentCache.promise = null
         throw error
       })
     }
 
     return currentCache.promise
-  }, [activeDocument?.pageCount, evidencePageTextCacheKey, extractEvidencePageText, getNativeEvidencePageCorpus])
+  }, [activeFilePageCount, evidencePageTextCacheKey, extractEvidencePageText, getEvidencePageTextCorpusCache, getNativeEvidencePageCorpus])
 
   const getCachedEvidencePageText = useCallback((pageNumber: number): string | null => {
-    const cache = evidencePageTextCorpusRef.current
-    if (cache.cacheKey !== evidencePageTextCacheKey || !cache.pages) {
+    const cache = evidencePageTextCacheKey === null
+      ? undefined
+      : evidencePageTextCorporaRef.current.get(evidencePageTextCacheKey)
+    if (!cache?.pages) {
       return null
     }
 
     return cache.pages.find((page) => page.pageNumber === pageNumber)?.text ?? null
   }, [evidencePageTextCacheKey])
 
+  const activeContentUrl = activeFileIsPdf ? activeFile?.content_url ?? null : null
   const viewerSrc = useMemo(() => {
-    if (!activeDocument) return 'about:blank'
+    if (!activeDocument || !activeContentUrl) return 'about:blank'
     const url = new URL(VIEWER_BASE_PATH, window.location.origin)
-    url.searchParams.set('file', activeDocument.viewerUrl)
+    url.searchParams.set('file', activeContentUrl)
     // Append a cache-busting token so repeated loads of the same URL still trigger iframe reloads
-    const cacheBustToken = activeDocument.loadedAt ?? Date.now().toString()
-    url.searchParams.set('ts', cacheBustToken)
-    const nextSrc = url.toString()
-    console.debug('[PDF DEBUG] viewerSrc computed', {
-      documentId: activeDocument.documentId,
-      viewerUrl: activeDocument.viewerUrl,
-      cacheBustToken,
-      iframeSrc: nextSrc,
-    })
-    return nextSrc
-  }, [activeDocument])
+    url.searchParams.set('ts', activeDocument.loadedAt)
+    return url.toString()
+  }, [activeContentUrl, activeDocument])
 
   const executeEvidenceNavigation = useCallback(async (
     command: EvidenceNavigationCommand,
@@ -429,6 +475,7 @@ export function PdfViewer({
     const attemptedQueries: string[] = []
     const baseResult = {
       documentId: activeDocument?.documentId ?? null,
+      fileId: activeDocument?.activeFileId ?? null,
       quote,
       pageHints,
       sectionTitle,
@@ -842,10 +889,16 @@ export function PdfViewer({
       matchesTotal: 0,
       currentMatch: 0,
       note: 'The PDF viewer could not localize this evidence to quote, section, or page-level text in the current document.',
+      // Page-less evidence (PDF supplements, ABC main papers) opened its file but has
+      // no page to fall back to; say so instead of pretending a page.
+      curatorMessage: pageHints.length === 0 && activeFileName
+        ? pageLessQuoteNotLocatedMessage(activeFileName)
+        : null,
     }
   }, [
+    activeDocument?.activeFileId,
     activeDocument?.documentId,
-    activeDocument?.pageCount,
+    activeFileName,
     ensureEvidencePageTextCorpus,
     getCachedEvidencePageText,
   ])
@@ -854,6 +907,8 @@ export function PdfViewer({
     const result = await executeEvidenceNavigation(
       ({
         anchor: buildEvidenceSpikeAnchor(input),
+        fileId: activeDocument?.activeFileId ?? null,
+        textEvidence: { fragments: null, section: input.sectionTitle ?? null, subsection: null },
         searchText: input.quote?.trim() || null,
         pageNumber: input.pageNumber ?? null,
         sectionTitle: input.sectionTitle ?? null,
@@ -867,7 +922,7 @@ export function PdfViewer({
     commitNavigationResult(result)
     publishEvidenceSpikeResult(result)
     return result
-  }, [commitNavigationResult, executeEvidenceNavigation])
+  }, [activeDocument?.activeFileId, commitNavigationResult, executeEvidenceNavigation])
 
   const updateViewerState = useCallback(
     (updates: Partial<ViewerState>) => {
@@ -920,11 +975,21 @@ export function PdfViewer({
           searchNotFound: false,
         }))
         if (typeof resolvedPageCount === 'number' && resolvedPageCount > 0) {
-          setActiveDocument((current) =>
-            current && current.pageCount !== resolvedPageCount
-              ? { ...current, pageCount: resolvedPageCount }
-              : current,
-          )
+          // pdf.js knows the real page count (a stored count can be a placeholder).
+          setActiveDocument((current) => {
+            if (!current) {
+              return current
+            }
+            const shown = activeViewerFile(current)
+            return shown.page_count === resolvedPageCount
+              ? current
+              : {
+                  ...current,
+                  files: current.files.map((file) => (
+                    file.file_id === shown.file_id ? { ...file, page_count: resolvedPageCount } : file
+                  )),
+                }
+          })
         }
         signalLoadComplete()
         if (loadStartRef.current !== null) {
@@ -1108,10 +1173,16 @@ export function PdfViewer({
 
   const beginDocumentLoad = useCallback((document: ViewerDocument) => {
     console.debug('[PDF DEBUG] beginDocumentLoad invoked', document)
-    loadStartRef.current = performance.now()
+    const showsPdf = isPdfFile(activeViewerFile(document))
+    // A text file has no PDF to load: its pane loads its own text.
+    loadStartRef.current = showsPdf ? performance.now() : null
     handledNavigationKeyRef.current = null
     navigationRequestIdRef.current += 1
-    setStatus('loading')
+    textNavigationRequestIdRef.current += 1
+    setTextNavigation(null)
+    // The previous file's PDF application must never answer for this one.
+    pdfAppRef.current = null
+    setStatus(showsPdf ? 'loading' : 'ready')
     setError(null)
     toolbarSearchQueryRef.current = ''
     setViewerUiState((current) => ({
@@ -1134,6 +1205,53 @@ export function PdfViewer({
     setOverlayRenderKey((prev) => prev + 1)
     persistViewerSession(document, viewerStateRef.current)
   }, [commitNavigationResult, persistViewerSession, storageUserId])
+
+  /**
+   * Show another file of the paper. Page, scroll, corpus and highlight are per file.
+   * A curator's own switch drops any evidence navigation still waiting for another
+   * file; a switch made for evidence keeps it and is announced, without moving focus.
+   */
+  const switchActiveFile = useCallback((fileId: string, reason: 'curator' | 'evidence') => {
+    if (!activeDocument || activeDocument.activeFileId === fileId) {
+      return
+    }
+    const nextFile = activeDocument.files.find((file) => file.file_id === fileId)
+    if (!nextFile) {
+      throw new Error(`File ${fileId} is not one of the viewer's tabs`)
+    }
+    fileViewerStatesRef.current.set(activeDocument.activeFileId, { ...viewerStateRef.current })
+    viewerStateRef.current = fileViewerStatesRef.current.get(fileId)
+      ?? { ...DEFAULT_STATE, lastInteraction: new Date().toISOString() }
+    cleanupRefs.current.forEach((cleanup) => cleanup())
+    cleanupRefs.current = []
+    toolbarSearchQueryRef.current = ''
+    if (reason === 'curator') {
+      if (effectivePendingNavigation) {
+        handledNavigationKeyRef.current = buildNavigationCommandKey(effectivePendingNavigation)
+        setEventPendingNavigation(null)
+        if (pendingNavigation) {
+          onNavigationComplete?.()
+        }
+      }
+      setFileAnnouncement('')
+    } else {
+      setFileAnnouncement(openedFileAnnouncement(fileDisplayLabel(nextFile)))
+    }
+    const pendingKeyToKeep = reason === 'curator' ? handledNavigationKeyRef.current : null
+    beginDocumentLoad({
+      ...activeDocument,
+      activeFileId: fileId,
+      loadedAt: new Date().toISOString(),
+    })
+    if (pendingKeyToKeep !== null) {
+      // beginDocumentLoad clears the handled key; a dropped command must stay dropped.
+      handledNavigationKeyRef.current = pendingKeyToKeep
+    }
+  }, [activeDocument, beginDocumentLoad, effectivePendingNavigation, onNavigationComplete, pendingNavigation])
+
+  const handleSelectFile = useCallback((fileId: string) => {
+    switchActiveFile(fileId, 'curator')
+  }, [switchActiveFile])
 
   useEffect(() => {
     if (activeDocumentOwnerRef.current === activeDocumentOwnerToken) {
@@ -1192,52 +1310,83 @@ export function PdfViewer({
         return
       }
 
-      let normalizedViewerUrl: string
+      let files: ViewerFile[]
       try {
-        normalizedViewerUrl = normalizePdfViewerDocumentUrl(
-          event.detail.viewerUrl,
-          window.location.origin,
-        )
+        // Both addresses must be same-origin paths before the viewer uses them.
+        files = event.detail.files.map((file) => ({
+          ...file,
+          content_url: file.content_url === null
+            ? null
+            : normalizePdfViewerDocumentUrl(file.content_url, window.location.origin),
+          text_url: file.text_url === null
+            ? null
+            : normalizePdfViewerDocumentUrl(file.text_url, window.location.origin),
+        }))
+        if (!files.some((file) => file.file_id === event.detail.activeFileId)) {
+          throw new Error('The document change names an active file that is not one of its files.')
+        }
       } catch (error) {
-        console.warn('Rejected unsupported PDF document URL', {
-          viewerUrl: event.detail.viewerUrl,
+        console.warn('Rejected an unsupported viewer document change', {
+          documentId: event.detail.documentId,
           error,
         })
         resetViewerToIdle(error instanceof Error ? error.message : String(error))
         loadStartRef.current = null
+        // A refused new paper is a failed document load Home is waiting on.
+        documentLoadSignalPendingRef.current = true
         signalLoadError(error instanceof Error ? error.message : String(error))
         return
       }
 
-      const sameLoadedDocument = activeDocument
-        && activeDocument.documentId === event.detail.documentId
-        && activeDocument.viewerUrl === normalizedViewerUrl
-        && activeDocument.pageCount === event.detail.pageCount
-        && activeDocument.filename === event.detail.filename
-
-      if (sameLoadedDocument && status !== 'error') {
-        console.debug('[PDF DEBUG] Ignoring redundant document change for already loaded document', {
-          documentId: event.detail.documentId,
-          ownerToken: event.detail.ownerToken ?? null,
-        })
-        return
+      if (activeDocument && activeDocument.documentId === event.detail.documentId && status !== 'error') {
+        // The same paper again (a re-render, or a file joined or left): keep the file
+        // the curator is on when it is still there, and reload nothing.
+        const current = activeViewerFile(activeDocument)
+        const stillThere = files.find((file) => file.file_id === current.file_id)
+        if (stillThere && stillThere.content_url === current.content_url && stillThere.text_url === current.text_url) {
+          const unchanged = sameViewerFiles(activeDocument.files, files)
+            && activeDocument.mainFileUnavailable === event.detail.mainFileUnavailable
+            && sameIds(activeDocument.notReadyFileIds, event.detail.notReadyFileIds)
+          if (!unchanged) {
+            setActiveDocument({
+              ...activeDocument,
+              // Keep the page count pdf.js found for the file on screen.
+              files: files.map((file) => (file.file_id === current.file_id ? { ...file, page_count: current.page_count } : file)),
+              mainFileUnavailable: event.detail.mainFileUnavailable,
+              notReadyFileIds: event.detail.notReadyFileIds,
+            })
+          }
+          if (!isPdfFile(stillThere) && status === 'loading') {
+            // A chat load marked the viewer loading; a text file has nothing to wait for.
+            setStatus('ready')
+          }
+          return
+        }
       }
 
       const nextDoc: ViewerDocument = {
         documentId: event.detail.documentId,
-        viewerUrl: normalizedViewerUrl,
-        filename: event.detail.filename,
-        pageCount: event.detail.pageCount,
+        files,
+        activeFileId: event.detail.activeFileId,
+        mainFileUnavailable: event.detail.mainFileUnavailable,
+        notReadyFileIds: event.detail.notReadyFileIds,
         loadedAt: new Date().toISOString(),
       }
       console.debug('[PDF DEBUG] beginDocumentLoad called with', nextDoc)
 
+      evidencePageTextCorporaRef.current = new Map()
+      fileViewerStatesRef.current = new Map()
+      setFileAnnouncement('')
+      setIdleNotice(null)
       viewerStateRef.current = {
         ...DEFAULT_STATE,
         currentPage: event.detail.viewerState?.currentPage ?? DEFAULT_STATE.currentPage,
         scrollPosition: event.detail.viewerState?.scrollPosition ?? DEFAULT_STATE.scrollPosition,
         lastInteraction: new Date().toISOString(),
       }
+      // Home's load overlay waits on a real new load whose first file is a PDF; a text
+      // first file has no PDF load to signal, and later tabs never signal.
+      documentLoadSignalPendingRef.current = isPdfFile(activeViewerFile(nextDoc))
       beginDocumentLoad(nextDoc)
     })
 
@@ -1281,6 +1430,7 @@ export function PdfViewer({
         return
       }
       resetViewerToIdle()
+      setIdleNotice(event.detail.notice ?? null)
     })
 
     return () => {
@@ -1311,6 +1461,19 @@ export function PdfViewer({
     }
   }, [])
 
+  // The latest handlers, read by the frame's listeners: a refreshed file list must
+  // not re-run them (that would re-initialise pdf.js, reset the zoom and signal a
+  // second load).
+  const initialisePdfApplicationRef = useRef(initialisePdfApplication)
+  initialisePdfApplicationRef.current = initialisePdfApplication
+  const signalLoadErrorRef = useRef(signalLoadError)
+  signalLoadErrorRef.current = signalLoadError
+  const activeFileIsMainRef = useRef(false)
+  activeFileIsMainRef.current = activeFile?.role === 'main'
+  const frameKey = activeDocument
+    ? `${activeDocument.documentId}::${activeDocument.activeFileId}::${activeDocument.loadedAt}`
+    : null
+
   useEffect(() => {
     if (!iframeRef.current) {
       console.debug('[PDF DEBUG] iframeRef null in load listener effect')
@@ -1318,16 +1481,11 @@ export function PdfViewer({
     }
     const iframe = iframeRef.current
 
-    console.debug('[PDF DEBUG] Attaching load/error listeners to iframe', {
-      iframeSrc: iframe?.src,
-      activeDocument,
-    })
-
     const handleLoad = () => {
       console.debug('[PDF DEBUG] iframe load event triggered', {
         iframeSrc: iframe?.src,
       })
-      initialisePdfApplication()
+      initialisePdfApplicationRef.current()
     }
 
     const handleError = () => {
@@ -1337,22 +1495,22 @@ export function PdfViewer({
       setStatus('error')
       setError('Failed to load the PDF viewer frame.')
       loadStartRef.current = null
-      signalLoadError('Failed to load the PDF viewer frame.')
+      signalLoadErrorRef.current('Failed to load the PDF viewer frame.')
     }
 
     iframe.addEventListener('load', handleLoad)
     iframe.addEventListener('error', handleError)
 
-    if (activeDocument && (iframe.contentWindow as any)?.PDFViewerApplication?.eventBus) {
+    if (frameKey && (iframe.contentWindow as any)?.PDFViewerApplication?.eventBus) {
       // Recover when the iframe finished loading before this effect reattached listeners.
-      initialisePdfApplication()
+      initialisePdfApplicationRef.current()
     }
 
     return () => {
       iframe.removeEventListener('load', handleLoad)
       iframe.removeEventListener('error', handleError)
     }
-  }, [activeDocument, initialisePdfApplication, viewerSrc, signalLoadError])
+  }, [frameKey, viewerSrc])
 
   useEffect(() => {
     if (activeDocument) {
@@ -1394,7 +1552,7 @@ export function PdfViewer({
       return
     }
 
-    if (!activeDocument || status !== 'ready') {
+    if (!activeDocument) {
       return
     }
 
@@ -1403,9 +1561,65 @@ export function PdfViewer({
       return
     }
 
-    handledNavigationKeyRef.current = navigationKey
     const usesEventNavigation =
       pendingNavigation === null && eventPendingNavigation === effectivePendingNavigation
+    // Evidence the viewer cannot show changes nothing on screen but the banner:
+    // no tab switch, no scroll, and the current highlight stays.
+    const finishWithoutSearch = (result: PdfViewerNavigationResult | null) => {
+      handledNavigationKeyRef.current = navigationKey
+      if (result) {
+        commitNavigationResult(result)
+      }
+      if (usesEventNavigation) {
+        setEventPendingNavigation(null)
+      }
+      onNavigationComplete?.()
+    }
+
+    // The evidence's file decides first. A hover never opens or explains anything.
+    const targetFileId = effectivePendingNavigation.fileId
+    const isHover = effectivePendingNavigation.mode === 'hover'
+    if (targetFileId === null) {
+      finishWithoutSearch(isHover ? null : buildEvidenceFileResult(
+        effectivePendingNavigation,
+        activeDocument.documentId,
+        'evidence-without-file',
+      ))
+      return
+    }
+    if (!activeDocument.files.some((file) => file.file_id === targetFileId)) {
+      finishWithoutSearch(isHover ? null : buildEvidenceFileResult(
+        effectivePendingNavigation,
+        activeDocument.documentId,
+        activeDocument.notReadyFileIds.includes(targetFileId) ? 'file-not-ready' : 'file-removed',
+      ))
+      return
+    }
+    if (targetFileId !== activeDocument.activeFileId) {
+      if (isHover) {
+        finishWithoutSearch(null)
+        return
+      }
+      // Show the evidence's file first; this effect runs again once it is shown.
+      switchActiveFile(targetFileId, 'evidence')
+      return
+    }
+    if (!activeFileIsPdf) {
+      // A text file: its pane locates the copied quote; never pdf.js or the fuzzy matcher.
+      handledNavigationKeyRef.current = navigationKey
+      textNavigationRequestIdRef.current += 1
+      setTextNavigation({
+        requestId: textNavigationRequestIdRef.current,
+        fileId: targetFileId,
+        command: effectivePendingNavigation,
+      })
+      return
+    }
+    if (status !== 'ready') {
+      return
+    }
+
+    handledNavigationKeyRef.current = navigationKey
     let cancelled = false
 
     void executeEvidenceNavigation(effectivePendingNavigation, {
@@ -1470,6 +1684,7 @@ export function PdfViewer({
     }
   }, [
     activeDocument,
+    activeFileIsPdf,
     commitNavigationResult,
     effectivePendingNavigation,
     eventPendingNavigation,
@@ -1477,7 +1692,23 @@ export function PdfViewer({
     onNavigationComplete,
     pendingNavigation,
     status,
+    switchActiveFile,
   ])
+
+  /** The text pane located (or did not locate) the quote of the current text navigation. */
+  const handleTextNavigationResult = useCallback((
+    request: TextNavigationRequest,
+    result: PdfViewerNavigationResult,
+  ) => {
+    if (request.requestId !== textNavigationRequestIdRef.current) {
+      return
+    }
+    commitNavigationResult(result)
+    if (pendingNavigation === null && eventPendingNavigation === request.command) {
+      setEventPendingNavigation(null)
+    }
+    onNavigationComplete?.()
+  }, [commitNavigationResult, eventPendingNavigation, onNavigationComplete, pendingNavigation])
 
   useEffect(() => {
     return onPDFViewerNavigateEvidence((event) => {
@@ -1788,7 +2019,7 @@ export function PdfViewer({
   ])
 
   useEffect(() => {
-    if (!activeDocument) return
+    if (!frameKey || !activeContentUrl) return
 
     let cancelled = false
     const controller = new AbortController()
@@ -1796,7 +2027,7 @@ export function PdfViewer({
 
     const verifyDocument = async () => {
       try {
-        const response = await fetch(activeDocument.viewerUrl, {
+        const response = await fetch(activeContentUrl, {
           method: 'HEAD',
           signal: controller.signal,
           credentials: 'same-origin',
@@ -1806,10 +2037,12 @@ export function PdfViewer({
         }
       } catch (fetchError) {
         if (!cancelled) {
+          // A supplement cannot be re-uploaded by the curator; its pane says only that it could not be reached.
+          const message = activeFileIsMainRef.current ? MAIN_FILE_UNREACHABLE_MESSAGE : SUPPLEMENT_UNREACHABLE_MESSAGE
           setStatus('error')
-          setError('Unable to reach the PDF document. Please retry or re-upload.')
+          setError(message)
           loadStartRef.current = null
-          signalLoadError('Unable to reach the PDF document. Please retry or re-upload.')
+          signalLoadErrorRef.current(message)
         }
       } finally {
         window.clearTimeout(timeoutId)
@@ -1823,7 +2056,7 @@ export function PdfViewer({
       controller.abort()
       window.clearTimeout(timeoutId)
     }
-  }, [activeDocument, signalLoadError])
+  }, [activeContentUrl, frameKey])
 
   const handleRetry = useCallback(() => {
     if (!activeDocument) return
@@ -1859,10 +2092,10 @@ export function PdfViewer({
       return
     }
     if (typeof pdfViewer.currentPageNumber === 'number') {
-      const pageCount = activeDocument?.pageCount ?? pdfViewer.pagesCount ?? 1
+      const pageCount = activeFilePageCount ?? pdfViewer.pagesCount ?? 1
       pdfViewer.currentPageNumber = Math.min(pageCount, pdfViewer.currentPageNumber + 1)
     }
-  }, [activeDocument?.pageCount, getPdfApplication])
+  }, [activeFilePageCount, getPdfApplication])
 
   const handleZoomOut = useCallback(() => {
     const pdfViewer = getPdfApplication()?.pdfViewer
@@ -1948,6 +2181,10 @@ export function PdfViewer({
     dispatchPdfSearch(viewerUiState.searchQuery, { type: 'again', findPrevious: true })
   }, [dispatchPdfSearch, viewerUiState.searchQuery])
 
+  const handleDismissNavigationResult = useCallback(() => {
+    commitNavigationResult(null)
+  }, [commitNavigationResult])
+
   const navigationBannerMessage = navigationResult
     ? getNavigationBannerMessage(navigationResult, evidenceHighlight)
     : null
@@ -1955,6 +2192,13 @@ export function PdfViewer({
   return (
     <PdfViewerChrome
       activeDocument={activeDocument}
+      activeFile={activeFile}
+      fileAnnouncement={fileAnnouncement}
+      idleNotice={idleNotice}
+      onSelectFile={handleSelectFile}
+      textNavigation={textNavigation}
+      onTextNavigationResult={handleTextNavigationResult}
+      onDismissNavigationResult={handleDismissNavigationResult}
       status={status}
       error={error}
       retryKey={retryKey}

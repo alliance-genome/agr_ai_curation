@@ -32,9 +32,24 @@ import {
 } from './pdfEvidenceNavigation'
 import type { ViewerDocument, ViewerStatus } from './pdfViewerTypes'
 import type { UploadDialogState } from './usePdfViewerUpload'
+import { TextFileView, VIEWER_FILE_PANEL_ID, viewerFileTabId } from './TextFileView'
+import type { TextNavigationRequest } from './viewerFileNavigation'
+import { isPdfFile, type ViewerFile } from './viewerFiles'
+import { MAIN_FILE_UNAVAILABLE_MESSAGE } from './pdfEvents'
+import { ViewerFileTabs } from './ViewerFileTabs'
 
 interface PdfViewerChromeProps {
   activeDocument: ViewerDocument | null
+  activeFile: ViewerFile | null
+  /** Polite announcement when evidence opened another file's tab. */
+  fileAnnouncement: string
+  /** Shown instead of the drop zone when the loaded paper has nothing to show yet. */
+  idleNotice: string | null
+  onSelectFile: (fileId: string) => void
+  textNavigation: TextNavigationRequest | null
+  onTextNavigationResult: (request: TextNavigationRequest, result: PdfViewerNavigationResult) => void
+  /** Closes the navigation banner (the result chips and message go with it). */
+  onDismissNavigationResult: () => void
   status: ViewerStatus
   error: string | null
   retryKey: number
@@ -71,6 +86,13 @@ interface PdfViewerChromeProps {
 
 export function PdfViewerChrome({
   activeDocument,
+  activeFile,
+  fileAnnouncement,
+  idleNotice,
+  onSelectFile,
+  textNavigation,
+  onTextNavigationResult,
+  onDismissNavigationResult,
   status,
   error,
   retryKey,
@@ -106,6 +128,7 @@ export function PdfViewerChrome({
 }: PdfViewerChromeProps) {
   const theme = useTheme()
   const isCurationVariant = variant === 'curation'
+  const showsPdf = activeFile !== null && isPdfFile(activeFile)
   const controlsDisabled = !activeDocument || status !== 'ready'
   const searchDisabled = controlsDisabled || searchQuery.trim().length === 0
   const searchMatchLabel = searchNotFound
@@ -166,49 +189,36 @@ export function PdfViewerChrome({
       >
         {activeDocument ? (
           <Stack spacing={isCurationVariant ? 1 : 0.5}>
-            <Stack
-              direction="row"
-              spacing={1}
-              sx={{ alignItems: 'baseline', justifyContent: 'space-between', minWidth: 0 }}
-            >
+            {isCurationVariant ? (
               <Typography
-                variant={isCurationVariant ? 'subtitle2' : 'subtitle1'}
+                variant="subtitle2"
                 sx={{
-                  color: isCurationVariant ? alpha(theme.palette.common.white, 0.92) : undefined,
-                  fontWeight: isCurationVariant ? 800 : undefined,
-                  letterSpacing: isCurationVariant ? 0 : undefined,
+                  color: alpha(theme.palette.common.white, 0.92),
+                  fontWeight: 800,
+                  letterSpacing: 0,
                   lineHeight: 1.25,
-                  minWidth: 0,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
                 }}
               >
-                {isCurationVariant ? 'Document viewer' : activeDocument.filename}
+                Document viewer
               </Typography>
-              {isCurationVariant ? (
-                <Typography
-                  title={activeDocument.filename}
-                  variant="caption"
-                  sx={{
-                    color: alpha(theme.palette.common.white, 0.62),
-                    minWidth: 0,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {activeDocument.filename}
-                </Typography>
-              ) : null}
-            </Stack>
+            ) : null}
+            <ViewerFileTabs
+              files={activeDocument.files}
+              activeFileId={activeDocument.activeFileId}
+              onSelectFile={onSelectFile}
+            />
+            {activeDocument.mainFileUnavailable ? (
+              <Alert severity="info" variant="outlined" sx={{ py: 0 }}>
+                {MAIN_FILE_UNAVAILABLE_MESSAGE}
+              </Alert>
+            ) : null}
             {navigationResult && (
               <>
                 <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
                   <Chip
                     size="small"
                     color={getNavigationBadgeColor(navigationResult)}
-                    label={formatLocatorQualityLabel(navigationResult.locatorQuality)}
+                    label={navigationResult.chipLabel ?? formatLocatorQualityLabel(navigationResult.locatorQuality)}
                     sx={{
                       marginTop: 0.5,
                       ...(isCurationVariant && {
@@ -260,6 +270,7 @@ export function PdfViewerChrome({
                 </Typography>
               </>
             )}
+            {showsPdf ? (
             <Box
               sx={{
                 pt: isCurationVariant ? 0 : 0.75,
@@ -309,14 +320,14 @@ export function PdfViewerChrome({
                       fontWeight: 700,
                     })
                   }}>
-                  {currentPage} / {activeDocument.pageCount}
+                  {currentPage} / {activeFile?.page_count}
                 </Typography>
                 <Tooltip title="Next page">
                   <span>
                     <IconButton
                       aria-label="Next PDF page"
                       size="small"
-                      disabled={controlsDisabled || currentPage >= activeDocument.pageCount}
+                      disabled={controlsDisabled || currentPage >= (activeFile?.page_count ?? 0)}
                       onClick={onNextPage}
                     >
                       <ChevronRightIcon fontSize="small" />
@@ -464,10 +475,19 @@ export function PdfViewerChrome({
                 </Tooltip>
               </Stack>
             </Box>
+            ) : null}
           </Stack>
         ) : (
           <Typography variant="h6">No document loaded</Typography>
         )}
+        <Box
+          role="status"
+          aria-live="polite"
+          data-testid="viewer-file-announcement"
+          sx={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' }}
+        >
+          {fileAnnouncement}
+        </Box>
       </Box>
 
       <Box
@@ -489,13 +509,25 @@ export function PdfViewerChrome({
               zIndex: 3,
             }}
           >
-            <Alert severity={getNavigationBannerSeverity(navigationResult)} variant="filled">
+            <Alert
+              severity={getNavigationBannerSeverity(navigationResult)}
+              variant="filled"
+              onClose={onDismissNavigationResult}
+            >
               {navigationBannerMessage}
             </Alert>
           </Box>
         )}
 
-        {!activeDocument && (
+        {!activeDocument && idleNotice && (
+          <Box sx={{ position: 'absolute', inset: 0, zIndex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3 }}>
+            <Alert severity="info" sx={{ maxWidth: 640 }}>
+              {idleNotice}
+            </Alert>
+          </Box>
+        )}
+
+        {!activeDocument && !idleNotice && (
           <Box
             role="region"
             aria-label="PDF drop zone"
@@ -554,7 +586,7 @@ export function PdfViewerChrome({
           </Box>
         )}
 
-        {activeDocument && status === 'loading' && (
+        {activeDocument && showsPdf && status === 'loading' && (
           <Box
             sx={{
               position: 'absolute',
@@ -600,7 +632,7 @@ export function PdfViewerChrome({
                   size="small"
                   onClick={onRetry}
                 >
-                  Retry
+                  Try again
                 </Button>
               )}
             >
@@ -609,14 +641,26 @@ export function PdfViewerChrome({
           </Box>
         )}
 
+        {activeDocument && activeFile && !showsPdf ? (
+          <TextFileView
+            documentId={activeDocument.documentId}
+            file={activeFile}
+            navigation={textNavigation}
+            onNavigationResult={onTextNavigationResult}
+          />
+        ) : null}
+
         <iframe
-          key={`${activeDocument?.documentId}::${retryKey}`}
+          key={`${activeDocument?.documentId}::${activeDocument?.activeFileId}::${retryKey}`}
           ref={iframeRef}
           title="PDF Viewer"
           src={viewerSrc}
+          {...(showsPdf && activeFile
+            ? { role: 'tabpanel', id: VIEWER_FILE_PANEL_ID, 'aria-labelledby': viewerFileTabId(activeFile.file_id) }
+            : {})}
           style={{
             border: 'none',
-            display: 'block',
+            display: showsPdf || !activeDocument ? 'block' : 'none',
             // The blank frame must never intercept drops intended for the uploader.
             pointerEvents: activeDocument ? 'auto' : 'none',
             width: '100%',

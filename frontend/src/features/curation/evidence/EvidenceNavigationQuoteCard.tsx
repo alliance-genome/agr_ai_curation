@@ -30,7 +30,7 @@ export default function EvidenceNavigationQuoteCard({
   appearance,
   accentColor,
   debugContext,
-  footerText = 'Click to highlight this passage in the PDF',
+  footerText = 'Click to show this passage in the paper',
   copyButtonAriaLabel = null,
   onCopy = null,
 }: EvidenceNavigationQuoteCardProps) {
@@ -41,7 +41,7 @@ export default function EvidenceNavigationQuoteCard({
         sectionTitle: command.sectionTitle ?? command.anchor.section_title ?? null,
         subsectionTitle: command.anchor.subsection_title ?? null,
       })
-    : 'PDF location unavailable'
+    : 'This passage cannot be shown in the paper'
   const isChatAppearance = appearance === 'chat'
   const chatSurfaceColor = theme.palette.secondary.main
   const chatSurfaceTextColor = theme.palette.getContrastText(chatSurfaceColor)
@@ -104,7 +104,7 @@ export default function EvidenceNavigationQuoteCard({
         }}
         type="button"
       >
-        <Box
+        {locationLabel ? <Box
           sx={{
             fontSize: '11px',
             color: 'text.secondary',
@@ -113,7 +113,7 @@ export default function EvidenceNavigationQuoteCard({
           }}
         >
           {locationLabel}
-        </Box>
+        </Box> : null}
 
         <Box
           sx={{

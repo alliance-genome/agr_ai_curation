@@ -7,6 +7,7 @@ import {
   buildWorkspaceExpectedEnvelopeRevisions,
   mergeSubmissionExecutionIntoWorkspace,
 } from './workspaceState'
+import { singleMainPdfFile } from '@/components/pdfViewer/viewerFilesFixtures'
 
 function buildWorkspace(): CurationWorkspace {
   return {
@@ -20,6 +21,7 @@ function buildWorkspace(): CurationWorkspace {
       },
       document: {
         document_id: 'document-1',
+        files: [singleMainPdfFile({ documentId: 'document-1' })],
         title: 'Workspace document',
       },
       progress: {
