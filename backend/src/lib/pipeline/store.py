@@ -569,7 +569,7 @@ async def store_chunks_to_weaviate(
 
         try:
             # Connect to Weaviate
-            with weaviate_client.session() as client:
+            with weaviate_client.session(caller_reports_failure=True) as client:
                 # Get tenant-scoped collection (FR-011: user-specific data isolation)
                 from ..weaviate_helpers import get_user_collections
                 try:

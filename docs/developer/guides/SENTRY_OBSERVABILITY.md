@@ -739,8 +739,10 @@ warnings from the writer skip log-event promotion.
 When a chunk write fails after its caller cancels, the cancellation handler
 waits for the write and reports `pipeline_cancelled_storage_write_failed` under
 `document_pipeline`. The report carries a fixed, chain-free error and the
-exception class. The caller receives its original cancellation even if reporting
-fails. A successful write during cancellation produces no report.
+exception class. This includes failures opening the chunk worker's Weaviate
+session, which delegates reporting to the storage caller. The caller receives
+its original cancellation even if reporting fails. A successful write during
+cancellation produces no report.
 
 When an ABC file listing has a converted supplement whose `source` names a file
 missing from the same listing, the ABC adapter leaves that file out and reports
