@@ -1671,3 +1671,17 @@ async def test_overload_after_response_start_in_fanout_is_resent_without_double_
     evidence_ids = [record["evidence_record_id"] for record in summary["liveEvidenceRecords"]]
     assert len(evidence_ids) == len(set(evidence_ids)) == 7
     await model.close()
+
+
+@pytest.mark.asyncio
+async def test_fanout_planner_and_writers_go_through_the_resolving_boundary(harness):
+    """ALL-1708: planner and writers request their model through the SDK boundary that
+    resolves replaced catalog ids; a model object still naming one is refused, not sent."""
+    from src.lib.config.models_loader import list_models
+
+    replaced = next(old for model in list_models() for old in model.replaces)
+    model = ScriptedFanoutModel({"plan": _plan("reagent 1", "reagent 2")})
+    model.model = replaced
+    with pytest.raises(Exception, match=f"replaced model id '{replaced}'"):
+        await harness.run(model)
+    assert model.requests == []

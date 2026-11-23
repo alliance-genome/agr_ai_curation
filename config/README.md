@@ -260,6 +260,22 @@ Notes:
 - Unknown provider references are startup validation errors.
 - `curator_visible: false` keeps runtime compatibility models hidden from Agent Workshop.
 - `supports_tool_search: true` (default `false`) marks a model that can use hosted tool search; its provider must declare `supports.tool_search`.
+- `replaces: [<model id>, ...]` lists older versions this entry replaces (ALL-1708). A saved agent,
+  pinned revision or environment value that names a replaced id keeps that id and runs on this
+  entry: its limits, reasoning levels and pricing apply, and every request, cost and trace record
+  names this entry's id. A replaced id must not also be an entry, may be replaced by only one
+  entry, and the list stays flat (the next version's entry lists every id it now replaces).
+- `reasoning_map: {<level>: <level>}` maps a saved reasoning level this entry does not offer to one
+  it offers. A saved level that is neither offered nor mapped is refused by name, never guessed.
+
+#### Moving to a new model version
+
+One catalog edit, made identically in `config/models.yaml` and
+`packages/core/config/models.yaml`: give the current entry the new `model_id` and its facts, and
+add the old id to its `replaces` list (keep the ids already there). Nothing saved is edited.
+To roll back, make the old id the entry again and list the NEW id in its `replaces`, so agents
+saved on the new id in between keep running. A plain revert of the edit is not a rollback: rows
+saved on the new id would name an unknown model, and startup would refuse them.
 
 ### tool_loading.yaml
 

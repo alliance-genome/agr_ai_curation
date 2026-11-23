@@ -432,6 +432,10 @@ def get_model_for_agent(
     Returns:
         Model name string for native OpenAI, or a direct SDK model otherwise.
     """
+    from src.lib.config.models_loader import resolve_model_id
+
+    # A replaced model id is requested as the catalog entry replacing it (ALL-1708).
+    model_name = resolve_model_id(str(model_name or "").strip())
     provider_id = resolve_model_provider(model_name, provider_override)
     require_provider_enabled(provider_id)
     provider = _get_provider_definition(provider_id)
@@ -604,16 +608,42 @@ def unsupported_reasoning_effort(model_def: object, value: object) -> Optional[R
     """Return the effort that would be sent but the catalog model does not accept.
 
     Values that normalize to "no reasoning" are never sent, so they are not
-    reported here; only a real effort outside the model's options is.
+    reported here; only a real effort outside the model's options, with no
+    reviewed ``reasoning_map`` entry, is.
     """
     effort = normalize_reasoning_effort(value)
     if effort is None:
         return None
-    if getattr(model_def, "supports_reasoning", False) and effort in tuple(
-        getattr(model_def, "reasoning_options", ()) or ()
+    if getattr(model_def, "supports_reasoning", False) and (
+        effort in tuple(getattr(model_def, "reasoning_options", ()) or ())
+        or effort in (getattr(model_def, "reasoning_map", None) or {})
     ):
         return None
     return effort
+
+
+class UnsupportedReasoningEffortError(ValueError):
+    """A saved reasoning level the model does not offer and the catalog does not map."""
+
+
+def requested_reasoning_effort(model_def: object, value: object) -> Optional[ReasoningEffort]:
+    """The effort actually requested: the saved level when the model offers it, else
+    the catalog entry's reviewed ``reasoning_map`` level; with neither, refused."""
+    effort = normalize_reasoning_effort(value)
+    offered = tuple(getattr(model_def, "reasoning_options", ()) or ())
+    # An entry that declares no levels does not constrain the effort here.
+    if effort is None or not getattr(model_def, "supports_reasoning", False) or not offered:
+        return effort
+    if effort in offered:
+        return effort
+    mapped = (getattr(model_def, "reasoning_map", None) or {}).get(effort)
+    if mapped is None:
+        raise UnsupportedReasoningEffortError(
+            f"Reasoning effort '{effort}' is not offered by model "
+            f"'{getattr(model_def, 'model_id', '')}' and the model catalog has no reviewed "
+            "mapping for it"
+        )
+    return mapped  # type: ignore[return-value]
 
 
 ReasoningSummaryStatus = Literal["present", "not_requested", "not_supported", "unavailable"]
@@ -1276,6 +1306,10 @@ def build_model_settings(
     # Import here to avoid circular dependency
     from agents import ModelSettings
     from openai.types.shared import Reasoning
+    from src.lib.config.models_loader import resolve_model_id
+
+    # Settings (prompt-cache key included) describe the model actually requested.
+    model = resolve_model_id(str(model or "").strip())
 
     # Build reasoning config for models that support it. Normalize first so an
     # invalid value (e.g. "disabled" from the flow builder) becomes "no reasoning"
@@ -1283,6 +1317,13 @@ def build_model_settings(
     reasoning = None
     reasoning_effort = normalize_reasoning_effort(reasoning_effort)
     if reasoning_effort and supports_reasoning(model):
+        from src.lib.config.models_loader import get_model
+
+        # Catalog models apply their offered levels and reviewed reasoning_map; a
+        # provider-override model outside the catalog has no catalog policy to apply.
+        catalog_model = get_model(model)
+        if catalog_model is not None:
+            reasoning_effort = requested_reasoning_effort(catalog_model, reasoning_effort)
         summary_settings = reasoning_summary_request_settings(
             model=model,
             reasoning_effort=reasoning_effort,
@@ -1476,7 +1517,10 @@ def get_agent_config(agent_id: str) -> AgentConfig:
     # global defaults lazy so stale unused defaults do not break explicit agent
     # overrides or registry-owned defaults.
     model_default = defaults["model"] if "model" in defaults else get_default_model()
-    model = _get_env(f"{prefix}MODEL", model_default)
+    from src.lib.config.models_loader import resolve_model_id
+
+    # The configuration of what runs: a replaced id is its current entry (ALL-1708).
+    model = resolve_model_id(_get_env(f"{prefix}MODEL", model_default))
 
     # Temperature can be None for models that don't support it
     temperature_str = os.getenv(f"{prefix}TEMPERATURE")
@@ -4295,7 +4339,19 @@ def get_agent_model_capacity_overrides() -> dict:
             any(key not in names or type(limit) is not int or limit < 1 for key, limit in item.items())
             for item in value.values()):
         raise ValueError("AGENT_MODEL_CAPACITY_OVERRIDES_JSON must map model IDs to positive capacity values")
-    return value
+    from src.lib.config.models_loader import resolve_model_id
+
+    # Looked up by the model actually requested: a key naming a replaced id applies to
+    # the entry replacing it (ALL-1708).
+    resolved: dict = {}
+    for model_id, limits in value.items():
+        current = resolve_model_id(model_id)
+        if current in resolved:
+            raise ValueError(
+                f"AGENT_MODEL_CAPACITY_OVERRIDES_JSON names model '{current}' more than once "
+                "(directly or through a model id it replaces)")
+        resolved[current] = limits
+    return resolved
 
 
 # --- Authenticated user provisioning ---
@@ -4352,7 +4408,10 @@ def get_validation_review_source_group_records() -> int:
 
 def get_validation_review_model() -> str:
     """Model for supervisor review; empty keeps the supervisor's own model."""
-    return _get_env("VALIDATION_REVIEW_MODEL", "gpt-6.1-sol").strip()
+    from src.lib.config.models_loader import resolve_model_id
+
+    # Review records name the model actually requested (ALL-1708).
+    return resolve_model_id(_get_env("VALIDATION_REVIEW_MODEL", "gpt-6.1-sol").strip())
 
 
 def get_validation_review_reasoning() -> str:

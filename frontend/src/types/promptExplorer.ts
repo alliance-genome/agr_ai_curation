@@ -156,6 +156,8 @@ export interface ModelOption {
   reasoning_descriptions: Record<string, string>
   recommended_for: string[]
   avoid_for: string[]
+  /** Model ids this option replaces: a saved agent naming one shows and saves this option. */
+  replaces: string[]
 }
 
 /**

@@ -333,7 +333,8 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
         try:
             # Use the configured abstract-extraction model (.env, no code fallback).
             from src.lib.config.env import require_env
-            model = require_env("ABSTRACT_EXTRACTION_MODEL")
+            from src.lib.config.models_loader import resolve_model_id
+            model = resolve_model_id(require_env("ABSTRACT_EXTRACTION_MODEL"))
 
             from src.lib.openai_agents.config import (
                 get_abstract_extraction_input_max_chars,

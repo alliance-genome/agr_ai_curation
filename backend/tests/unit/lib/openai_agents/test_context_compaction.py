@@ -221,7 +221,7 @@ async def test_real_sdk_wire_native_policy_repeated_compaction_and_more_than_six
                            "name": "save_once", "arguments": json.dumps({"number": number}), "status": "completed"})
         else:
             output.append(final_message().model_dump())
-        return {"id": f"resp-{number}", "object": "response", "created_at": 0, "model": "gpt-6-astra",
+        return {"id": f"resp-{number}", "object": "response", "created_at": 0, "model": "gpt-6.2-astra",
                 "status": "completed", "output": output, "parallel_tool_calls": True, "tools": [], "tool_choice": "auto",
                 "usage": {"input_tokens": 20000, "output_tokens": 30, "total_tokens": 20030,
                           "input_tokens_details": {"cached_tokens": 0}, "output_tokens_details": {"reasoning_tokens": 0}}}
@@ -248,7 +248,7 @@ async def test_real_sdk_wire_native_policy_repeated_compaction_and_more_than_six
 
     async with AsyncOpenAI(api_key="fixture", max_retries=0, http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(http_reply))) as client:
         kind = OpenAIResponsesModel if transport == "http" else OpenAIResponsesWSModel
-        model = kind(model="gpt-6-astra", openai_client=client)
+        model = kind(model="gpt-6.2-astra", openai_client=client)
         if transport == "websocket":
             monkeypatch.setattr(model, "_open_websocket_connection", AsyncMock(return_value=Socket()))
         agent = Agent(name="wire fixture", model=model, tools=[save_once], model_settings=ModelSettings(store=False))
@@ -324,7 +324,7 @@ async def test_real_sdk_capacity_ingestion_preserves_exact_tool_result_without_r
     from src.lib.openai_agents import model_request_measurement as measurement
     measurement.install_model_request_measurement()
     monkeypatch.setattr(measurement, "_publish", lambda value: None)
-    monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", json.dumps({"gpt-6-astra": {
+    monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", json.dumps({"gpt-6.2-astra": {
         "context_window_tokens": 16000, "max_input_tokens": 15000, "max_output_tokens": 1000}}))
     monkeypatch.setenv("AGENT_CONTEXT_COMPACTION_TOKEN_THRESHOLD", "10000")
     # Synthetic 15000-token capacity: keep the former exact-limit fit.
@@ -366,7 +366,7 @@ async def test_real_sdk_capacity_ingestion_preserves_exact_tool_result_without_r
         output = ([{"type": "reasoning", "id": f"rs-{n}", "summary": [], "encrypted_content": "reasoning"},
                    {"type": "function_call", "id": f"fc-{n}", "call_id": f"call-{n}", "name": name,
                     "arguments": "{}", "status": "completed"}] if name else [final_message().model_dump()])
-        return {"id": f"resp-{n}", "object": "response", "created_at": 0, "model": "gpt-6-astra",
+        return {"id": f"resp-{n}", "object": "response", "created_at": 0, "model": "gpt-6.2-astra",
             "status": "completed", "output": output, "parallel_tool_calls": False, "tools": [], "tool_choice": "auto",
             "usage": {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
                       "input_tokens_details": {"cached_tokens": 0}, "output_tokens_details": {"reasoning_tokens": 0}}}
@@ -394,7 +394,7 @@ async def test_real_sdk_capacity_ingestion_preserves_exact_tool_result_without_r
 
     async with AsyncOpenAI(api_key="fixture", http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(http_reply))) as client:
         cls = OpenAIResponsesModel if transport == "http" else OpenAIResponsesWSModel
-        model = cls(model="gpt-6-astra", openai_client=client)
+        model = cls(model="gpt-6.2-astra", openai_client=client)
         if transport == "websocket":
             monkeypatch.setattr(model, "_open_websocket_connection", AsyncMock(side_effect=lambda *args, **kwargs: Socket()))
         agent = Agent(name="capacity fixture", model=model, tools=[save_once, *history_tools(archive)],
@@ -526,7 +526,7 @@ async def test_reviewer_continuation_reuses_real_sdk_compaction_history_and_acco
             assert step == 5
             assert wire["input"][0]["encrypted_content"] == "opaque-two"
             output = [final_message().model_dump()]
-        return {"id": f"response-{step}", "object": "response", "created_at": 0, "model": "gpt-6-astra",
+        return {"id": f"response-{step}", "object": "response", "created_at": 0, "model": "gpt-6.2-astra",
                 "status": "completed", "output": output, "parallel_tool_calls": True, "tools": [], "tool_choice": "auto",
                 "usage": {"input_tokens": 1000, "output_tokens": 20, "total_tokens": 1020,
                           "input_tokens_details": {"cached_tokens": 0}, "output_tokens_details": {"reasoning_tokens": 0}}}
@@ -550,7 +550,7 @@ async def test_reviewer_continuation_reuses_real_sdk_compaction_history_and_acco
     async with AsyncOpenAI(api_key="fixture", max_retries=0,
         http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(http_reply))) as client:
         kind = OpenAIResponsesModel if transport == "http" else OpenAIResponsesWSModel
-        model = kind(model="gpt-6-astra", openai_client=client)
+        model = kind(model="gpt-6.2-astra", openai_client=client)
         if transport == "websocket":
             monkeypatch.setattr(model, "_open_websocket_connection", AsyncMock(return_value=Socket()))
         agent = Agent(name="Supervisor", model=model, instructions="Review every record.",
