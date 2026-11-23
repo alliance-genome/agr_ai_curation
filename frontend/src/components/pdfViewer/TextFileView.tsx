@@ -19,6 +19,9 @@ export const VIEWER_FILE_PANEL_ID = 'viewer-file-panel'
 const LOADING_TEXT = 'Loading the file\'s text...'
 const LOAD_ERROR_TEXT = 'Could not load this file\'s text.'
 
+/** Proposal, awaiting sign-off (P9c): what conversion does not keep, at the top of every text tab. */
+export const CONVERTED_TEXT_NOTE = 'This is text converted from the original file. Formatting, images and some table layout are not kept.'
+
 export function viewerFileTabId(fileId: string): string {
   return `viewer-file-tab-${fileId}`
 }
@@ -135,12 +138,17 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
     )
   } else {
     content = (
-      <TextFileBlocks
-        blocks={loadState.blocks}
-        highlightedBlocks={highlight}
-        sectionBlockIndex={sectionBlockIndex}
-        firstHighlightRef={setHighlightedElement}
-      />
+      <>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          {CONVERTED_TEXT_NOTE}
+        </Typography>
+        <TextFileBlocks
+          blocks={loadState.blocks}
+          highlightedBlocks={highlight}
+          sectionBlockIndex={sectionBlockIndex}
+          firstHighlightRef={setHighlightedElement}
+        />
+      </>
     )
   }
 

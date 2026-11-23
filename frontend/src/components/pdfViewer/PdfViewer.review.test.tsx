@@ -203,6 +203,42 @@ describe('P9b review fixes', () => {
     expect(await screen.findByRole('row', { current: true })).toHaveTextContent('XS0401')
   })
 
+  describe('P9c: large tables and the converted-text note', () => {
+    function longSheet(dataRows: number): DisplayBlock {
+      const header = { line: '| Strain | Temp |', cells: ['Strain', 'Temp'], is_header: true }
+      const rows = [header, ...Array.from({ length: dataRows }, (_, index) => ({
+        line: `| XS${index + 1} | 25 C |`, cells: [`XS${index + 1}`, '25 C'], is_header: false,
+      }))]
+      return {
+        ...TEXT_SUPPLEMENT_BLOCKS.blocks[1]!,
+        text: [header.line, '|---|---|', ...rows.slice(1).map((row) => row.line)].join('\n'),
+        rows,
+      }
+    }
+
+    it('evidence on row 7,001 of a long sheet reveals its part and highlights it', async () => {
+      stubViewerFetch({ textBlocks: [TEXT_SUPPLEMENT_BLOCKS.blocks[0]!, longSheet(9799)] })
+      await showFourFilePaper()
+      act(() => {
+        dispatchPDFViewerNavigateEvidence(twoRowRecord(['| XS7000 | 25 C |', '| XS7001 | 25 C |']))
+      })
+
+      await waitFor(() => expect(document.querySelectorAll('tr[aria-current="true"]')).toHaveLength(2), { timeout: 8000 })
+      expect(document.querySelectorAll('tbody tr')).toHaveLength(7500)
+      expect(screen.getByText('Showing rows 1 to 7,500 of 9,800.')).toBeInTheDocument()
+    }, 20000)
+
+    it('a text tab says what conversion does not keep; a PDF tab does not', async () => {
+      stubViewerFetch()
+      await showFourFilePaper()
+      expect(screen.queryByText('This is text converted from the original file. Formatting, images and some table layout are not kept.')).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Table_S1.xlsx, file 2 of 3, converted text' }))
+
+      expect(await screen.findByText('This is text converted from the original file. Formatting, images and some table layout are not kept.')).toBeInTheDocument()
+    })
+  })
+
   describe('F2: the same paper sent again', () => {
     it('R3: equal files keep the text highlight and do not fetch the text again', async () => {
       stubViewerFetch()
