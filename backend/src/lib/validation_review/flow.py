@@ -46,7 +46,7 @@ class FlowReview(ChatReview):
     async def receive(self, envelope, domain_pack, *, agent_key, adapter_key, tool_name,
                       execution_receipt, context, trace_id=None, source_metadata=None,
                       builder_finalization=None, event_emitter=None, source_agent=None,
-                      history_invocation_id=None):
+                      files_read_scope=None):
         from src.lib.curation_workspace.extraction_results import persist_inline_validated_extraction_result
         from src.schemas.curation_workspace import CurationExtractionSourceKind
         from src.lib.curation_workspace.models import CurationExtractionResultRecord
@@ -69,7 +69,7 @@ class FlowReview(ChatReview):
             tool_name=self.step_provenance["tool_name"],
             source_kind=CurationExtractionSourceKind.FLOW, origin_session_id=self.session_id,
             user_id=self.owner_id, trace_id=trace_id, flow_run_id=self.flow_run_id,
-            builder_finalization=builder_finalization, history_invocation_id=history_invocation_id,
+            builder_finalization=builder_finalization, **(files_read_scope or {}),
             metadata={**(source_metadata or {}), **self.step_provenance, "flow_review": ref, "flow_step_key": self.node_id,
                       "execution_context": self.execution_context})
         scope_id = await asyncio.to_thread(self.operation_scope, binding.scope)

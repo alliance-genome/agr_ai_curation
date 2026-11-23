@@ -1401,3 +1401,46 @@ def isolated_history_reference_authorization(monkeypatch):
     # isolates extraction-result persistence and uses a fake database session.
     from src.lib.validation_history import runtime
     monkeypatch.setattr(runtime, "require_captured_envelope", lambda *args, **kwargs: None)
+
+
+def test_files_read_never_enter_the_payload_hash_or_idempotency_identity(monkeypatch):
+    # ALL-1460 Q3: files read live in their own column only. The same validated
+    # payload saved with different files read keeps one hash and one identity.
+    files = [{"file_id": "file-1", "file_name": "Table S1.xlsx", "role": "supplement",
+              "converted_artifact_id": None, "converted_artifact_sha256": None}]
+    builder_finalization = SimpleNamespace(summary=lambda: {
+        "builder_run_id": "trace-1", "builder_invocation_id": "builder-invocation-1",
+        "candidate_ids": ["candidate-1"], "source_candidate_ids": ["source-candidate-1"],
+    })
+    document_id = str(uuid4())
+    saved = []
+    for files_read in ([], files):
+        monkeypatch.setattr(module, "files_read_for_result", lambda *_a, _f=files_read, **_k: _f)
+        session = _FakeSession()
+        response = persist_inline_validated_extraction_result(
+            payload_json=_sample_persisted_domain_envelope_payload(), document_id=document_id,
+            agent_key="gene", adapter_key="gene", tool_name="ask_gene_specialist",
+            source_kind=CurationExtractionSourceKind.CHAT, origin_session_id="session-1",
+            trace_id="trace-1", user_id="user-1", builder_finalization=builder_finalization,
+            history_invocation_ids=["invocation-1"], db=session,
+        )
+        saved.append((session.added, response))
+
+    (first, first_response), (second, second_response) = saved
+    assert (first.files_read, second.files_read) == ([], files)
+    assert first.payload_hash == second.payload_hash == first_response.payload_hash == second_response.payload_hash
+    assert first.payload_hash == module._canonical_payload_hash(first.payload_json)
+    assert first.idempotency_key == second.idempotency_key
+    assert first.payload_json == second.payload_json
+    assert "files_read" not in json.dumps(first.payload_json)
+
+    flow_request = _flow_persistence_request().model_copy(update={"trace_id": "trace-1"})
+    flow_hashes = []
+    for files_read in ([], files):
+        monkeypatch.setattr(module, "files_read_for_result", lambda *_a, _f=files_read, **_k: _f)
+        session = _FakeSession()
+        persist_idempotent_extraction_results([flow_request], db=session)
+        flow_hashes.append((session.added.files_read, session.added.payload_hash, session.added.idempotency_key))
+    assert flow_hashes[0][1:] == flow_hashes[1][1:]
+    assert flow_hashes[1][1] == canonical_extraction_payload_hash(flow_request.payload_json)
+    assert [entry[0] for entry in flow_hashes] == [[], files]

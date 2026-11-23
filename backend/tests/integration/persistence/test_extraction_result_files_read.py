@@ -83,12 +83,12 @@ def _read(document_id: str, scope: HistoryScope, files: list[tuple[str, str]]) -
     HistoryStore(SessionLocal).append(scope, FILES_READ_KIND, json.dumps(payload, sort_keys=True))
 
 
-def _request(document_id: str, owner: str, run_id: str, *, invocation_id: str | None):
+def _request(document_id: str, owner: str, run_id: str, *, invocation_id: str | None, writers=()):
     return CurationExtractionPersistenceRequest(
         document_id=document_id, adapter_key="reference_adapter", agent_key="gene_extractor",
         source_kind=CurationExtractionSourceKind.CHAT, trace_id=run_id, user_id=owner,
         candidate_count=1, payload_json={"items": [{"gene": "made-up"}]},
-        history_invocation_id=invocation_id,
+        history_invocation_ids=None if invocation_id is None else [invocation_id, *writers],
     )
 
 
@@ -108,6 +108,10 @@ def test_a_result_stores_the_files_its_invocation_read_in_tab_order(paper):
         whole_run = persist_extraction_result(
             _request(document_id, owner, run_id, invocation_id=None), db=db,
         ).extraction_result
+        with_writer = persist_extraction_result(
+            _request(document_id, owner, run_id, invocation_id=extractor.invocation_id,
+                     writers=[other.invocation_id]), db=db,
+        ).extraction_result
 
     assert saved.files_read is not None
     assert [entry.model_dump() for entry in saved.files_read] == [
@@ -117,6 +121,8 @@ def test_a_result_stores_the_files_its_invocation_read_in_tab_order(paper):
          "converted_artifact_id": "artifact-2", "converted_artifact_sha256": "2" * 64},
     ]
     assert [entry.file_name for entry in whole_run.files_read] == ["paper.pdf", "Table S1.xlsx", "Data S2.docx"]
+    # A fan-out writer's reads count toward the extraction agent's result.
+    assert [entry.file_name for entry in with_writer.files_read] == ["paper.pdf", "Table S1.xlsx", "Data S2.docx"]
 
 
 def test_a_result_whose_invocation_read_nothing_records_an_empty_list(paper):
@@ -164,6 +170,54 @@ def test_a_result_saved_before_files_were_recorded_is_served_unchanged(paper):
     assert served.files_read is None
     assert "files_read" not in served.model_dump(mode="json")
     assert "files_read" not in json.loads(served.model_dump_json())
+
+
+def _entry(file_id, name, role="supplement"):
+    return {"file_id": file_id, "file_name": name, "role": role,
+            "converted_artifact_id": None, "converted_artifact_sha256": None}
+
+
+def _derived(document_id, inputs):
+    return CurationExtractionPersistenceRequest(
+        document_id=document_id, adapter_key="reference_adapter", agent_key="curation_prep",
+        source_kind=CurationExtractionSourceKind.CHAT, trace_id=str(uuid4()), user_id=f"owner-{uuid4()}",
+        candidate_count=1, payload_json={"items": [{"gene": "made-up"}]}, input_files_read=inputs,
+    )
+
+
+def test_a_prepared_result_reads_the_union_of_its_inputs_in_tab_order(paper):
+    # ALL-1460: a Prepare for Curation result takes its inputs' files, never a run's reads.
+    document_id, file_ids = paper
+    removed = str(uuid4())
+    word = _entry(file_ids["Data S2.docx"], "Data S2.docx")
+    inputs = [
+        [word, _entry(removed, "Removed S3.csv")],
+        [_entry(file_ids["paper.pdf"], "paper.pdf", "main"), dict(word, file_name="renamed later")],
+    ]
+    owner, run_id = f"owner-{uuid4()}", str(uuid4())
+    # Reads in the prep request's own run must not be used.
+    _read(document_id, HistoryScope(owner, run_id, str(uuid4()), "supervisor", "s/", "chat-a"),
+          [(file_ids["Table S1.xlsx"], "Table S1.xlsx")])
+    request = _derived(document_id, inputs).model_copy(update={"user_id": owner, "trace_id": run_id})
+
+    with SessionLocal.begin() as db:
+        saved = persist_extraction_result(request, db=db).extraction_result
+
+    assert [entry.model_dump() for entry in saved.files_read] == [
+        _entry(file_ids["paper.pdf"], "paper.pdf", "main"), word, _entry(removed, "Removed S3.csv"),
+    ]
+
+
+def test_a_prepared_result_with_an_unrecorded_input_is_unrecorded(paper):
+    document_id, file_ids = paper
+    inputs = [[_entry(file_ids["paper.pdf"], "paper.pdf", "main")], None]
+
+    with SessionLocal.begin() as db:
+        saved = persist_extraction_result(_derived(document_id, inputs), db=db).extraction_result
+        empty = persist_extraction_result(_derived(document_id, [[], []]), db=db).extraction_result
+
+    assert saved.files_read is None
+    assert empty.files_read == []
 
 
 def test_the_migration_adds_a_nullable_column_and_refuses_downgrade(historical_migration_database):

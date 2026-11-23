@@ -38,6 +38,7 @@ def identity_function_tool(monkeypatch):
     # Formatting/selection tests isolate the source scope; SDK lifecycle and
     # durable source binding are covered in test_document_references.py.
     monkeypatch.setattr(weaviate_search, "scoped_document_tool", lambda tool, **kwargs: tool)
+    monkeypatch.setattr(weaviate_search, "record_files_shown", AsyncMock())
     monkeypatch.setattr(weaviate_search, "retain_issued_spans", AsyncMock())
     _READABLE["value"] = single_file("doc-12345678")
     _OUTLINE.clear()

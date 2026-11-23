@@ -1252,7 +1252,7 @@ def _record_trace_files_read(span: Any, *, user_id: str, trace_id: str, document
     try:
         with SessionLocal() as db:
             files_read = files_read_for_result(
-                db, owner_id=user_id, run_id=trace_id, document_id=document_id, invocation_id=None,
+                db, owner_id=user_id, run_id=trace_id, document_id=document_id, invocation_ids=None,
             )
         span.update(metadata={
             "files_read": [

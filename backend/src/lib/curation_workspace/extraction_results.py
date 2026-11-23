@@ -26,7 +26,7 @@ from src.lib.persistence_sanitization import (
 from src.lib.curation_workspace.models import (
     CurationExtractionResultRecord as CurationExtractionResultRecordModel,
 )
-from src.lib.document_files.files_read import files_read_for_result
+from src.lib.document_files.files_read import files_read_for_result, union_files_read
 from src.lib.openai_agents.extraction_trace_events import write_extraction_trace_event
 from src.models.sql.database import SessionLocal
 from src.schemas.curation_workspace import (
@@ -62,8 +62,11 @@ class ExtractionEnvelopeCandidate:
     conversation_summary: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
     execution_receipt: AgentExecutionReceipt | None = None
-    # The producing agent invocation, when known; its reads become the result's files read.
-    history_invocation_id: Optional[str] = None
+    # The producing agent invocations (agent plus fan-out writers), when known; their
+    # reads become the result's files read. files_read_unrecorded: they cannot be
+    # known with certainty, so nothing is recorded (NULL).
+    history_invocation_ids: Optional[list[str]] = None
+    files_read_unrecorded: bool = False
 
 
 @dataclass(frozen=True)
@@ -166,7 +169,8 @@ def build_extraction_envelope_candidate(
     adapter_key: Optional[str] = None,
     metadata: Optional[Mapping[str, Any]] = None,
     execution_receipt: AgentExecutionReceipt | Mapping[str, Any] | None = None,
-    history_invocation_id: Optional[str] = None,
+    history_invocation_ids: Optional[list[str]] = None,
+    files_read_unrecorded: bool = False,
 ) -> Optional[ExtractionEnvelopeCandidate]:
     """Convert a tool output payload into a persistable extraction candidate."""
 
@@ -235,7 +239,8 @@ def build_extraction_envelope_candidate(
         if conversation_summary is not None
         else None,
         metadata=envelope_metadata,
-        history_invocation_id=history_invocation_id,
+        history_invocation_ids=history_invocation_ids,
+        files_read_unrecorded=files_read_unrecorded,
     )
 
 
@@ -272,7 +277,8 @@ def build_extraction_envelope_candidate_with_evidence(
     adapter_key: Optional[str] = None,
     metadata: Optional[Mapping[str, Any]] = None,
     execution_receipt: AgentExecutionReceipt | Mapping[str, Any] | None = None,
-    history_invocation_id: Optional[str] = None,
+    history_invocation_ids: Optional[list[str]] = None,
+    files_read_unrecorded: bool = False,
 ) -> tuple[Optional[ExtractionEnvelopeCandidate], dict[str, Any]]:
     """Build one extraction candidate plus normalized evidence metadata."""
 
@@ -283,7 +289,8 @@ def build_extraction_envelope_candidate_with_evidence(
         adapter_key=adapter_key,
         metadata=metadata,
         execution_receipt=execution_receipt,
-        history_invocation_id=history_invocation_id,
+        history_invocation_ids=history_invocation_ids,
+        files_read_unrecorded=files_read_unrecorded,
     )
     evidence_source = candidate.payload_json if candidate is not None else raw_output
     evidence_records = extract_evidence_records_from_structured_result(
@@ -348,7 +355,8 @@ def persist_inline_validated_extraction_result(
     builder_finalization: Any | None = None,
     metadata: Mapping[str, Any] | None = None,
     execution_receipt: AgentExecutionReceipt | Mapping[str, Any] | None = None,
-    history_invocation_id: str | None = None,
+    history_invocation_ids: list[str] | None = None,
+    files_read_unrecorded: bool = False,
     db: Optional[Session] = None,
 ) -> InlineExtractionPersistenceResult:
     """Persist a validated canonical domain envelope and return its stable ref.
@@ -417,7 +425,8 @@ def persist_inline_validated_extraction_result(
             idempotency_key=idempotency_key,
             payload_hash=payload_hash,
             metadata=persistence_metadata,
-            history_invocation_id=history_invocation_id,
+            history_invocation_ids=history_invocation_ids,
+            files_read_unrecorded=files_read_unrecorded,
         )
         record = _build_extraction_result_record(request, session=session)
         try:
@@ -925,8 +934,24 @@ def _files_read(
     session: Session,
     request: CurationExtractionPersistenceRequest,
 ) -> list[dict[str, Any]] | None:
-    """The files read for a new result; None only when the run cannot be identified."""
+    """The files read for a new result.
 
+    A result derived from saved results takes the union of theirs. Otherwise the
+    producing invocations' reads, or the whole run's; None when the producing
+    invocations cannot be known with certainty or the run cannot be identified.
+    """
+
+    if request.input_files_read is not None:
+        return union_files_read(
+            session,
+            document_id=str(request.document_id),
+            inputs=[
+                None if entries is None else [entry.model_dump(mode="json") for entry in entries]
+                for entries in request.input_files_read
+            ],
+        )
+    if request.files_read_unrecorded:
+        return None
     if not request.user_id or not request.trace_id:
         return None
     return files_read_for_result(
@@ -934,7 +959,7 @@ def _files_read(
         owner_id=request.user_id,
         run_id=request.trace_id,
         document_id=str(request.document_id),
-        invocation_id=request.history_invocation_id,
+        invocation_ids=request.history_invocation_ids,
     )
 
 

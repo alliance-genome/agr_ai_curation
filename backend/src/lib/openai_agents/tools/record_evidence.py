@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from agr_ai_curation_runtime.document_references import (
     DocumentSelection,
     current_readable_files,
+    record_files_shown,
     resolve_selections,
     scoped_document_tool,
 )
@@ -1350,6 +1351,9 @@ def create_record_evidence_tool(
             raise DocumentReadError("record_evidence") from DocumentReferenceError(result["resolution_failure"])
         if result.get("status") == "verified":
             result["selections"] = [selection.model_dump() for selection in selections]
+            # The verified quote shows the model this file's text, even when another
+            # agent of the conversation read the span (ALL-1460).
+            await record_files_shown([selection.chunk_index for selection in selections])
         return result
 
     return _reject_unknown_arguments(

@@ -19,6 +19,7 @@ from agr_ai_curation_runtime.document_errors import DocumentReadError
 from agr_ai_curation_runtime.document_references import (
     LocalIndex,
     current_readable_files,
+    record_files_shown,
     retain_issued_spans,
     scoped_document_tool,
 )
@@ -361,6 +362,9 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
                 )
             )
 
+        # Every hit's text reaches the model, so its file counts as read (ALL-1460);
+        # snippets are not evidence, so no span is issued.
+        await record_files_shown([hit.chunk_index for hit in hits])
         logger.debug("Returning %s structured chunks", len(hits))
         return _search_result(hits)
 

@@ -1239,11 +1239,6 @@ class LiteralToolResultTests(unittest.TestCase):
                 self.assertIsNone(result['parsed'])
                 self.assertEqual(result['raw'], raw)
 
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TraceSummaryFilesReadTests(unittest.TestCase):
     """ALL-1460: the run's files read are in the trace metadata; older traces have none."""
 
@@ -1262,3 +1257,7 @@ class TraceSummaryFilesReadTests(unittest.TestCase):
         summary = TraceSummaryAnalyzer.analyze(self._trace({"supervisor_agent": "supervisor"}), [])
 
         self.assertIsNone(summary["files_read"])
+
+
+if __name__ == "__main__":
+    unittest.main()

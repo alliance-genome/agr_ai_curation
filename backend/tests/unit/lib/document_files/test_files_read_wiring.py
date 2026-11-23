@@ -64,7 +64,7 @@ def test_the_record_stores_the_producing_invocations_files_and_traces_them(monke
     request = CurationExtractionPersistenceRequest(
         document_id=str(uuid4()), adapter_key="reference_adapter", agent_key="gene_extractor",
         source_kind=CurationExtractionSourceKind.FLOW, trace_id="trace-1", user_id="owner-1",
-        payload_json={"items": []}, history_invocation_id="invocation-1",
+        payload_json={"items": []}, history_invocation_ids=["invocation-1", "writer-1"],
     )
 
     record = results._build_extraction_result_record(request, session=object())
@@ -73,7 +73,7 @@ def test_the_record_stores_the_producing_invocations_files_and_traces_them(monke
 
     assert record.files_read == FILES
     assert lookups == [{"owner_id": "owner-1", "run_id": "trace-1", "document_id": request.document_id,
-                        "invocation_id": "invocation-1"}]
+                        "invocation_ids": ["invocation-1", "writer-1"]}]
     assert traced == [{"event_type": "extraction.files_read", "trace_id": "trace-1",
                        "output_summary": {"extraction_result_id": "result-1", "files_read": FILES}}]
 
@@ -93,30 +93,66 @@ def test_a_result_without_an_identified_run_records_nothing_and_traces_nothing(m
     assert traced == []
 
 
-def test_the_specialists_extraction_event_names_its_invocation():
+def _agent(invocation_id):
+    return SimpleNamespace(run_history=SimpleNamespace(scope=SimpleNamespace(invocation_id=invocation_id)))
+
+
+def test_the_result_reads_are_the_agents_and_every_fanout_writers():
     from src.lib.openai_agents import streaming_tools
 
-    agent = SimpleNamespace(run_history=SimpleNamespace(scope=SimpleNamespace(invocation_id="invocation-1")))
-    event = streaming_tools._with_history_invocation({"internal": {"tool_output": "{}"}}, agent)
-    without_history = streaming_tools._with_history_invocation(
-        {"internal": {"tool_output": "{}"}}, SimpleNamespace(run_history=None),
+    planner = _agent("planner-1")
+    fanout = SimpleNamespace(writer_invocation_ids=["writer-1", "writer-1-rerun", "writer-2"],
+                             writer_invocations_unknown=False)
+
+    assert streaming_tools._files_read_scope(planner) == {"history_invocation_ids": ["planner-1"]}
+    assert streaming_tools._files_read_scope(planner, fanout) == {
+        "history_invocation_ids": ["planner-1", "writer-1", "writer-1-rerun", "writer-2"]}
+    # History off: every read row carries the run, so the whole run is complete.
+    assert streaming_tools._files_read_scope(SimpleNamespace(run_history=None), fanout) == {}
+
+
+def test_a_writer_whose_invocation_is_unknown_leaves_the_result_unrecorded():
+    from src.lib.openai_agents import streaming_tools
+
+    fanout = SimpleNamespace(writer_invocation_ids=["writer-1"], writer_invocations_unknown=True)
+
+    assert streaming_tools._files_read_scope(_agent("planner-1"), fanout) == {"files_read_unrecorded": True}
+
+
+def test_an_unrecorded_scope_saves_null_files_read(monkeypatch):
+    monkeypatch.setattr(results, "files_read_for_result", lambda db, **kwargs: FILES)
+    request = CurationExtractionPersistenceRequest(
+        document_id=str(uuid4()), adapter_key="reference_adapter", agent_key="gene_extractor",
+        source_kind=CurationExtractionSourceKind.CHAT, trace_id="trace-1", user_id="owner-1",
+        payload_json={"items": []}, history_invocation_ids=["planner-1"], files_read_unrecorded=True,
     )
 
-    assert event["internal"]["history_invocation_id"] == "invocation-1"
-    assert "history_invocation_id" not in without_history["internal"]
+    assert results._build_extraction_result_record(request, session=object()).files_read is None
 
 
-def test_a_flow_step_takes_the_invocation_from_its_extraction_event():
+def test_the_specialists_extraction_event_names_its_invocations():
+    from src.lib.openai_agents import streaming_tools
+
+    event = streaming_tools._with_files_read_scope(
+        {"internal": {"tool_output": "{}"}}, {"history_invocation_ids": ["planner-1", "writer-1"]},
+    )
+
+    assert event["internal"]["history_invocation_ids"] == ["planner-1", "writer-1"]
+
+
+def test_a_flow_step_takes_the_invocations_from_its_extraction_event():
     from src.lib.flows import executor
     from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 
     event = {"type": INTERNAL_EXTRACTION_RESULT_EVENT_TYPE, "details": {"toolName": "ask_gene"},
-             "internal": {"tool_output": "{}", "history_invocation_id": "invocation-1"}}
-    _output, audit = executor._internal_extraction_tool_output_with_audit_since(
-        {"live_events": [event], "live_index": 0}, tool_name="ask_gene",
-    )
+             "internal": {"tool_output": "{}", "history_invocation_ids": ["planner-1", "writer-1"]}}
+    cursor = {"live_events": [event], "live_index": 0}
+    _output, audit = executor._internal_extraction_tool_output_with_audit_since(cursor, tool_name="ask_gene")
 
-    assert audit["history_invocation_id"] == "invocation-1"
+    assert executor._internal_extraction_files_read_scope_since(cursor, tool_name="ask_gene") == {
+        "history_invocation_ids": ["planner-1", "writer-1"], "files_read_unrecorded": False}
+    # The lookup audit is published in flow events; the invocation ids stay out of it.
+    assert "history_invocation_ids" not in audit
 
 
 def test_the_trace_metadata_carries_file_ids_and_names_only(monkeypatch):

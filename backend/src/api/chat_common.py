@@ -195,7 +195,8 @@ def _build_extraction_candidate_from_tool_event(
         execution_receipt=internal_payload.get("execution_receipt"),
         conversation_summary=conversation_summary,
         metadata=candidate_metadata,
-        history_invocation_id=internal_payload.get("history_invocation_id"),
+        history_invocation_ids=internal_payload.get("history_invocation_ids"),
+        files_read_unrecorded=internal_payload.get("files_read_unrecorded") is True,
     )
 
 
@@ -448,7 +449,8 @@ def _persist_extraction_candidates(
                 conversation_summary=candidate.conversation_summary,
                 payload_json=candidate.payload_json,
                 metadata=dict(candidate.metadata),
-                history_invocation_id=candidate.history_invocation_id,
+                history_invocation_ids=candidate.history_invocation_ids,
+                files_read_unrecorded=candidate.files_read_unrecorded,
             )
         )
     if not requests:

@@ -300,6 +300,35 @@ def _unique_non_empty_values(values: List[Any]) -> List[str]:
     return ordered
 
 
+def _internal_extraction_files_read_scope_since(
+    cursor: Mapping[str, Any],
+    *,
+    tool_name: str,
+) -> dict[str, Any]:
+    """The producing invocations named on the step's latest extraction event (ALL-1460).
+
+    Kept apart from the lookup audit, which is published in flow events: the
+    invocation ids only reach the candidate, for its files read.
+    """
+
+    for key_events, key_index in (("live_events", "live_index"), ("collected_events", "collected_index")):
+        events, start = cursor.get(key_events), cursor.get(key_index)
+        if not isinstance(events, list) or not isinstance(start, int):
+            continue
+        for event in reversed(events[start:]):
+            if (isinstance(event, Mapping) and event.get("type") == INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
+                    and isinstance(event.get("details"), Mapping)
+                    and str(event["details"].get("toolName") or "").strip() == str(tool_name or "").strip()
+                    and isinstance(event.get("internal"), Mapping)
+                    and event["internal"].get("tool_output") is not None):
+                internal = event["internal"]
+                return {
+                    "history_invocation_ids": internal.get("history_invocation_ids"),
+                    "files_read_unrecorded": internal.get("files_read_unrecorded") is True,
+                }
+    return {}
+
+
 def _internal_extraction_tool_output_with_audit_since(
     cursor: Mapping[str, Any],
     *,
@@ -359,8 +388,6 @@ def _internal_extraction_tool_output_with_audit_since(
                 )
                 if "tool_output" in internal and internal.get("tool_output") is not None:
                     audit["internalPayloadFound"] = True
-                    # The step's producing invocation (ALL-1460); not copied to step timing.
-                    audit["history_invocation_id"] = internal.get("history_invocation_id")
                     audit["finalizedEmptyExtraction"] = _is_finalized_empty_extraction(
                         internal.get("tool_output"), internal.get("builder_finalization")
                     )
@@ -2503,7 +2530,9 @@ def get_all_agent_tools(
                     conversation_summary=flow_conversation_summary,
                     adapter_key=curation_adapter_key,
                     metadata=deepcopy(step_provenance),
-                    history_invocation_id=internal_lookup_audit.get("history_invocation_id"),
+                    **_internal_extraction_files_read_scope_since(
+                        internal_event_cursor, tool_name=tool_name,
+                    ),
                 )
             )
             if flow_review is not None and flow_review.record is not None and candidate is not None:
@@ -3849,7 +3878,8 @@ def _persist_flow_extraction_candidates(
                 idempotency_key=idempotency_key,
                 payload_hash=payload_hash,
                 metadata=metadata,
-                history_invocation_id=candidate.history_invocation_id,
+                history_invocation_ids=candidate.history_invocation_ids,
+                files_read_unrecorded=candidate.files_read_unrecorded,
             )
         )
 

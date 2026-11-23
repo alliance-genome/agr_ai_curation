@@ -41,5 +41,10 @@ async def retain_issued_spans(reads: list[tuple[dict, list[dict], list[int]]]) -
     await _implementation().retain_issued_spans(reads)
 
 
+async def record_files_shown(chunk_indexes: list[int]) -> None:
+    """Record that the model was shown these pieces' files, without issuing spans (search hits)."""
+    await _implementation().record_files_shown(chunk_indexes)
+
+
 async def resolve_selections(selections: list[DocumentSelection]) -> list[str]:
     return await _implementation().resolve_selections(selections)

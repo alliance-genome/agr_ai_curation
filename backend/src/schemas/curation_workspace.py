@@ -2896,11 +2896,27 @@ class CurationExtractionPersistenceRequest(CurationWorkspaceBaseModel):
         default_factory=dict,
         description="Storage or transport metadata for persistence",
     )
-    history_invocation_id: Optional[str] = Field(
+    history_invocation_ids: Optional[list[str]] = Field(
         default=None,
         description=(
-            "The producing agent invocation, when known; its reads are the result's files "
-            "read. Otherwise the files read are those of the whole run (trace)"
+            "The producing agent invocations (the extraction agent and its fan-out writers), "
+            "when known; their reads are the result's files read. Otherwise the files read "
+            "are those of the whole run (trace)"
+        ),
+    )
+    files_read_unrecorded: bool = Field(
+        default=False,
+        description=(
+            "The producing invocations cannot be known with certainty: files read stays "
+            "NULL (not recorded) rather than a partial list"
+        ),
+    )
+    input_files_read: Optional[list[Optional[list[ExtractionFileRead]]]] = Field(
+        default=None,
+        description=(
+            "For a result derived from saved results (Prepare for Curation): each input's "
+            "stored files read. The result's files read are their union, or NULL if any "
+            "input has none recorded; no history lookup is made"
         ),
     )
 

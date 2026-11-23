@@ -2497,6 +2497,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                     "internal": {
                         "tool_output": json.dumps(payload),
                         "output_length": len(json.dumps(payload)),
+                        "history_invocation_ids": ["invocation-backend-only"],
                     },
                 })
                 return "Validated domain envelope result for gene."
@@ -2577,6 +2578,13 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert audit_event["data"]["flow_name"] == flow.name
         assert audit_event["data"]["toolName"] == "ask_gene_specialist"
         assert audit_event["data"]["internalPayloadFound"] is True
+        # ALL-1460: the producing invocation reaches the candidate (files read) only,
+        # never the public flow events or the stored step audit.
+        assert completed_step["candidate"].history_invocation_ids == ["invocation-backend-only"]
+        public = [event for event in collected_events
+                  if event.get("type") != executor.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE]
+        assert "invocation-backend-only" not in json.dumps(public, default=str)
+        assert "invocation-backend-only" not in json.dumps(handoff_audit, default=str)
 
     def test_expected_extraction_missing_payload_diagnostic(self):
         assert _executor_module()._flow_candidate_reject_reason(

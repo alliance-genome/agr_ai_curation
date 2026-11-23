@@ -3058,23 +3058,33 @@ def _domain_envelope_supervisor_minimal_summary(payload: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _history_invocation_id(agent: Any) -> str | None:
-    """The specialist run's history invocation, whose reads are its result's files read."""
+def _files_read_scope(agent: Any, fanout: Any = None) -> dict[str, Any]:
+    """Which reads are the specialist result's files read (ALL-1460, Q1).
 
-    history = getattr(agent, "run_history", None)
-    return history.scope.invocation_id if history is not None else None
-
-
-def _with_history_invocation(event: Dict[str, Any], agent: Any) -> Dict[str, Any]:
-    """Name the producing invocation on a backend-only extraction event (ALL-1460, Q1).
-
-    The persisting caller (flow executor or chat stream) stores the files that
-    invocation read as the result's files read.
+    The extraction agent's own history invocation plus every fan-out writer
+    attempt's. With history off nothing has an invocation: every read row still
+    carries the run, so the whole run (empty scope) is a complete answer. If the
+    agent has an invocation but a writer's cannot be known, the result's files
+    read stay NULL (``files_read_unrecorded``), never the agent's alone.
     """
 
-    invocation_id = _history_invocation_id(agent)
-    if invocation_id is not None:
-        event["internal"]["history_invocation_id"] = invocation_id
+    history = getattr(agent, "run_history", None)
+    if history is None:
+        return {}
+    if fanout is not None and fanout.writer_invocations_unknown:
+        return {"files_read_unrecorded": True}
+    writers = list(fanout.writer_invocation_ids) if fanout is not None else []
+    return {"history_invocation_ids": [history.scope.invocation_id, *writers]}
+
+
+def _with_files_read_scope(event: Dict[str, Any], scope: dict[str, Any]) -> Dict[str, Any]:
+    """Name the producing invocations on a backend-only extraction event (ALL-1460, Q1).
+
+    The persisting caller (flow executor or chat stream) stores the files those
+    invocations read as the result's files read.
+    """
+
+    event["internal"].update(scope)
     return event
 
 
@@ -3087,7 +3097,7 @@ def _persist_builder_finalization_for_supervisor(
     adapter_key: str | None,
     agent_key: str | None,
     trace_id: str | None,
-    history_invocation_id: str | None,
+    files_read_scope: dict[str, Any],
     execution_context: ExtractionExecutionContext | None = None,
 ) -> InlineExtractionPersistenceResult:
     document_id = str(builder_workspace.document_id or "").strip()
@@ -3135,7 +3145,7 @@ def _persist_builder_finalization_for_supervisor(
             trace_id=trace_id or get_current_trace_id() or builder_workspace.run_id,
             user_id=get_current_user_id(),
             builder_finalization=builder_finalization,
-            history_invocation_id=history_invocation_id,
+            **files_read_scope,
             metadata={
                 "specialist_name": specialist_name,
                 "domain_pack_id": builder_workspace.domain_pack_id,
@@ -3829,7 +3839,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
     builder_finalization: Any = None,
     source_agent: Any = None,
     source_max_turns: int | None = None,
-    history_invocation_id: str | None = None,
+    files_read_scope: dict[str, Any] | None = None,
 ) -> str:
     """Run active domain-pack validators before extractor output reaches supervisor.
 
@@ -4064,7 +4074,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
                     source_metadata={**dict(source_metadata or {}), "specialist_name": specialist_name,
                                      "domain_pack_id": envelope.domain_pack_id},
                     event_emitter=_emit_validator_dispatch_event, source_agent=source_agent,
-                    history_invocation_id=history_invocation_id)
+                    files_read_scope=files_read_scope)
             except BaseException as error:
                 from src.lib.validation_review.stops import review_stop
                 stopped = review_stop(error) is not None
@@ -6509,7 +6519,7 @@ async def run_specialist_with_events(
                 producer_id=builder_workspace.builder_invocation_id,
                 source_agent=agent,
                 source_max_turns=max_turns,
-                history_invocation_id=_history_invocation_id(runtime_agent),
+                files_read_scope=_files_read_scope(runtime_agent, fanout),
                 expected_output_type=expected_output_type,
                 specialist_name=specialist_name,
                 tool_name=tool_name,
@@ -6578,7 +6588,7 @@ async def run_specialist_with_events(
                 producer_id=builder_workspace.builder_invocation_id,
                 source_agent=agent,
                 source_max_turns=max_turns,
-                history_invocation_id=_history_invocation_id(runtime_agent),
+                files_read_scope=_files_read_scope(runtime_agent, fanout),
                 expected_output_type=expected_output_type,
                 specialist_name=specialist_name,
                 tool_name=tool_name,
@@ -6680,7 +6690,7 @@ async def run_specialist_with_events(
                 adapter_key=runtime_curation_adapter_key,
                 agent_key=runtime_canonical_agent_key,
                 trace_id=trace_run.trace_id if trace_run is not None else None,
-                history_invocation_id=_history_invocation_id(runtime_agent),
+                files_read_scope=_files_read_scope(runtime_agent, fanout),
                 execution_context=execution_context,
             )
             handoff = _build_supervisor_extraction_handoff(
@@ -6718,7 +6728,7 @@ async def run_specialist_with_events(
             # the executor. Restore the pre-branch flow emission: the internal extraction
             # event WITHOUT CHAT persisted identifiers (no extraction_result_id/result_ref/
             # persistence_status), and no supervisor extraction handoff.
-            add_specialist_event(_with_history_invocation(
+            add_specialist_event(_with_files_read_scope(
                 build_internal_extraction_result_event(
                     tool_name=tool_name,
                     specialist_name=specialist_name,
@@ -6726,7 +6736,7 @@ async def run_specialist_with_events(
                     timestamp=datetime.now(timezone.utc).isoformat(),
                     agent_key=runtime_canonical_agent_key,
                 ),
-                runtime_agent,
+                _files_read_scope(runtime_agent, fanout),
             ))
     elif (
         tool_name
@@ -6737,7 +6747,7 @@ async def run_specialist_with_events(
             validated_result_callback(
                 copy.deepcopy(structured_finalization_state.accepted_payload)
             )
-        add_specialist_event(_with_history_invocation(
+        add_specialist_event(_with_files_read_scope(
             _build_structured_finalization_internal_result_event(
                 tool_name=tool_name,
                 specialist_name=specialist_name,
@@ -6746,7 +6756,7 @@ async def run_specialist_with_events(
                 finalization_tool_name=structured_finalization_state.tool_name,
                 timestamp=datetime.now(timezone.utc).isoformat(),
             ),
-            runtime_agent,
+            _files_read_scope(runtime_agent, fanout),
         ))
     phase_timings_ms["internal_extraction_event_ms"] = _elapsed_ms(
         internal_event_started_at

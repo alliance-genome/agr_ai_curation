@@ -14,6 +14,7 @@ def identity_function_tool(monkeypatch):
     monkeypatch.setattr(weaviate_search, "scoped_document_tool", lambda tool, **kwargs: tool)
     monkeypatch.setattr(weaviate_search, "current_readable_files", lambda: single_file("doc-12345678"))
     monkeypatch.setattr(weaviate_search, "retain_issued_spans", AsyncMock())
+    monkeypatch.setattr(weaviate_search, "record_files_shown", AsyncMock())
     monkeypatch.setattr(weaviate_search, "function_tool", lambda fn=None, **kwargs: fn if fn is not None else lambda decorated: decorated)
 
 

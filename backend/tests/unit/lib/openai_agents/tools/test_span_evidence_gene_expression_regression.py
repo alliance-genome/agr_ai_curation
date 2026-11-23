@@ -48,6 +48,7 @@ def identity_function_tool(monkeypatch):
     monkeypatch.setattr(
         evidence_workspace, "resolve_readable_files", lambda document_id, user_id: single_file("doc-12345678")
     )
+    monkeypatch.setattr(weaviate_search, "record_files_shown", AsyncMock())
     monkeypatch.setattr(weaviate_search, "retain_issued_spans", AsyncMock())
     monkeypatch.setattr(weaviate_search, "function_tool", _identity_function_tool)
     monkeypatch.setattr(record_evidence, "function_tool", _identity_function_tool)
