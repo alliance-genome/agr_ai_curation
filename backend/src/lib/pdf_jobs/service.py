@@ -18,6 +18,7 @@ from src.lib.openai_agents.config import (
     get_document_source_dead_wait_polls,
     get_document_source_poll_interval_seconds,
     get_document_source_request_timeout_seconds,
+    get_document_supplement_listing_poll_seconds,
     get_pdf_document_error_message_max_chars,
     get_pdf_job_error_message_max_chars,
     get_pdf_no_job_orphan_batch_size,
@@ -69,7 +70,11 @@ _ACTIVE_STATUSES = {
 # poll interval and records it (``update_progress``). Only these can be told
 # dead from their last activity alone.
 PROVIDER_CONVERSION_STAGE = "provider_conversion"
-_POLLING_STAGES = frozenset({PROVIDER_CONVERSION_STAGE})
+# The paper is ready; the job polls the provider for its chosen supplements.
+WAITING_FOR_SUPPLEMENTS_STAGE = "waiting_for_supplements"
+# The converted supplements are being written (no polling).
+ADDING_SUPPLEMENTS_STAGE = "adding_supplements"
+_POLLING_STAGES = frozenset({PROVIDER_CONVERSION_STAGE, WAITING_FOR_SUPPLEMENTS_STAGE})
 # updated_at is mutable activity time, so equal creation times use a stable ID tie-break.
 _JOB_CREATION_ORDERING = (
     PdfProcessingJob.created_at.desc(),
@@ -548,7 +553,7 @@ def create_job(*, document_id: UUID | str, user_id: int, filename: Optional[str]
 
 def create_job_in_session(
     session, *, document_id: UUID | str, user_id: int, filename: Optional[str] = None,
-    metadata: Optional[dict] = None,
+    metadata: Optional[dict] = None, current_stage: str = "pending",
 ) -> PdfJobResponse:
     """Create a paper's job in ``session`` and commit it.
 
@@ -562,7 +567,7 @@ def create_job_in_session(
         user_id=user_id,
         filename=filename,
         status=PdfJobStatus.PENDING.value,
-        current_stage="pending",
+        current_stage=current_stage,
         progress_percentage=0,
         message="Queued for background processing",
         cancel_requested=False,
@@ -643,18 +648,118 @@ def get_job_by_id(*, job_id: UUID | str, reconcile_stale: bool = True) -> Option
 # Such a job never stands for the paper's own processing state.
 JOB_KIND_KEY = "job_kind"
 SUPPLEMENT_ADD_JOB_KIND = "supplement_add"
+# The supplement stage of a new paper's import (P7b): it waits for the provider,
+# then adds the converted files. Like an add, it never stands for the paper's state.
+SUPPLEMENT_WAIT_JOB_KIND = "supplement_wait"
+_FILE_JOB_KINDS = (SUPPLEMENT_ADD_JOB_KIND, SUPPLEMENT_WAIT_JOB_KIND)
 
 
 def _not_an_add_job():
     return or_(
         PdfProcessingJob.metadata_json.is_(None),
-        PdfProcessingJob.metadata_json[JOB_KIND_KEY].astext.is_distinct_from(SUPPLEMENT_ADD_JOB_KIND),
+        PdfProcessingJob.metadata_json[JOB_KIND_KEY].astext.is_(None),
+        PdfProcessingJob.metadata_json[JOB_KIND_KEY].astext.not_in(_FILE_JOB_KINDS),
     )
 
 
 def is_supplement_add_job(job: PdfJobResponse | PdfProcessingJob) -> bool:
     metadata = job.metadata if isinstance(job, PdfJobResponse) else job.metadata_json
-    return bool(metadata) and metadata.get(JOB_KIND_KEY) == SUPPLEMENT_ADD_JOB_KIND
+    return bool(metadata) and metadata.get(JOB_KIND_KEY) in _FILE_JOB_KINDS
+
+
+def start_supplement_wait_job(*, document_id: UUID | str, user_id: int, filename: Optional[str]) -> PdfJobResponse:
+    """Create the job of a new paper's supplement stage, once its import job has completed.
+
+    Ordered against a delete of the same paper by the paper's lock (never waiting
+    for it). Raises ``ActiveJobExistsError`` when the paper already has an active
+    job, or a delete or an add holds its lock.
+    """
+    from src.lib.document_files.paper_lock import try_lock_paper_for_add
+
+    session = SessionLocal()
+    try:
+        if not try_lock_paper_for_add(session, document_id):
+            session.rollback()
+            raise ActiveJobExistsError(document_id)
+        paper = session.execute(
+            select(PDFDocument).where(PDFDocument.id == _to_uuid(document_id)).with_for_update()
+        ).scalar_one_or_none()
+        if paper is None:
+            session.rollback()
+            raise ActiveJobExistsError(document_id)
+        # Born in the waiting stage, so a delete can end it from its first moment
+        # (queued or not), never only after its first poll.
+        return create_job_in_session(
+            session, document_id=document_id, user_id=user_id, filename=filename,
+            metadata={JOB_KIND_KEY: SUPPLEMENT_WAIT_JOB_KIND},
+            current_stage=WAITING_FOR_SUPPLEMENTS_STAGE,
+        )
+    finally:
+        session.close()
+
+
+def record_supplement_outcomes_on_finished_job(*, job_id: UUID | str, supplements: list[dict]) -> None:
+    """Write an import's per-file supplement outcomes onto its already-finished job.
+
+    Used when the paper became busy or was deleted at the moment it was ready, so
+    no supplement stage started: the import's result still says what happened to
+    each chosen file. A job that no longer exists (the paper was deleted) is left alone.
+    """
+    session = SessionLocal()
+    try:
+        job = session.execute(
+            select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id)).with_for_update()
+        ).scalar_one_or_none()
+        if job is None:
+            session.rollback()
+            return
+        metadata = dict(job.metadata_json or {})
+        metadata["supplements"] = supplements
+        job.metadata_json = metadata
+        session.commit()
+    finally:
+        session.close()
+
+
+def is_waiting_supplement_stage(job: PdfJobResponse | None) -> bool:
+    """Whether ``job`` is a new paper's supplement stage that only waits for the provider."""
+    return (
+        job is not None
+        and job.status in _ACTIVE_STATUSES
+        and job.current_stage == WAITING_FOR_SUPPLEMENTS_STAGE
+        and (job.metadata or {}).get(JOB_KIND_KEY) == SUPPLEMENT_WAIT_JOB_KIND
+    )
+
+
+def end_supplement_wait_for_delete(*, document_id: UUID | str, user_id: int) -> bool:
+    """A delete of the paper ends its supplement stage while it only waits for the provider.
+
+    Finalizes the paper's active supplement-wait job as cancelled (the stage then
+    writes nothing more) and returns True. While the stage is adding files, or for
+    any other job, nothing changes and the delete keeps refusing.
+    """
+    session = SessionLocal()
+    try:
+        job = session.execute(
+            select(PdfProcessingJob).where(
+                PdfProcessingJob.document_id == _to_uuid(document_id),
+                PdfProcessingJob.user_id == user_id,
+                PdfProcessingJob.status.in_(tuple(_ACTIVE_STATUSES)),
+            ).with_for_update()
+        ).scalar_one_or_none()
+        if (
+            job is None
+            or (job.metadata_json or {}).get(JOB_KIND_KEY) != SUPPLEMENT_WAIT_JOB_KIND
+            or job.current_stage != WAITING_FOR_SUPPLEMENTS_STAGE
+        ):
+            session.rollback()
+            return False
+        job.cancel_requested = True
+        _finalize_cancelled(session, job, now=datetime.now(timezone.utc))
+        session.commit()
+        return True
+    finally:
+        session.close()
 
 
 def get_latest_job_for_document(
@@ -902,11 +1007,38 @@ def _polling_stopped(job: PdfProcessingJob, *, now: datetime) -> bool:
     """Whether a job in a polling stage has recorded no poll for too long."""
     if job.current_stage not in _POLLING_STAGES:
         return False
+    # Each polling stage records activity at least once per its own interval.
+    interval_seconds = (
+        get_document_supplement_listing_poll_seconds()
+        if job.current_stage == WAITING_FOR_SUPPLEMENTS_STAGE
+        else get_document_source_poll_interval_seconds()
+    )
     dead_after_seconds = get_document_source_dead_wait_polls() * (
-        get_document_source_poll_interval_seconds()
-        + get_document_source_request_timeout_seconds()
+        interval_seconds + get_document_source_request_timeout_seconds()
     )
     return (now - _last_activity_timestamp(job)).total_seconds() > dead_after_seconds
+
+
+def supplement_wait_active(session, document_id: UUID | str) -> bool:
+    """Whether a living import is waiting for the provider to convert this paper's supplements.
+
+    For the reading outline (interface agreed with P8a): a job of the paper in the
+    supplement-wait stage, queued (``pending``: behind the limit on simultaneous
+    stages, or before its first heartbeat) or polling (``running``), whose last
+    activity is recent by the same test as the dead-wait cancel. A job asked to
+    stop, or ended by any route, does not count. Uses the caller's session;
+    never cached.
+    """
+    job = session.execute(
+        select(PdfProcessingJob).where(
+            PdfProcessingJob.document_id == _to_uuid(document_id),
+            PdfProcessingJob.status.in_((PdfJobStatus.PENDING.value, PdfJobStatus.RUNNING.value)),
+            PdfProcessingJob.current_stage == WAITING_FOR_SUPPLEMENTS_STAGE,
+        )
+    ).scalar_one_or_none()
+    if job is None:
+        return False
+    return not _polling_stopped(job, now=datetime.now(timezone.utc))
 
 
 def _finalize_cancelled(session, job: PdfProcessingJob, *, now: datetime) -> None:

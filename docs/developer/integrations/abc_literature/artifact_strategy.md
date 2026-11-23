@@ -268,3 +268,29 @@ this file through this listing can go ahead", decided from the import's own deci
 - Stored check results are shared by every curator listing the file, so `FileAssessment` refuses
   a code outside `CHECK_REASONS` before it can be stored, and a stored one is refused again on
   read.
+
+### Importing a new paper with chosen supplements (KANBAN-1976 / ALL-1460, P7b)
+
+The identifier import takes the ticked supplements beside `identifiers`:
+`supplements: [{identifier, provider_file_id, md5, converted_md5}]`, where
+`identifier` is exactly as typed in `identifiers`.
+
+- A converted file (`converted_md5` set) can always be chosen.
+- An unconverted file (`converted_md5: null`) can be chosen only when the import
+  sends today's conversion request for the paper. The import decision records
+  ABC's answer in `conversion_answer` when it sent the request; without one, that
+  identifier ends with the per-identifier error `file_not_tickable`, and the
+  paper is not imported.
+- Whole-request refusals are 422s with a code: `supplement_identifier_unknown`,
+  `file_chosen_twice`, `paper_file_limit` (more than `DOCUMENT_MAX_FILES_PER_PAPER`
+  files, the main included).
+
+The main paper is imported exactly as before, and its import job completes as
+before. Once it is ready (`completed` and readable), the supplement stage starts
+under a job of its own kind (`supplement_wait.py`, see `import_lifecycle.md`),
+which never stands for the paper's state. There, ABC's per-file answers are classified by ABC's own
+fields only, and the converted files are added in one write through
+`add_files_to_paper` (P7c1). Neither ABC's group rule nor its size limits are
+copied: if ABC converts more groups or larger files (ABC PR 1413), nothing here
+changes.
+

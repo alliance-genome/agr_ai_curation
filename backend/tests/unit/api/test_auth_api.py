@@ -233,3 +233,30 @@ def test_build_logout_redirect_uri_falls_back_to_base_url():
     provider = SimpleNamespace(redirect_uri=None)
     req = _request(base_url="https://app.example.org/")
     assert auth_api._build_logout_redirect_uri(req, provider) == "https://app.example.org/"
+
+
+
+@pytest.mark.asyncio
+async def test_the_user_carries_the_validated_login_expiry_never_the_token(monkeypatch):
+    """Long imports keep a reserve before the login expires (KANBAN-1976 / ALL-1460, P7b)."""
+
+    monkeypatch.delenv("TESTING_API_KEY", raising=False)
+    monkeypatch.setattr(auth_api, "is_dev_mode", lambda: False)
+    monkeypatch.setattr(auth_api, "is_auth_configured", lambda: True)
+
+    class _Provider:
+        async def validate_token(self, _token):
+            return {"iss": "https://identity.example.org/pool", "exp": 1_900_000_000}
+
+        def extract_principal(self, _claims):
+            return SimpleNamespace(subject="user-123", email="u@example.org", display_name="User 123",
+                                   provider="cognito", groups=["devs"])
+
+    monkeypatch.setattr(auth_api, "_get_provider_or_503", lambda: _Provider())
+
+    result = await auth_api._get_user_from_cookie_impl(
+        _request(cookies={"auth_token": "jwt-made-up-token"}), SecurityScopes(),
+    )
+
+    assert result["exp"] == 1_900_000_000
+    assert "jwt-made-up-token" not in repr(dict(result))

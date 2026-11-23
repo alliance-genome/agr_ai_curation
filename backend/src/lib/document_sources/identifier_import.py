@@ -11,7 +11,7 @@ import logging
 import re
 import shutil
 import uuid
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from src.config import get_pdf_storage_path
 from src.lib.document_cleanup import cleanup_document_curation_dependencies
 from src.lib.document_sources.access import DocumentSourceRequestContext
+from src.lib.document_sources.supplement_plan import ChosenSupplement, SupplementPlan
 from src.lib.document_sources.import_selection import (
     artifact_is_bound_to_source,
     provider_metadata_artifacts_for_source,
@@ -33,6 +34,7 @@ from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
     DocumentSourceConfigError,
     DocumentSourceError,
+    DocumentSourceLoginExpired,
     DocumentSourceReferenceNotFound,
     DocumentSourceProvider,
     NormalizedSourceIdentifier,
@@ -51,7 +53,10 @@ from src.lib.document_sources.provenance import (
     sanitize_document_source_provenance,
 )
 from src.lib.document_sources.registry import get_configured_document_source_provider
-from src.lib.openai_agents.config import get_document_source_import_batch_limit
+from src.lib.openai_agents.config import (
+    get_document_max_files_per_paper,
+    get_document_source_import_batch_limit,
+)
 from src.lib.pdf_jobs import service as pdf_job_service
 from src.lib.pdf_jobs.upload_execution_service import (
     ProviderConversionExecutionRequest,
@@ -103,6 +108,24 @@ class IdentifierImportValidationError(ValueError):
     """Raised when the identifier import request itself is invalid."""
 
 
+class SupplementSelectionError(ValueError):
+    """The chosen supplements cannot be imported as asked; ``code`` says why (codes only).
+
+    ``supplement_identifier_unknown``, ``file_chosen_twice`` or ``paper_file_limit``.
+    """
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+# Per-identifier result for an unconverted supplement this import will not ask the
+# provider to convert. Curator-facing; proposed wording awaiting the owner's sign-off.
+FILE_NOT_TICKABLE_MESSAGE = (
+    "This file can no longer be chosen: ABC has not converted it and this import will not ask ABC to."
+)
+
+
 class ReferenceImportDecisionStatus(str):
     """Decision categories for reference-backed imports."""
 
@@ -138,6 +161,8 @@ class ReferenceImportDecision:
     candidates: tuple[ReferenceImportCandidate, ...] = ()
     message: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # The provider's answer when this decision sent the conversion request, else ``None``.
+    conversion_answer: SourceConversionResult | None = None
 
     @property
     def is_ready(self) -> bool:
@@ -535,6 +560,7 @@ async def decide_reference_import(
             )
             if ambiguous_count > 1:
                 return _reference_decision(
+                    conversion_answer=conversion_result,
                     provider=provider.provider_id,
                     identifier=identifier,
                     reference=reference,
@@ -550,6 +576,7 @@ async def decide_reference_import(
                     provider_metadata_artifacts=refreshed_metadata_artifacts,
                 )
                 return _reference_decision(
+                    conversion_answer=conversion_result,
                     provider=provider.provider_id,
                     identifier=identifier,
                     reference=reference,
@@ -561,6 +588,7 @@ async def decide_reference_import(
                 )
         if conversion_result.status is SourceConversionStatus.RUNNING:
             return _reference_decision(
+                conversion_answer=conversion_result,
                 provider=provider.provider_id,
                 identifier=identifier,
                 reference=reference,
@@ -575,6 +603,7 @@ async def decide_reference_import(
             )
         if conversion_result.status is SourceConversionStatus.FAILED:
             return _reference_decision(
+                conversion_answer=conversion_result,
                 provider=provider.provider_id,
                 identifier=identifier,
                 reference=reference,
@@ -588,6 +617,7 @@ async def decide_reference_import(
             )
         if conversion_result.status is SourceConversionStatus.NO_SOURCES:
             return _reference_decision(
+                conversion_answer=conversion_result,
                 provider=provider.provider_id,
                 identifier=identifier,
                 reference=reference,
@@ -600,6 +630,7 @@ async def decide_reference_import(
                 metadata=conversion_metadata,
             )
         return _reference_decision(
+            conversion_answer=conversion_result,
             provider=provider.provider_id,
             identifier=identifier,
             reference=reference,
@@ -673,13 +704,21 @@ class IdentifierImportService:
         identifiers: str,
         user: Mapping[str, Any],
         document_source_context: DocumentSourceRequestContext,
+        supplements: Sequence[Any] = (),
     ) -> IdentifierImportBatchResult:
-        """Import a batch of source identifiers and return per-item status."""
+        """Import a batch of source identifiers and return per-item status.
+
+        ``supplements`` are the curator's ticked supplements, each naming its
+        ``identifier`` exactly as in ``identifiers`` (interface I6). They are
+        checked before anything is imported (``SupplementSelectionError``).
+        """
 
         raw_identifiers = parse_source_identifier_batch(
             identifiers,
             batch_limit=self._import_batch_limit_provider(),
         )
+        chosen_by_identifier = _chosen_supplements_by_identifier(raw_identifiers, supplements)
+        login_expires_at = _login_expires_at(user, document_source_context.bearer_kind)
         db_user = await self._provision_user(self._principal_from_claims(dict(user)))
 
         curator_token = (document_source_context.curator_token or "").strip()
@@ -733,6 +772,8 @@ class IdentifierImportService:
                 user=user,
                 db_user=db_user,
                 document_source_context=document_source_context,
+                chosen=chosen_by_identifier.get(raw_identifier, ()),
+                login_expires_at=login_expires_at,
             )
             results.append(result)
         if normalization_provider is not None:
@@ -920,6 +961,8 @@ class IdentifierImportService:
         user: Mapping[str, Any],
         db_user: Any,
         document_source_context: DocumentSourceRequestContext,
+        chosen: tuple[Any, ...] = (),
+        login_expires_at: float | None = None,
     ) -> IdentifierImportItemResult:
         assert normalized.normalized is not None
         curator_token = (document_source_context.curator_token or "").strip()
@@ -943,6 +986,29 @@ class IdentifierImportService:
             )
             if not decision.can_import:
                 return self._error_result_from_decision(normalized, decision)
+            if (
+                any(item.converted_md5 is None for item in chosen)
+                and decision.conversion_answer is None
+            ):
+                # An unconverted file can be chosen only when this import asks
+                # the provider to convert the paper (it did not: for example the
+                # main text became converted after the listing).
+                return IdentifierImportItemResult(
+                    identifier=normalized.original,
+                    normalized_identifier=normalized.normalized,
+                    status="error",
+                    error_code="file_not_tickable",
+                    message=FILE_NOT_TICKABLE_MESSAGE,
+                )
+            plan = None
+            if chosen:
+                plan = SupplementPlan(
+                    chosen=tuple(chosen),
+                    request_context=document_source_context,
+                    login_expires_at=login_expires_at,
+                    owner_user_id=db_user.id,
+                    reference=_reference_poll_value(decision),
+                )
 
             source_provenance = _build_reference_source_provenance(decision)
             existing_source_document = await self._find_active_source_duplicate(
@@ -978,6 +1044,8 @@ class IdentifierImportService:
                 curator_token=curator_token,
                 bearer_kind=document_source_context.bearer_kind,
                 wait_for_conversion=decision.waits_for_conversion,
+                supplements=plan,
+                login_expires_at=login_expires_at,
             )
         except DocumentSourceAccessDenied as exc:
             logger.warning(
@@ -994,7 +1062,9 @@ class IdentifierImportService:
                 message="Access to the document-source PDF was denied.",
             )
         except (DocumentSourceConfigError, DocumentSourceError) as exc:
-            _report_source_failure(exc, "source_import_failed")
+            if not isinstance(exc, DocumentSourceLoginExpired):
+                # An expired curator login is the curator's own condition, not a server failure.
+                _report_source_failure(exc, "source_import_failed")
             logger.warning(
                 "Document-source identifier import failed for %s: %s",
                 normalized.normalized,
@@ -1031,6 +1101,8 @@ class IdentifierImportService:
         curator_token: str,
         bearer_kind: ProviderBearerKind,
         wait_for_conversion: bool = False,
+        supplements: Any = None,
+        login_expires_at: float | None = None,
     ) -> IdentifierImportItemResult:
         assert normalized.normalized is not None
         assert decision.selected is not None
@@ -1182,6 +1254,10 @@ class IdentifierImportService:
                             for artifact in decision.selected.provider_metadata_artifacts
                         ),
                         file_path=saved_path,
+                        supplements=supplements,
+                        login_expires_at=login_expires_at,
+                        conversion_requested=decision.conversion_answer is not None,
+                        last_conversion_answer=decision.conversion_answer,
                     ),
                 )
             elif wait_for_conversion:
@@ -1203,6 +1279,8 @@ class IdentifierImportService:
                             for artifact in decision.selected.provider_metadata_artifacts
                         ),
                         file_path=saved_path,
+                        supplements=supplements,
+                        login_expires_at=login_expires_at,
                     ),
                 )
             else:
@@ -1213,6 +1291,8 @@ class IdentifierImportService:
                         job_id=job.job_id,
                         user_id=user_sub,
                         file_path=saved_path,
+                        supplements=supplements,
+                        login_expires_at=login_expires_at,
                     ),
                 )
         except Exception:
@@ -1365,6 +1445,7 @@ def _reference_decision(
     candidates: tuple[ReferenceImportCandidate, ...] = (),
     message: str | None = None,
     metadata: dict[str, Any] | None = None,
+    conversion_answer: SourceConversionResult | None = None,
 ) -> ReferenceImportDecision:
     return ReferenceImportDecision(
         status=status,
@@ -1375,6 +1456,7 @@ def _reference_decision(
         candidates=candidates,
         message=message,
         metadata=metadata or {},
+        conversion_answer=conversion_answer,
     )
 
 
@@ -1509,6 +1591,42 @@ def _reference_conversion_metadata(result: SourceConversionResult) -> dict[str, 
     if result.per_file_progress:
         metadata["per_file_progress"] = list(result.per_file_progress)
     return metadata
+
+
+def _chosen_supplements_by_identifier(
+    raw_identifiers: Sequence[str], supplements: Sequence[Any],
+) -> dict[str, tuple[Any, ...]]:
+    """Group the ticked supplements by identifier; refuse a selection that cannot be imported."""
+
+    known = set(raw_identifiers)
+    grouped: dict[str, list[ChosenSupplement]] = {}
+    for choice in supplements:
+        if choice.identifier not in known:
+            raise SupplementSelectionError("supplement_identifier_unknown")
+        grouped.setdefault(choice.identifier, []).append(
+            ChosenSupplement(
+                provider_file_id=choice.provider_file_id,
+                md5=choice.md5,
+                converted_md5=choice.converted_md5,
+            )
+        )
+    file_limit = get_document_max_files_per_paper()
+    for chosen in grouped.values():
+        ids = [item.provider_file_id for item in chosen]
+        if len(set(ids)) != len(ids):
+            raise SupplementSelectionError("file_chosen_twice")
+        if len(chosen) + 1 > file_limit:  # the main paper counts
+            raise SupplementSelectionError("paper_file_limit")
+    return {identifier: tuple(chosen) for identifier, chosen in grouped.items()}
+
+
+def _login_expires_at(user: Mapping[str, Any], bearer_kind: ProviderBearerKind) -> float | None:
+    """The curator's login expiry from the validated claims (``exp``, optional in the claims)."""
+
+    if bearer_kind is not ProviderBearerKind.CURATOR:
+        return None
+    expires = user.get("exp")
+    return float(expires) if expires is not None else None
 
 
 def _reference_poll_value(decision: ReferenceImportDecision) -> str:

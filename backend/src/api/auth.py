@@ -298,6 +298,9 @@ async def _get_user_from_cookie_impl(
             "email": principal.email,
             "name": principal.display_name or principal.email,
             "provider": principal.provider,
+            # When the validated login expires (epoch seconds): long imports
+            # keep a reserve before it. The token itself is never copied here.
+            "exp": claims.get("exp"),
         }
         payload = _with_group_claim_aliases(payload, principal.groups)
         return _build_mock_user(payload)

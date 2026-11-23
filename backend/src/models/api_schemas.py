@@ -108,13 +108,35 @@ class DocumentSourceProvenance(BaseModel):
     viewer_mode: Optional[str] = None
 
 
-class DocumentSourceIdentifierImportRequest(BaseModel):
-    """Request to import papers from the configured document source."""
+class DocumentSourceIdentifierResolveRequest(BaseModel):
+    """Request to resolve identifiers against the configured document source."""
 
     identifiers: str = Field(
         ...,
         min_length=1,
         description="Comma- or newline-separated document-source identifiers",
+    )
+
+
+class DocumentSourceSupplementChoice(BaseModel):
+    """One supplement the curator ticked for one identifier (interface I6)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    identifier: str = Field(..., min_length=1, description="The identifier exactly as in `identifiers`")
+    provider_file_id: str = Field(..., min_length=1, description="The listing entry's provider file id")
+    md5: Optional[str] = Field(None, description="The listing entry's md5")
+    converted_md5: Optional[str] = Field(
+        None, description="The listing entry's converted_md5; null for an unconverted file",
+    )
+
+
+class DocumentSourceIdentifierImportRequest(DocumentSourceIdentifierResolveRequest):
+    """Request to import papers from the configured document source."""
+
+    supplements: List[DocumentSourceSupplementChoice] = Field(
+        default_factory=list,
+        description="Supplements to add to each imported paper once its main paper is ready",
     )
 
 

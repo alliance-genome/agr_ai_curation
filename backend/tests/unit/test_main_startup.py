@@ -109,6 +109,8 @@ async def test_startup_stops_on_invalid_quick_check_setting(monkeypatch, key, va
     # An .env that still pins the old 2 s poll fails the deploy (KANBAN-1976 / ALL-1460, P7w).
     ("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", "2"),
     ("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", "1"),
+    # The supplement wait's listing read every 20 s: 540 reads in 3 hours (P7b, card 31).
+    ("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", "20"),
 ])
 async def test_startup_stops_on_unsafe_document_source_wait_setting(monkeypatch, key, value):
     main = _main_module()

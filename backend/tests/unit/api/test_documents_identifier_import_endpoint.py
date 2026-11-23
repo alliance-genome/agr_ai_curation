@@ -231,3 +231,63 @@ async def test_import_documents_by_source_identifiers_returns_400_for_invalid_ba
         )
 
     assert exc.value.status_code == 400
+
+
+# --- KANBAN-1976 / ALL-1460, P7b: chosen supplements
+
+
+@pytest.mark.asyncio
+async def test_import_forwards_the_chosen_supplements(monkeypatch):
+    from src.models.api_schemas import DocumentSourceSupplementChoice
+
+    captured = {}
+
+    class _FakeIdentifierImportService:
+        async def import_identifiers(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(to_dict=lambda: {"results": [], "requested_count": 1,
+                                                     "imported_count": 0, "duplicate_count": 0,
+                                                     "error_count": 0})
+
+    monkeypatch.setattr(documents, "identifier_import_service", _FakeIdentifierImportService())
+    monkeypatch.setattr(documents, "external_document_source_import_enabled", lambda: True)
+    choice = DocumentSourceSupplementChoice(
+        identifier="123", provider_file_id="30", md5="md5-30", converted_md5=None,
+    )
+
+    await documents.import_documents_by_source_identifiers(
+        payload=DocumentSourceIdentifierImportRequest(identifiers="123", supplements=[choice]),
+        background_tasks=BackgroundTasks(), request=_request(), user={"sub": "user-1"},
+    )
+
+    assert captured["supplements"] == [choice]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["supplement_identifier_unknown", "file_chosen_twice", "paper_file_limit"])
+async def test_a_selection_that_cannot_be_imported_is_a_422_with_its_code(monkeypatch, code):
+    from src.lib.document_sources.identifier_import import SupplementSelectionError
+
+    class _FakeIdentifierImportService:
+        async def import_identifiers(self, **_kwargs):
+            raise SupplementSelectionError(code)
+
+    monkeypatch.setattr(documents, "identifier_import_service", _FakeIdentifierImportService())
+    monkeypatch.setattr(documents, "external_document_source_import_enabled", lambda: True)
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.import_documents_by_source_identifiers(
+            payload=DocumentSourceIdentifierImportRequest(identifiers="123"),
+            background_tasks=BackgroundTasks(), request=_request(), user={"sub": "user-1"},
+        )
+
+    assert (exc.value.status_code, exc.value.detail) == (422, {"code": code})
+
+
+def test_a_supplement_choice_rejects_unknown_fields():
+    from pydantic import ValidationError
+
+    from src.models.api_schemas import DocumentSourceSupplementChoice
+
+    with pytest.raises(ValidationError):
+        DocumentSourceSupplementChoice(identifier="123", provider_file_id="30", file_id="x")

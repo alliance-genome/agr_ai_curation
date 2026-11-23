@@ -41,6 +41,7 @@ from ..lib.packages.document_source_provider_models import DevelopmentReaderUnav
 from ..lib.document_sources.identifier_import import (
     IdentifierImportService,
     IdentifierImportValidationError,
+    SupplementSelectionError,
 )
 from ..lib.document_sources.provenance import build_document_source_provenance
 from ..lib.document_sources.registry import get_document_source_provider_metadata
@@ -73,6 +74,7 @@ from ..models.api_schemas import (
     DocumentListResponse,
     DocumentResponse,
     DocumentSourceIdentifierImportRequest,
+    DocumentSourceIdentifierResolveRequest,
     DocumentSourceIdentifierImportResponse,
     DocumentSourceProviderConfiguration,
     DocumentSourceProvenance,
@@ -1507,6 +1509,20 @@ async def delete_document_endpoint(
                         reconcile_stale=True,
                     )
                 )
+                # A new paper's supplement stage that only waits for the provider
+                # ends with the delete (P7b); one that is writing files keeps it refused.
+                if pdf_job_service.is_waiting_supplement_stage(latest_job) and await asyncio.to_thread(
+                    lambda: pdf_job_service.end_supplement_wait_for_delete(
+                        document_id=document_id, user_id=pg_doc.user_id,
+                    )
+                ):
+                    latest_job = await asyncio.to_thread(
+                        lambda: pdf_job_service.get_latest_job_for_document(
+                            document_id=document_id,
+                            user_id=pg_doc.user_id,
+                            reconcile_stale=True,
+                        )
+                    )
                 pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
                 active_job_status = latest_job.status if latest_job else None
                 pipeline_is_active = _is_pipeline_status_active(pipeline_status)
@@ -1814,8 +1830,11 @@ async def import_documents_by_source_identifiers(
             identifiers=payload.identifiers,
             user=user,
             document_source_context=document_source_context,
+            supplements=payload.supplements,
         )
         return result.to_dict()
+    except SupplementSelectionError as selection_error:
+        raise HTTPException(status_code=422, detail={"code": selection_error.code}) from None
     except IdentifierImportValidationError as validation_error:
         raise_sanitized_http_exception(
             logger,
@@ -1840,7 +1859,7 @@ async def import_documents_by_source_identifiers(
     response_model=DocumentSourceIdentifierImportResponse,
 )
 async def resolve_documents_by_source_identifiers(
-    payload: DocumentSourceIdentifierImportRequest,
+    payload: DocumentSourceIdentifierResolveRequest,
     request: Request,
     user: dict[str, Any] = get_auth_dependency(),
 ):

@@ -16,6 +16,7 @@ from src.lib.document_sources.models import (
     DocumentSourceUnavailable,
     DocumentSourceReferenceNotFound,
     DocumentSourceHealth,
+    DocumentSourceLoginExpired,
     DocumentSourceProvider,
     NormalizedSourceIdentifier,
     SourceAccessPolicy,
@@ -536,6 +537,7 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
                 request_bearer_token=request_bearer_token,
             )
         except ABCLiteratureClientError as exc:
+            _raise_if_login_refused(exc, "ABC Literature artifact listing failed")
             raise DocumentSourceError("ABC Literature artifact listing failed") from exc
         files = _extract_referencefiles(payload)
         # ``show_all`` is one flat row per file. A converted text row names the
@@ -612,6 +614,7 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
                 request_bearer_token=request_bearer_token,
             )
         except ABCLiteratureClientError as exc:
+            _raise_if_login_refused(exc, "ABC Literature checksum lookup failed")
             raise DocumentSourceError("ABC Literature checksum lookup failed") from exc
         artifacts: list[SourceArtifact] = []
         references: dict[str, SourceReference] = {}
@@ -674,6 +677,7 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
                 max_bytes=max_bytes,
             )
         except ABCLiteratureHTTPError as exc:
+            _raise_if_login_refused(exc, "ABC Literature artifact download failed")
             if exc.status_code == 403:
                 raise DocumentSourceAccessDenied(
                     "Document-source artifact access was denied"
@@ -712,6 +716,7 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
                 request_bearer_token=request_bearer_token,
             )
         except ABCLiteratureClientError as exc:
+            _raise_if_login_refused(exc, "ABC Literature conversion request failed")
             raise DocumentSourceError("ABC Literature conversion request failed") from exc
         return _map_conversion_result(payload, provider=self.provider_id)
 
@@ -986,6 +991,16 @@ def _is_source_linked_converted_payload(payload: Mapping[str, Any]) -> bool:
 
     file_class = (_first_string(payload, "file_class") or "").lower()
     return file_class in _SOURCE_LINKED_CONVERTED_FILE_CLASSES
+
+
+def _raise_if_login_refused(exc: ABCLiteratureClientError, message: str) -> None:
+    """ABC's 401: the curator's login was refused, in practice because it expired.
+
+    The error keeps the same text this call failed with before (``message``).
+    """
+
+    if isinstance(exc, ABCLiteratureHTTPError) and exc.status_code == 401:
+        raise DocumentSourceLoginExpired(message) from exc
 
 
 def _source_referencefile_id(payload: Mapping[str, Any]) -> str | None:
