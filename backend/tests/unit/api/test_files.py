@@ -112,12 +112,12 @@ def client(temp_storage_dir):
         "FILE_OUTPUT_STORAGE_PATH": str(temp_storage_dir),
         "OPENAI_API_KEY": "test-key",
         "TESTING_API_KEY": "test-key",
-        "DEV_MODE": "true",
     }
     previous_env = {key: os.environ.get(key) for key in env_overrides}
     os.environ.update(env_overrides)
 
     from main import create_app
+    from src.api.auth import _build_mock_user, _get_user_from_cookie_impl
 
     app = create_app()
 
@@ -139,11 +139,23 @@ def client(temp_storage_dir):
             db.close()
 
     app.dependency_overrides[get_db] = _override_get_db
+    # Every request is the curator dev-user-123. An explicit override, not DEV_MODE:
+    # dev mode is refused on EC2 hosts (CI runners included) unless a cached EC2 check
+    # says otherwise, so relying on it made this module pass or fail with test order.
+    app.dependency_overrides[_get_user_from_cookie_impl] = lambda: _build_mock_user({
+        "sub": "dev-user-123",
+        "uid": "dev-user-123",
+        "email": "dev@localhost",
+        "name": "Dev User",
+        "groups": ["developers"],
+        "cognito:groups": ["developers"],
+    })
 
     try:
         yield TestClient(app)
     finally:
         app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(_get_user_from_cookie_impl, None)
         Base.metadata.drop_all(bind=engine, tables=[FileOutput.__table__])
         for key, value in previous_env.items():
             if value is None:
