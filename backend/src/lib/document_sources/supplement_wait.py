@@ -27,7 +27,7 @@ from uuid import UUID
 
 from src.lib.document_sources.file_listing import FileListing
 from src.lib.document_sources.file_reasons import FileReason, SupplementState
-from src.lib.document_sources.supplement_plan import ChosenSupplement, SupplementPlan
+from src.lib.document_sources.supplement_plan import SupplementPlan
 from src.lib.document_sources.models import (
     DocumentSourceError,
     DocumentSourceProvider,

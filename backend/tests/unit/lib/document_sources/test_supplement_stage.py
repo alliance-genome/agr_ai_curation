@@ -24,6 +24,7 @@ from src.lib.document_sources.models import (
     ProviderBearerKind,
 )
 from src.lib.document_sources.supplement_add import AddResult, FileOutcome
+from src.lib.document_sources.supplement_plan import ChosenSupplement, SupplementPlan
 from tests.unit.lib.document_sources.test_abc_literature_provider import (
     FakeABCLiteratureClient,
     _abc_show_all_main_pdf,
@@ -149,7 +150,7 @@ def _context():
 
 
 def _chosen(provider_file_id, *, converted_md5=None):
-    return stage.ChosenSupplement(
+    return ChosenSupplement(
         provider_file_id=provider_file_id, md5=f"md5-{provider_file_id}", converted_md5=converted_md5,
     )
 
@@ -167,7 +168,7 @@ async def _run(*, chosen, abc_answers, paper, last_answer_payload, clock, add=No
     add = add or _Add()
     await stage.run_supplement_stage(
         job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
-        plan=stage.SupplementPlan(
+        plan=SupplementPlan(
             chosen=tuple(chosen), request_context=_context(),
             login_expires_at=clock() + login_expires_in, owner_user_id=7, reference="AGRKB:101",
         ),
@@ -228,7 +229,7 @@ async def test_a_file_abc_converts_during_the_wait_joins_and_abc_is_not_asked_ag
     add, outcomes = _Add(), _Outcomes()
     await stage.run_supplement_stage(
         job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
-        plan=stage.SupplementPlan(chosen=(_chosen("30"),), request_context=_context(),
+        plan=SupplementPlan(chosen=(_chosen("30"),), request_context=_context(),
                                   login_expires_at=clock() + 86400, owner_user_id=7, reference="AGRKB:101"),
         conversion_requested=True, last_answer=last_answer, main_ready_at=clock(),
         provider=provider, weaviate_client=object(), outcomes=outcomes,
@@ -282,7 +283,7 @@ async def test_a_failed_pdf_job_adds_the_converted_files_and_reports_the_failed_
     add, outcomes = _Add(), _Outcomes()
     await stage.run_supplement_stage(
         job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
-        plan=stage.SupplementPlan(chosen=(_chosen("30"), _chosen("50")), request_context=_context(),
+        plan=SupplementPlan(chosen=(_chosen("30"), _chosen("50")), request_context=_context(),
                                   login_expires_at=clock() + 86400, owner_user_id=7, reference="AGRKB:101"),
         conversion_requested=True, last_answer=last_answer, main_ready_at=clock(),
         provider=provider, weaviate_client=object(), outcomes=outcomes,
@@ -354,7 +355,7 @@ async def test_the_first_abc_error_ends_the_wait_without_retrying(job, error):
 
     await stage.run_supplement_stage(
         job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
-        plan=stage.SupplementPlan(chosen=(_chosen("20", converted_md5="md5-21"), _chosen("30")),
+        plan=SupplementPlan(chosen=(_chosen("20", converted_md5="md5-21"), _chosen("30")),
                                   request_context=_context(), login_expires_at=clock() + 86400,
                                   owner_user_id=7, reference="AGRKB:101"),
         conversion_requested=True, last_answer=_map_conversion_result(running, provider="abc_literature"),
@@ -384,7 +385,7 @@ async def test_a_cancel_during_the_wait_ends_the_job_cancelled_and_adds_nothing(
     add, outcomes = _Add(), _Outcomes()
     await stage.run_supplement_stage(
         job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
-        plan=stage.SupplementPlan(chosen=(_chosen("30"),), request_context=_context(),
+        plan=SupplementPlan(chosen=(_chosen("30"),), request_context=_context(),
                                   login_expires_at=clock() + 86400, owner_user_id=7, reference="AGRKB:101"),
         conversion_requested=True, last_answer=last_answer, main_ready_at=clock(),
         provider=provider, weaviate_client=object(), outcomes=outcomes,
@@ -416,7 +417,7 @@ async def test_a_wait_finalized_elsewhere_writes_nothing_more(job):
     add, outcomes = _Add(), _Outcomes()
     await stage.run_supplement_stage(
         job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
-        plan=stage.SupplementPlan(chosen=(_chosen("30"),), request_context=_context(),
+        plan=SupplementPlan(chosen=(_chosen("30"),), request_context=_context(),
                                   login_expires_at=clock() + 86400, owner_user_id=7, reference="AGRKB:101"),
         conversion_requested=True, last_answer=last_answer, main_ready_at=clock(),
         provider=provider, weaviate_client=object(), outcomes=outcomes,
