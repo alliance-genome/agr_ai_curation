@@ -746,3 +746,43 @@ async def test_a_paper_without_a_main_file_is_listed_with_its_paper_provenance_o
     provenance = document["source_provenance"]
     assert provenance["reference_curie"] == "AGRKB:101"
     assert "viewer_mode" not in provenance and "source_file_id" not in provenance
+
+
+@pytest.mark.asyncio
+async def test_get_document_waits_for_its_database_session_off_the_event_loop():
+    """A slow pool (the session's first query takes a second) must not stall other work on the loop."""
+
+    import asyncio
+    import time
+
+    from src.lib.weaviate_client import documents as documents_module
+
+    class _SlowSession:
+        def execute(self, *_args, **_kwargs):
+            time.sleep(1.0)  # waiting for a pooled connection
+            raise ValueError("made-up: user not found")
+
+        def close(self):
+            pass
+
+    def slow_get_db():
+        yield _SlowSession()
+
+    gaps = []
+
+    async def ticker(stop):
+        last = time.monotonic()
+        while not stop.is_set():
+            await asyncio.sleep(0.05)
+            now = time.monotonic()
+            gaps.append(now - last)
+            last = now
+
+    stop = asyncio.Event()
+    with patch.object(documents_module, "get_db", slow_get_db):
+        tick = asyncio.create_task(ticker(stop))
+        with pytest.raises(ValueError, match="made-up"):
+            await documents_module.get_document("made-up-subject", "00000000-0000-4000-8000-000000000001")
+        stop.set()
+        await tick
+    assert gaps and max(gaps) < 0.5

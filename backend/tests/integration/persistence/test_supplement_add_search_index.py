@@ -999,3 +999,24 @@ async def test_a_delete_that_finished_says_so_even_if_its_lock_connection_was_lo
         ).scalar_one() is True
         connection.execute(sql_text("SELECT pg_advisory_unlock(:key)"), {"key": paper_lock.paper_lock_key(paper)})
         connection.commit()
+
+
+@pytest.mark.asyncio
+async def test_a_pool_timeout_while_reading_the_papers_index_object_is_the_delete_503(owner_id, index, monkeypatch):
+    from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+
+    paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    _wire_delete(monkeypatch, owner_id)
+
+    async def no_connection(_sub, _document_id):
+        raise PoolTimeoutError("made-up: QueuePool limit reached")
+
+    monkeypatch.setattr(documents_api, "get_document", no_connection)
+    with pytest.raises(HTTPException) as raised:
+        await _delete(paper)
+    assert raised.value.status_code == 503
+    assert raised.value.detail == "The server is busy right now; try deleting the paper again in a moment."
+    assert [row.role for row in _rows(paper)] == ["main"]
+
+    _wire_delete(monkeypatch, owner_id)  # the lock was released: the next delete goes ahead
+    assert (await _delete(paper)).success is True

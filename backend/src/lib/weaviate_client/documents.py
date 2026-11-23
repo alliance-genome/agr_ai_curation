@@ -436,25 +436,29 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
     from ...models.sql.user import User
     from sqlalchemy import select
 
-    # T030: Get database user for ownership metadata (FR-014, FR-016)
-    db_gen = get_db()
-    db = next(db_gen)
-    try:
-        db_user = db.execute(select(User).where(User.auth_sub == user_id)).scalar_one_or_none()
-        if not db_user:
-            raise ValueError(f"User with auth_sub {user_id} not found")
-        if db.scalar(select(PdfDocumentModel.document_kind).where(
-            PdfDocumentModel.id == UUID(document_id),
-            PdfDocumentModel.user_id == db_user.id,
-        )) not in (None, DOCUMENT_KIND_LIBRARY):
-            # Chat selection/resume and detailed library reads must not expose
-            # runtime benchmark copies. Normal benchmark tools use the direct
-            # owned chunk/context helpers, not this library detail operation.
-            raise ValueError("Document is not available in the curator library")
-        # user_id parameter already contains auth_sub, use it for tenant naming
-        tenant_name = get_tenant_name(user_id)
-    finally:
-        db.close()
+    # T030: Get database user for ownership metadata (FR-014, FR-016). In a worker
+    # thread, so waiting for a pooled connection never blocks the event loop.
+    def check_owner_and_kind() -> str:
+        db_gen = get_db()
+        db = next(db_gen)
+        try:
+            db_user = db.execute(select(User).where(User.auth_sub == user_id)).scalar_one_or_none()
+            if not db_user:
+                raise ValueError(f"User with auth_sub {user_id} not found")
+            if db.scalar(select(PdfDocumentModel.document_kind).where(
+                PdfDocumentModel.id == UUID(document_id),
+                PdfDocumentModel.user_id == db_user.id,
+            )) not in (None, DOCUMENT_KIND_LIBRARY):
+                # Chat selection/resume and detailed library reads must not expose
+                # runtime benchmark copies. Normal benchmark tools use the direct
+                # owned chunk/context helpers, not this library detail operation.
+                raise ValueError("Document is not available in the curator library")
+            # user_id parameter already contains auth_sub, use it for tenant naming
+            return get_tenant_name(user_id)
+        finally:
+            db.close()
+
+    tenant_name = await asyncio.to_thread(check_owner_and_kind)
 
     connection = get_connection()
     if not connection:
