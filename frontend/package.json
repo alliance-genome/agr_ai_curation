@@ -34,8 +34,7 @@
     "test:stable": "vitest run --pool=forks --no-file-parallelism --maxWorkers=1 --sequence.hooks=list --sequence.setupFiles=list",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src --ext .ts,.tsx",
-    "type-check": "tsc --noEmit",
-    "type-check:changed": "node scripts/typecheck-changed.mjs"
+    "type-check": "tsc --noEmit"
   },
   "overrides": {
     "react-is": "^18.3.1"
