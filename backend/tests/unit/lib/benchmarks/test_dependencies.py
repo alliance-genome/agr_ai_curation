@@ -103,26 +103,64 @@ def test_historical_plans_do_not_get_invented_dependencies(monkeypatch):
     assert "dependencies" not in _resolved_cell("agent", "extractor", {}).model_dump(mode="json")
 
 
-def test_dependency_changes_change_frozen_cell_and_plan_identity(configured):
-    from src.lib.benchmarks.models import ResolvedBenchmarkPlan
+def _resolve_with_dependencies(snapshot):
     from src.lib.benchmarks.suites import resolve_suite, validate_suite
     from tests.unit.lib.benchmarks.test_suites import _catalog, _payload
 
     catalog = _catalog()
     suite = validate_suite(_payload())
-    def resolve(snapshot):
-        targets = tuple(target.model_copy(update={"dependencies": snapshot}) for target in catalog.targets)
-        return resolve_suite(suite, catalog.model_copy(update={"targets": targets}),
-                             max_cases=100, max_configurations=100, max_repetitions=100, max_cells=10000)
-    first = resolve(configured.snapshot)
+    targets = tuple(target.model_copy(update={"dependencies": snapshot}) for target in catalog.targets)
+    return resolve_suite(suite, catalog.model_copy(update={"targets": targets}),
+                         max_cases=100, max_configurations=100, max_repetitions=100, max_cells=10000)
+
+
+def test_dependency_changes_change_frozen_cell_and_plan_identity(configured):
+    from src.lib.benchmarks.models import ResolvedBenchmarkPlan
+
+    first = _resolve_with_dependencies(configured.snapshot)
     changed = configured.snapshot.model_copy(update={"runtime_catalog_digest": "sha256:" + "e" * 64})
-    second = resolve(changed)
+    second = _resolve_with_dependencies(changed)
     assert first.suite_digest == second.suite_digest
     assert first.catalog_digest != second.catalog_digest
     assert first.cells[0].cell_id != second.cells[0].cell_id
     assert first.plan_digest != second.plan_digest
     assert first.cells[0].dependencies == configured.snapshot
     assert ResolvedBenchmarkPlan.model_validate_json(first.model_dump_json()) == first
+
+
+@pytest.mark.parametrize("setting,initial,changed", [
+    ("extraction_fanout_min_items", 0, 10),
+    ("extraction_fanout_items_per_writer", 5, 3),
+    ("extraction_fanout_max_writers", 8, 4),
+    ("extraction_fanout_max_plan_reminders", 1, 0),
+    ("extraction_fanout_max_finalize_corrections", 1, 2),
+    ("extraction_fanout_writer_reruns", 1, 2),
+    ("extraction_fanout_writer_store_responses", False, True),
+])
+@pytest.mark.asyncio
+async def test_fanout_drift_blocks_dispatch_and_changes_prepared_identity(monkeypatch, setting, initial, changed):
+    monkeypatch.setattr(deps, "runtime_catalog_digest", lambda: "sha256:" + "a" * 64)
+    dispatch = Mock()
+    monkeypatch.setattr(runtime, "execute_flow", dispatch)
+    curator = NS(db_user_id=7, active_groups=())
+    target = NS(system_agent_snapshots={}, source_execution_receipts={})
+
+    monkeypatch.setenv(setting.upper(), str(initial).lower())
+    original = deps.capture_dependencies(Mock(), curator, target)
+    first = _resolve_with_dependencies(original)
+    deps.require_current_dependencies(original)
+
+    monkeypatch.setenv(setting.upper(), str(changed).lower())
+    with pytest.raises(ValueError, match="dependencies changed"):
+        await runtime.execute_resolved_flow_cell(first.cells[0], {}, "run")
+    dispatch.assert_not_called()
+
+    updated = deps.capture_dependencies(Mock(), curator, target)
+    second = _resolve_with_dependencies(updated)
+    assert original.execution_settings[setting] == initial
+    assert updated.execution_settings[setting] == changed
+    assert first.cells[0].cell_id != second.cells[0].cell_id
+    assert first.plan_digest != second.plan_digest
 
 
 def test_custom_source_domain_is_resolved_from_pinned_revision(configured, monkeypatch):

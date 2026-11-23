@@ -43,6 +43,9 @@ def execution_settings() -> dict[str, Any]:
 
     names = (
         "benchmark_environment_id", "benchmark_worker_concurrency", "benchmark_cell_timeout_seconds",
+        "extraction_fanout_min_items", "extraction_fanout_items_per_writer", "extraction_fanout_max_writers",
+        "extraction_fanout_max_plan_reminders", "extraction_fanout_max_finalize_corrections",
+        "extraction_fanout_writer_reruns", "extraction_fanout_writer_store_responses",
         "max_turns", "max_parallel_validators", "validator_batch_max_size", "validator_max_tool_calls",
         "structured_finalization_max_attempts", "structured_finalization_hard_max_attempts",
         "structured_finalization_retry_max_turns", "flow_supervisor_parallel_tool_calls_enabled",
