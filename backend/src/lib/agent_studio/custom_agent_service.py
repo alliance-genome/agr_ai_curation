@@ -616,7 +616,9 @@ def _validate_model_id(model_id: str) -> str:
         raise ValueError(f"Model is not selectable in Agent Workshop: {normalized}")
     # A save stores the catalog entry actually used: a replaced id is written as the
     # entry replacing it (ALL-1708).
-    return model_def.model_id
+    from src.lib.config.models_loader import resolve_model_id
+
+    return resolve_model_id(normalized)
 
 
 def _agent_validation_sources(

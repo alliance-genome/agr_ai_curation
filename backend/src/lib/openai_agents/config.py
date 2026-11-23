@@ -1517,7 +1517,10 @@ def get_agent_config(agent_id: str) -> AgentConfig:
     # global defaults lazy so stale unused defaults do not break explicit agent
     # overrides or registry-owned defaults.
     model_default = defaults["model"] if "model" in defaults else get_default_model()
-    model = _get_env(f"{prefix}MODEL", model_default)
+    from src.lib.config.models_loader import resolve_model_id
+
+    # The configuration of what runs: a replaced id is its current entry (ALL-1708).
+    model = resolve_model_id(_get_env(f"{prefix}MODEL", model_default))
 
     # Temperature can be None for models that don't support it
     temperature_str = os.getenv(f"{prefix}TEMPERATURE")

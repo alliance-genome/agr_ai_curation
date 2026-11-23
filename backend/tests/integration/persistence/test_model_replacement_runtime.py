@@ -195,3 +195,26 @@ def test_rollback_catalog_brings_rows_saved_on_the_new_id_back(db, tmp_path, mon
             families["gpt-6.2-sol"]]
     finally:
         models_loader.reset_cache()
+
+
+@pytest.mark.parametrize("replaced,current", [(r, m.model_id) for r, m in _families()])
+def test_every_record_of_an_agent_built_from_a_replaced_id_names_the_model_called(
+        db, monkeypatch, replaced, current):
+    """The Langfuse agent-config event (TraceReview's models_used), the built agent and the
+    validation-review contract all name the model requested (the prompt-cache key is
+    covered in tests/unit/lib/config/test_model_replacements.py)."""
+    from src.lib.validation_review.extractor_phase import contract
+
+    events = []
+    monkeypatch.setattr(langfuse_client, "log_agent_config", lambda **kwargs: events.append(kwargs))
+    agent = make_agent(db, "Finder")
+    save_on_retired(db, agent, model=replaced)
+    agent.model_id = replaced
+    db.flush()
+
+    built = catalog_service.get_agent_by_id(agent.agent_key, **_context())
+
+    assert [event["model"] for event in events] == [current]
+    assert built.model == current
+    assert contract(built, max_turns=1)["model"] == current
+    assert sent_model(built) == [current]
