@@ -953,6 +953,7 @@ export function useChatController({
           flow_run_id: typeof parsed.details.flow_run_id === 'string' ? parsed.details.flow_run_id : undefined,
           document_id: typeof parsed.details.document_id === 'string' ? parsed.details.document_id : undefined,
           set_aside: readOutputSetAside(parsed.details.set_aside) ?? undefined,
+          has_set_aside_details: parsed.details.has_set_aside_details === true,
         }
         debug.log('[FILE_READY] File ready for download:', fileData.filename)
 

@@ -38,6 +38,7 @@ export interface FileInfo {
   source_envelope_ids?: string[]
   flow_run_id?: string
   document_id?: string
+  has_set_aside_details?: boolean
   /** Records the run's review set aside in this file's sources (ALL-1561). */
   set_aside?: OutputSetAsideCounts | null
 }
@@ -269,7 +270,7 @@ function FileDownloadCard({
               counts={file.set_aside}
               noun="file"
               outputName={file.filename}
-              outputId={file.file_id}
+              outputId={file.has_set_aside_details ? file.file_id : null}
               flowRunId={file.flow_run_id ?? null}
               documentId={file.document_id ?? null}
             />

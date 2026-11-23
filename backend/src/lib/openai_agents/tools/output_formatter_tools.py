@@ -2233,6 +2233,7 @@ def build_output_formatter_tools(
                     "export_accounting",
                     "export_details",
                     "set_aside",
+                    "has_set_aside_details",
                 }
             }
             return _tool_json(

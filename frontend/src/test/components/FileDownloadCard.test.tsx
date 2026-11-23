@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import FileDownloadCard, { FileInfo } from '../../components/Chat/FileDownloadCard'
+import { buildRestorableChatMessages } from '../../services/chatHistoryApi'
 
 // Mock fetch globally
 const mockFetch = vi.fn()
@@ -283,7 +284,8 @@ describe('FileDownloadCard - records set aside by the review (ALL-1561)', () => 
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
 
     render(<FileDownloadCard file={createTestFileInfo({
-      flow_run_id: 'run-1', document_id: 'doc-1', set_aside: { included: 1, left_out: 2 },
+      flow_run_id: 'run-1', document_id: 'doc-1', has_set_aside_details: true,
+      set_aside: { included: 1, left_out: 2 },
     })} />)
 
     expect(screen.getByText('2 records set aside by review, not in this file')).toBeInTheDocument()
@@ -299,13 +301,23 @@ describe('FileDownloadCard - records set aside by the review (ALL-1561)', () => 
     )
   })
 
-  it('says when set-aside records are in the file', () => {
-    render(<FileDownloadCard file={createTestFileInfo({
-      flow_run_id: 'run-1', document_id: 'doc-1', set_aside: { included: 1, left_out: 0 },
-    })} />)
+  it.each([
+    { receipt: {}, canView: false },
+    { receipt: { has_set_aside_details: true }, canView: true },
+  ])('restores counts and downloads with View available only for a saved membership ($canView)', ({ receipt, canView }) => {
+    const [message] = buildRestorableChatMessages([{
+      message_id: 'file', session_id: 'session', chat_kind: 'assistant_chat', role: 'assistant',
+      message_type: 'file_download', content: 'Generated file', created_at: '2026-11-19T00:00:00Z',
+      payload_json: { type: 'FILE_READY', details: createTestFileInfo({
+        flow_run_id: 'run-1', document_id: 'doc-1', set_aside: { included: 1, left_out: 0 },
+        ...receipt,
+      }) },
+    }])
+    render(<FileDownloadCard file={message.fileData!} />)
 
     expect(screen.getByText('1 record set aside by review, in this file')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /View set-aside records/ })).toHaveTextContent('View')
+    expect(screen.getByRole('button', { name: '' })).toBeEnabled()
+    expect(Boolean(screen.queryByRole('button', { name: /View set-aside records/ }))).toBe(canView)
   })
 
   it('shows nothing extra when the file holds no set-aside records', () => {

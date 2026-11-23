@@ -566,6 +566,7 @@ async def test_set_aside_details_for_file_and_chat_use_their_saved_membership(pl
     from src.lib.flows.chat_output_delivery import chat_output_delivery_scope, deliver_projected_chat_output
     from src.lib.flows.output_projection import FlowOutputFilterSpec, finalize_output_projection
     from src.lib.flows.set_aside_records import FlowRunResultsNotFound, list_set_aside_records
+    from src.lib.openai_agents.models import file_ready_event_details
     from src.lib.openai_agents.tools.file_output_tools import save_projected_file_output
     from src.lib.openai_agents.tools.output_formatter_tools import build_output_formatter_tools
 
@@ -592,9 +593,11 @@ async def test_set_aside_details_for_file_and_chat_use_their_saved_membership(pl
     })
     with agent_request_scope(user_id=item.scope.owner_id, session_id=item.scope.session_id, trace_id=uuid4().hex):
         file = await save_projected_file_output("csv", projected, "filtered", "fixture_formatter")
+        assert file_ready_event_details(file)["has_set_aside_details"] is True
         # Saving identical bytes and membership reuses the file and its original membership.
         repeated = await save_projected_file_output("csv", projected, "filtered", "fixture_formatter")
         assert repeated["file_id"] == file["file_id"]
+        assert file_ready_event_details(repeated)["has_set_aside_details"] is True
         # A different record with the same exported cell value needs its own membership.
         other = finalize_output_projection(first_bundle, plan.model_copy(update={
             "filters": [FlowOutputFilterSpec(field_ref="object.pending_ref_id", op="eq", value="extra")],
@@ -604,6 +607,7 @@ async def test_set_aside_details_for_file_and_chat_use_their_saved_membership(pl
 
         plain = finalize_output_projection(first_bundle, _plan("csv", columns[:1]))
         plain_file = await save_projected_file_output("csv", plain, "plain", "fixture_formatter")
+        assert file_ready_event_details(plain_file)["has_set_aside_details"] is True
         empty = list_set_aside_records(**scope, output_id=UUID(plain_file["file_id"]))
         assert empty.results == [] and empty.set_aside_count == 0
 

@@ -529,6 +529,30 @@ describe('Chat persistence', () => {
     expect(restored.container.querySelectorAll('.assistant-message')).toHaveLength(1)
   })
 
+  it('opens an empty saved set-aside membership from a streamed file card', async () => {
+    renderChat({
+      sessionId: 'session-1', eventStreamVersion: 5, processedEventCount: 0,
+      events: [{
+        type: 'FILE_READY', session_id: 'session-1', turn_id: 'file-turn',
+        details: {
+          file_id: 'file-1', filename: 'rows.tsv', format: 'tsv', download_url: '/api/files/file-1/download',
+          flow_run_id: 'run-1', document_id: 'doc-1', set_aside: { included: 0, left_out: 2 },
+          has_set_aside_details: true,
+        },
+      }],
+    })
+    const button = await screen.findByRole('button', { name: 'View set-aside records for rows.tsv' })
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
+      flow_run_id: 'run-1', document_id: 'doc-1', set_aside_count: 0, results: [],
+    })))
+    fireEvent.click(button)
+    expect(await screen.findByText(/No set-aside records are waiting for this paper/)).toBeInTheDocument()
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/curation-workspace/flow-runs/run-1/set-aside-records?document_id=doc-1&output_id=file-1',
+      expect.objectContaining({ credentials: 'include' }),
+    )
+  })
+
   it('notes set-aside records under a chat table and keeps the note in the restored session (ALL-1561)', async () => {
     const table = '| Reagent |\n| --- |\n| anti-Plimsoll |'
     const view = renderChat({

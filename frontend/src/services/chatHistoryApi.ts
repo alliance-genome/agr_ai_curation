@@ -199,6 +199,7 @@ function extractFileData(payload: Record<string, unknown> | null): FileInfo | nu
       flow_run_id: readString(candidate.flow_run_id) ?? undefined,
       document_id: readString(candidate.document_id) ?? undefined,
       set_aside: readOutputSetAside(candidate.set_aside) ?? undefined,
+      has_set_aside_details: candidate.has_set_aside_details === true,
     }
   }
 

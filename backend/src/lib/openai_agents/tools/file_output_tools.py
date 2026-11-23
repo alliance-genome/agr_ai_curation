@@ -14,6 +14,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from sqlalchemy import select
+
 from src.lib.flows.output_projection import FlowOutputProjectionResult
 from src.lib.export_accounting import projection_summary, export_diagnostics, exact_diagnostics_json
 from src.lib.file_outputs.storage import FileOutputStorageService, sanitize_output_descriptor
@@ -307,6 +309,8 @@ async def save_projected_file_output(
                 "source_envelope_ids",
             }
         }
+        document_id = flow_output_attachment.get("document_id")
+        has_set_aside_details = False
         if file_output is None:
             file_output = FileOutput(
                 filename=full_filename,
@@ -331,14 +335,22 @@ async def save_projected_file_output(
                 },
             )
             db.add(file_output)
-            if membership and flow_run_id and flow_output_attachment.get("document_id"):
+            if membership and flow_run_id and document_id:
                 db.flush()
                 FlowOutputSetAside(
                     output_id=file_output.id, owner_id=effective_curator_id,
-                    flow_run_id=flow_run_id, document_id=flow_output_attachment["document_id"],
+                    flow_run_id=flow_run_id, document_id=document_id,
                     included_keys=projection.set_aside_included_keys,
                 ).persist(db)
+                has_set_aside_details = True
         else:
+            if membership and flow_run_id and document_id:
+                has_set_aside_details = db.scalar(select(FlowOutputSetAside.output_id).where(
+                    FlowOutputSetAside.output_id == file_output.id,
+                    FlowOutputSetAside.owner_id == effective_curator_id,
+                    FlowOutputSetAside.flow_run_id == flow_run_id,
+                    FlowOutputSetAside.document_id == document_id,
+                )) is not None
             previous_file_path = str(file_output.file_path or "")
             file_output.filename = full_filename
             file_output.file_path = str(file_path)
@@ -419,6 +431,7 @@ async def save_projected_file_output(
         source_envelope_ids=list(
             flow_output_attachment.get("source_envelope_ids") or []
         ),
-        document_id=flow_output_attachment.get("document_id") or None,
+        document_id=document_id or None,
+        has_set_aside_details=has_set_aside_details,
     )
     return file_info.model_dump(mode="json")

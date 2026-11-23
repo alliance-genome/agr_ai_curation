@@ -78,6 +78,7 @@ class FileInfo(BaseModel):
         description="Canonical domain-envelope identities used by this output",
     )
     document_id: Optional[str] = Field(None, description="Source document ID")
+    has_set_aside_details: bool = False
 
 
 _FILE_READY_EVENT_DETAIL_FIELDS = (
@@ -100,6 +101,7 @@ _FILE_READY_EVENT_DETAIL_FIELDS = (
     "source_keys",
     "source_envelope_ids",
     "document_id",
+    "has_set_aside_details",
     # Records the review set aside in this file's sources (ALL-1561):
     # {"included": n, "left_out": n}, or None when there are none.
     "set_aside",
