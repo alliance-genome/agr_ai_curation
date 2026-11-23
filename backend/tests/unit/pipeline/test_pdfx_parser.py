@@ -1257,6 +1257,8 @@ def test_text_with_no_page_marker_claims_no_page():
 
 
 def test_a_page_marker_sets_the_page_from_where_it_stands():
+    # What is STORED only: a file whose text came from provider conversion never shows or
+    # records a page, markers included (``file_pages_trusted``).
     elements = markdown_to_pipeline_elements(
         "# Title\n\nBefore any marker.\n\n<!-- page: 3 -->\n\n## Results\n\nOn page three.\n\n[page 4]\n\nOn page four.\n"
     )

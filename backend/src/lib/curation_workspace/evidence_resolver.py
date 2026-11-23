@@ -173,6 +173,7 @@ class DeterministicEvidenceAnchorResolver:
         *,
         source_file_id: UUID,
         chunk_index_range: tuple[int, int],
+        pages_trusted: bool,
         session_factory: SessionFactory = SessionLocal,
         user_id_resolver: UserIdResolver | None = None,
         chunk_loader: ChunkLoader | None = None,
@@ -182,6 +183,8 @@ class DeterministicEvidenceAnchorResolver:
         # are searched, and every resolved record names it.
         self._source_file_id = source_file_id
         self._chunk_index_range = chunk_index_range
+        # Whether the file's pieces carry real pages (file_pages_trusted); else no page is taken.
+        self._pages_trusted = pages_trusted
         self._session_factory = session_factory
         self._user_id_resolver = user_id_resolver or self._resolve_user_id
         self._chunk_loader = chunk_loader or _default_chunk_loader
@@ -279,7 +282,9 @@ class DeterministicEvidenceAnchorResolver:
             for raw_chunk in raw_chunks
             if first_index <= _required_chunk_index(raw_chunk) <= last_index
         ]
-        return _PreparedDocument.from_chunks(_coerce_resolution_chunks(file_chunks)), None
+        return _PreparedDocument.from_chunks(
+            _coerce_resolution_chunks(file_chunks, pages_trusted=self._pages_trusted)
+        ), None
 
     def _resolve_evidence_record(
         self,
@@ -966,7 +971,9 @@ def _required_chunk_index(raw_chunk: Mapping[str, Any]) -> int:
     return chunk_index
 
 
-def _coerce_resolution_chunks(raw_chunks: Sequence[Mapping[str, Any]]) -> list[_ResolutionChunk]:
+def _coerce_resolution_chunks(
+    raw_chunks: Sequence[Mapping[str, Any]], *, pages_trusted: bool,
+) -> list[_ResolutionChunk]:
     chunks: list[_ResolutionChunk] = []
     for fallback_index, raw_chunk in enumerate(raw_chunks):
         metadata = raw_chunk.get("metadata")
@@ -1005,10 +1012,11 @@ def _coerce_resolution_chunks(raw_chunks: Sequence[Mapping[str, Any]]) -> list[_
                 chunk_index=_coerce_int(raw_chunk.get("chunk_index"), raw_chunk.get("chunkIndex"))
                 or fallback_index,
                 text=text,
+                # A stored page counts only for a file with real pages (ALL-1460).
                 page_number=_coerce_positive_int(
                     raw_chunk.get("page_number"),
                     raw_chunk.get("pageNumber"),
-                ),
+                ) if pages_trusted else None,
                 section_title=section_title,
                 parent_section=parent_section,
                 subsection=subsection,

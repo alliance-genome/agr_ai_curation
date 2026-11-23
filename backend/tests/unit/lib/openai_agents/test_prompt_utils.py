@@ -13,7 +13,6 @@ _spec.loader.exec_module(prompt_utils)
 
 format_document_context_for_prompt = prompt_utils.format_document_context_for_prompt
 format_hierarchy_for_prompt = prompt_utils.format_hierarchy_for_prompt
-format_sections_for_prompt = prompt_utils.format_sections_for_prompt
 inject_structured_output_instruction = prompt_utils.inject_structured_output_instruction
 
 
@@ -168,42 +167,12 @@ def test_with_no_file_being_added_the_outline_does_not_mention_it():
         _outline(_file("paper.pdf", "main", "PDF", 0, 41, [METHODS])))
 
 
-def test_format_sections_for_prompt_returns_empty_when_no_sections():
-    assert format_sections_for_prompt([]) == ""
-
-
-def test_format_sections_for_prompt_formats_entries_with_defaults():
-    sections = [
-        {"title": "Introduction", "page_numbers": [1], "chunk_count": 2},
-        {"page_numbers": [5, 7]},
-    ]
-
-    result = format_sections_for_prompt(sections)
-
-    assert "## Document Sections" in result
-    assert "- **Introduction** (p.1, 2 chunks)" in result
-    assert "- **Unknown** (p.5-7, 0 chunks)" in result
-
-
-def test_a_section_with_no_pages_shows_its_piece_count_only():
-    # ALL-1460: converted text has no pages; the outline never shows an empty page slot.
-    result = format_sections_for_prompt([{"title": "Sheet1", "page_numbers": [], "chunk_count": 3}])
-
-    assert "- **Sheet1** (3 chunks)" in result
-
-
 def test_format_document_context_for_prompt_prefers_hierarchy():
     hierarchy = _outline(_file("paper.pdf", "main", "PDF", 0, 1, [
         {"name": "Results", "page_numbers": [8], "chunk_count": 2, "subsections": []}]))
-    sections = [{"title": "Fallback", "page_numbers": [1], "chunk_count": 1}]
-
-    context_text, structure_info = format_document_context_for_prompt(
-        hierarchy=hierarchy,
-        sections=sections,
-    )
+    context_text, structure_info = format_document_context_for_prompt(hierarchy=hierarchy)
 
     assert "## Document Structure" in context_text
-    assert "## Document Sections" not in context_text
     assert structure_info == "hierarchy with 1 sections"
 
 
@@ -226,22 +195,8 @@ def test_document_context_is_exactly_the_section_list_for_a_paper_with_an_abstra
     assert not hasattr(prompt_utils, "ABSTRACT_TEMPLATE")
 
 
-def test_format_document_context_for_prompt_uses_sections_when_no_hierarchy():
-    context_text, structure_info = format_document_context_for_prompt(
-        hierarchy={"sections": []},
-        sections=[{"title": "Only Section", "page_numbers": [2], "chunk_count": 1}],
-    )
-
-    assert "## Document Sections" in context_text
-    assert "## Document Structure" not in context_text
-    assert structure_info == "1 flat sections"
-
-
 def test_format_document_context_for_prompt_handles_no_structure():
-    context_text, structure_info = format_document_context_for_prompt(
-        hierarchy=None,
-        sections=[],
-    )
+    context_text, structure_info = format_document_context_for_prompt(hierarchy=None)
 
     assert context_text == ""
     assert structure_info == "no structure"

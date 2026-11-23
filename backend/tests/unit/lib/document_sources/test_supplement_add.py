@@ -604,3 +604,17 @@ async def test_no_warning_when_every_chosen_file_was_already_in_the_paper(monkey
         files=(_chosen(20),),
     ))
     assert reports == [] and len(failed) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_converted_office_file_stores_no_page(monkeypatch, storage):
+    # ALL-1460: converted text has no page marker, so its elements and pieces claim no page.
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+    result = await _add(provider, [_chosen(20)])
+
+    added = _by_id(result)["20"]
+    assert [element["metadata"]["page_number"] for element in storage.saved_json[added.file_id]] == [None] * len(
+        storage.saved_json[added.file_id])
+    ((_, chunks),) = storage.stored
+    assert chunks and [chunk.page_number for chunk in chunks] == [None] * len(chunks)

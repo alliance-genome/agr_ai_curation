@@ -769,3 +769,49 @@ def test_evidence_refuses_a_file_that_is_not_ready(db_session, file_status):
         {"code": "file_not_ready", "message": "This file is not ready"},
     )
     assert db_session.scalars(select(EvidenceRecordModel)).all() == []
+
+
+@pytest.mark.parametrize("source_markdown_path, page", [(None, 3), ("owner/source_markdown/paper.md", None)],
+                         ids=["upload read by the extraction service", "main paper imported from converted text"])
+def test_resolve_and_recompute_take_a_stored_page_only_from_a_file_with_real_pages(
+    db_session, monkeypatch, source_markdown_path, page,
+):
+    # ALL-1460: through the service of POST /curation-workspace/evidence/resolve and
+    # /recompute with the real resolver; only the stored pieces are a stand-in.
+    from src.lib.curation_workspace import evidence_resolver
+
+    document = _create_document(db_session)
+    document.main_file.source_markdown_path = source_markdown_path
+    db_session.commit()
+    extraction_result = _create_extraction_result(db_session, document_id=document.id)
+    session = _create_session(db_session, document_id=document.id, total_candidates=1)
+    candidate, draft = _create_candidate(
+        db_session, session=session, extraction_result_id=extraction_result.id,
+        source=CurationCandidateSource.EXTRACTED, order=0,
+    )
+    existing = _add_evidence(
+        db_session, candidate=candidate, draft=draft, source=CurationEvidenceSource.EXTRACTED,
+        anchor=_anchor(snippet_text="Example quote.", page_number=None),
+        source_file_id=document.main_file.id,
+    )
+    monkeypatch.setattr(evidence_resolver, "_default_chunk_loader", lambda _document_id, _user_id: [{
+        "id": "chunk-1", "chunk_index": 0, "content": "Introductory text. Example quote. Closing text.",
+        "page_number": 3, "section_title": "Results", "metadata": {},
+    }])
+
+    resolved = module.resolve_evidence(
+        CurationEvidenceResolveRequest(
+            session_id=str(session.id), candidate_id=str(candidate.id), field_key="gene.symbol",
+            anchor=_anchor(snippet_text="Example quote.", page_number=None),
+            file_id=str(document.main_file.id), replace_existing=True,
+        ),
+        current_user_id="curator-1", db=db_session,
+    )
+    recomputed = module.recompute_evidence(
+        CurationEvidenceRecomputeRequest(session_id=str(session.id), candidate_ids=[str(candidate.id)], force=True),
+        current_user_id="curator-1", actor_claims={"sub": "curator-1"}, db=db_session,
+    )
+
+    assert resolved.evidence_record.anchor_id == str(existing.id)
+    assert resolved.evidence_record.anchor.page_number == page
+    assert [record.anchor.page_number for record in recomputed.updated_evidence_records] == [page]

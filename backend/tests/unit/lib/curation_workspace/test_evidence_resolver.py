@@ -85,10 +85,12 @@ def _resolve_anchor(
     *,
     chunks: list[dict],
     resolve_against_document: bool = True,
+    pages_trusted: bool = True,
 ) -> tuple[EvidenceAnchor, list[str], list[str]]:
     resolver = DeterministicEvidenceAnchorResolver(
         source_file_id=_FILE_ID,
         chunk_index_range=_FILE_RANGE,
+        pages_trusted=pages_trusted,
         user_id_resolver=lambda _prep_result_id: "user-1",
         chunk_loader=lambda _document_id, _user_id: chunks,
         resolve_against_document=resolve_against_document,
@@ -109,7 +111,7 @@ def _resolve_anchor(
 def test_resolver_preserves_tool_verified_anchor_payload():
     candidate = _make_candidate(_make_anchor_payload())
     resolver = DeterministicEvidenceAnchorResolver(
-        source_file_id=_FILE_ID, chunk_index_range=_FILE_RANGE
+        source_file_id=_FILE_ID, chunk_index_range=_FILE_RANGE, pages_trusted=True
     )
 
     result = resolver.resolve(
@@ -233,6 +235,7 @@ def test_resolver_uses_context_current_user_id_when_prep_result_has_no_user_id()
     resolver = DeterministicEvidenceAnchorResolver(
         source_file_id=_FILE_ID,
         chunk_index_range=_FILE_RANGE,
+        pages_trusted=True,
         user_id_resolver=lambda _prep_result_id: None,
         chunk_loader=lambda _document_id, user_id: (
             observed_users.append(user_id)
@@ -267,6 +270,7 @@ def test_resolver_caches_document_chunks_for_same_document_and_user():
     resolver = DeterministicEvidenceAnchorResolver(
         source_file_id=_FILE_ID,
         chunk_index_range=_FILE_RANGE,
+        pages_trusted=True,
         user_id_resolver=lambda _prep_result_id: "user-1",
         chunk_loader=lambda document_id, user_id: (
             load_calls.append((document_id, user_id))
@@ -308,7 +312,7 @@ def test_resolver_moves_table_literal_into_table_reference():
         field_path="anatomy_label",
     )
     resolver = DeterministicEvidenceAnchorResolver(
-        source_file_id=_FILE_ID, chunk_index_range=_FILE_RANGE
+        source_file_id=_FILE_ID, chunk_index_range=_FILE_RANGE, pages_trusted=True
     )
 
     result = resolver.resolve(
@@ -396,6 +400,7 @@ def test_resolver_searches_only_the_evidence_file(chunk_index_range, expected_ch
     resolver = DeterministicEvidenceAnchorResolver(
         source_file_id=_FILE_ID,
         chunk_index_range=chunk_index_range,
+        pages_trusted=True,
         user_id_resolver=lambda _prep_result_id: "user-1",
         chunk_loader=lambda _document_id, _user_id: _two_file_chunks(quote),
         resolve_against_document=True,
@@ -419,6 +424,7 @@ def test_resolver_refuses_a_piece_without_a_piece_number():
     resolver = DeterministicEvidenceAnchorResolver(
         source_file_id=_FILE_ID,
         chunk_index_range=_FILE_RANGE,
+        pages_trusted=True,
         user_id_resolver=lambda _prep_result_id: "user-1",
         chunk_loader=lambda _document_id, _user_id: chunks,
         resolve_against_document=True,
@@ -430,3 +436,17 @@ def test_resolver_refuses_a_piece_without_a_piece_number():
             normalized_candidate=_make_normalized_candidate(candidate),
             context=_make_context(),
         )
+
+
+@pytest.mark.parametrize("pages_trusted, page", [(True, 3), (False, None)],
+                         ids=["upload read by the extraction service", "file from provider-converted text"])
+def test_a_resolved_anchor_takes_a_stored_page_only_from_a_file_with_real_pages(pages_trusted, page):
+    # ALL-1460: the workspace resolver (POST /curation-workspace/evidence/resolve and
+    # /recompute) applies the same rule as the reading tools and record_evidence.
+    candidate = _make_candidate(_make_anchor_payload(page_number=None, section_title=None, chunk_ids=[]))
+    chunks = [{"id": "chunk-1", "chunk_index": 0, "content": "Verified quote from the paper.",
+               "page_number": 3, "section_title": "Results", "metadata": {}}]
+
+    anchor, _warnings, _keys = _resolve_anchor(candidate, chunks=chunks, pages_trusted=pages_trusted)
+
+    assert anchor.page_number == page
