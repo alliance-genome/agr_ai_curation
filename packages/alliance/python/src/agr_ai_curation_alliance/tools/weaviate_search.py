@@ -341,7 +341,7 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
         for chunk in chunks:
             metadata = _best_effort_metadata(chunk)
             section = metadata.get("section_title") or metadata.get("sectionTitle") or "Unknown Section"
-            page = metadata.get("page_number") or metadata.get("pageNumber")
+            page = _chunk_page(chunk, metadata)
             score = chunk.get("score", 0.0)
             content = chunk.get("text") or chunk.get("content") or ""
 
@@ -506,7 +506,7 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
         actual_chunk_id = chunk_id
         if _coerce_chunk_index(chunk.get("chunk_index")) != chunk_index:
             raise ValueError("Resolved chunk index differs from the selected source")
-        page_number = chunk.get("page_number") or metadata.get("page_number")
+        page_number = _chunk_page(chunk, metadata)
         section_title = (
             chunk.get("section_title")
             or metadata.get("section_title")
@@ -648,12 +648,17 @@ def _chunk_text(chunk: dict) -> str:
 
 
 def _chunk_page(chunk: dict, metadata: dict) -> Optional[int]:
-    return (
+    """The piece's page as the model may see it: only a file with real pages has one (ALL-1460)."""
+    stored = (
         chunk.get("page_number")
         or chunk.get("pageNumber")
         or metadata.get("page_number")
         or metadata.get("pageNumber")
     )
+    own_file = current_readable_files().file_for(_coerce_chunk_index(chunk.get("chunk_index")))
+    if own_file is None:
+        raise RuntimeError("A piece read is outside the readable files")
+    return own_file.page_of(stored)
 
 
 def _chunk_section_title(chunk: dict, metadata: dict) -> Optional[str]:

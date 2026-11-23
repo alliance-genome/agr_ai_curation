@@ -1418,8 +1418,11 @@ async def get_chunks_by_subsection(
     return chunks
 
 
-def _outline(objects: List[Any]) -> tuple[List[Dict[str, Any]], List[str]]:
-    """Sections in order of first appearance, each with its subsections, pages and chunk count."""
+def _outline(objects: List[Any], readable: ReadableFiles) -> tuple[List[Dict[str, Any]], List[str]]:
+    """Sections in order of first appearance, each with its subsections, pages and chunk count.
+
+    Pages count only for files with real pages (ALL-1460).
+    """
     from collections import defaultdict
 
     sections = defaultdict(lambda: {
@@ -1439,8 +1442,9 @@ def _outline(objects: List[Any]) -> tuple[List[Dict[str, Any]], List[str]]:
             stored_names.add(props["parentSection"])
         parent = props.get("parentSection") or "Unknown"
         subsection = props.get("subsection")
-        page = props.get("pageNumber")
         idx = props.get("chunkIndex")
+        own_file = readable.file_for(idx)
+        page = own_file.page_of(props.get("pageNumber")) if own_file is not None else None
         # Retain chunks without inventing page/index metadata. Stable
         # sorting places wholly unindexed subsections after known ones.
         if idx is None:
@@ -1571,10 +1575,10 @@ async def get_document_sections_hierarchical(
                     raise ValueError("Section listing returned a piece outside the readable files")
                 by_file[own_file.file_id].append(obj)
 
-            sections, top_level_order = _outline(objects)
+            sections, top_level_order = _outline(objects, readable)
             files = []
             for label, own_file in readable.labelled():
-                file_sections, file_top_level = _outline(by_file.get(own_file.file_id, []))
+                file_sections, file_top_level = _outline(by_file.get(own_file.file_id, []), readable)
                 files.append({
                     "file_id": own_file.file_id,
                     "name": label,

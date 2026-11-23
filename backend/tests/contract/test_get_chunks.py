@@ -29,6 +29,7 @@ def _readable(document_id: str = DOCUMENT_ID) -> ReadableFiles:
                 chunk_index_end=0,
                 kind="PDF",
                 label="main.pdf",
+                pages_trusted=True,
             ),
         ),
     )

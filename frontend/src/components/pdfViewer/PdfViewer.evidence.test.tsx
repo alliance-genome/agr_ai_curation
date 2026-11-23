@@ -1172,6 +1172,53 @@ describe('PdfViewer evidence navigation', () => {
     expect(getEvidenceHighlightRects(iframe)).toHaveLength(0)
   })
 
+  it('a page-less quote on a main paper imported as text opens where its text is, with no page from the record', async () => {
+    // ALL-1460: evidence from a paper imported from converted text records no page; the
+    // PDF tab still finds the quote by its text and highlights it on the page it is on.
+    vi.stubEnv('VITE_DEV_MODE', 'true')
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+    const pageText = 'Wingless was absent from the wing disc.'
+    vi.mocked(fuzzyMatchPdfEvidenceQuote).mockResolvedValueOnce(
+      createSinglePageFuzzyMatchResult(3, pageText, pageText, { score: 97 }),
+    )
+    render(<PdfViewer />)
+    showPaperFilesInViewer('doc-abc', [singleMainPdfFile({ documentId: 'doc-abc', displayName: 'abc-paper.pdf', pageCount: 4 })])
+    await waitFor(() => {
+      expect(screen.getByText('abc-paper.pdf')).toBeInTheDocument()
+    })
+    const { iframe } = installMockPdfViewer({
+      onFind: (candidateQuery) => ({
+        state: candidateQuery === pageText ? 0 : 1,
+        total: candidateQuery === pageText ? 1 : 0,
+        current: candidateQuery === pageText ? 1 : 0,
+        pageIdx: candidateQuery === pageText ? 2 : null,
+        pageMatches: candidateQuery === pageText ? [0] : [],
+        pageMatchesLength: candidateQuery === pageText ? [pageText.length] : [],
+      }),
+      pages: [
+        { pageNumber: 1, textSegments: ['Title page'] },
+        { pageNumber: 2, textSegments: ['Introduction'] },
+        { pageNumber: 3, textSegments: [pageText] },
+        { pageNumber: 4, textSegments: ['References'] },
+      ],
+    })
+    fireEvent.load(iframe)
+    await waitFor(() => {
+      expect(window.__pdfViewerEvidenceSpike).toBeTypeOf('function')
+    })
+
+    const result = await window.__pdfViewerEvidenceSpike?.({
+      quote: pageText,
+      pageNumber: null,
+      sectionTitle: 'Results',
+    } satisfies PdfEvidenceSpikeInput)
+
+    expect(result).toMatchObject({ status: 'matched', matchedPage: 3, pageHints: [] })
+    await waitFor(() => {
+      expect(getNativeSelectedHighlights(iframe)).toHaveLength(1)
+    })
+  })
+
   it('acknowledges select navigation and keeps quote highlighting native-only on the matched page', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
 

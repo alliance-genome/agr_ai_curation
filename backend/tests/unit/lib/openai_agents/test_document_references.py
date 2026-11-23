@@ -1325,3 +1325,40 @@ async def test_evidence_from_a_piece_with_no_page_stores_no_page_and_names_its_f
     assert recorded.get("page") is None and recorded["file_name"] == "Table S1.xlsx"
     assert summary.get("page") is None and summary["file_name"] == "Table S1.xlsx"
     assert evidence_record_page(summary) == (True, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("converted, shown", [((), 3), (("paper.pdf",), None)],
+                         ids=["upload read by the extraction service", "main paper imported from ABC's text"])
+async def test_a_stored_page_counts_only_for_a_file_with_real_pages(store, scope, monkeypatch, converted, shown):
+    # ALL-1460: pieces indexed before the no-marker rule still carry page 1 (or a marker
+    # page) in the index; a file whose pieces came from provider-converted text never
+    # yields a page, in what the model reads or what evidence records.
+    from src.lib.openai_agents.evidence_summary import build_record_evidence_summary_record
+    from agr_ai_curation_alliance.tools import weaviate_search
+
+    piece = _section_chunk(10, "Wingless was absent from the wing disc.")  # stored page 3
+    readable = files("doc-a", ("paper.pdf", 0, 11), converted=converted)
+    tools = _section_reading_setup(store, scope, monkeypatch, [piece], readable=readable)
+
+    async def hybrid(**_kwargs):
+        return [dict(piece, score=0.9)]
+
+    monkeypatch.setattr(weaviate_search, "hybrid_search_chunks", hybrid)
+    search = await _invoke(weaviate_search.create_search_tool("doc-a", "alice"), {"query": "wingless"})
+    read = await _invoke(tools["read_chunk"], {"chunk_index": 10})
+    section = await _invoke(tools["read_section"], {"section_name": "Results"})
+    recorded = await _invoke(tools["record_evidence"],
+                             {"entity": "wg", "selections": [{"chunk_index": 10, "span_index": 0}]})
+    summary = build_record_evidence_summary_record(
+        tool_name="record_evidence", tool_input={"entity": "wg"}, tool_output=json.dumps(recorded),
+    )
+
+    assert search.hits[0].page_number == shown
+    assert read.chunk.page_number == shown
+    assert all(span.page_number == shown for span in read.chunk.evidence_spans)
+    assert ("from page 3" in read.summary) is (shown == 3)
+    assert section.section.passages[0].page_number == shown
+    assert section.section.page_numbers == ([3] if shown else [])
+    assert recorded["status"] == "verified" and recorded.get("page") == shown
+    assert summary.get("page") == shown and summary["file_name"] == "paper.pdf"

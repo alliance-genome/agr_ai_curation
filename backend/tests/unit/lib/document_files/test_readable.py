@@ -33,7 +33,7 @@ def test_a_piece_number_outside_every_range_or_not_an_integer_is_not_readable(in
 
 
 def test_the_ranges_read_as_today_for_one_file_and_name_each_file_for_several():
-    one = ReadableFiles("doc-1", (ReadableFile("f", "paper.pdf", "main", 0, 348, "PDF", "paper.pdf"),))
+    one = ReadableFiles("doc-1", (ReadableFile("f", "paper.pdf", "main", 0, 348, "PDF", "paper.pdf", True),))
 
     assert one.ranges_text() == "0 to 348"
     assert PAPER.ranges_text() == "0 to 41 (paper.pdf), 42 to 60 (Table S1.xlsx), 70 to 75 (Data S2.docx)"
@@ -41,8 +41,8 @@ def test_the_ranges_read_as_today_for_one_file_and_name_each_file_for_several():
 
 def test_ranges_are_told_in_piece_order_whatever_the_tab_order():
     reordered = ReadableFiles("doc-1", (
-        ReadableFile("b", "Table S1.xlsx", "supplement", 42, 60, "Excel", "Table S1.xlsx"),
-        ReadableFile("a", "paper.pdf", "main", 0, 41, "PDF", "paper.pdf"),
+        ReadableFile("b", "Table S1.xlsx", "supplement", 42, 60, "Excel", "Table S1.xlsx", False),
+        ReadableFile("a", "paper.pdf", "main", 0, 41, "PDF", "paper.pdf", True),
     ))
 
     assert reordered.ranges_text() == "0 to 41 (paper.pdf), 42 to 60 (Table S1.xlsx)"
@@ -101,7 +101,7 @@ def test_one_file_of_the_paper_can_be_read_on_its_own():
 
     assert PAPER.only(sheet).files == (sheet,)
     with pytest.raises(Exception, match="not one of this paper's readable files"):
-        PAPER.only(ReadableFile("x", "other.pdf", "supplement", 90, 99, "PDF", "other.pdf"))
+        PAPER.only(ReadableFile("x", "other.pdf", "supplement", 90, 99, "PDF", "other.pdf", True))
 
 
 @pytest.mark.parametrize("display_mode, extension, kind", [
@@ -113,3 +113,21 @@ def test_a_files_kind_comes_from_its_display_mode_and_extension(display_mode, ex
     from src.lib.document_files.readable import file_kind
 
     assert file_kind(display_mode, extension) == kind
+
+
+@pytest.mark.parametrize("display_mode, source_markdown_path, trusted", [
+    ("local_pdf", None, True),                                   # an upload read by the extraction service
+    ("local_pdf", "sub/source_markdown/paper.md", False),        # a main paper imported from ABC's text
+    ("provider_pdf_proxy", "sub/source_markdown/paper.md", False),
+    ("text", "sub/source_markdown/sheet.md", False),             # a converted Word or Excel supplement
+    ("text", None, False),                                       # a benchmark text paper
+])
+def test_only_a_file_the_extraction_service_read_from_its_pdf_has_real_pages(
+    display_mode, source_markdown_path, trusted,
+):
+    # ALL-1460: decided from stored structure only; a stored page is never trusted otherwise.
+    from src.lib.document_files.readable import file_pages_trusted
+
+    assert file_pages_trusted(display_mode, source_markdown_path) is trusted
+    file = ReadableFile("f", "paper.pdf", "main", 0, 9, "PDF", "paper.pdf", trusted)
+    assert file.page_of(4) == (4 if trusted else None)

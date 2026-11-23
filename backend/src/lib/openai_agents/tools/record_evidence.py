@@ -1020,7 +1020,9 @@ def _create_canonical_evidence_recorder(
                     verification_method="missing_chunk_text",
                 )
 
-            page = _resolve_chunk_page(chunk)
+            # A stored page counts only for a file with real pages (ALL-1460): pieces of
+            # provider-converted text keep whatever page they were indexed with.
+            page = current_readable_files().file_for(chunk["chunk_index"]).page_of(_resolve_chunk_page(chunk))
             section = _resolve_chunk_section(chunk)
             subsection = _resolve_chunk_subsection(chunk)
             try:
