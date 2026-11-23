@@ -1648,7 +1648,7 @@
   "pdf_extraction": {
     "avoid_when": [
       "To extract genes, alleles, diseases, phenotypes, or expression patterns for curation; use the matching extraction agent.",
-      "To confirm an identifier against a database; identifiers on extracted records are checked automatically, and for a single ontology term or chemical use the Ontology Term Resolver Agent or the Chemical Ontology Agent.",
+      "To confirm a single ontology term or chemical; use the Ontology Term Resolver Agent or the Chemical Ontology Agent. Records from the packaged extractors are checked by their automatic validators where those exist; this agent's own records get no automatic check, and in an agent you save from this template only the validators you attach to its Custom Output Structure check its details.",
       "For content inside figures beyond their captions."
     ],
     "capabilities": [
