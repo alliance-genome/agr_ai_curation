@@ -23,9 +23,9 @@ def _load_smoke_module():
 
 
 _CATALOG = {"models": [
-    {"model_id": "gpt-6.2-sol", "supports_reasoning": True,
+    {"model_id": "gpt-6.2-sol", "supports_reasoning": True, "replaces": ["gpt-6.1-sol"],
      "reasoning_options": ["low", "medium", "high"], "default_reasoning": "medium"},
-    {"model_id": "gpt-6.2-astra", "supports_reasoning": True,
+    {"model_id": "gpt-6.2-astra", "supports_reasoning": True, "replaces": ["gpt-6-astra"],
      "reasoning_options": ["low", "medium", "high", "xhigh"], "default_reasoning": "low"},
 ]}
 
@@ -1729,3 +1729,14 @@ def test_batch_plumbing_rejects_one_invalid_name_among_valid_artifacts():
             {prefix + "b" * 64 + "_" + "a" * 32 + ".json": rows,
              prefix + "a" * 32 + ".json": rows}, output_format="json",
         )
+
+
+def test_expected_models_resolve_through_the_backend_catalog(monkeypatch):
+    """ALL-1708: a configured id the catalog has replaced is expected as its current entry,
+    so a model version move does not break the release smoke."""
+    smoke = _load_smoke_module()
+    monkeypatch.setattr(smoke, "http_request", lambda method, url, **kwargs: _catalog_response(smoke, url))
+    current = [smoke.catalog_current_model_id(base_url="http://example.test", headers={}, model_id=model)
+               for model in ("gpt-6.1-sol", "gpt-6-astra", "gpt-6.2-sol")]
+    assert current == ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.2-sol"]
+    assert smoke.catalog_default_reasoning(base_url="http://example.test", headers={}, model_id="gpt-6-astra") == "low"
