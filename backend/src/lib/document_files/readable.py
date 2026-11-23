@@ -82,6 +82,19 @@ def file_kind(display_mode: str, source_file_extension: str | None) -> str:
     return _TEXT_FILE_KINDS.get(extension, FILE_KIND_TEXT)
 
 
+def file_pages_trusted(display_mode: str, source_markdown_path: str | None) -> bool:
+    """Whether a file's pieces carry real page numbers (ALL-1460).
+
+    Only a file whose text the extraction service produced from its own PDF has
+    real page data. A file whose pieces were built from provider-converted text
+    (it has stored provider Markdown, ``source_markdown_path``: every provider
+    Markdown import since v0.9.7 records it) or that is shown as text never
+    yields a page, whatever page its stored pieces carry. Structural only.
+    """
+
+    return display_mode != DISPLAY_MODE_TEXT and source_markdown_path is None
+
+
 def file_labels(display_names: list[str]) -> list[str]:
     """The name the model sees for each of a paper's files, given in tab order.
 
@@ -116,6 +129,13 @@ class ReadableFile:
     kind: str
     # The name the model sees and passes back as ``file`` (see ``file_labels``).
     label: str
+    # Whether its pieces' pages are real (``file_pages_trusted``); otherwise no page is shown or recorded.
+    pages_trusted: bool
+
+    def page_of(self, page: int | None) -> int | None:
+        """A piece's page as it may be shown or recorded: ``None`` for a file without real pages."""
+
+        return page if self.pages_trusted else None
 
     def contains(self, chunk_index: int) -> bool:
         return self.chunk_index_start <= chunk_index <= self.chunk_index_end
@@ -222,6 +242,7 @@ def readable_files_in_session(
         files.append(ReadableFile(
             str(row.id), row.display_name, row.role, start, end,
             file_kind(row.display_mode, row.source_file_extension), label,
+            file_pages_trusted(row.display_mode, row.source_markdown_path),
         ))
     being_added = sum(1 for row, _label in in_scope if row.status == FILE_STATUS_PENDING)
     # Keep the caller's spelling: read functions compare it with the documentId they filter on.
@@ -243,6 +264,7 @@ __all__ = [
     "ReadableFilesError",
     "ReadingScope",
     "current_reading_scope",
+    "file_pages_trusted",
     "readable_files_in_session",
     "reading_scope",
     "resolve_readable_files",

@@ -31,8 +31,12 @@ rewritten.
   `source_fragments[]` item. `record_evidence` takes both from the readable file
   whose piece range holds the quoted piece; it never infers a file from text.
 - `page` is an integer where the file has page numbers there. A record whose
-  file has none (converted Word or Excel text, a PDF supplement until ABC keeps
-  page data) carries `page: null`; a fragment then has no `page` key. A record
+  file has none (converted Word or Excel text, a PDF supplement, or a main paper
+  imported from converted text, until ABC keeps page data) carries `page: null`;
+  a fragment then has no `page` key. Only a file whose text the extraction
+  service produced from its own PDF has page numbers: a file with stored
+  provider Markdown (`source_markdown_path`) or shown as text never yields a
+  page, whatever page its stored pieces carry (`file_pages_trusted`). A record
   without `file_id` still needs a positive page, exactly as before 0.12.0, so
   older records normalize unchanged.
 - Review workspace anchors store the file in `evidence_anchors.source_file_id`

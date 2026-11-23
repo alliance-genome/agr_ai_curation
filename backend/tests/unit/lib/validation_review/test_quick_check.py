@@ -949,3 +949,20 @@ async def test_a_phenotype_packet_with_evidence_quote_records_is_checked(decisio
         assert not set(rows[label]) & {"forward", "reversed", "average"}
     assert rows["R6"]["routes"] == {"removal_only": "sol", "balanced": "skip", "strict": "skip"}
     assert rows["R6"]["forward"]["val_entity"] == {"R6V1": 1.0}
+
+
+@pytest.mark.parametrize("page, section, shown", [
+    (2, "Results", 'E1 (page 2, Results): "q"'),
+    (None, "Results", 'E1 (Results): "q"'),
+    (2, None, 'E1 (page 2): "q"'),
+    (None, None, 'E1: "q"'),
+])
+def test_an_evidence_line_names_only_the_page_and_section_it_has(page, section, shown):
+    # ALL-1460: a quote from a file with no page (converted text) is never shown as "page None".
+    record = {"type": "Gene", "role": None, "values": {},
+              "evidence": [{"id": "E1", "page": page, "section": section, "quote": "q"}], "validators": []}
+
+    line = quick_check._record_block("R1", record, quick_check.DEFINITION).splitlines()[1]
+
+    assert line == f"  evidence {shown}"
+    assert "None" not in line

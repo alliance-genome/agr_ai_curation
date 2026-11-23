@@ -1995,7 +1995,6 @@ def _build_runtime_context(
     if bool(tool_id_set & DOCUMENT_TOOL_IDS):
         context_text, _structure_info = format_document_context_for_prompt(
             hierarchy=runtime_kwargs.get("hierarchy"),
-            sections=runtime_kwargs.get("sections"),
         )
         if context_text:
             parts.append(context_text)

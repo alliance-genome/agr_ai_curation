@@ -149,19 +149,6 @@ _FILE_ROLE_LABELS = {"main": "main paper", "supplement": "supplement"}
 # Approved by Chris, 22 Nov 2026 (O4). Shown while the paper has files being added.
 FILES_BEING_ADDED_LINE = "\nFiles are still being added to this paper; they cannot be read yet.\n"
 
-# Fallback template for flat sections (no hierarchy available)
-SECTION_LIST_TEMPLATE = """
-## Document Sections
-
-This document has the following sections available:
-{section_list}
-
-Use this information to choose the right tool and target your searches effectively.
-For retained evidence, pass the `chunk_index` and sentence number (`span_index`)
-of a numbered sentence shown by `read_section`, `read_subsection` or
-`read_chunk(chunk_index)` to `record_evidence`.
-"""
-
 
 def _size_label(pages: List[int], chunk_count: int) -> str:
     """"p.2-3, 15 chunks", or "15 chunks" for a file without pages."""
@@ -214,51 +201,17 @@ def format_hierarchy_for_prompt(hierarchy: Dict[str, Any]) -> str:
     )
 
 
-def format_sections_for_prompt(sections: List[Dict[str, Any]]) -> str:
-    """
-    Format a flat sections list for injection into an agent prompt (fallback).
-
-    Used when hierarchical structure is not available.
-
-    Args:
-        sections: List of section dicts with title, page_numbers, chunk_count.
-
-    Returns:
-        Formatted string ready for prompt injection, or empty string if no sections.
-    """
-    if not sections:
-        return ""
-
-    lines = []
-    for section in sections:
-        title = section.get("title", "Unknown")
-        pages = section.get("page_numbers", [])
-        chunk_count = section.get("chunk_count", 0)
-
-        if pages:
-            page_str = f"p.{pages[0]}" if len(pages) == 1 else f"p.{pages[0]}-{pages[-1]}"
-        else:
-            page_str = ""
-
-        lines.append(f"- **{title}** ({page_str}, {chunk_count} chunks)")
-
-    section_list = "\n".join(lines)
-    return SECTION_LIST_TEMPLATE.format(section_list=section_list)
-
-
 def format_document_context_for_prompt(
     hierarchy: Optional[Dict[str, Any]] = None,
-    sections: Optional[List[Dict[str, Any]]] = None,
 ) -> tuple[str, str]:
     """
     Format all document context for injection into an agent prompt.
 
-    This is the main entry point for document context injection: the paper
-    hierarchy, or the flat section list when no hierarchy is available.
+    This is the main entry point for document context injection: the paper's
+    outline (hierarchy). A paper without one gets no injected structure.
 
     Args:
         hierarchy: Hierarchical structure from get_document_sections_hierarchical
-        sections: Flat list of sections (fallback if hierarchy not available)
 
     Returns:
         Tuple of (context_text, structure_info) where:
@@ -268,15 +221,10 @@ def format_document_context_for_prompt(
     parts = []
     info_parts = []
 
-    # Add hierarchy or sections (prefer hierarchy)
     if hierarchy and hierarchy.get("sections"):
         hierarchy_text = format_hierarchy_for_prompt(hierarchy)
         parts.append(hierarchy_text)
         info_parts.append(f"hierarchy with {len(hierarchy.get('sections', []))} sections")
-    elif sections:
-        section_text = format_sections_for_prompt(sections)
-        parts.append(section_text)
-        info_parts.append(f"{len(sections)} flat sections")
     else:
         info_parts.append("no structure")
 

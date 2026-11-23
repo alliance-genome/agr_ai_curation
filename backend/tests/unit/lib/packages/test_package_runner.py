@@ -1296,6 +1296,9 @@ class _OneFile:
     def file_for(self, chunk_index):
         return self if self.contains(chunk_index) else None
 
+    def page_of(self, page):
+        return page
+
     def labelled(self):
         return (("paper.pdf", self),)
 

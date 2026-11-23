@@ -1294,3 +1294,73 @@ async def test_the_two_file_refusal_names_same_named_files_by_their_outline_labe
         "entity": "abc", "selections": [{"chunk_index": 20, "span_index": 0}]})
     assert saved["file_name"] == "Table S1.xlsx"
     assert saved["file_id"] == "file-2"
+
+
+@pytest.mark.asyncio
+async def test_evidence_from_a_piece_with_no_page_stores_no_page_and_names_its_file(store, scope, monkeypatch):
+    # ALL-1460: a piece of converted text with no page marker claims no page; reading it
+    # shows no page and the recorded evidence has none, naming its file instead.
+    from src.lib.openai_agents.evidence_summary import build_record_evidence_summary_record
+    from src.lib.openai_agents.document_result_view import document_result_view
+    from src.schemas.evidence_workspace import evidence_record_page
+
+    sheet_row = _section_chunk(12, "| abc-1 | 3 | 5 |")
+    sheet_row["page_number"] = None
+    sheet_row["metadata"] = {"section_title": "Results"}
+    two_files = files("doc-a", ("paper.pdf", 0, 11), ("Table S1.xlsx", 12, 13))
+    tools = _section_reading_setup(store, scope, monkeypatch, [sheet_row], readable=two_files)
+
+    read = await _invoke(tools["read_chunk"], {"chunk_index": 12})
+    view = document_result_view("read_chunk", read)[0]
+    recorded = await _invoke(tools["record_evidence"],
+                             {"entity": "abc-1", "selections": [{"chunk_index": 12, "span_index": 0}]})
+    summary = build_record_evidence_summary_record(
+        tool_name="record_evidence", tool_input={"entity": "abc-1"}, tool_output=json.dumps(recorded),
+    )
+
+    assert "page" not in read.summary
+    assert all(span.page_number is None for span in read.chunk.evidence_spans)
+    assert "from page" not in json.dumps(view)
+    assert recorded["status"] == "verified"
+    assert recorded.get("page") is None and recorded["file_name"] == "Table S1.xlsx"
+    assert summary.get("page") is None and summary["file_name"] == "Table S1.xlsx"
+    assert evidence_record_page(summary) == (True, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("converted, shown", [((), 3), (("paper.pdf",), None)],
+                         ids=["upload read by the extraction service", "main paper imported from ABC's text"])
+async def test_a_stored_page_counts_only_for_a_file_with_real_pages(store, scope, monkeypatch, converted, shown):
+    # ALL-1460: a file whose pieces came from provider-converted text never yields a page,
+    # in what the model reads or what evidence records, whatever page its stored pieces
+    # carry: page 1 indexed before the no-marker rule, a page from a marker in the text,
+    # or a figure caption's page from the provider's figure metadata. The stored page 3
+    # here stands for any of them.
+    from src.lib.openai_agents.evidence_summary import build_record_evidence_summary_record
+    from agr_ai_curation_alliance.tools import weaviate_search
+
+    piece = _section_chunk(10, "Wingless was absent from the wing disc.")  # stored page 3
+    readable = files("doc-a", ("paper.pdf", 0, 11), converted=converted)
+    tools = _section_reading_setup(store, scope, monkeypatch, [piece], readable=readable)
+
+    async def hybrid(**_kwargs):
+        return [dict(piece, score=0.9)]
+
+    monkeypatch.setattr(weaviate_search, "hybrid_search_chunks", hybrid)
+    search = await _invoke(weaviate_search.create_search_tool("doc-a", "alice"), {"query": "wingless"})
+    read = await _invoke(tools["read_chunk"], {"chunk_index": 10})
+    section = await _invoke(tools["read_section"], {"section_name": "Results"})
+    recorded = await _invoke(tools["record_evidence"],
+                             {"entity": "wg", "selections": [{"chunk_index": 10, "span_index": 0}]})
+    summary = build_record_evidence_summary_record(
+        tool_name="record_evidence", tool_input={"entity": "wg"}, tool_output=json.dumps(recorded),
+    )
+
+    assert search.hits[0].page_number == shown
+    assert read.chunk.page_number == shown
+    assert all(span.page_number == shown for span in read.chunk.evidence_spans)
+    assert ("from page 3" in read.summary) is (shown == 3)
+    assert section.section.passages[0].page_number == shown
+    assert section.section.page_numbers == ([3] if shown else [])
+    assert recorded["status"] == "verified" and recorded.get("page") == shown
+    assert summary.get("page") == shown and summary["file_name"] == "paper.pdf"

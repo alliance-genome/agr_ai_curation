@@ -39,6 +39,7 @@ from src.lib.curation_workspace.session_service import (
     get_session_detail,
     normalize_uuid,
 )
+from src.lib.document_files.readable import file_pages_trusted
 from src.models.sql.pdf_document import PDFDocumentFile
 from src.schemas.curation_prep import CurationPrepCandidate
 from src.schemas.curation_workspace import (
@@ -575,6 +576,7 @@ def _resolve_anchor_against_document(
         resolve_against_document=True,
         chunk_index_range=file_chunk_index_range(file_row),
         source_file_id=file_row.id,
+        pages_trusted=file_pages_trusted(file_row.display_mode, file_row.source_markdown_path),
     )
     resolved_field_path = field_path or "workspace.evidence"
     prep_candidate = CurationPrepCandidate.model_validate(
