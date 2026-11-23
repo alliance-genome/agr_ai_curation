@@ -359,6 +359,8 @@ def _internal_extraction_tool_output_with_audit_since(
                 )
                 if "tool_output" in internal and internal.get("tool_output") is not None:
                     audit["internalPayloadFound"] = True
+                    # The step's producing invocation (ALL-1460); not copied to step timing.
+                    audit["history_invocation_id"] = internal.get("history_invocation_id")
                     audit["finalizedEmptyExtraction"] = _is_finalized_empty_extraction(
                         internal.get("tool_output"), internal.get("builder_finalization")
                     )
@@ -2501,6 +2503,7 @@ def get_all_agent_tools(
                     conversation_summary=flow_conversation_summary,
                     adapter_key=curation_adapter_key,
                     metadata=deepcopy(step_provenance),
+                    history_invocation_id=internal_lookup_audit.get("history_invocation_id"),
                 )
             )
             if flow_review is not None and flow_review.record is not None and candidate is not None:
@@ -3846,6 +3849,7 @@ def _persist_flow_extraction_candidates(
                 idempotency_key=idempotency_key,
                 payload_hash=payload_hash,
                 metadata=metadata,
+                history_invocation_id=candidate.history_invocation_id,
             )
         )
 

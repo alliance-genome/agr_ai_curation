@@ -1771,6 +1771,22 @@ class CurationSubmissionRecord(CurationWorkspaceBaseModel):
     )
 
 
+class ExtractionFileRead(CurationWorkspaceBaseModel):
+    """One paper file whose text the model was shown while producing a result (ALL-1460)."""
+
+    file_id: str = Field(description="The pdf_document_files row id")
+    file_name: str = Field(description="The file's display name when it was read")
+    role: Optional[str] = Field(
+        default=None, description="main or supplement; null if the file was removed before the result was saved",
+    )
+    converted_artifact_id: Optional[str] = Field(
+        default=None, description="The provider's converted-text artifact id, when the file came from the provider",
+    )
+    converted_artifact_sha256: Optional[str] = Field(
+        default=None, description="SHA-256 of the converted artifact, when recorded",
+    )
+
+
 class CurationExtractionResultRecord(CurationWorkspaceBaseModel):
     """Persisted extraction envelope contract used for replay and session bootstrap."""
 
@@ -1826,6 +1842,21 @@ class CurationExtractionResultRecord(CurationWorkspaceBaseModel):
         default_factory=dict,
         description="Storage or transport metadata for the persisted extraction envelope",
     )
+    files_read: list[ExtractionFileRead] | SkipJsonSchema[None] = Field(
+        default=None,
+        json_schema_extra=_absent_when_unrecorded,
+        description=(
+            "The paper files whose text the model was shown while producing this result. "
+            "Absent for results saved before files were recorded; empty when none was read"
+        ),
+    )
+
+    @model_serializer(mode="wrap")
+    def serialize_without_unrecorded_files_read(self, handler):
+        serialized = handler(self)
+        if self.files_read is None:
+            serialized.pop("files_read", None)
+        return serialized
 
 
 class CurationSessionSummary(CurationWorkspaceBaseModel):
@@ -2864,6 +2895,13 @@ class CurationExtractionPersistenceRequest(CurationWorkspaceBaseModel):
     metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Storage or transport metadata for persistence",
+    )
+    history_invocation_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "The producing agent invocation, when known; its reads are the result's files "
+            "read. Otherwise the files read are those of the whole run (trace)"
+        ),
     )
 
     @model_validator(mode="after")

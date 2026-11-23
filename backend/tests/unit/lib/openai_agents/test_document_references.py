@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -1124,8 +1124,9 @@ async def test_evidence_from_a_file_that_stopped_being_readable_is_refused_to_th
 async def test_a_selection_outside_the_readable_files_never_reaches_the_store(store, scope, monkeypatch):
     chunk, spans = source(12)
     # Read while the paper held a sheet at 12..13; the sheet has since been removed.
-    value = binding(store, scope, readable=files("doc-a", ("paper.pdf", 0, 11), ("Data S2.docx", 20, 21)))
+    value = binding(store, scope, readable=THREE_FILES)
     value.retain([(chunk, spans, [0])])
+    value.readable = files("doc-a", ("paper.pdf", 0, 11), ("Data S2.docx", 20, 21))
     lookup = AsyncMock()
     monkeypatch.setattr(refs, "get_chunk_by_index", lookup)
 
@@ -1364,3 +1365,45 @@ async def test_a_stored_page_counts_only_for_a_file_with_real_pages(store, scope
     assert section.section.page_numbers == ([3] if shown else [])
     assert recorded["status"] == "verified" and recorded.get("page") == shown
     assert summary.get("page") == shown and summary["file_name"] == "paper.pdf"
+
+
+def _files_read_rows(store):
+    from src.lib.document_files.files_read import FILES_READ_KIND
+    with store.session_factory() as db:
+        return [
+            (event.invocation_id, json.loads(content)["files"])
+            for event, content in db.execute(
+                select(AgentHistoryEvent, AgentHistoryPayload.content).join(AgentHistoryPayload)
+                .where(AgentHistoryEvent.kind == FILES_READ_KIND).order_by(AgentHistoryEvent.sequence)
+            ).all()
+        ]
+
+
+@pytest.mark.asyncio
+async def test_reads_record_each_newly_shown_file_once_per_invocation(store, scope, monkeypatch):
+    # ALL-1460 Q8: 300 reads over two files of a three-file paper write two rows.
+    main_text = _section_chunk(10, "Wingless was absent from the wing disc.")
+    sheet_row = _section_chunk(12, "| abc-1 | 3 | 5 |")
+    tools = _section_reading_setup(store, scope, monkeypatch, [main_text, sheet_row], readable=THREE_FILES)
+
+    for _ in range(150):
+        await _invoke(tools["read_chunk"], {"chunk_index": 10})
+    for _ in range(150):
+        await _invoke(tools["read_chunk"], {"chunk_index": 12})
+
+    assert _files_read_rows(store) == [
+        ("inv-a", [{"file_id": "file-0", "file_name": "paper.pdf"}]),
+        ("inv-a", [{"file_id": "file-1", "file_name": "Table S1.xlsx"}]),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_read_records_no_file(store, scope, monkeypatch):
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+    tools = _section_reading_setup(store, scope, monkeypatch, [_section_chunk(10, "Main text.")],
+                                   readable=THREE_FILES)
+
+    with pytest.raises(DocumentReadError):
+        await _invoke(tools["read_chunk"], {"chunk_index": 12})
+
+    assert _files_read_rows(store) == []

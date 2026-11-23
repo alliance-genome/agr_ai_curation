@@ -285,6 +285,7 @@ class ChatReview:
         builder_finalization=None,
         event_emitter=None,
         source_agent=None,
+        history_invocation_id=None,
     ):
         from src.lib.domain_packs.validator_dispatch import prepare_validator_dispatch
         from src.lib.curation_workspace.extraction_results import (
@@ -338,6 +339,7 @@ class ChatReview:
             user_id=self.owner_id,
             trace_id=trace_id,
             builder_finalization=builder_finalization,
+            history_invocation_id=history_invocation_id,
             metadata={
                 **(source_metadata or {}),
                 "chat_turn_id": self.turn_id,

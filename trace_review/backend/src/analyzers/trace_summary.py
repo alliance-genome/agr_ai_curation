@@ -187,6 +187,9 @@ class TraceSummaryAnalyzer:
                 "id": document_id,
                 "name": document_name
             } if document_id else None,
+            # The paper files whose text the model was shown in this run (ids and names);
+            # None for traces recorded before files were recorded.
+            "files_read": trace_metadata.get("files_read"),
             "response_preview": response_preview,
             "response_length": len(response_text) if response_text else 0,
             "timing": timing,

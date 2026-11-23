@@ -22,6 +22,7 @@ from agr_ai_curation_runtime.document_references import DocumentSelection
 from agr_ai_curation_runtime.evidence_spans import resolve_evidence_span_id
 from src.lib.context import get_current_session_id, get_current_trace_id, get_current_user_id
 from src.lib.document_files.service import FileRangeMissingError
+from src.lib.document_files.files_read import FILES_READ_KIND, files_already_read
 from src.lib.document_files.readable import (
     ReadableFiles,
     ReadableFilesError,
@@ -188,6 +189,34 @@ class SourceBinding:
                 if added:
                     # Retain each definition once; later reads add only ordinal coverage.
                     self.append(_WINDOW_KIND, {"chunk_index": index, "issued_indexes": sorted(added)}, db=db)
+            self._record_files_read(definitions, db=db)
+
+    def _record_files_read(self, definitions: dict, *, db) -> None:
+        """Record the files this read showed that the invocation had not been shown yet.
+
+        One row per newly shown set of files (ALL-1460, Q8), so a long run writes at
+        most one row per file per invocation, in the read's own transaction.
+        """
+        shown: dict[str, str] = {}
+        for index in definitions:
+            file = self.readable.file_for(index)
+            if file is None:
+                raise DocumentReferenceError("A shown chunk is not part of a readable file")
+            shown.setdefault(file.file_id, file.display_name)
+        if not shown:
+            return
+        scope = self.history_scope
+        already = files_already_read(
+            db, owner_id=scope.owner_id, run_id=scope.run_id,
+            invocation_id=scope.invocation_id, document_id=self.document_id,
+        )
+        new_files = [
+            {"file_id": file_id, "file_name": name}
+            for file_id, name in shown.items()
+            if file_id not in already
+        ]
+        if new_files:
+            self.append(FILES_READ_KIND, {"files": new_files}, db=db)
 
     async def resolve(self, selections: list[DocumentSelection]) -> list[str]:
         if not selections:

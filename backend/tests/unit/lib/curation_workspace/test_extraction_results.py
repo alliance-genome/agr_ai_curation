@@ -123,6 +123,13 @@ class _NestedTransaction:
         return False
 
 
+@pytest.fixture(autouse=True)
+def _no_recorded_reads(monkeypatch):
+    # The files-read lookup runs on PostgreSQL (persistence suite); these fakes record none.
+    monkeypatch.setattr(module, "files_read_for_result", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(module, "write_extraction_trace_event", lambda **_kwargs: None)
+
+
 class _FakeSession:
     def __init__(
         self,
@@ -380,6 +387,7 @@ def _record_row(**overrides):
         "payload_json": _sample_envelope_payload(),
         "created_at": datetime(2026, 3, 21, 0, 0, tzinfo=timezone.utc),
         "extraction_metadata": {},
+        "files_read": None,
     }
     payload.update(overrides)
     return SimpleNamespace(**payload)
@@ -837,6 +845,7 @@ def test_persist_inline_validated_extraction_result_reloads_existing_idempotent_
     document_id = uuid4()
     existing = SimpleNamespace(
         id=existing_id,
+        files_read=None,
         document_id=document_id,
         adapter_key="gene",
         agent_key="gene",
@@ -952,6 +961,7 @@ def test_persist_inline_validated_extraction_result_reloads_after_insert_conflic
     }
     race_winner_row = SimpleNamespace(
         id=existing_id,
+        files_read=None,
         document_id=document_id,
         adapter_key="gene",
         agent_key="gene",
@@ -1183,7 +1193,7 @@ def test_same_payload_different_receipt_cannot_reuse_idempotency_identity(existi
     receipt = _execution_receipt()
     first = _flow_persistence_request().model_copy(update={"agent_key": receipt.agent_key, "execution_receipt": receipt})
     second = first.model_copy(update={"execution_receipt": receipt.model_copy(update={"agent_revision_id": uuid4(), "revision": 2})})
-    record = module._build_extraction_result_record(first)
+    record = module._build_extraction_result_record(first, session=_FakeSession())
     session = _FakeSession(existing_rows=[record] if existing_row else [])
     with pytest.raises(ExtractionResultPayloadMismatchError, match="different execution receipt"):
         persist_idempotent_extraction_results([second] if existing_row else [first, second], db=session)
