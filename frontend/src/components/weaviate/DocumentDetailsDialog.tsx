@@ -31,6 +31,7 @@ import {
   documentSourceProviderLabel,
   documentSourceReferenceLabel,
 } from '../../utils/documentSourcePresentation';
+import DocumentFilesSection from './DocumentFilesSection';
 
 interface DocumentDetailsDialogProps {
   open: boolean;
@@ -285,6 +286,15 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                   {renderInfoItem('Created', formatDateTime(details.document.creationDate))}
                 </Paper>
               </Grid>
+              {documentId && (
+                <Grid size={12}>
+                  <DocumentFilesSection
+                    documentId={documentId}
+                    providerLabel={sourceProvenance?.provider ? documentSourceProviderLabel(sourceProvenance) : null}
+                    open={open}
+                  />
+                </Grid>
+              )}
               <Grid size={12}>
                 <Paper variant="outlined" sx={{ p: 2 }}>
                   <Typography variant="subtitle2" gutterBottom>
