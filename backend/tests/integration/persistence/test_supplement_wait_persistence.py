@@ -1,14 +1,19 @@
 """The supplement wait against the real database (KANBAN-1976 / ALL-1460, P7b).
 
-A restart loses the in-process stage; the stale sweep must then end its job
-cleanly, leaving the paper (completed before the wait) usable. And the outline
-signal reads the real job row. All values are made up.
+The stage runs under a job of its own kind, handed off when the main paper's
+import job completes, so the paper reads completed and stays usable during the
+wait and after every ending (done, failed, cancelled, a restart swept by the
+stale sweep). Only adding files is refused while it waits; a delete ends a
+waiting stage. Statuses are read through the real status endpoint. All values
+are made up.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -27,29 +32,34 @@ PREFIX = "p7b_supplement_wait_test_"
 
 
 @pytest.fixture
-def owner_id():
+def owner():
     command.upgrade(Config(str(BACKEND_ROOT / "alembic.ini")), "head")
+    subject = f"p7b-owner-{uuid4()}"
     with SessionLocal.begin() as db:
-        owner = ensure_test_pdf_owner(db, auth_sub=f"p7b-owner-{uuid4()}")
-    yield owner
+        owner_id = ensure_test_pdf_owner(db, auth_sub=subject)
+    yield owner_id, subject
     with SessionLocal.begin() as db:
         db.execute(delete(PDFDocument).where(PDFDocument.filename.like(f"{PREFIX}%")))
 
 
-def _ready_paper(owner: int) -> PDFDocument:
+def _ready_paper(owner_id: int) -> PDFDocument:
+    """A paper whose import job has just completed (the moment of the hand-off)."""
+
     document_id = uuid4()
     paper = new_paper(
-        id=document_id, user_id=owner, filename=f"{PREFIX}{document_id}.pdf", status="completed",
+        id=document_id, user_id=owner_id, filename=f"{PREFIX}{document_id}.pdf", status="completed",
         file_path=f"owner/{document_id}/made-up.pdf", file_hash=document_id.hex * 2,
         file_size=100, page_count=2,
     )
     with SessionLocal.begin() as db:
         db.add(paper)
+    import_job = job_service.create_job(document_id=paper.id, user_id=owner_id, filename=paper.filename)
+    job_service.mark_completed(job_id=import_job.job_id, message="Processing completed")
     return paper
 
 
-def _waiting_job(paper: PDFDocument, owner: int):
-    job = job_service.create_job(document_id=paper.id, user_id=owner, filename=paper.filename)
+def _waiting_stage(paper: PDFDocument, owner_id: int):
+    job = job_service.start_supplement_wait_job(document_id=paper.id, user_id=owner_id, filename=paper.filename)
     job_service.update_progress(
         job_id=job.job_id, stage="waiting_for_supplements", progress_percentage=60,
         message="Waiting for ABC", status="running",
@@ -63,12 +73,69 @@ def _age(job_id, seconds: int) -> None:
         db.execute(update(PdfProcessingJob).where(PdfProcessingJob.id == job_id).values(updated_at=aged))
 
 
-def test_after_a_restart_the_sweep_ends_the_wait_and_the_paper_stays_usable(owner_id, monkeypatch):
+async def _status(paper: PDFDocument, owner, monkeypatch) -> str:
+    """What the real status endpoint answers for the paper."""
+
+    from src.api import documents
+
+    owner_id, subject = owner
+    monkeypatch.setattr(documents, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=owner_id)))
+    monkeypatch.setattr(
+        documents, "get_document",
+        AsyncMock(return_value={"document": {"processing_status": "completed"}}),
+    )
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", AsyncMock(return_value=None))
+    answer = await documents.get_document_processing_status(document_id=str(paper.id), user={"sub": subject})
+    return answer["processing_status"]
+
+
+def _main_file_status(paper: PDFDocument) -> str:
+    with SessionLocal() as db:
+        return db.get(PDFDocument, paper.id).main_file.status
+
+
+@pytest.mark.asyncio
+async def test_the_paper_reads_completed_while_its_supplements_are_awaited(owner, monkeypatch):
+    owner_id, _ = owner
+    paper = _ready_paper(owner_id)
+    _waiting_stage(paper, owner_id)
+
+    assert await _status(paper, owner, monkeypatch) == "completed"
+    # Only adding files is refused during the wait (one active job per paper).
+    with pytest.raises(job_service.ActiveJobExistsError):
+        job_service.create_job(document_id=paper.id, user_id=owner_id, filename=paper.filename)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["completed", "failed", "cancelled"])
+async def test_the_paper_reads_completed_after_every_ending_of_its_stage(owner, monkeypatch, ending):
+    owner_id, _ = owner
+    paper = _ready_paper(owner_id)
+    stage = _waiting_stage(paper, owner_id)
+
+    if ending == "completed":
+        job_service.mark_completed(job_id=stage.job_id, message="Supplements finished")
+    elif ending == "failed":
+        job_service.mark_failed(
+            job_id=stage.job_id, message="The main paper is ready, but its supplements could not be added.",
+            stage="failed",
+        )
+    else:
+        job_service.mark_cancelled(job_id=stage.job_id, reason="Processing cancelled by user request")
+
+    assert await _status(paper, owner, monkeypatch) == "completed"
+    # A failed or cancelled stage never marks the paper's main file failed (mutation M6).
+    assert _main_file_status(paper) == "ready"
+
+
+@pytest.mark.asyncio
+async def test_after_a_restart_the_sweep_ends_the_wait_and_the_paper_stays_usable(owner, monkeypatch):
     from src.lib.pdf_jobs.recovery import reconcile_stale_jobs_once
 
+    owner_id, _ = owner
     paper = _ready_paper(owner_id)
-    job = _waiting_job(paper, owner_id)
-    _age(job.job_id, 3 * 3600)  # the process died with its stage three hours ago
+    stage = _waiting_stage(paper, owner_id)
+    _age(stage.job_id, 3 * 3600)  # the process died with its stage three hours ago
     monkeypatch.setenv("PDF_JOB_STALE_TIMEOUT_SECONDS", "7200")
     monkeypatch.setenv("PDF_JOB_RECOVERY_BATCH_SIZE", "200")
 
@@ -77,24 +144,46 @@ def test_after_a_restart_the_sweep_ends_the_wait_and_the_paper_stays_usable(owne
         cursor = reconcile_stale_jobs_once(after=cursor)
 
     with SessionLocal() as db:
-        assert db.get(PdfProcessingJob, job.job_id).status == "failed"
-        stored = db.get(PDFDocument, paper.id)
-        assert stored.status == "completed"
-        assert stored.main_file.status == "ready"
-    # The one-active-job rule no longer holds the paper: files can be added by hand.
+        assert db.get(PdfProcessingJob, stage.job_id).status == "failed"
+    assert await _status(paper, owner, monkeypatch) == "completed"
+    assert _main_file_status(paper) == "ready"
+    # The one-active-job rule no longer holds the paper.
     job_service.create_job(document_id=paper.id, user_id=owner_id, filename=paper.filename)
 
 
-def test_the_outline_signal_reads_a_living_wait_and_drops_a_dead_one(owner_id, monkeypatch):
+def test_a_delete_ends_a_stage_that_only_waits(owner):
+    owner_id, _ = owner
+    paper = _ready_paper(owner_id)
+    stage = _waiting_stage(paper, owner_id)
+
+    assert job_service.end_supplement_wait_for_delete(document_id=paper.id, user_id=owner_id) is True
+
+    latest = job_service.get_latest_job_for_document(document_id=paper.id, user_id=owner_id)
+    assert (latest.job_id, latest.status) == (stage.job_id, "cancelled")
+
+
+def test_a_delete_keeps_refusing_while_the_stage_writes_files(owner):
+    owner_id, _ = owner
+    paper = _ready_paper(owner_id)
+    stage = _waiting_stage(paper, owner_id)
+    job_service.update_progress(job_id=stage.job_id, stage="adding_supplements", status="running")
+
+    assert job_service.end_supplement_wait_for_delete(document_id=paper.id, user_id=owner_id) is False
+    latest = job_service.get_latest_job_for_document(document_id=paper.id, user_id=owner_id)
+    assert latest.status == "running"
+
+
+def test_the_outline_signal_reads_a_living_wait_and_drops_a_dead_one(owner, monkeypatch):
     monkeypatch.delenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", raising=False)
     monkeypatch.delenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", raising=False)
+    owner_id, _ = owner
     paper = _ready_paper(owner_id)
-    job = _waiting_job(paper, owner_id)
+    stage = _waiting_stage(paper, owner_id)
 
     with SessionLocal() as db:
         assert job_service.supplement_wait_active(db, paper.id) is True
-    _age(job.job_id, 130)  # no poll for longer than 3 x (30 s + 10 s)
+    _age(stage.job_id, 130)  # no poll for longer than 3 x (30 s + 10 s)
     with SessionLocal() as db:
         assert job_service.supplement_wait_active(db, paper.id) is False
     with SessionLocal() as db:

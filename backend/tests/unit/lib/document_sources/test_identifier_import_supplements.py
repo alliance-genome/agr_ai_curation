@@ -38,6 +38,34 @@ from tests.unit.lib.document_sources.test_identifier_import import (
 EXPIRES = 1_900_000_000
 
 
+async def _signed_in_user(monkeypatch):
+    """The user the real auth dependency returns for a validated login expiring at EXPIRES."""
+
+    import importlib
+    from types import SimpleNamespace as _NS
+
+    from fastapi.security import SecurityScopes
+
+    auth_api = importlib.import_module("src.api.auth")
+
+    class _Provider:
+        async def validate_token(self, _token):
+            return {"iss": "https://identity.example.org/pool", "exp": EXPIRES}
+
+        def extract_principal(self, _claims):
+            return _NS(subject="user-1", email="u@example.org", display_name="User 1",
+                       provider="cognito", groups=["FBStaff"])
+
+    monkeypatch.delenv("TESTING_API_KEY", raising=False)
+    monkeypatch.setattr(auth_api, "is_dev_mode", lambda: False)
+    monkeypatch.setattr(auth_api, "is_auth_configured", lambda: True)
+    monkeypatch.setattr(auth_api, "_get_provider_or_503", lambda: _Provider())
+    return await auth_api._get_user_from_cookie_impl(
+        _NS(headers={}, cookies={"auth_token": "made-up-token"}, base_url="https://app.example.org/"),
+        SecurityScopes(),
+    )
+
+
 def _running_answer():
     return SourceConversionResult(
         provider="abc_literature", status=SourceConversionStatus.RUNNING,
@@ -82,7 +110,7 @@ def _choice(provider_file_id, *, identifier="123", converted_md5=None):
 
 
 @pytest.mark.asyncio
-async def test_an_import_that_asks_abc_carries_the_chosen_supplements_and_the_login_expiry(tmp_path):
+async def test_an_import_that_asks_abc_carries_the_chosen_supplements_and_the_login_expiry(tmp_path, monkeypatch):
     provider = _FakeConversionProvider(
         artifacts=(_source_artifact(artifact_id="pdf-1"), _provider_metadata_artifact()),
         conversion_result=_running_answer(),
@@ -92,7 +120,7 @@ async def test_an_import_that_asks_abc_carries_the_chosen_supplements_and_the_lo
 
     result = await _service(provider, tmp_path, dispatch).import_identifiers(
         background_tasks=BackgroundTasks(), identifiers="123",
-        user={"sub": "user-1", "exp": EXPIRES}, document_source_context=_context(),
+        user=await _signed_in_user(monkeypatch), document_source_context=_context(),
         supplements=[_choice("30"), _choice("40", converted_md5="md5-41")],
     )
 
@@ -135,7 +163,7 @@ async def test_an_unconverted_file_is_not_tickable_when_this_import_does_not_ask
 
     result = await _service(provider, tmp_path, dispatch).import_identifiers(
         background_tasks=BackgroundTasks(), identifiers="123",
-        user={"sub": "user-1", "exp": EXPIRES}, document_source_context=_context(),
+        user={"sub": "user-1"}, document_source_context=_context(),
         supplements=[_choice("30")],
     )
 
@@ -151,7 +179,7 @@ async def test_a_converted_file_on_a_converted_main_goes_through_without_a_wait(
 
     await _service(provider, tmp_path, dispatch).import_identifiers(
         background_tasks=BackgroundTasks(), identifiers="123",
-        user={"sub": "user-1", "exp": EXPIRES}, document_source_context=_context(),
+        user={"sub": "user-1"}, document_source_context=_context(),
         supplements=[_choice("40", converted_md5="md5-41")],
     )
 
@@ -192,7 +220,7 @@ async def test_the_machine_reader_has_no_curator_login_to_expire(tmp_path):
 
     await _service(provider, tmp_path, dispatch).import_identifiers(
         background_tasks=BackgroundTasks(), identifiers="123",
-        user={"sub": "dev-user", "exp": EXPIRES},
+        user={"sub": "dev-user"},
         document_source_context=_context(ProviderBearerKind.SERVICE),
         supplements=[_choice("40", converted_md5="md5-41")],
     )
@@ -228,3 +256,30 @@ async def test_a_decision_that_sent_no_request_has_no_answer():
 
     assert decision.is_ready
     assert decision.conversion_answer is None
+
+
+
+@pytest.mark.asyncio
+async def test_an_expired_login_on_an_ordinary_import_shows_what_it_showed_before_and_is_not_reported(
+    tmp_path, monkeypatch
+):
+    from src.lib.document_sources import identifier_import
+    from src.lib.document_sources.models import DocumentSourceLoginExpired
+
+    reported = []
+    monkeypatch.setattr(identifier_import, "_report_source_failure", lambda exc, code: reported.append(code))
+
+    class _Refusing(_FakeProvider):
+        async def download_artifact(self, artifact_id, *, request_bearer_token=None, max_bytes=None):
+            raise DocumentSourceLoginExpired("ABC Literature artifact download failed")
+
+    result = await _service(_Refusing(artifacts=_ready_artifacts()), tmp_path, _DispatchRecorder()).import_identifiers(
+        background_tasks=BackgroundTasks(), identifiers="123", user={"sub": "user-1"},
+        document_source_context=_context(),
+    )
+
+    row = result.results[0]
+    assert (row.status, row.error_code, row.message) == (
+        "error", "document_source_unavailable", "Document-source lookup is unavailable.",
+    )
+    assert reported == []

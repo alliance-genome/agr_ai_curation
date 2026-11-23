@@ -34,13 +34,11 @@ LOGIN_EXPIRED_MESSAGE = (
 class DocumentSourceLoginExpired(DocumentSourceError):
     """The provider refused the curator's login (it expired during a long import).
 
-    Raised by a provider for its "not authenticated" answer, and by an import
-    whose login has run out before it starts. Its message is the curator-facing
-    ``LOGIN_EXPIRED_MESSAGE``.
+    Raised by a provider for its "not authenticated" answer, with the provider's
+    own failure text, so an ordinary import shows what it showed before. Only an
+    import with chosen supplements, refused before it starts, carries the
+    curator-facing ``LOGIN_EXPIRED_MESSAGE``.
     """
-
-    def __init__(self) -> None:
-        super().__init__(LOGIN_EXPIRED_MESSAGE)
 
 
 class DocumentSourceArtifactNotFound(DocumentSourceError):

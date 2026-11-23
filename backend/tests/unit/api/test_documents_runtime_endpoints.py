@@ -2154,3 +2154,26 @@ async def test_document_detail_of_a_paper_without_a_main_file_has_no_file_size(m
 
     assert response.filename == "old-name.pdf"
     assert response.file_size_bytes is None
+
+
+def test_only_a_waiting_supplement_stage_is_ended_by_a_delete():
+    """KANBAN-1976 / ALL-1460, P7b: a delete ends a stage that only waits; nothing else."""
+
+    from datetime import datetime, timezone
+
+    from src.lib.pdf_jobs.service import is_waiting_supplement_stage
+    from src.schemas.pdf_jobs import PdfJobResponse
+
+    def _job(stage, kind, status="running"):
+        now = datetime.now(timezone.utc)
+        return PdfJobResponse(
+            job_id="job-1", document_id="doc-1", user_id=7, status=status, current_stage=stage,
+            metadata={"job_kind": kind} if kind else None, created_at=now, updated_at=now,
+        )
+
+    assert is_waiting_supplement_stage(_job("waiting_for_supplements", "supplement_wait")) is True
+    assert is_waiting_supplement_stage(_job("adding_supplements", "supplement_wait")) is False
+    assert is_waiting_supplement_stage(_job("waiting_for_supplements", "supplement_wait", "completed")) is False
+    assert is_waiting_supplement_stage(_job("parsing", None)) is False
+    assert is_waiting_supplement_stage(_job("waiting_for_supplements", "supplement_add")) is False
+    assert is_waiting_supplement_stage(None) is False

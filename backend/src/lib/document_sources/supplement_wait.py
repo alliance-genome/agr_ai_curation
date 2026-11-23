@@ -30,6 +30,7 @@ from src.lib.document_sources.file_reasons import FileReason, SupplementState
 from src.lib.document_sources.supplement_plan import SupplementPlan
 from src.lib.document_sources.models import (
     DocumentSourceError,
+    DocumentSourceLoginExpired,
     DocumentSourceProvider,
     SourceConversionFileStatus,
     SourceConversionResult,
@@ -128,6 +129,9 @@ class _JobNoLongerActive(Exception):
     """The job was made terminal outside this stage; the stage writes nothing more."""
 
 
+_FINAL_STATES = frozenset({SupplementState.ADDED, SupplementState.LEFT_OUT})
+
+
 @dataclass(slots=True)
 class _Entry:
     provider_file_id: str
@@ -138,6 +142,8 @@ class _Entry:
     file_id: str | None = None
     converted_md5: str | None = None
     md5: str | None = None
+    measured_value: int | None = None
+    limit_value: int | None = None
 
     def as_metadata(self) -> dict[str, Any]:
         return {
@@ -147,11 +153,89 @@ class _Entry:
             "reason_code": self.reason_code,
             "observed_at": self.observed_at,
             "file_id": self.file_id,
+            "measured_value": self.measured_value,
+            "limit_value": self.limit_value,
         }
 
 
 def _iso(epoch_seconds: float) -> str:
     return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc).isoformat()
+
+
+class _Stage:
+    """One import's supplement stage: its entries, its job writes and its limits."""
+
+    def __init__(self, *, job_id: str, plan: SupplementPlan, main_ready_at: float,
+                 clock: Callable[[], float]):
+        self.job_id = job_id
+        self.plan = plan
+        self.clock = clock
+        self.entries: dict[str, _Entry] = {}
+        self.login_cutoff = (
+            plan.login_expires_at - get_document_supplement_add_reserve_seconds()
+            if plan.login_expires_at is not None
+            else None
+        )
+        self.wait_ends_at = main_ready_at + get_document_supplement_wait_timeout_seconds()
+        if self.login_cutoff is not None:
+            self.wait_ends_at = min(self.wait_ends_at, self.login_cutoff)
+
+    def login_ended(self) -> bool:
+        return self.login_cutoff is not None and self.clock() >= self.login_cutoff
+
+    def login_gone(self) -> bool:
+        """The login itself has expired: nothing may be asked of the provider with it."""
+        return self.plan.login_expires_at is not None and self.clock() >= self.plan.login_expires_at
+
+    async def checkpoint(self, stage: str | None = None) -> None:
+        job = await asyncio.to_thread(
+            pdf_job_service.get_job_by_id, job_id=self.job_id, reconcile_stale=False
+        )
+        if job is None or job.status in TERMINAL_PDF_JOB_STATUSES:
+            raise _JobNoLongerActive()
+        if job.cancel_requested:
+            raise PDFCancellationError("Processing cancelled by user request")
+
+    async def record(self, stage: str, message: str) -> None:
+        await asyncio.to_thread(
+            pdf_job_service.update_progress,
+            job_id=self.job_id,
+            stage=stage,
+            message=message,
+            status="running",
+            metadata={
+                "supplements": [entry.as_metadata() for entry in self.entries.values()],
+                "supplement_wait_ends_at": _iso(self.wait_ends_at),
+            },
+        )
+
+    def leave_out(self, provider_file_id: str, reason: FileReason | str, *,
+                  measured_value: int | None = None, limit_value: int | None = None) -> None:
+        entry = self.entries[provider_file_id]
+        entry.state = SupplementState.LEFT_OUT
+        entry.reason_code = reason.value if isinstance(reason, FileReason) else reason
+        entry.observed_at = _iso(self.clock())
+        entry.measured_value = measured_value
+        entry.limit_value = limit_value
+
+    def ids_in(self, *states: SupplementState) -> list[str]:
+        return [key for key, entry in self.entries.items() if entry.state in states]
+
+    def end_unfinished(self, reason: FileReason) -> None:
+        for provider_file_id in [
+            key for key, entry in self.entries.items() if entry.state not in _FINAL_STATES
+        ]:
+            self.leave_out(provider_file_id, reason)
+
+    def apply(self, classified: Mapping[str, str], listing: FileListing) -> None:
+        listed = {item.provider_file_id: item for item in listing.files}
+        for provider_file_id, outcome in classified.items():
+            if outcome == CONVERTED:
+                entry = self.entries[provider_file_id]
+                entry.state = SupplementState.QUEUED
+                entry.converted_md5 = listed[provider_file_id].converted_md5
+            elif outcome != WAITING:
+                self.leave_out(provider_file_id, outcome)
 
 
 async def run_supplement_stage(
@@ -174,220 +258,239 @@ async def run_supplement_stage(
 ) -> None:
     """Wait for the provider to convert the chosen supplements, then add the converted ones.
 
-    The paper is already ``completed``; its status never changes here. The wait
-    polls the request the main phase sent, only while that request's answer is
-    ``running``, and ends at the first of: every file classified, a final answer,
-    the supplement wait limit (from ``main_ready_at``), the login's expiry minus
-    the add reserve, the first provider error, a cancel, or the job made terminal
-    elsewhere (then nothing more is written). The request is never sent after a
-    final answer.
+    Runs under its own job (the paper is already ``completed``; its status never
+    depends on this). The wait polls the request the main phase sent, only while
+    that request's answer is ``running``, and ends at the first of: every file
+    classified; a final answer; the wait limit (from ``main_ready_at``); the
+    login's expiry minus the add reserve; the provider starting a new job for the
+    paper (its ``job_id`` changes: nothing more is sent); the first provider
+    error; a cancel; or the job made terminal elsewhere (then nothing more is
+    written). The request is never sent after a final answer. Every entry ends
+    ``added`` or ``left_out`` with a reason.
     """
 
-    wait_ends_at = main_ready_at + get_document_supplement_wait_timeout_seconds()
-    if plan.login_expires_at is not None:
-        wait_ends_at = min(
-            wait_ends_at,
-            plan.login_expires_at - get_document_supplement_add_reserve_seconds(),
+    stage = _Stage(job_id=job_id, plan=plan, main_ready_at=main_ready_at, clock=clock)
+    for chosen in plan.chosen:
+        stage.entries[chosen.provider_file_id] = _Entry(
+            provider_file_id=chosen.provider_file_id,
+            display_name=chosen.provider_file_id,
+            state=(
+                SupplementState.QUEUED
+                if chosen.converted_md5 is not None
+                else SupplementState.WAITING
+            ),
+            converted_md5=chosen.converted_md5,
+            md5=chosen.md5,
         )
-    token = plan.request_context.curator_token
-    entries: dict[str, _Entry] = {}
-
-    async def checkpoint(stage: str | None = None) -> None:
-        job = await asyncio.to_thread(
-            pdf_job_service.get_job_by_id, job_id=job_id, reconcile_stale=False
-        )
-        if job is None or job.status in TERMINAL_PDF_JOB_STATUSES:
-            raise _JobNoLongerActive()
-        if job.cancel_requested:
-            raise PDFCancellationError("Processing cancelled by user request")
-
-    def record(stage: str, message: str) -> None:
-        pdf_job_service.update_progress(
-            job_id=job_id,
-            stage=stage,
-            message=message,
-            status="running",
-            metadata={
-                "supplements": [entry.as_metadata() for entry in entries.values()],
-                "supplement_wait_ends_at": _iso(wait_ends_at),
-            },
-        )
-
-    def leave_out(provider_file_id: str, reason: str) -> None:
-        entry = entries[provider_file_id]
-        entry.state = SupplementState.LEFT_OUT
-        entry.reason_code = reason
-        entry.observed_at = _iso(clock())
-
-    def waiting_ids() -> list[str]:
-        return [key for key, entry in entries.items() if entry.state is SupplementState.WAITING]
-
-    def apply(classified: Mapping[str, str], listing: FileListing) -> None:
-        listed = {item.provider_file_id: item for item in listing.files}
-        for provider_file_id, outcome in classified.items():
-            if outcome == CONVERTED:
-                entry = entries[provider_file_id]
-                entry.state = SupplementState.QUEUED
-                entry.converted_md5 = listed[provider_file_id].converted_md5
-            elif outcome != WAITING:
-                leave_out(provider_file_id, outcome)
 
     try:
-        await checkpoint()
+        await stage.checkpoint()
+        if clock() >= stage.wait_ends_at:
+            # Queued past its limit or its login: end at once, asking the provider nothing.
+            if stage.login_ended():
+                stage.end_unfinished(FileReason.LOGIN_EXPIRED)
+            else:
+                for provider_file_id in stage.ids_in(SupplementState.WAITING):
+                    stage.leave_out(provider_file_id, FileReason.NOT_CONVERTED_IN_TIME)
+                stage.end_unfinished(FileReason.WAIT_LIMIT_REACHED)
+            await stage.record(pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE, "Supplements finished")
+            await outcomes.completed()
+            return
+
+        add_allowed = True
         try:
             listing = await list_files(
                 UUID(document_id), owner_user_id=owner_user_id, provider=provider,
                 context=plan.request_context,
             )
+        except DocumentSourceLoginExpired:
+            listing = None
+            stage.end_unfinished(FileReason.LOGIN_EXPIRED)
+            add_allowed = False
         except DocumentSourceError:
             listing = None
-        names = {item.provider_file_id: item.display_name for item in listing.files} if listing else {}
-        for chosen in plan.chosen:
-            entries[chosen.provider_file_id] = _Entry(
-                provider_file_id=chosen.provider_file_id,
-                display_name=names.get(chosen.provider_file_id) or chosen.provider_file_id,
-                state=(
-                    SupplementState.QUEUED
-                    if chosen.converted_md5 is not None
-                    else SupplementState.WAITING
-                ),
-                converted_md5=chosen.converted_md5,
-                md5=chosen.md5,
-            )
-        record(pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE, "Waiting for ABC")
+        if listing is not None:
+            names = {item.provider_file_id: item.display_name for item in listing.files}
+            for entry in stage.entries.values():
+                entry.display_name = names.get(entry.provider_file_id) or entry.provider_file_id
+        await stage.record(pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE, "Waiting for ABC")
 
-        if waiting_ids():
+        if stage.ids_in(SupplementState.WAITING):
             if not conversion_requested or last_answer is None or listing is None:
-                # Nothing asked the provider to convert them in this import, or
-                # the paper's files cannot be listed: they are not converted.
-                for provider_file_id in waiting_ids():
-                    leave_out(
+                # Nothing asked the provider to convert them in this import, or the
+                # paper's files cannot be listed: they are not converted.
+                for provider_file_id in stage.ids_in(SupplementState.WAITING):
+                    stage.leave_out(
                         provider_file_id,
-                        FileReason.NOT_CONVERTED_IN_TIME.value
+                        FileReason.NOT_CONVERTED_IN_TIME
                         if listing is None
-                        else FileReason.PROVIDER_NOT_CONVERTED.value,
+                        else FileReason.PROVIDER_NOT_CONVERTED,
                     )
             elif last_answer.status is not SourceConversionStatus.RUNNING:
                 # The main phase already had the provider's final answer:
                 # classify once and never ask again.
-                apply(
-                    classify_conversion_answer(
+                try:
+                    classified = classify_conversion_answer(
                         last_answer, provider.conversion_file_statuses(last_answer),
-                        waiting_ids(), listing,
-                    ),
-                    listing,
-                )
+                        stage.ids_in(SupplementState.WAITING), listing,
+                    )
+                except (DocumentSourceError, UnclassifiableConversionAnswer):
+                    for provider_file_id in stage.ids_in(SupplementState.WAITING):
+                        stage.leave_out(provider_file_id, FileReason.PROVIDER_ANSWER_UNKNOWN)
+                else:
+                    stage.apply(classified, listing)
             else:
-                await _poll_until_done(
-                    provider=provider, reference=reference, token=token, plan=plan,
+                add_allowed = await _poll_until_done(
+                    stage=stage, provider=provider, reference=reference,
                     document_id=document_id, owner_user_id=owner_user_id,
-                    listing=listing, wait_ends_at=wait_ends_at, clock=clock, sleep=sleep,
-                    list_files=list_files, checkpoint=checkpoint, record=record,
-                    leave_out=leave_out, waiting_ids=waiting_ids, apply=apply,
+                    listing=listing, first_job_id=last_answer.job_id, sleep=sleep,
+                    list_files=list_files,
                 )
 
-        to_add = [
-            entry for entry in entries.values() if entry.state is SupplementState.QUEUED
-        ]
+        to_add = [stage.entries[key] for key in stage.ids_in(SupplementState.QUEUED)]
+        if to_add and (not add_allowed or stage.login_gone()):
+            stage.end_unfinished(FileReason.LOGIN_EXPIRED)
+            to_add = []
         if to_add:
-            await checkpoint()
+            await stage.checkpoint()
             for entry in to_add:
                 entry.state = SupplementState.ADDING
-            record(pdf_job_service.ADDING_SUPPLEMENTS_STAGE, "Adding supplements")
+            await stage.record(pdf_job_service.ADDING_SUPPLEMENTS_STAGE, "Adding supplements")
             from src.lib.document_sources.supplement_add import ChosenFile
 
-            result = await add_files(
-                UUID(document_id),
-                owner_user_id,
-                plan.request_context,
-                [
-                    ChosenFile(
-                        provider_file_id=entry.provider_file_id,
-                        md5=entry.md5,
-                        converted_md5=entry.converted_md5,
-                    )
-                    for entry in to_add
-                ],
-                job_id=UUID(job_id),
-                provider=provider,
-                weaviate_client=weaviate_client,
-                stage_checkpoint=checkpoint,
-            )
-            for outcome in result.files:
-                entry = entries[outcome.provider_file_id]
-                if outcome.outcome == "added":
-                    entry.state = SupplementState.ADDED
-                    entry.file_id = str(outcome.file_id)
-                else:
-                    leave_out(outcome.provider_file_id, outcome.reason_code.value)
-        await checkpoint()
-        record(pdf_job_service.ADDING_SUPPLEMENTS_STAGE, "Supplements finished")
+            try:
+                result = await add_files(
+                    UUID(document_id),
+                    owner_user_id,
+                    plan.request_context,
+                    [
+                        ChosenFile(
+                            provider_file_id=entry.provider_file_id,
+                            md5=entry.md5,
+                            converted_md5=entry.converted_md5,
+                        )
+                        for entry in to_add
+                    ],
+                    job_id=UUID(job_id),
+                    provider=provider,
+                    weaviate_client=weaviate_client,
+                    stage_checkpoint=stage.checkpoint,
+                )
+            except DocumentSourceLoginExpired:
+                stage.end_unfinished(FileReason.LOGIN_EXPIRED)
+            except DocumentSourceError:
+                # The provider failed during the add (its listing or downloads):
+                # the add wrote nothing; the files are left out.
+                stage.end_unfinished(FileReason.SOURCE_UNAVAILABLE)
+            else:
+                for outcome in result.files:
+                    entry = stage.entries[outcome.provider_file_id]
+                    if outcome.display_name:
+                        entry.display_name = outcome.display_name
+                    if outcome.outcome == "added":
+                        entry.state = SupplementState.ADDED
+                        entry.file_id = str(outcome.file_id)
+                    else:
+                        stage.leave_out(
+                            outcome.provider_file_id, outcome.reason_code,
+                            measured_value=outcome.measured_value,
+                            limit_value=outcome.limit_value,
+                        )
+        await stage.checkpoint()
+        await stage.record(pdf_job_service.ADDING_SUPPLEMENTS_STAGE, "Supplements finished")
         await outcomes.completed()
     except _JobNoLongerActive:
         logger.info("Supplement stage of job %s ended: the job was finalized elsewhere", job_id)
     except PDFCancellationError:
-        for provider_file_id in waiting_ids():
-            leave_out(provider_file_id, FileReason.NOT_CONVERTED_IN_TIME.value)
-        if entries:
-            record(pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE, "Cancelled")
+        stage.end_unfinished(FileReason.IMPORT_CANCELLED)
+        await stage.record(pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE, "Cancelled")
         await outcomes.cancelled()
+    except Exception:
+        # The stage's own failure: every file still open is left out by name, then
+        # the task's guard ends the job and reports it.
+        stage.end_unfinished(FileReason.SUPPLEMENT_STAGE_FAILED)
+        await stage.record(pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE, "Supplements failed")
+        raise
 
 
 async def _poll_until_done(
     *,
+    stage: _Stage,
     provider: DocumentSourceProvider,
     reference: str,
-    token: str | None,
-    plan: SupplementPlan,
     document_id: str,
     owner_user_id: int,
     listing: FileListing,
-    wait_ends_at: float,
-    clock: Callable[[], float],
+    first_job_id: str | None,
     sleep: Callable[[float], Awaitable[None]],
     list_files: Callable[..., Awaitable[FileListing]],
-    checkpoint: Callable[..., Awaitable[None]],
-    record: Callable[[str, str], None],
-    leave_out: Callable[[str, str], None],
-    waiting_ids: Callable[[], list[str]],
-    apply: Callable[[Mapping[str, str], FileListing], None],
-) -> None:
-    """Re-send the main phase's request while it answers ``running``; stop at the first end."""
+) -> bool:
+    """Re-send the main phase's request while it answers ``running``; stop at the first end.
+
+    Returns whether the converted files may still be added (False once the
+    curator's login was refused).
+    """
 
     poll_seconds = get_document_source_poll_interval_seconds()
-    while waiting_ids():
-        remaining = wait_ends_at - clock()
+    token = stage.plan.request_context.curator_token
+    while stage.ids_in(SupplementState.WAITING):
+        remaining = stage.wait_ends_at - stage.clock()
         if remaining <= 0:
             break
         await sleep(min(poll_seconds, remaining))
-        await checkpoint()
-        if clock() >= wait_ends_at:
+        await stage.checkpoint()
+        if stage.clock() >= stage.wait_ends_at:
             break
         try:
             answer = await provider.request_conversion(
                 reference, wait=False, request_bearer_token=token,
             )
+        except DocumentSourceLoginExpired:
+            for provider_file_id in stage.ids_in(SupplementState.WAITING):
+                stage.leave_out(provider_file_id, FileReason.LOGIN_EXPIRED)
+            return False
+        except DocumentSourceError:
+            # The first provider error ends the wait (no retries); converted files join.
+            break
+        if answer.job_id != first_job_id:
+            # The provider lost the job this import started and began a new one
+            # (that request may already have started new work): ask nothing more.
+            for provider_file_id in stage.ids_in(SupplementState.WAITING):
+                stage.leave_out(provider_file_id, FileReason.PROVIDER_JOB_RESTARTED)
+            break
+        try:
             statuses = provider.conversion_file_statuses(answer)
             final = answer.status is not SourceConversionStatus.RUNNING
             newly_converted = any(
                 statuses.get(provider_file_id) is SourceConversionFileStatus.CONVERTED
-                for provider_file_id in waiting_ids()
+                for provider_file_id in stage.ids_in(SupplementState.WAITING)
             )
             if final or newly_converted:
-                listing = await list_files(
-                    UUID(document_id), owner_user_id=owner_user_id, provider=provider,
-                    context=plan.request_context,
-                )
-            classified = classify_conversion_answer(answer, statuses, waiting_ids(), listing)
+                try:
+                    listing = await list_files(
+                        UUID(document_id), owner_user_id=owner_user_id, provider=provider,
+                        context=stage.plan.request_context,
+                    )
+                except DocumentSourceLoginExpired:
+                    for provider_file_id in stage.ids_in(SupplementState.WAITING):
+                        stage.leave_out(provider_file_id, FileReason.LOGIN_EXPIRED)
+                    return False
+                except DocumentSourceError:
+                    break
+            classified = classify_conversion_answer(
+                answer, statuses, stage.ids_in(SupplementState.WAITING), listing,
+            )
         except (DocumentSourceError, UnclassifiableConversionAnswer):
-            # The first provider error ends the wait (no retries).
+            for provider_file_id in stage.ids_in(SupplementState.WAITING):
+                stage.leave_out(provider_file_id, FileReason.PROVIDER_ANSWER_UNKNOWN)
             break
-        apply(classified, listing)
-        record(pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE, "Waiting for ABC")
+        stage.apply(classified, listing)
+        await stage.record(pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE, "Waiting for ABC")
         if final:
             break
-    for provider_file_id in waiting_ids():
-        leave_out(provider_file_id, FileReason.NOT_CONVERTED_IN_TIME.value)
+    for provider_file_id in stage.ids_in(SupplementState.WAITING):
+        stage.leave_out(provider_file_id, FileReason.NOT_CONVERTED_IN_TIME)
+    return True
 
 
 # --- Running the stage as its own task ------------------------------------------
@@ -466,25 +569,39 @@ async def _run_guarded(
 async def _wait_for_slot(
     slots: asyncio.Semaphore, *, job_id: str, outcomes: StageOutcomes,
 ) -> None:
+    """Wait for a running slot, in order, recording activity at the poll interval meanwhile.
+
+    One ``acquire`` per waiting stage stays in the semaphore's queue for the
+    whole wait, so stages are served in the order they arrived.
+    """
     poll_seconds = get_document_source_poll_interval_seconds()
-    while True:
-        try:
-            await asyncio.wait_for(slots.acquire(), timeout=poll_seconds)
-            return
-        except asyncio.TimeoutError:
+    acquiring = asyncio.ensure_future(slots.acquire())
+    try:
+        while True:
+            done, _pending = await asyncio.wait({acquiring}, timeout=poll_seconds)
+            if done:
+                acquiring.result()
+                return
             job = await asyncio.to_thread(
                 pdf_job_service.get_job_by_id, job_id=job_id, reconcile_stale=False
             )
             if job is None or job.status in TERMINAL_PDF_JOB_STATUSES:
-                raise _JobNoLongerActive() from None
+                raise _JobNoLongerActive()
             if job.cancel_requested:
-                raise PDFCancellationError("Processing cancelled by user request") from None
-            pdf_job_service.update_progress(
+                raise PDFCancellationError("Processing cancelled by user request")
+            await asyncio.to_thread(
+                pdf_job_service.update_progress,
                 job_id=job_id,
                 stage=pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE,
                 message="Waiting for ABC",
                 status="running",
             )
+    except BaseException:
+        if acquiring.done() and not acquiring.cancelled() and acquiring.exception() is None:
+            slots.release()  # granted at the same moment the wait ended
+        else:
+            acquiring.cancel()
+        raise
 
 
 async def stop_supplement_stages() -> None:

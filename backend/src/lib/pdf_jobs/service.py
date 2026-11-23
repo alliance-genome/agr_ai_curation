@@ -647,18 +647,92 @@ def get_job_by_id(*, job_id: UUID | str, reconcile_stale: bool = True) -> Option
 # Such a job never stands for the paper's own processing state.
 JOB_KIND_KEY = "job_kind"
 SUPPLEMENT_ADD_JOB_KIND = "supplement_add"
+# The supplement stage of a new paper's import (P7b): it waits for the provider,
+# then adds the converted files. Like an add, it never stands for the paper's state.
+SUPPLEMENT_WAIT_JOB_KIND = "supplement_wait"
+_FILE_JOB_KINDS = (SUPPLEMENT_ADD_JOB_KIND, SUPPLEMENT_WAIT_JOB_KIND)
 
 
 def _not_an_add_job():
     return or_(
         PdfProcessingJob.metadata_json.is_(None),
-        PdfProcessingJob.metadata_json[JOB_KIND_KEY].astext.is_distinct_from(SUPPLEMENT_ADD_JOB_KIND),
+        PdfProcessingJob.metadata_json[JOB_KIND_KEY].astext.is_(None),
+        PdfProcessingJob.metadata_json[JOB_KIND_KEY].astext.not_in(_FILE_JOB_KINDS),
     )
 
 
 def is_supplement_add_job(job: PdfJobResponse | PdfProcessingJob) -> bool:
     metadata = job.metadata if isinstance(job, PdfJobResponse) else job.metadata_json
-    return bool(metadata) and metadata.get(JOB_KIND_KEY) == SUPPLEMENT_ADD_JOB_KIND
+    return bool(metadata) and metadata.get(JOB_KIND_KEY) in _FILE_JOB_KINDS
+
+
+def start_supplement_wait_job(*, document_id: UUID | str, user_id: int, filename: Optional[str]) -> PdfJobResponse:
+    """Create the job of a new paper's supplement stage, once its import job has completed.
+
+    Ordered against a delete of the same paper by the paper's lock (never waiting
+    for it). Raises ``ActiveJobExistsError`` when the paper already has an active
+    job, or a delete or an add holds its lock.
+    """
+    from src.lib.document_files.paper_lock import try_lock_paper_for_add
+
+    session = SessionLocal()
+    try:
+        if not try_lock_paper_for_add(session, document_id):
+            session.rollback()
+            raise ActiveJobExistsError(document_id)
+        paper = session.execute(
+            select(PDFDocument).where(PDFDocument.id == _to_uuid(document_id)).with_for_update()
+        ).scalar_one_or_none()
+        if paper is None:
+            session.rollback()
+            raise ActiveJobExistsError(document_id)
+        return create_job_in_session(
+            session, document_id=document_id, user_id=user_id, filename=filename,
+            metadata={JOB_KIND_KEY: SUPPLEMENT_WAIT_JOB_KIND},
+        )
+    finally:
+        session.close()
+
+
+def is_waiting_supplement_stage(job: PdfJobResponse | None) -> bool:
+    """Whether ``job`` is a new paper's supplement stage that only waits for the provider."""
+    return (
+        job is not None
+        and job.status in _ACTIVE_STATUSES
+        and job.current_stage == WAITING_FOR_SUPPLEMENTS_STAGE
+        and (job.metadata or {}).get(JOB_KIND_KEY) == SUPPLEMENT_WAIT_JOB_KIND
+    )
+
+
+def end_supplement_wait_for_delete(*, document_id: UUID | str, user_id: int) -> bool:
+    """A delete of the paper ends its supplement stage while it only waits for the provider.
+
+    Finalizes the paper's active supplement-wait job as cancelled (the stage then
+    writes nothing more) and returns True. While the stage is adding files, or for
+    any other job, nothing changes and the delete keeps refusing.
+    """
+    session = SessionLocal()
+    try:
+        job = session.execute(
+            select(PdfProcessingJob).where(
+                PdfProcessingJob.document_id == _to_uuid(document_id),
+                PdfProcessingJob.user_id == user_id,
+                PdfProcessingJob.status.in_(tuple(_ACTIVE_STATUSES)),
+            ).with_for_update()
+        ).scalar_one_or_none()
+        if (
+            job is None
+            or (job.metadata_json or {}).get(JOB_KIND_KEY) != SUPPLEMENT_WAIT_JOB_KIND
+            or job.current_stage != WAITING_FOR_SUPPLEMENTS_STAGE
+        ):
+            session.rollback()
+            return False
+        job.cancel_requested = True
+        _finalize_cancelled(session, job, now=datetime.now(timezone.utc))
+        session.commit()
+        return True
+    finally:
+        session.close()
 
 
 def get_latest_job_for_document(

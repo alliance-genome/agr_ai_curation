@@ -2175,8 +2175,10 @@ def validate_document_source_wait_settings() -> None:
             raise DocumentSourceWaitSettingsError(
                 f"{wait_name} / DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS "
                 f"({wait_seconds:g} / {poll_seconds:g}) allows {polls:.0f} provider polls in "
-                f"one wait, more than {DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT}; raise the poll "
-                "interval or lower the wait"
+                f"one wait, more than {DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT}; set "
+                "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS to at least "
+                f"{math.ceil(wait_seconds / DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT):g}, or {wait_name} "
+                f"to at most {DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT * poll_seconds:g}"
             )
     # A deadline pinned below the default (an old override) is not unsafe and is
     # not refused; stating the effective values makes it visible.

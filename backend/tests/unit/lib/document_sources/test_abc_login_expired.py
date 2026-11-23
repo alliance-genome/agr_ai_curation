@@ -1,8 +1,9 @@
 """ABC refusing the curator's login is a named failure (KANBAN-1976 / ALL-1460, P7b).
 
 Papers late in a batch, and supplement waits, can outlive a curator's login.
-ABC then answers 401; before P7b that became the generic "ABC Literature
-conversion request failed". All values are made up.
+ABC then answers 401. The failure is now named (``DocumentSourceLoginExpired``)
+but keeps the text the call failed with before, so an ordinary import shows
+exactly what it showed before. All values are made up.
 """
 
 from __future__ import annotations
@@ -13,7 +14,6 @@ from agr_ai_curation_alliance.literature.client import ABCLiteratureHTTPError
 from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
     DocumentSourceLoginExpired,
-    LOGIN_EXPIRED_MESSAGE,
 )
 from tests.unit.lib.document_sources.test_abc_literature_provider import (
     FakeABCLiteratureClient,
@@ -62,6 +62,13 @@ CALLS = {
         "made-up-md5", request_bearer_token="expired-token"
     ),
 }
+# What each call failed with before P7b, for any ABC error, a 401 included.
+TEXT_BEFORE = {
+    "conversion request": "ABC Literature conversion request failed",
+    "listing": "ABC Literature artifact listing failed",
+    "download": "ABC Literature artifact download failed",
+    "checksum lookup": "ABC Literature checksum lookup failed",
+}
 
 
 @pytest.mark.asyncio
@@ -72,7 +79,7 @@ async def test_a_401_from_abc_is_a_named_login_failure(call):
     with pytest.raises(DocumentSourceLoginExpired) as raised:
         await CALLS[call](provider)
 
-    assert str(raised.value) == LOGIN_EXPIRED_MESSAGE
+    assert str(raised.value) == TEXT_BEFORE[call]
 
 
 @pytest.mark.asyncio
@@ -83,7 +90,9 @@ async def test_a_403_is_still_access_denied_not_an_expired_login():
         await CALLS["download"](provider)
 
 
-def test_the_login_expired_message_is_the_core_wording():
+def test_the_curator_wording_is_kept_for_imports_with_supplements():
+    from src.lib.document_sources.models import LOGIN_EXPIRED_MESSAGE
+
     assert LOGIN_EXPIRED_MESSAGE == (
         "Your sign-in expired before this import finished. "
         "Sign in again, then import the paper again."

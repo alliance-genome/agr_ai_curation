@@ -1509,6 +1509,20 @@ async def delete_document_endpoint(
                         reconcile_stale=True,
                     )
                 )
+                # A new paper's supplement stage that only waits for the provider
+                # ends with the delete (P7b); one that is writing files keeps it refused.
+                if pdf_job_service.is_waiting_supplement_stage(latest_job) and await asyncio.to_thread(
+                    lambda: pdf_job_service.end_supplement_wait_for_delete(
+                        document_id=document_id, user_id=pg_doc.user_id,
+                    )
+                ):
+                    latest_job = await asyncio.to_thread(
+                        lambda: pdf_job_service.get_latest_job_for_document(
+                            document_id=document_id,
+                            user_id=pg_doc.user_id,
+                            reconcile_stale=True,
+                        )
+                    )
                 pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
                 active_job_status = latest_job.status if latest_job else None
                 pipeline_is_active = _is_pipeline_status_active(pipeline_status)

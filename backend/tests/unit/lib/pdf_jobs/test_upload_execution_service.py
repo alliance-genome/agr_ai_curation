@@ -3520,19 +3520,26 @@ def _quiet_jobs(monkeypatch, completed, failed=None):
 
 
 @pytest.mark.asyncio
-async def test_a_ready_main_paper_with_supplements_starts_their_stage_instead_of_completing(monkeypatch):
+async def test_a_ready_main_paper_completes_its_import_job_and_its_supplements_get_their_own(monkeypatch):
+    """The paper reads completed at once; the stage runs under a job of its own kind."""
+
     from src.lib.document_sources import supplement_wait
 
-    completed, started = [], []
+    completed, started, created = [], [], []
 
     async def _ingest(request, *, weaviate_client):
         return None
+
+    def _stage_job(**kwargs):
+        created.append(kwargs)
+        return SimpleNamespace(job_id="stage-job-1")
 
     monkeypatch.setattr(
         supplement_wait, "start_supplement_stage",
         lambda *, job_id, run, outcomes: started.append((job_id, run, outcomes)),
     )
     _quiet_jobs(monkeypatch, completed)
+    monkeypatch.setattr(service_module.pdf_job_service, "start_supplement_wait_job", _stage_job)
     service = UploadExecutionService(
         pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: _Provider(),
         provider_markdown_ingestion_fn=_ingest,
@@ -3540,14 +3547,59 @@ async def test_a_ready_main_paper_with_supplements_starts_their_stage_instead_of
 
     await service.execute_provider_markdown(_markdown_request(supplements=_plan()))
 
-    assert completed == []  # the stage completes the job when it ends
-    assert [job_id for job_id, _run, _outcomes in started] == ["job-provider"]
-    await started[0][2].completed()
     assert completed == [{"job_id": "job-provider", "message": "Processing completed"}]
+    assert created == [{"document_id": "doc-job-provider", "user_id": 42, "filename": "paper.pdf"}]
+    assert [job_id for job_id, _run, _outcomes in started] == ["stage-job-1"]
+    await started[0][2].completed()
+    assert completed[-1] == {"job_id": "stage-job-1", "message": "Supplements finished"}
 
 
 @pytest.mark.asyncio
-async def test_a_queued_paper_whose_login_is_about_to_expire_fails_by_name_without_asking_abc(monkeypatch):
+async def test_no_stage_starts_when_the_paper_became_busy_or_was_deleted_meanwhile(monkeypatch):
+    from src.lib.document_sources import supplement_wait
+
+    completed, started = [], []
+
+    async def _ingest(request, *, weaviate_client):
+        return None
+
+    def _busy(**_kwargs):
+        raise service_module.pdf_job_service.ActiveJobExistsError("doc-job-provider")
+
+    monkeypatch.setattr(
+        supplement_wait, "start_supplement_stage",
+        lambda *, job_id, run, outcomes: started.append(job_id),
+    )
+    _quiet_jobs(monkeypatch, completed)
+    monkeypatch.setattr(service_module.pdf_job_service, "start_supplement_wait_job", _busy)
+    service = UploadExecutionService(
+        pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: _Provider(),
+        provider_markdown_ingestion_fn=_ingest,
+    )
+
+    await service.execute_provider_markdown(_markdown_request(supplements=_plan()))
+
+    assert completed == [{"job_id": "job-provider", "message": "Processing completed"}]
+    assert started == []
+
+
+def _late_conversion_request(**overrides):
+    import time as _time
+
+    values = dict(
+        bearer_kind=ProviderBearerKind.CURATOR, document_id="doc-late", job_id="job-late",
+        user_id="user-provider", owner_user_id=42, filename="paper.pdf",
+        file_path=Path("/tmp/paper.pdf"), reference="AGRKB:101", source_artifact_id="pdf-1",
+        curator_token="curator-token", source_provenance={"provider": "abc_literature"},
+        # Ten minutes left: inside the 15-minute reserve.
+        login_expires_at=_time.time() + 600,
+    )
+    values.update(overrides)
+    return ProviderConversionExecutionRequest(**values)
+
+
+@pytest.mark.asyncio
+async def test_a_queued_import_with_supplements_whose_login_is_about_to_expire_fails_by_name(monkeypatch):
     from src.lib.document_sources.models import LOGIN_EXPIRED_MESSAGE
 
     provider = _Provider()
@@ -3561,22 +3613,31 @@ async def test_a_queued_paper_whose_login_is_about_to_expire_fails_by_name_witho
         pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: provider,
     )
     monkeypatch.setattr(service, "_report_execution_failure", lambda exc, **kwargs: reported.append(exc))
-    import time as _time
 
-    await service.execute_provider_conversion(
-        ProviderConversionExecutionRequest(
-            bearer_kind=ProviderBearerKind.CURATOR, document_id="doc-late", job_id="job-late",
-            user_id="user-provider", owner_user_id=42, filename="paper.pdf",
-            file_path=Path("/tmp/paper.pdf"), reference="AGRKB:101", source_artifact_id="pdf-1",
-            curator_token="curator-token", source_provenance={"provider": "abc_literature"},
-            # Ten minutes left: inside the 15-minute reserve.
-            login_expires_at=_time.time() + 600,
-        )
-    )
+    await service.execute_provider_conversion(_late_conversion_request(supplements=_plan()))
 
     assert provider.conversion_requests == []
     assert [event["message"] for event in failed] == [LOGIN_EXPIRED_MESSAGE]
     assert reported == []  # the curator's own condition, not a server failure
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_import_is_never_refused_for_its_login(monkeypatch):
+    """Without supplements, an import behaves exactly as before, whatever its login."""
+
+    clock = _VirtualClock()
+    provider = _ProviderReadyAt(clock, ready_at=0)
+    outcomes = _record_job_outcomes(monkeypatch)
+    monkeypatch.setattr(service_module, "asyncio", clock)
+    service = UploadExecutionService(
+        pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: provider,
+        provider_markdown_ingestion_fn=AsyncMock(return_value=None),
+    )
+
+    await service.execute_provider_conversion(_late_conversion_request())
+
+    assert len(provider.conversion_requests) == 1
+    assert outcomes["failed"] == []
 
 
 @pytest.mark.asyncio
@@ -3599,6 +3660,10 @@ async def test_the_next_paper_of_a_request_starts_while_the_first_waits_for_its_
     monkeypatch.setattr(supplement_wait, "run_supplement_stage", _slow_stage)
     _quiet_jobs(monkeypatch, completed)
     monkeypatch.setattr(service_module.pdf_job_service, "touch_pending_jobs", lambda *, job_ids: 0)
+    monkeypatch.setattr(
+        service_module.pdf_job_service, "start_supplement_wait_job",
+        lambda **_kwargs: SimpleNamespace(job_id="stage-job-1"),
+    )
     service = UploadExecutionService(
         pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: _Provider(),
         provider_markdown_ingestion_fn=_ingest,
@@ -3611,10 +3676,10 @@ async def test_the_next_paper_of_a_request_starts_while_the_first_waits_for_its_
         background_tasks=background_tasks, request=_markdown_request("job-2"),
     )
 
-    await background_tasks()
+    await asyncio.wait_for(background_tasks(), timeout=10)
 
     assert ingested == ["doc-job-1", "doc-job-2"]
-    assert [event["job_id"] for event in completed] == ["job-2"]  # job 1 still waits
+    assert [event["job_id"] for event in completed] == ["job-1", "job-2"]  # both papers ready
     stage_may_end.set()
-    await asyncio.gather(*list(supplement_wait._stage_tasks))
-    assert [event["job_id"] for event in completed] == ["job-2", "job-1"]
+    await asyncio.wait_for(asyncio.gather(*list(supplement_wait._stage_tasks)), timeout=10)
+    assert [event["job_id"] for event in completed] == ["job-1", "job-2", "stage-job-1"]

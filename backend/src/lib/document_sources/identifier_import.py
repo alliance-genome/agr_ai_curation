@@ -34,6 +34,7 @@ from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
     DocumentSourceConfigError,
     DocumentSourceError,
+    DocumentSourceLoginExpired,
     DocumentSourceReferenceNotFound,
     DocumentSourceProvider,
     NormalizedSourceIdentifier,
@@ -1061,7 +1062,9 @@ class IdentifierImportService:
                 message="Access to the document-source PDF was denied.",
             )
         except (DocumentSourceConfigError, DocumentSourceError) as exc:
-            _report_source_failure(exc, "source_import_failed")
+            if not isinstance(exc, DocumentSourceLoginExpired):
+                # An expired curator login is the curator's own condition, not a server failure.
+                _report_source_failure(exc, "source_import_failed")
             logger.warning(
                 "Document-source identifier import failed for %s: %s",
                 normalized.normalized,

@@ -157,13 +157,17 @@ def _chosen(provider_file_id, *, converted_md5=None):
 
 async def _run(*, chosen, abc_answers, paper, last_answer_payload, clock, add=None,
                conversion_requested=True, login_expires_in=24 * 3600):
+    from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
+
     client = _AbcClient(abc_answers)
     provider = provider_from_fake(client)
-    last_answer = None
-    if last_answer_payload is not None:
-        client.conversion_payload = last_answer_payload
-        last_answer = await provider.request_conversion("AGRKB:101", request_bearer_token="curator-token")
-        client.requests = 0
+    # The main phase's last answer, mapped as the adapter maps it; the stage's own
+    # polls get the scripted answers.
+    last_answer = (
+        _map_conversion_result(last_answer_payload, provider="abc_literature")
+        if last_answer_payload is not None
+        else None
+    )
     outcomes = _Outcomes()
     add = add or _Add()
     await stage.run_supplement_stage(
@@ -331,11 +335,15 @@ async def test_the_login_reserve_ends_the_wait_before_the_limit(job):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error", [
-    DocumentSourceUnavailable("ABC Literature or its file storage could not be reached"),
-    DocumentSourceLoginExpired(),
+@pytest.mark.parametrize(("error", "expected"), [
+    # Any other ABC error: the waiting file is not converted in time; the converted one joins.
+    (DocumentSourceUnavailable("ABC Literature or its file storage could not be reached"),
+     {"20": ("added", None), "30": ("left_out", IN_TIME)}),
+    # The login was refused: nothing more can be asked of ABC with it, the add included.
+    (DocumentSourceLoginExpired("ABC Literature conversion request failed"),
+     {"20": ("left_out", "login_expired"), "30": ("left_out", "login_expired")}),
 ], ids=["abc_502", "login_expired"])
-async def test_the_first_abc_error_ends_the_wait_without_retrying(job, error):
+async def test_the_first_abc_error_ends_the_wait_without_retrying(job, error, expected):
     clock = _Clock()
     running = _answer_payload("running", [_job_entry(30, "supplement", "pending")])
     paper = _Paper([_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), _unconverted(30, "pdf")],
@@ -364,7 +372,7 @@ async def test_the_first_abc_error_ends_the_wait_without_retrying(job, error):
     )
 
     assert client.requests == 1
-    assert _final_entries(job) == {"20": ("added", None), "30": ("left_out", IN_TIME)}
+    assert _final_entries(job) == expected
     assert outcomes.ended == ["completed"]
 
 
@@ -394,7 +402,7 @@ async def test_a_cancel_during_the_wait_ends_the_job_cancelled_and_adds_nothing(
 
     assert add.calls == []
     assert outcomes.ended == ["cancelled"]
-    assert _final_entries(job) == {"30": ("left_out", IN_TIME)}
+    assert _final_entries(job) == {"30": ("left_out", "import_cancelled")}
 
 
 @pytest.mark.asyncio
@@ -554,3 +562,211 @@ async def test_the_stage_failure_report_carries_no_paper_or_curator_content(job,
     assert kwargs["tags"] == {"failure_type": "RuntimeError"}
     flattened = repr((str(exc), kwargs))
     assert secret_title not in flattened and secret_token not in flattened
+
+
+
+# --- Review fixes: endings that ask ABC nothing, truthful entries, queue order
+
+
+def _plain_provider(answers=None):
+    client = _AbcClient(answers or [_answer_payload("converted", [])])
+    return client, provider_from_fake(client)
+
+
+async def _stage(job, *, chosen, paper, main_ready_at, clock, provider, add=None,
+                 conversion_requested=False, last_answer=None, login_expires_at=None):
+    outcomes, add = _Outcomes(), add or _Add()
+    await stage.run_supplement_stage(
+        job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
+        plan=SupplementPlan(chosen=tuple(chosen), request_context=_context(),
+                            login_expires_at=login_expires_at, owner_user_id=7, reference="AGRKB:101"),
+        conversion_requested=conversion_requested, last_answer=last_answer,
+        main_ready_at=main_ready_at, provider=provider, weaviate_client=object(),
+        outcomes=outcomes, list_files=paper.list_files, add_files=add,
+        clock=clock, sleep=clock.sleep,
+    )
+    return add, outcomes
+
+
+@pytest.mark.asyncio
+async def test_a_stage_queued_past_its_wait_limit_ends_at_once_asking_abc_nothing(job):
+    clock = _Clock()
+    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), _unconverted(30, "pdf")],
+                   payloads={"21": GOOD_TABLE})
+    client, provider = _plain_provider()
+
+    add, outcomes = await _stage(
+        job, chosen=[_chosen("20", converted_md5="md5-21"), _chosen("30")], paper=paper,
+        main_ready_at=clock() - 10_801, clock=clock, provider=provider,
+    )
+
+    assert (paper.listings, client.requests, add.calls) == (0, 0, [])
+    assert _final_entries(job) == {"20": ("left_out", "wait_limit_reached"), "30": ("left_out", IN_TIME)}
+    assert outcomes.ended == ["completed"]
+
+
+@pytest.mark.asyncio
+async def test_a_stage_whose_login_is_inside_the_reserve_ends_at_once_asking_abc_nothing(job):
+    clock = _Clock()
+    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB")], payloads={"21": GOOD_TABLE})
+    client, provider = _plain_provider()
+
+    add, outcomes = await _stage(
+        job, chosen=[_chosen("20", converted_md5="md5-21")], paper=paper, main_ready_at=clock(),
+        clock=clock, provider=provider, login_expires_at=clock() + 300,  # inside the 900 s reserve
+    )
+
+    assert (paper.listings, client.requests, add.calls) == (0, 0, [])
+    assert _final_entries(job) == {"20": ("left_out", "login_expired")}
+    assert outcomes.ended == ["completed"]
+
+
+@pytest.mark.asyncio
+async def test_a_changed_abc_job_id_stops_every_further_request(job):
+    """ABC lost the job this import started and began a new one: ask nothing more."""
+
+    clock = _Clock()
+    first = _answer_payload("running", [_job_entry(30, "supplement", "pending")])
+    restarted = {**first, "job_id": "made-up-new-job", "previous_job_id": "made-up-job"}
+    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "pdf")])
+
+    client, add, outcomes = await _run(
+        chosen=[_chosen("30")], abc_answers=[restarted], paper=paper,
+        last_answer_payload=first, clock=clock,
+    )
+
+    assert client.requests == 1
+    assert _final_entries(job) == {"30": ("left_out", "provider_job_restarted")}
+    assert outcomes.ended == ["completed"]
+
+
+@pytest.mark.asyncio
+async def test_an_answer_abc_does_not_send_today_ends_the_wait_with_its_own_reason(job):
+    clock = _Clock()
+    first = _answer_payload("running", [_job_entry(30, "supplement", "pending")])
+    unknown = _answer_payload("running", [{**_job_entry(30, "supplement", "pending"), "status": "skipped"}])
+    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "pdf")])
+
+    client, _add, outcomes = await _run(
+        chosen=[_chosen("30")], abc_answers=[unknown], paper=paper,
+        last_answer_payload=first, clock=clock,
+    )
+
+    assert client.requests == 1
+    assert _final_entries(job) == {"30": ("left_out", "provider_answer_unknown")}
+
+
+class _RaisingAdd(_Add):
+    def __init__(self, error):
+        super().__init__()
+        self.error = error
+
+    async def __call__(self, *args, stage_checkpoint, **kwargs):
+        await stage_checkpoint("checking_files")
+        raise self.error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("error", "reason"), [
+    (DocumentSourceLoginExpired("ABC Literature artifact listing failed"), "login_expired"),
+    (DocumentSourceUnavailable("ABC Literature or its file storage could not be reached"), "source_unavailable"),
+], ids=["login_expired", "abc_unavailable"])
+async def test_an_abc_failure_inside_the_add_ends_with_a_reason_not_a_stage_failure(job, error, reason):
+    clock = _Clock()
+    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB")], payloads={"21": GOOD_TABLE})
+    client, provider = _plain_provider()
+
+    _add, outcomes = await _stage(
+        job, chosen=[_chosen("20", converted_md5="md5-21")], paper=paper, main_ready_at=clock(),
+        clock=clock, provider=provider, add=_RaisingAdd(error),
+    )
+
+    assert _final_entries(job) == {"20": ("left_out", reason)}
+    assert outcomes.ended == ["completed"]
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_during_the_add_leaves_no_entry_adding(job):
+    clock = _Clock()
+    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB")], payloads={"21": GOOD_TABLE})
+    client, provider = _plain_provider()
+
+    class _CancelledAdd(_Add):
+        async def __call__(self, *args, stage_checkpoint, **kwargs):
+            job.cancel_requested = True
+            await stage_checkpoint("saving_files")
+
+    _add, outcomes = await _stage(
+        job, chosen=[_chosen("20", converted_md5="md5-21")], paper=paper, main_ready_at=clock(),
+        clock=clock, provider=provider, add=_CancelledAdd(),
+    )
+
+    assert _final_entries(job) == {"20": ("left_out", "import_cancelled")}
+    assert outcomes.ended == ["cancelled"]
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_failure_leaves_every_open_file_out_by_name_then_reaches_the_guard(job):
+    clock = _Clock()
+    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB")], payloads={"21": GOOD_TABLE})
+    client, provider = _plain_provider()
+
+    with pytest.raises(KeyError):
+        await _stage(
+            job, chosen=[_chosen("20", converted_md5="md5-21")], paper=paper, main_ready_at=clock(),
+            clock=clock, provider=provider, add=_RaisingAdd(KeyError("made-up bug")),
+        )
+
+    assert _final_entries(job) == {"20": ("left_out", "supplement_stage_failed")}
+
+
+@pytest.mark.asyncio
+async def test_an_add_refusal_keeps_its_measured_and_limit_values(job):
+    clock = _Clock()
+    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB")], payloads={"21": GOOD_TABLE})
+    client, provider = _plain_provider()
+
+    class _RefusingAdd(_Add):
+        async def __call__(self, *args, files, **kwargs):
+            return AddResult(files=(FileOutcome(
+                provider_file_id="20", outcome="left_out", reason_code=FileReason.TOO_LARGE,
+                measured_value=2_000_000, limit_value=1_000_000,
+            ),))
+
+    async def _call(document_id, owner_user_id, request_context, files, **kwargs):
+        return await _RefusingAdd()(files=files)
+
+    _add, outcomes = await _stage(
+        job, chosen=[_chosen("20", converted_md5="md5-21")], paper=paper, main_ready_at=clock(),
+        clock=clock, provider=provider, add=_call,
+    )
+
+    (entry,) = job.progress[-1]["metadata"]["supplements"]
+    assert (entry["state"], entry["reason_code"], entry["measured_value"], entry["limit_value"]) == (
+        "left_out", "too_large", 2_000_000, 1_000_000,
+    )
+
+
+@pytest.mark.asyncio
+async def test_queued_stages_are_served_in_the_order_they_arrived(job, monkeypatch):
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS", "1")
+    monkeypatch.setattr(stage, "get_document_source_poll_interval_seconds", lambda: 0.01)
+    release = asyncio.Event()
+    order = []
+
+    def _run_named(name, wait_for=None):
+        async def _run():
+            order.append(name)
+            if wait_for is not None:
+                await wait_for.wait()
+        return _run
+
+    tasks = [stage.start_supplement_stage(job_id="job-first", run=_run_named("first", release), outcomes=_Outcomes())]
+    await asyncio.sleep(0)
+    for name in ("second", "third", "fourth"):
+        tasks.append(stage.start_supplement_stage(job_id=f"job-{name}", run=_run_named(name), outcomes=_Outcomes()))
+        await asyncio.sleep(0.03)  # several heartbeats each while queued
+    release.set()
+    await asyncio.wait_for(asyncio.gather(*tasks), timeout=10)
+
+    assert order == ["first", "second", "third", "fourth"]

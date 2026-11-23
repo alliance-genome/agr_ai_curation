@@ -58,6 +58,21 @@ class FileReason(str, Enum):
     # The import stopped waiting before the provider had converted the file.
     NOT_CONVERTED_IN_TIME = "not_converted_in_time"
 
+    # Why an import's supplement stage ended without adding a chosen file (P7b).
+    # The curator's login expired before the file could be added.
+    LOGIN_EXPIRED = "login_expired"
+    # The wait limit had passed (for example while the stage was queued) before the file was added.
+    WAIT_LIMIT_REACHED = "wait_limit_reached"
+    # The curator cancelled the import's supplement stage.
+    IMPORT_CANCELLED = "import_cancelled"
+    # The supplement stage itself failed unexpectedly.
+    SUPPLEMENT_STAGE_FAILED = "supplement_stage_failed"
+    # The provider answered in a shape the import does not know, so waiting stopped.
+    PROVIDER_ANSWER_UNKNOWN = "provider_answer_unknown"
+    # The provider started a new conversion job for the paper (its earlier one was lost),
+    # so the import stopped asking it.
+    PROVIDER_JOB_RESTARTED = "provider_job_restarted"
+
     # Why adding a chosen file to a paper left it out (P7c1). ``ALREADY_IN_PAPER``,
     # ``TOO_LARGE`` (the download cap is R1's limit) and the check reasons also apply.
     FILE_NOT_IN_REFERENCE = "file_not_in_reference"
@@ -115,6 +130,17 @@ PROVIDER_OBSERVATION_REASONS: frozenset[FileReason] = frozenset({
     FileReason.PROVIDER_NOT_CONVERTED,
     FileReason.PROVIDER_CONVERSION_FAILED,
     FileReason.NOT_CONVERTED_IN_TIME,
+})
+
+# Endings of an import's supplement stage that are not the provider's answer about a file
+# (P7b writes them; the listing reads none of them as a provider observation).
+SUPPLEMENT_STAGE_REASONS: frozenset[FileReason] = frozenset({
+    FileReason.LOGIN_EXPIRED,
+    FileReason.WAIT_LIMIT_REACHED,
+    FileReason.IMPORT_CANCELLED,
+    FileReason.SUPPLEMENT_STAGE_FAILED,
+    FileReason.PROVIDER_ANSWER_UNKNOWN,
+    FileReason.PROVIDER_JOB_RESTARTED,
 })
 
 

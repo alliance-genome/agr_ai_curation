@@ -1131,37 +1131,57 @@ class UploadExecutionService:
         conversion_requested: bool = False,
         last_answer: SourceConversionResult | None = None,
     ) -> None:
-        """The main paper is ready: complete the job, or hand it to the supplement stage.
+        """The main paper is ready: complete its import job, then start any supplement stage.
 
-        The stage runs as its own task, so the next paper of the request starts
-        meanwhile; the job stays active until the stage ends it.
+        The import job completes exactly as an import without supplements, so the
+        paper reads completed and usable at once. The supplement stage then runs
+        under a job of its own kind (it never stands for the paper's state) in its
+        own task, so the next paper of the request starts meanwhile.
         """
+        await self._mark_completed_and_sync_tracker(
+            request, message=message, observability_receipt=observability_receipt,
+        )
         plan = request.supplements
         if plan is None:
-            await self._mark_completed_and_sync_tracker(
-                request, message=message, observability_receipt=observability_receipt,
-            )
             return
         from src.lib.document_sources import supplement_wait
         from src.lib.document_sources.file_listing_service import list_files_for_paper
         from src.lib.document_sources.supplement_add import add_files_to_paper
 
-        service = self
+        try:
+            stage_job = await asyncio.to_thread(
+                pdf_job_service.start_supplement_wait_job,
+                document_id=request.document_id,
+                user_id=plan.owner_user_id,
+                filename=getattr(request, "filename", None),
+            )
+        except pdf_job_service.ActiveJobExistsError:
+            # The curator deleted the paper, or started an add or a delete on it,
+            # in the moment after it became ready: its supplements are not waited for.
+            logger.info(
+                "Supplement stage of document %s not started: the paper is busy or gone",
+                request.document_id,
+            )
+            return
+        stage_job_id = str(stage_job.job_id)
 
         class _Outcomes:
             async def completed(self) -> None:
-                await service._mark_completed_and_sync_tracker(
-                    request, message=message, observability_receipt=observability_receipt,
+                await asyncio.to_thread(
+                    pdf_job_service.mark_completed, job_id=stage_job_id,
+                    message="Supplements finished",
                 )
 
             async def cancelled(self) -> None:
-                await service._mark_cancelled_and_sync_tracker(
-                    request, reason="Processing cancelled by user request",
+                await asyncio.to_thread(
+                    pdf_job_service.mark_cancelled, job_id=stage_job_id,
+                    reason="Processing cancelled by user request",
                 )
 
             async def failed(self, failure_message: str) -> None:
-                await service._mark_failed_and_sync_tracker(
-                    request, message=failure_message, stage=ProcessingStage.FAILED.value,
+                await asyncio.to_thread(
+                    pdf_job_service.mark_failed, job_id=stage_job_id,
+                    message=failure_message, stage=ProcessingStage.FAILED.value,
                 )
 
         outcomes = _Outcomes()
@@ -1171,7 +1191,7 @@ class UploadExecutionService:
             provider = self._document_source_provider_factory()
             try:
                 await supplement_wait.run_supplement_stage(
-                    job_id=str(request.job_id),
+                    job_id=stage_job_id,
                     document_id=str(request.document_id),
                     owner_user_id=plan.owner_user_id,
                     reference=plan.reference,
@@ -1188,9 +1208,7 @@ class UploadExecutionService:
             finally:
                 await provider.aclose()
 
-        supplement_wait.start_supplement_stage(
-            job_id=str(request.job_id), run=run, outcomes=outcomes,
-        )
+        supplement_wait.start_supplement_stage(job_id=stage_job_id, run=run, outcomes=outcomes)
 
     async def _mark_completed_and_sync_tracker(
         self,
@@ -1507,17 +1525,20 @@ class UploadExecutionService:
 def _refuse_if_login_expired(
     request: ProviderMarkdownExecutionRequest | ProviderConversionExecutionRequest,
 ) -> None:
-    """A paper queued behind others whose curator login is about to expire fails by name.
+    """An import with supplements, queued behind others, whose curator login is about to expire fails by name.
 
     Checked before any provider call, with the same reserve the supplement wait
     keeps for adding files.
     """
-    if request.login_expires_at is None:
+    # Only an import with chosen supplements: an ordinary import behaves as it always did.
+    if request.supplements is None or request.login_expires_at is None:
         return
     from src.lib.openai_agents.config import get_document_supplement_add_reserve_seconds
 
     if time.time() >= request.login_expires_at - get_document_supplement_add_reserve_seconds():
-        raise DocumentSourceLoginExpired()
+        from src.lib.document_sources.models import LOGIN_EXPIRED_MESSAGE
+
+        raise DocumentSourceLoginExpired(LOGIN_EXPIRED_MESSAGE)
 
 
 def _conversion_job_metadata(result: SourceConversionResult) -> dict[str, Any]:

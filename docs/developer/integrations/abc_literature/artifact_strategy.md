@@ -285,9 +285,10 @@ The identifier import takes the ticked supplements beside `identifiers`:
   `file_chosen_twice`, `paper_file_limit` (more than `DOCUMENT_MAX_FILES_PER_PAPER`
   files, the main included).
 
-The main paper is imported exactly as before. Once it is ready (`completed` and
-readable), the job moves to the supplement stage (`supplement_wait.py`, see
-`import_lifecycle.md`). There, ABC's per-file answers are classified by ABC's own
+The main paper is imported exactly as before, and its import job completes as
+before. Once it is ready (`completed` and readable), the supplement stage starts
+under a job of its own kind (`supplement_wait.py`, see `import_lifecycle.md`),
+which never stands for the paper's state. There, ABC's per-file answers are classified by ABC's own
 fields only, and the converted files are added in one write through
 `add_files_to_paper` (P7c1). Neither ABC's group rule nor its size limits are
 copied: if ABC converts more groups or larger files (ABC PR 1413), nothing here
