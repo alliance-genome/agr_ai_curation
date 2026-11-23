@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
+from src.lib.observability import runtime
 from src.lib.pdf_viewer.display_blocks import (
     UnsupportedDisplayElementError,
     file_display_blocks,
@@ -341,6 +342,20 @@ def _owned_stored_path(access: _OwnedDocumentAccess, relative_path: str) -> File
     )
 
 
+def _report_ready_artifact_failure(operation: str, message: str, *, exception_type: str | None = None) -> None:
+    """Report a verified storage failure using only fixed codes, messages, and the error class."""
+    logger.warning(message, extra={"sentry_skip_event": True})
+    try:
+        runtime.report_runtime_exception(
+            runtime.sanitized_runtime_error(message),
+            component="pdf_viewer",
+            operation=operation,
+            context={"exception_type": exception_type} if exception_type is not None else {},
+        )
+    except Exception:
+        logger.warning("Failed to report PDF viewer artifact failure", extra={"sentry_skip_event": True})
+
+
 @router.get("/documents/{document_id}/files", response_model=DocumentFilesResponse)
 def list_document_files(
     document_id: UUID = Path(..., description="UUID of the paper"),
@@ -372,9 +387,8 @@ def get_document_file_content(
         raise not_available
     file_path = _owned_stored_path(access, file_row.file_path)
     if not file_path.is_file():
-        logger.warning(
-            "Stored PDF missing for a ready file",
-            extra={"document_id": str(document_id), "file_id": str(file_id)},
+        _report_ready_artifact_failure(
+            "pdf_viewer_ready_file_bytes_missing", "Stored PDF missing for a ready file",
         )
         raise not_available
 
@@ -402,17 +416,13 @@ def get_document_file_text(
     )
     if not serves_text(file_row):
         raise not_available
-    if file_row.processed_json_path is None:
-        logger.warning(
-            "Processed elements not recorded for a ready text file",
-            extra={"document_id": str(document_id), "file_id": str(file_id)},
-        )
-        raise not_available
-    elements_path = _owned_stored_path(access, file_row.processed_json_path)
-    if not elements_path.is_file():
-        logger.warning(
-            "Processed elements missing for a ready text file",
-            extra={"document_id": str(document_id), "file_id": str(file_id)},
+    elements_path = (
+        _owned_stored_path(access, file_row.processed_json_path)
+        if file_row.processed_json_path is not None else None
+    )
+    if elements_path is None or not elements_path.is_file():
+        _report_ready_artifact_failure(
+            "pdf_viewer_ready_file_elements_missing", "Processed elements missing for a ready text file",
         )
         raise not_available
 
@@ -420,15 +430,15 @@ def get_document_file_text(
     try:
         blocks = file_display_blocks(elements, file_row.hierarchy_metadata)
     except (UnsupportedDisplayElementError, StoredSectionMapError) as exc:
-        logger.warning(
-            "Processed elements of a text file cannot be shown: %s",
-            exc,
-            extra={"document_id": str(document_id), "file_id": str(file_id)},
+        _report_ready_artifact_failure(
+            "pdf_viewer_stored_display_data_invalid",
+            "Processed elements of a ready text file cannot be shown",
+            exception_type=type(exc).__name__,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"File text could not be shown for file {file_id}",
-        ) from exc
+        ) from None
 
     return FileTextResponse(
         document_id=access.record.id,

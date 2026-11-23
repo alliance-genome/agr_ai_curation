@@ -552,6 +552,16 @@ propagate to the existing request failure owner without explicit capture here.
 Reporting failures cannot escape the completion callback; its fixed warning
 skips Sentry log promotion.
 
+The per-file PDF viewer reports missing artifacts after it verifies ownership,
+display mode, and ready status. Under component `pdf_viewer`, a missing PDF
+produces `pdf_viewer_ready_file_bytes_missing`. An absent processed-elements
+path or file produces `pdf_viewer_ready_file_elements_missing`. Both return
+404. Unsupported stored elements or section maps produce
+`pdf_viewer_stored_display_data_invalid` and return 500. Only this last event
+has an underlying exception class to record. All three use fixed, chain-free
+errors and omit paths, identifiers, and stored content. Companion warnings
+skip log promotion. Ordinary file lookup and readiness failures stay quiet.
+
 Canonical agent history reports failed writes, searches, reads and integrity
 checks with component `agent_history` and operations `write_failed`,
 `search_failed` or `read_failed`. Reports use fixed, chain-free exceptions and
