@@ -172,19 +172,19 @@ def test_while_abc_converts_the_supplements_the_outline_says_so_after_the_files(
 
     result = format_hierarchy_for_prompt(outline)
 
-    # Approved by Chris, 23 Nov 2026 (card 42), character for character.
-    assert "\nABC is still converting this paper's supplements; they cannot be read yet.\n" in result
-    assert result.index("**Materials and Methods**") < result.index("ABC is still converting") < result.index(
+    # Approved by Chris, 23 Nov 2026 (replacing card 42), character for character.
+    assert "\nABC has not finished converting this paper's supplements; they cannot be read yet.\n" in result
+    assert result.index("**Materials and Methods**") < result.index("ABC has not finished converting") < result.index(
         "### How to use this outline:")
-    assert "  └─ Fly strains (p.3, 1 chunks)\n\nABC is still converting this paper's supplements; they cannot " \
+    assert "  └─ Fly strains (p.3, 1 chunks)\n\nABC has not finished converting this paper's supplements; they cannot " \
            "be read yet.\n\n### How to use this outline:" in result
 
 
 def test_with_no_abc_wait_the_outline_does_not_mention_it():
     for value in (False, None):
         outline = {**_outline(_file("paper.pdf", "main", "PDF", 0, 41, [METHODS])), "supplements_converting": value}
-        assert "still converting" not in format_hierarchy_for_prompt(outline)
-    assert "still converting" not in format_hierarchy_for_prompt(
+        assert "not finished converting" not in format_hierarchy_for_prompt(outline)
+    assert "not finished converting" not in format_hierarchy_for_prompt(
         _outline(_file("paper.pdf", "main", "PDF", 0, 41, [METHODS])))
 
 

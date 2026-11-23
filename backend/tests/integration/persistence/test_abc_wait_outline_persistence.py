@@ -1,4 +1,4 @@
-"""The run's outline says ABC is still converting supplements only while a living wait runs.
+"""The run's outline says ABC has not finished converting supplements only while a living wait runs.
 
 Real job rows and the real resolver (KANBAN-1976 / ALL-1460, P7b outline line).
 The line keys on ``supplement_wait_active`` through ``ReadableFiles``, the same

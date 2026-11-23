@@ -82,7 +82,7 @@ class PerFileOutlineTests(unittest.TestCase):
     def test_the_abc_wait_line_is_reported(self):
         waiting = OUTLINE.replace(
             "**Sheet1** (19 chunks)\n",
-            "**Sheet1** (19 chunks)\n\nABC is still converting this paper's supplements; they cannot be read yet.\n")
+            "**Sheet1** (19 chunks)\n\nABC has not finished converting this paper's supplements; they cannot be read yet.\n")
 
         result = DocumentHierarchyAnalyzer.analyze({}, _observations(waiting))
 

@@ -149,9 +149,10 @@ _FILE_ROLE_LABELS = {"main": "main paper", "supplement": "supplement"}
 # Approved by Chris, 22 Nov 2026 (O4). Shown while the paper has files being added.
 FILES_BEING_ADDED_LINE = "\nFiles are still being added to this paper; they cannot be read yet.\n"
 
-# Approved by Chris, 23 Nov 2026 (decisions page, card 42). Shown while a living import
-# waits for ABC to convert the paper's supplements.
-SUPPLEMENTS_CONVERTING_LINE = "\nABC is still converting this paper's supplements; they cannot be read yet.\n"
+# Approved by Chris, 23 Nov 2026, replacing card 42's "is still converting": ABC does not tell
+# us when it fails a file, so the wait cannot know it is still converting. Shown while a living
+# import waits for ABC to convert the paper's supplements.
+SUPPLEMENTS_CONVERTING_LINE = "\nABC has not finished converting this paper's supplements; they cannot be read yet.\n"
 
 
 def _size_label(pages: List[int], chunk_count: int) -> str:

@@ -219,7 +219,7 @@ class DocumentHierarchyAnalyzer:
 
     _FILES_BEING_ADDED = "Files are still being added to this paper; they cannot be read yet."
     # Keep in step with SUPPLEMENTS_CONVERTING_LINE in backend prompt_utils.
-    _SUPPLEMENTS_CONVERTING = "ABC is still converting this paper's supplements; they cannot be read yet."
+    _SUPPLEMENTS_CONVERTING = "ABC has not finished converting this paper's supplements; they cannot be read yet."
 
     _FILE_LINE = re.compile(
         r'^File (\d+) of (\d+): (.+) \((main paper|supplement), ([^,]+), (\d+) chunks, chunks (\d+) to (\d+)\)$'
