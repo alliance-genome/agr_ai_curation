@@ -146,14 +146,14 @@ def test_destination_incompatibility_refuses_before_dependency_commit(
     saved = saved.model_copy(update=changes[incompatible])
     newer = append_execution_revision(db, agent, saved, user_id=1,
                                       expected_revision_id=agent.execution_revision_id)
-    agent.model_id = "gpt-6.1-sol"  # Source rows are fixture scaffolding, not resolver copies.
+    agent.model_id = "gpt-6.2-sol"  # Source rows are fixture scaffolding, not resolver copies.
     agent.output_schema_key = None
     definition = deepcopy(source.flow_definition)
     definition["nodes"][1]["data"]["agent_revision_id"] = str(newer.id)
     definition["nodes"][1]["data"]["execution_receipt"] = receipt(agent, newer)
     source.flow_definition = definition
     db.flush()
-    destination_model = get_model("gpt-6.1-sol")
+    destination_model = get_model("gpt-6.2-sol")
     assert destination_model is not None
     with monkeypatch.context() as source_catalog:
         source_model = replace(destination_model, reasoning_options=["minimal", "low", "medium", "high"])
@@ -181,7 +181,7 @@ def test_destination_incompatibility_refuses_before_dependency_commit(
         copy = copy_of(session, agent)
         if existing:
             assert first is not None
-            assert copy.is_active and copy.model_id == "gpt-6.1-sol"
+            assert copy.is_active and copy.model_id == "gpt-6.2-sol"
             assert copy.execution_revision_id == old_head
             flow = session.get(CurationFlow, first.flow_id)
             assert flow_execution_revision_findings(session, flow.flow_definition, user_id=2,
@@ -210,7 +210,7 @@ def test_compatible_bundle_cannot_promote_an_incompatible_existing_head(
     newer = append_execution_revision(
         db, copy, snapshot.model_copy(update={"model_id": "source-only-model"}),
         user_id=2, expected_revision_id=copy.execution_revision_id)
-    copy.model_id = "gpt-6.1-sol"
+    copy.model_id = "gpt-6.2-sol"
     copy.is_active = active
     copy.description = "Keep local metadata on refusal"
     new_head = newer.id
@@ -226,7 +226,7 @@ def test_compatible_bundle_cannot_promote_an_incompatible_existing_head(
     assert commits == []
     with sessions() as session:
         copy = copy_of(session, agent)
-        assert copy.is_active == active and copy.model_id == "gpt-6.1-sol"
+        assert copy.is_active == active and copy.model_id == "gpt-6.2-sol"
         assert copy.execution_revision_id == new_head
         assert copy.description == "Keep local metadata on refusal"
         assert count(session, BenchmarkFlowImport) == 1

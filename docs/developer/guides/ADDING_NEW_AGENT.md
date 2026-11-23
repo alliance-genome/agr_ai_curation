@@ -115,7 +115,7 @@ output_projection:
 
 # LLM settings (supports environment variables)
 model_config:
-  model: "${AGENT_MY_AGENT_MODEL:-gpt-6.1-sol}"
+  model: "${AGENT_MY_AGENT_MODEL:-gpt-6.2-sol}"
   temperature: 0.1
   reasoning: "medium"
 

@@ -48,7 +48,7 @@ async def _extracting_turn(scope, monkeypatch, *, recorded=True):
     install_cancel_reader(monkeypatch, AsyncMock(return_value=False))
     monkeypatch.setattr("src.lib.agent_studio.catalog_service.resolve_tools", lambda *args: [])
     monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
-    supervisor = Agent(name="Supervisor", model="gpt-6-astra", instructions="Policy")
+    supervisor = Agent(name="Supervisor", model="gpt-6.2-astra", instructions="Policy")
     attach_agent_cost_identity(supervisor, {"agent_id": "supervisor", "agent_role": "supervisor"})
     turn_id = uuid4().hex
     if recorded:

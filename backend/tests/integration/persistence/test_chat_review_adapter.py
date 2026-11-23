@@ -426,7 +426,7 @@ async def test_chat_source_checkpoint_and_prep_share_identity_before_and_after_r
         "src.lib.validation_review.validator_adapter._default_package_scoped_validator_batch_runner",
         lambda: lambda *a, **kw: pytest.fail("Unexpected batch"),
     )
-    supervisor = Agent(name="Supervisor", model="gpt-6-astra", instructions="Policy")
+    supervisor = Agent(name="Supervisor", model="gpt-6.2-astra", instructions="Policy")
     attach_agent_cost_identity(
         supervisor, {"agent_id": "supervisor", "agent_role": "supervisor"}
     )

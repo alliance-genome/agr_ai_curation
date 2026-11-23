@@ -809,7 +809,7 @@ async def test_canonical_saved_profile_uses_pinned_agent_and_real_generic_builde
         _, revision = generic_profile_service.create_profile(db, owner_id, raw)
         saved = SavedAgent(agent_key="ca_" + uuid4().hex, user_id=owner_id, name="Canonical saved extractor",
             instructions="Read the paper and capture the three records in the declared profile.",
-            model_id="gpt-6.1-sol", visibility="private", tool_ids=[
+            model_id="gpt-6.2-sol", visibility="private", tool_ids=[
                 "read_chunk", "record_evidence", "stage_generic_object", "finalize_generic_extraction"])
         db.add(saved)
         db.flush()

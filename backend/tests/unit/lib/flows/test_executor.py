@@ -4253,7 +4253,7 @@ class TestFlowSupervisorPromptCacheKey:
     """ALL-1284: one stable prompt cache key per saved flow, not per run."""
 
     @patch("src.lib.flows.executor.build_model_settings")
-    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-6.1-sol")
+    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-6.2-sol")
     @patch("src.lib.flows.executor.get_agent_config")
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -4267,7 +4267,7 @@ class TestFlowSupervisorPromptCacheKey:
     ):
         from src.lib.openai_agents.config import build_prompt_cache_key
 
-        mock_config.return_value = MagicMock(model="gpt-6.1-sol", temperature=None, reasoning="low")
+        mock_config.return_value = MagicMock(model="gpt-6.2-sol", temperature=None, reasoning="low")
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         mock_streaming.return_value = MagicMock()
         mock_settings.return_value = ModelSettings()
@@ -4277,7 +4277,7 @@ class TestFlowSupervisorPromptCacheKey:
             create_flow_supervisor(flow, **kwargs)
             identity = mock_settings.call_args.kwargs["prompt_cache"]
             assert identity.agent_key == "flow_supervisor"
-            return build_prompt_cache_key(identity, model="gpt-6.1-sol")
+            return build_prompt_cache_key(identity, model="gpt-6.2-sol")
 
         nodes = [_task_input_node(), _agent_node("n1", "gene", step_goal="Extract genes")]
         first = key_for(_make_flow(nodes), document_id="doc-1", document_name="paper-1.pdf")
@@ -4324,7 +4324,7 @@ class TestCreateFlowSupervisorNoTools:
                 },
             ),
         )
-        mock_config.return_value = MagicMock(model="gpt-6.1-sol", temperature=0.0, reasoning=None)
+        mock_config.return_value = MagicMock(model="gpt-6.2-sol", temperature=0.0, reasoning=None)
 
         flow = _make_flow([
             _task_input_node(),
@@ -4332,14 +4332,14 @@ class TestCreateFlowSupervisorNoTools:
             _agent_node("n2", "pdf_extraction", step_goal="Extract data"),
         ])
 
-        mock_model.return_value = "gpt-6.1-sol"
+        mock_model.return_value = "gpt-6.2-sol"
         mock_settings.return_value = ModelSettings()
         supervisor = create_flow_supervisor(flow, document_id=None)
         assert len(supervisor._flow_unavailable_steps) == 2
         assert [tool.name for tool in supervisor.tools] == ["inspect_results", "read_export_details"]
 
     @patch("src.lib.flows.executor.build_model_settings")
-    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-6.1-sol")
+    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-6.2-sol")
     @patch("src.lib.flows.executor.get_agent_config")
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -4354,7 +4354,7 @@ class TestCreateFlowSupervisorNoTools:
     ):
         """Should NOT raise when at least one tool is created."""
         monkeypatch.delenv("FLOW_SUPERVISOR_PARALLEL_TOOL_CALLS_ENABLED", raising=False)
-        mock_config.return_value = MagicMock(model="gpt-6.1-sol", temperature=0.0, reasoning=None)
+        mock_config.return_value = MagicMock(model="gpt-6.2-sol", temperature=0.0, reasoning=None)
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         mock_streaming.return_value = MagicMock()
         mock_settings.return_value = ModelSettings()
@@ -4371,7 +4371,7 @@ class TestCreateFlowSupervisorNoTools:
 
     @pytest.mark.asyncio
     @patch("src.lib.flows.executor.build_model_settings")
-    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-6.1-sol")
+    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-6.2-sol")
     @patch("src.lib.flows.executor.get_agent_config")
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -4394,7 +4394,7 @@ class TestCreateFlowSupervisorNoTools:
 
         monkeypatch.setattr("src.lib.openai_agents.result_inspection_tool.inspect_results", _inspect_results)
         mock_config.return_value = MagicMock(
-            model="gpt-6.1-sol", temperature=0.0, reasoning=None
+            model="gpt-6.2-sol", temperature=0.0, reasoning=None
         )
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         mock_streaming.return_value = MagicMock()
@@ -4497,7 +4497,7 @@ class TestCreateFlowSupervisorNoTools:
             assert supervisor._flow_execution_state["inspected_result_refs"] == set()
 
     @patch("src.lib.flows.executor.build_model_settings")
-    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-6.1-sol")
+    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-6.2-sol")
     @patch("src.lib.flows.executor.get_agent_config")
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -4512,7 +4512,7 @@ class TestCreateFlowSupervisorNoTools:
     ):
         """Flow-specific override should be forwarded without affecting chat supervisors."""
         monkeypatch.setenv("FLOW_SUPERVISOR_PARALLEL_TOOL_CALLS_ENABLED", "true")
-        mock_config.return_value = MagicMock(model="gpt-6.1-sol", temperature=0.0, reasoning=None)
+        mock_config.return_value = MagicMock(model="gpt-6.2-sol", temperature=0.0, reasoning=None)
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         mock_streaming.return_value = MagicMock()
         mock_settings.return_value = ModelSettings()
@@ -4921,7 +4921,7 @@ class TestExecuteFlowTermination:
 
     @pytest.mark.asyncio
     @patch("src.lib.flows.executor.build_model_settings")
-    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-6.1-sol")
+    @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-6.2-sol")
     @patch("src.lib.flows.executor.get_agent_config")
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -4954,7 +4954,7 @@ class TestExecuteFlowTermination:
 
         monkeypatch.setattr("src.lib.openai_agents.result_inspection_tool.inspect_results", _empty_search)
         mock_config.return_value = MagicMock(
-            model="gpt-6.1-sol", temperature=0.0, reasoning=None
+            model="gpt-6.2-sol", temperature=0.0, reasoning=None
         )
         mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
         mock_streaming.return_value = MagicMock()
@@ -8085,8 +8085,8 @@ async def test_fresh_flow_extract_inspect_then_next_step(monkeypatch, session_id
         return agent
     monkeypatch.setattr(executor, "get_agent_by_id", build_agent)
     monkeypatch.setattr(executor, "_create_streaming_tool", streaming)
-    monkeypatch.setattr(executor, "get_agent_config", lambda *a: SimpleNamespace(model="gpt-6.1-sol", temperature=0.0, reasoning=None))
-    monkeypatch.setattr(executor, "get_model_for_agent", lambda *a, **kw: "gpt-6.1-sol")
+    monkeypatch.setattr(executor, "get_agent_config", lambda *a: SimpleNamespace(model="gpt-6.2-sol", temperature=0.0, reasoning=None))
+    monkeypatch.setattr(executor, "get_model_for_agent", lambda *a, **kw: "gpt-6.2-sol")
     monkeypatch.setattr(executor, "build_model_settings", lambda **kw: ModelSettings())
     persist = _recording_persist_idempotent_extraction_results()
     failure = RuntimeError("fake-secret-database-error")

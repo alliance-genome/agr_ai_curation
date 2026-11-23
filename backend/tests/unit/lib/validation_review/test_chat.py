@@ -29,7 +29,7 @@ def test_named_phase_keeps_model_policy_and_has_no_dispatch_or_validator_paper_t
 
     supervisor = Agent(
         name="Named Supervisor",
-        model="gpt-6-astra",
+        model="gpt-6.2-astra",
         instructions="Curator policy",
         model_settings=ModelSettings(temperature=0.2, reasoning={"effort": "high"}),
         tools=[ask_unconfigured_agent],
@@ -354,12 +354,12 @@ def test_direct_supervisor_resolves_requested_settings_without_routing_agent(
     monkeypatch.setattr(supervisor_agent, "_build_model_settings", settings)
     agent = create_direct_supervisor(
         active_groups=["TEST_GROUP"],
-        model_override="gpt-6-astra",
+        model_override="gpt-6.2-astra",
         temperature_override=0.2,
         reasoning_override="high",
     )
-    assert agent.model == "gpt-6-astra" and agent.tools == []
-    assert calls[0][0] == "gpt-6-astra"
+    assert agent.model == "gpt-6.2-astra" and agent.tools == []
+    assert calls[0][0] == "gpt-6.2-astra"
     assert (
         calls[0][1]["temperature"] == 0.2 and calls[0][1]["reasoning_effort"] == "high"
     )
@@ -487,7 +487,7 @@ async def test_stop_inside_real_sdk_tool_survives_sdk_cancellation_handling(monk
 def _phase_supervisor():
     from agents import Agent, ModelSettings
 
-    return Agent(name="Flow Supervisor", instructions="Route.", model="gpt-6-astra",
+    return Agent(name="Flow Supervisor", instructions="Route.", model="gpt-6.2-astra",
                  model_settings=ModelSettings(parallel_tool_calls=False))
 
 
@@ -496,7 +496,7 @@ def test_review_uses_its_configured_model_and_keeps_tool_call_policy(monkeypatch
     from src.lib.openai_agents import config
     from src.lib.validation_review.reviewer import _review_model_overrides
 
-    monkeypatch.setenv("VALIDATION_REVIEW_MODEL", "gpt-6.1-sol")
+    monkeypatch.setenv("VALIDATION_REVIEW_MODEL", "gpt-6.2-sol")
     monkeypatch.setenv("VALIDATION_REVIEW_REASONING", "medium")
     sentinel = Mock()
     monkeypatch.setattr(config, "get_model_for_agent", lambda model, provider_override=None: (sentinel, model)[0])
@@ -506,7 +506,7 @@ def test_review_uses_its_configured_model_and_keeps_tool_call_policy(monkeypatch
     overrides = _review_model_overrides(_phase_supervisor(), "Review instructions")
     assert overrides == {"model": sentinel, "model_settings": settings}
     arguments = build.call_args.kwargs
-    assert arguments["model"] == "gpt-6.1-sol" and arguments["reasoning_effort"] == "medium"
+    assert arguments["model"] == "gpt-6.2-sol" and arguments["reasoning_effort"] == "medium"
     assert arguments["parallel_tool_calls"] is False
     assert arguments["prompt_cache"].agent_key == "supervisor.validation_review"
 
@@ -522,8 +522,8 @@ def test_benchmark_routes_keep_their_pinned_review_model(monkeypatch):
     from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
     from src.lib.validation_review.reviewer import _review_model_overrides
 
-    monkeypatch.setenv("VALIDATION_REVIEW_MODEL", "gpt-6.1-sol")
-    route = {"provider": "openai", "model": "gpt-6-astra", "reasoning_effort": "low"}
+    monkeypatch.setenv("VALIDATION_REVIEW_MODEL", "gpt-6.2-sol")
+    route = {"provider": "openai", "model": "gpt-6.2-astra", "reasoning_effort": "low"}
     with benchmark_route_plan({"supervisor": route}):
         assert _review_model_overrides(_phase_supervisor(), "Review instructions") == {}
 
@@ -533,7 +533,7 @@ def test_review_model_defaults_to_sol(monkeypatch):
 
     monkeypatch.delenv("VALIDATION_REVIEW_MODEL", raising=False)
     monkeypatch.delenv("VALIDATION_REVIEW_REASONING", raising=False)
-    assert get_validation_review_model() == "gpt-6.1-sol"
+    assert get_validation_review_model() == "gpt-6.2-sol"
     assert get_validation_review_reasoning() == "medium"
 
 
@@ -542,9 +542,9 @@ def test_startup_validation_rejects_a_bad_review_model_or_reasoning():
 
     assert any("VALIDATION_REVIEW_MODEL" in error for error in model_env_errors({"VALIDATION_REVIEW_MODEL": "not-a-model"}))
     assert any("VALIDATION_REVIEW_REASONING" in error for error in model_env_errors(
-        {"VALIDATION_REVIEW_MODEL": "gpt-6.1-sol", "VALIDATION_REVIEW_REASONING": "not-a-level"}))
+        {"VALIDATION_REVIEW_MODEL": "gpt-6.2-sol", "VALIDATION_REVIEW_REASONING": "not-a-level"}))
     assert not [error for error in model_env_errors(
-        {"VALIDATION_REVIEW_MODEL": "gpt-6.1-sol", "VALIDATION_REVIEW_REASONING": "medium"}) if "VALIDATION_REVIEW" in error]
+        {"VALIDATION_REVIEW_MODEL": "gpt-6.2-sol", "VALIDATION_REVIEW_REASONING": "medium"}) if "VALIDATION_REVIEW" in error]
 
 
 def test_compose_lets_an_empty_review_model_keep_the_supervisor_model():
@@ -555,7 +555,7 @@ def test_compose_lets_an_empty_review_model_keep_the_supervisor_model():
     if not composes:
         pytest.skip("Compose files are not mounted in this test image")
     for path in composes:
-        assert "${VALIDATION_REVIEW_MODEL-gpt-6.1-sol}" in path.read_text()
+        assert "${VALIDATION_REVIEW_MODEL-gpt-6.2-sol}" in path.read_text()
 
 
 def test_finished_review_names_pending_records_instead_of_a_bare_stop_code():

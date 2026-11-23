@@ -1,0 +1,28 @@
+# Reviewed model move for release v0.11.14 (2026-11-23).
+#
+# Run with `python -m src.services.model_move_cli --moves <this file> ...` after the
+# model catalog no longer offers any `from` id and offers every `to` id. See
+# config/model_moves/README.md. Each entry moves saved custom agents (archived ones
+# included), the flow steps that pin their versions and their editable rows from
+# every `from` id to `to`.
+#
+# reasoning: {} keeps each saved reasoning level unchanged. Both targets offer the
+# same levels as the model they replace (Sol: low, medium, high; Astra: low,
+# medium, high, xhigh), so nothing needs mapping; a level the target does not
+# offer is refused, never guessed.
+#
+# note: stored on every appended version; curators can read it in the agent's
+# version history.
+moves:
+  - from: [gpt-6.1-sol]
+    to: gpt-6.2-sol
+    reasoning: {}
+    note: >-
+      v0.11.14 release: GPT-6.1 Sol was retired; this copy of the saved version runs
+      on GPT-6.2 Sol with the same reasoning level. Nothing else changed.
+  - from: [gpt-6-astra]
+    to: gpt-6.2-astra
+    reasoning: {}
+    note: >-
+      v0.11.14 release: GPT-6 Astra was retired; this copy of the saved version runs
+      on GPT-6.2 Astra with the same reasoning level. Nothing else changed.

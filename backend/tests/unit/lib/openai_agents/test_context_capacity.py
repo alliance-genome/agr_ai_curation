@@ -138,7 +138,7 @@ async def test_count_endpoint_receives_sdk_wire_tools_schema_instructions_and_op
         sent.append((request.url.path, json.loads(request.content)))
         return httpx2.Response(200, json={"object": "response.input_tokens", "input_tokens": 123})
     client = AsyncOpenAI(api_key="fixture", http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(transport)))
-    model = OpenAIResponsesModel(model="gpt-6-astra", openai_client=client)
+    model = OpenAIResponsesModel(model="gpt-6.2-astra", openai_client=client)
     request = NativeCapacityRequest(model, ModelSettings(max_tokens=1000), instructions="Keep NOT observed.",
         tools=[lookup], output_schema=None, handoffs=[])
     items = [{"type": "compaction", "encrypted_content": "opaque"}, {"role": "user", "content": "Task α😀"}]
@@ -248,7 +248,7 @@ async def test_effective_extra_body_instructions_and_output_reserve_are_counted(
     import json
     from openai import AsyncOpenAI
     from agents.models.openai_responses import OpenAIResponsesModel
-    monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", json.dumps({"gpt-6-astra": {
+    monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", json.dumps({"gpt-6.2-astra": {
         "context_window_tokens": 10000, "max_input_tokens": 10000, "max_output_tokens": 4000}}))
     monkeypatch.setenv("AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS", "500")
     sent = []
@@ -256,7 +256,7 @@ async def test_effective_extra_body_instructions_and_output_reserve_are_counted(
         sent.append(json.loads(request.content))
         return httpx2.Response(200, json={"input_tokens": 100})
     async with AsyncOpenAI(api_key="fixture", http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(reply))) as client:
-        model = OpenAIResponsesModel(model="gpt-6-astra", openai_client=client)
+        model = OpenAIResponsesModel(model="gpt-6.2-astra", openai_client=client)
         request = NativeCapacityRequest(model, ModelSettings(max_tokens=100,
             extra_body={"instructions": "actual instructions", "max_output_tokens": 3000}),
             instructions="overridden", tools=[], output_schema=None, handoffs=[])
@@ -273,7 +273,7 @@ def _sdk_request(monkeypatch, *, capacity=None, sent=None):
     from openai import AsyncOpenAI
     from agents.models.openai_responses import OpenAIResponsesModel
     if capacity is not None:
-        monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", json.dumps({"gpt-6-astra": {
+        monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", json.dumps({"gpt-6.2-astra": {
             "context_window_tokens": capacity + 1000, "max_input_tokens": capacity, "max_output_tokens": 1000}}))
         # Synthetic small capacities keep the former exact-limit fit.
         monkeypatch.setenv("AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS", "0")
@@ -282,7 +282,7 @@ def _sdk_request(monkeypatch, *, capacity=None, sent=None):
         sent.append(request.url.path)
         return httpx2.Response(200, json={"object": "response.input_tokens", "input_tokens": 10})
     client = AsyncOpenAI(api_key="fixture", http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(reply)))
-    model = OpenAIResponsesModel(model="gpt-6-astra", openai_client=client)
+    model = OpenAIResponsesModel(model="gpt-6.2-astra", openai_client=client)
     request = NativeCapacityRequest(model, ModelSettings(max_tokens=1000), instructions="Extract records.",
         tools=[], output_schema=None, handoffs=[])
     return request, sent, client
@@ -341,7 +341,7 @@ async def test_skip_path_serializes_the_real_tool_surface(monkeypatch):
         sent.append(request.url.path)
         return httpx2.Response(200, json={"object": "response.input_tokens", "input_tokens": 10})
     client = AsyncOpenAI(api_key="fixture", http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(reply)))
-    model = OpenAIResponsesModel(model="gpt-6-astra", openai_client=client)
+    model = OpenAIResponsesModel(model="gpt-6.2-astra", openai_client=client)
     settings = ModelSettings(max_tokens=1000, reasoning=Reasoning(effort="medium", summary="auto"),
         tool_choice="read_chunk", parallel_tool_calls=True, verbosity="low", store=False,
         extra_args={"service_tier": "priority"})
@@ -560,10 +560,10 @@ def test_capacity_headroom_must_stay_below_the_model_capacity(monkeypatch, headr
     from openai import AsyncOpenAI
     from agents.models.openai_responses import OpenAIResponsesModel
     from src.lib.openai_agents.model_context_view import ContextRecoveryError
-    monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", json.dumps({"gpt-6-astra": {
+    monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", json.dumps({"gpt-6.2-astra": {
         "context_window_tokens": 3000, "max_input_tokens": 2000, "max_output_tokens": 1000}}))
     monkeypatch.setenv("AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS", headroom)
-    model = OpenAIResponsesModel(model="gpt-6-astra", openai_client=AsyncOpenAI(api_key="fixture"))
+    model = OpenAIResponsesModel(model="gpt-6.2-astra", openai_client=AsyncOpenAI(api_key="fixture"))
     with pytest.raises(ContextRecoveryError, match="must be below the input capacity"):
         NativeCapacityRequest(model, ModelSettings(max_tokens=1000), instructions="x",
                               tools=[], output_schema=None, handoffs=[])

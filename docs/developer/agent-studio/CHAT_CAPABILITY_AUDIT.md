@@ -83,7 +83,7 @@ Successful Flow and Workshop proposal Apply schedules one Chat follow-up after t
 Workshop Start now promotes Custom data extraction. It selects an available template declaring unprofiled generic output, retains its tools/model settings, initializes a fresh profile-bound structure, and opens the item-type wizard. Help distinguishes custom records from standard Alliance structures. Support labels use installed extraction metadata and model/object/schema definition states; an active domain pack alone does not establish readiness.
 
 AI Chat uses its own registered model selection: `AGENT_STUDIO_OPENAI_MODEL`
-(default `gpt-6-astra`) and `AGENT_STUDIO_REASONING_EFFORT` (default `medium`).
+(default `gpt-6.2-astra`) and `AGENT_STUDIO_REASONING_EFFORT` (default `medium`).
 Backend restart applies changes. The shared extraction/routing default stays
 independent. Astra uses Responses tool calling and catalog capability metadata
 that disables temperature; unsupported reasoning levels fail configuration.

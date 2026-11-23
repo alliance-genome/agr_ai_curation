@@ -48,7 +48,7 @@ async def test_abstract_fallback_reserves_owned_cost_across_async_preparation(mo
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=complete)), close=close)
     monkeypatch.setattr("openai.AsyncOpenAI", lambda: client)
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6.1-sol")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6.2-sol")
     monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
     monkeypatch.setattr("src.lib.weaviate_client.chunks.get_chunks_by_parent_section", empty)
     monkeypatch.setattr("src.lib.weaviate_client.chunks.search_chunks_by_keyword", keyword)
@@ -271,7 +271,7 @@ async def test_extract_abstract_with_llm_input_character_limit(
         close=AsyncMock(),
     )
     monkeypatch.setattr("openai.AsyncOpenAI", lambda: client)
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6-astra")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6.2-astra")
     monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
     if configured_limit is None:
         monkeypatch.delenv("ABSTRACT_EXTRACTION_INPUT_MAX_CHARS", raising=False)
@@ -292,7 +292,7 @@ async def test_extract_abstract_with_llm_input_character_limit(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-6.1-sol"])
+@pytest.mark.parametrize("model", ["gpt-6.2-astra", "gpt-6.2-sol"])
 async def test_extract_abstract_with_llm_uses_catalog_reasoning_without_temperature(monkeypatch, model):
     captured = {}
 
@@ -369,7 +369,7 @@ async def test_extract_abstract_with_llm_preserves_short_output_and_missing_sent
             pass
 
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6-astra")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6.2-astra")
     monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
 
     assert await prompt_utils._extract_abstract_with_llm("raw text") == expected
@@ -406,7 +406,7 @@ async def test_extract_abstract_with_llm_closes_client_for_all_outcomes(
             lifecycle["closed"] += 1
 
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6-astra")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6.2-astra")
     monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
 
     if outcome == "configuration":
@@ -465,7 +465,7 @@ async def test_extract_abstract_with_llm_preserves_result_when_close_fails(
             raise RuntimeError("SECRET source prompt response credential token")
 
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6-astra")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6.2-astra")
     monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
 
     if outcome in {"cancelled", "close_cancelled"}:
@@ -719,7 +719,7 @@ async def test_abstract_client_close_and_reporting_failure_preserve_llm_result(m
         ))), close=close,
     )
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=lambda: client))
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6-astra")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6.2-astra")
     monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
     monkeypatch.setattr(prompt_utils, "report_runtime_exception", Mock(side_effect=RuntimeError("SECRET report")))
     assert await prompt_utils._extract_abstract_with_llm("raw") == "Brief abstract."

@@ -146,7 +146,7 @@ async def test_sdk_count_and_compact_use_same_projection_without_changing_source
         return SimpleNamespace(output=items)
 
     request = NativeCapacityRequest(
-        OpenAIResponsesModel(model="gpt-6-astra", openai_client=client),
+        OpenAIResponsesModel(model="gpt-6.2-astra", openai_client=client),
         ModelSettings(max_tokens=1000),
         instructions="Inspect the draft",
         tools=surface(namespace),
@@ -183,7 +183,7 @@ async def test_measured_generation_matches_real_sdk_count_after_checkpoint_resto
         api_key="fixture",
         http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(transport)),
     )
-    inner = model_class(model="gpt-6-astra", openai_client=client)
+    inner = model_class(model="gpt-6.2-astra", openai_client=client)
 
     def record(instructions, input, settings, tools, schema, handoffs):
         wire = inner._build_response_create_kwargs(
@@ -260,7 +260,7 @@ async def test_measured_generation_matches_real_sdk_count_after_checkpoint_resto
 @pytest.mark.asyncio
 async def test_native_request_without_context_policy_still_projects_history():
     client = AsyncOpenAI(api_key="fixture")
-    inner = OpenAIResponsesModel(model="gpt-6-astra", openai_client=client)
+    inner = OpenAIResponsesModel(model="gpt-6.2-astra", openai_client=client)
     model = MeasuredModel(inner, agent=None)
     raw = history()
     before = deepcopy(raw)

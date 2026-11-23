@@ -1,10 +1,10 @@
-"""Moving saved custom agents and their pinned flow steps off GPT-6 Sol."""
+"""Moving saved custom agents and their pinned flow steps off a retired model.
 
-import importlib.util
-import json
-import sys
+The target is the catalog's default model, so a model move needs no edits here.
+"""
+
+import re
 from copy import deepcopy
-from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -16,6 +16,7 @@ from src.lib.agent_studio import custom_agent_service as service
 from src.lib.agent_studio import retired_model_conversion as conversion
 from src.lib.agent_studio.execution_revision_service import append_execution_revision
 from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
+from src.lib.config.models_loader import get_default_model
 from src.lib.flows.execution_revisions import flow_execution_revision_findings
 from src.models.sql import database
 from src.models.sql.agent_execution_revision import AgentExecutionRevision
@@ -31,7 +32,7 @@ from .test_flow_revision_persistence import migrate
 from .test_generic_profile_persistence import profile_db  # noqa: F401
 
 NO_OUTPUT = AgentOutputContract(output_state="none")
-RETIRED, TARGET = "gpt-6-sol", "gpt-6.1-sol"
+RETIRED, TARGET = "gpt-6-sol", get_default_model().model_id
 
 
 @pytest.fixture
@@ -63,7 +64,7 @@ def save_on_retired(db, agent, instructions=None, reasoning="medium", model=RETI
         update={"model_id": model, "model_reasoning": reasoning})
     row = append_execution_revision(db, agent, snapshot, user_id=agent.user_id,
                                     expected_revision_id=agent.execution_revision_id)
-    # Alembic s6b7c8d9e0f1 has already moved the editable row.
+    # The editable row names the current model.
     agent.model_id = TARGET
     db.flush()
     return row
@@ -114,11 +115,11 @@ FULL_MAP = {"minimal": "low", "disabled": "medium", "xhigh": "high"}
 
 
 def run(db, owner_groups=None, reasoning_map=None):
-    return conversion.convert(db, retired_model_ids=frozenset({RETIRED, "gpt-5.6-terra"}),
-                              target_model_id=TARGET,
-                              reasoning_map=FULL_MAP if reasoning_map is None else reasoning_map,
-                              owner_groups={1: [], 2: []} if owner_groups is None else owner_groups,
-                              notes="test conversion")
+    move = conversion.ModelMove(from_ids=(RETIRED, "gpt-5.6-terra"), to_id=TARGET,
+                                reasoning_map=FULL_MAP if reasoning_map is None else reasoning_map,
+                                note="test conversion")
+    return conversion.convert(db, moves=[move],
+                              owner_groups={1: [], 2: []} if owner_groups is None else owner_groups)
 
 
 def same_except_model(old, new):
@@ -273,14 +274,14 @@ def test_every_retired_model_moves_with_the_reviewed_reasoning(world, model, sav
     assert same_except_model(old_head.snapshot, head.snapshot)
     db.refresh(flow)
     assert pin(flow)["agent_revision_id"] == str(head.id)
-    assert report["from_models"] == ["gpt-5.6-terra", RETIRED]
+    assert report["moves"][0]["from"] == [RETIRED, "gpt-5.6-terra"]
     assert report["after"]["active_agent_heads"] == report["after"]["active_flow_pins"] == 0
 
 
 def test_a_run_is_refused_while_a_retired_model_is_still_offered(world):
-    with pytest.raises(conversion.ConversionRefused, match=r"still in the model catalog: \['gpt-6.1-sol'\]"):
-        conversion.convert(world, retired_model_ids=frozenset({TARGET}), target_model_id=TARGET,
-                           reasoning_map={}, owner_groups={}, notes="n")
+    with pytest.raises(conversion.ConversionRefused,
+                       match=rf"still in the model catalog: \['{re.escape(TARGET)}'\]"):
+        conversion.convert(world, moves=[conversion.ModelMove((TARGET,), TARGET, {}, "n")], owner_groups={})
 
 
 def test_a_flow_owner_without_reviewed_groups_stops_the_run_before_any_write(world):
@@ -293,72 +294,3 @@ def test_a_flow_owner_without_reviewed_groups_stops_the_run_before_any_write(wor
     with pytest.raises(conversion.ConversionRefused, match=r"flow owner\(s\) \[1\]"):
         run(db, owner_groups={2: []})
     assert revision_count(db, agent) == count
-
-
-# The CLI, run through main() against this isolated schema.
-
-def _script():
-    path = Path(__file__).resolve().parents[4] / "scripts/one_off/convert_gpt6_sol_agents_0100.py"
-    spec = importlib.util.spec_from_file_location("convert_gpt6_sol_agents_0100", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_the_script_makes_the_backend_and_its_runtime_helpers_importable(monkeypatch):
-    backend = Path(__file__).resolve().parents[3]
-    wanted = {str(backend), str(backend / "src")}
-    monkeypatch.setattr(sys, "path", [entry for entry in sys.path
-                                      if str(Path(entry or ".").resolve()) not in wanted])
-    _script()
-    assert wanted <= set(sys.path)
-
-
-def _groups_file(tmp_path, groups):
-    path = tmp_path / "owner-groups.json"
-    path.write_text(json.dumps(groups))
-    return str(path)
-
-
-def _head(db, agent):
-    db.expire_all()
-    return db.get(type(agent), agent.id).execution_revision_id
-
-
-def test_cli_dry_run_reports_and_rolls_back_then_apply_commits(world, tmp_path, monkeypatch, capsys):
-    db = world
-    agent = make_agent(db, "Finder")
-    old_head = save_on_retired(db, agent)
-    make_flow(db, [(agent, old_head)])
-    args = ["--owner-groups", _groups_file(tmp_path, {"1": []})]
-
-    assert _script().main(args) == 0
-    dry = json.loads(capsys.readouterr().out)
-    assert dry["committed"] is False and dry["counts"]["steps_repinned"] == 1
-    assert _head(db, agent) == old_head.id
-
-    assert _script().main([*args, "--apply"]) == 0
-    applied = json.loads(capsys.readouterr().out)
-    assert applied["committed"] is True and applied["after"]["active_flow_pins"] == 0
-    assert _head(db, agent) != old_head.id
-
-
-def test_cli_exits_3_when_something_is_refused(world, tmp_path, capsys):
-    db = world
-    agent = make_agent(db, "Finder")
-    save_on_retired(db, agent, reasoning="minimal")
-    script = _script()
-    script.REASONING_MAP = {}
-    assert script.main(["--owner-groups", _groups_file(tmp_path, {}), "--apply"]) == 3
-    assert json.loads(capsys.readouterr().out)["counts"]["agents_refused"] == 1
-
-
-def test_cli_refuses_unknown_groups_and_missing_owners(world, tmp_path, capsys):
-    db = world
-    agent = make_agent(db, "Finder")
-    make_flow(db, [(agent, save_on_retired(db, agent))])
-    assert _script().main(["--owner-groups", _groups_file(tmp_path, {"1": ["NOT_A_GROUP"]})]) == 1
-    assert "NOT_A_GROUP" in capsys.readouterr().err
-    assert _script().main(["--owner-groups", _groups_file(tmp_path, {})]) == 1
-    assert "flow owner(s) [1]" in capsys.readouterr().err

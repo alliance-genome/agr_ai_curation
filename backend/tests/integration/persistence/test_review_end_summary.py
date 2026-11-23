@@ -63,7 +63,7 @@ async def _chat_review(scope, monkeypatch, count):
         metadata={"evidence_records": [_evidence(f"e{index}", f"{QUOTE} {index}") for index in range(count)]})
     envelope = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex, envelope=envelope,
                                           typed=envelope.model_dump(mode="json"), provenance={})
-    supervisor = Agent(name="Supervisor", model="gpt-6-astra", instructions="Policy")
+    supervisor = Agent(name="Supervisor", model="gpt-6.2-astra", instructions="Policy")
     attach_agent_cost_identity(supervisor, {"agent_id": "supervisor", "agent_role": "supervisor"})
     turn_id = uuid4().hex
     record_user_turn(owner_id=scope.owner_id, session_id=scope.session_id, turn_id=turn_id, question=QUESTION)

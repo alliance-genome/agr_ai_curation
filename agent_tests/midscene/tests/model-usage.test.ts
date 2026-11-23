@@ -23,7 +23,7 @@ describe('Midscene model usage accounting', () => {
       cacheWriteInputTokens: 10_000,
       outputTokens: 10_000,
       totalTokens: 1_010_000,
-      model_name: 'gpt-6.1-sol',
+      model_name: 'gpt-6.2-sol',
     }
     const second = {
       request_id: 'req-long',
@@ -31,12 +31,12 @@ describe('Midscene model usage accounting', () => {
       prompt_tokens_details: { cached_tokens: 100_000, cache_write_tokens: 50_000 },
       completion_tokens: 2_000,
       total_tokens: 302_000,
-      model_name: 'gpt-6.1-sol',
+      model_name: 'gpt-6.2-sol',
     }
     await writeFile(path.join(report, 'one.execution.json'), JSON.stringify({ tasks: [{ usage: first }, { repeated: { usage: first } }] }))
     await writeFile(path.join(report, 'two.execution.json'), JSON.stringify({ usage: second }))
 
-    const summary = await summarizeModelUsage(path.dirname(report), 'openai', 'gpt-6.1-sol', 1)
+    const summary = await summarizeModelUsage(path.dirname(report), 'openai', 'gpt-6.2-sol', 1)
 
     assert.equal(summary.report_files, 2)
     assert.equal(summary.request_count, 2)
@@ -79,7 +79,7 @@ describe('Midscene model usage accounting', () => {
   })
 
   it('returns zero usage when no Midscene execution report exists', async () => {
-    const summary = await summarizeModelUsage('/definitely/missing/midscene-report', 'openai', 'gpt-6.1-sol', 5)
+    const summary = await summarizeModelUsage('/definitely/missing/midscene-report', 'openai', 'gpt-6.2-sol', 5)
     assert.equal(summary.report_files, 0)
     assert.equal(summary.request_count, 0)
     assert.equal(summary.estimated_openai_api_cost_usd, null)
@@ -98,10 +98,10 @@ describe('Midscene model usage accounting', () => {
         completion_tokens: 100,
         total_tokens: 1_100,
         cached_input: 200,
-        model_name: 'gpt-6.1-sol',
+        model_name: 'gpt-6.2-sol',
       },
     }))
-    const summary = await summarizeModelUsage(report, 'openai', 'gpt-6.1-sol', 0.00275)
+    const summary = await summarizeModelUsage(report, 'openai', 'gpt-6.2-sol', 0.00275)
 
     assert.equal(summary.requests_missing_cache_write_tokens, 1)
     assert.equal(summary.estimated_openai_api_cost_usd, null)

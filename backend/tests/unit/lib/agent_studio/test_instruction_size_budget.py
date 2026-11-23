@@ -88,8 +88,8 @@ def _models():
             default_reasoning="medium",
         )
         for name, model_id, default in (
-            ("Sol", "gpt-6.1-sol", True),
-            ("Astra", "gpt-6-astra", False),
+            ("Sol", "gpt-6.2-sol", True),
+            ("Astra", "gpt-6.2-astra", False),
         )
     ]
 

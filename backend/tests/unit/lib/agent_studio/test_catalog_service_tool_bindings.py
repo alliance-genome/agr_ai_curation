@@ -306,7 +306,7 @@ def test_create_db_agent_propagates_tool_resolution_errors(monkeypatch):
         instructions="do work",
         group_prompt_overrides={},
         group_rules_enabled=False,
-        model_id="gpt-6.1-sol",
+        model_id="gpt-6.2-sol",
         model_temperature=0.1,
         model_reasoning="medium",
         output_schema_key=None,
@@ -500,7 +500,7 @@ def test_create_db_agent_does_not_require_a_curation_lookup_call(monkeypatch):
         instructions="validate genes",
         group_prompt_overrides={},
         group_rules_enabled=False,
-        model_id="gpt-6.1-sol",
+        model_id="gpt-6.2-sol",
         model_temperature=0.1,
         model_reasoning=None,
         output_schema_key=None,
@@ -956,7 +956,7 @@ def test_direct_validator_constructor_refuses_paper_tools_before_resolution(monk
     fake_row = SimpleNamespace(
         id="validator-id", agent_key="custom-validator", template_source="gene_validation",
         instructions="Check supplied context", group_prompt_overrides={}, group_rules_enabled=False,
-        model_id="gpt-6.1-sol", model_temperature=0.1, model_reasoning="medium",
+        model_id="gpt-6.2-sol", model_temperature=0.1, model_reasoning="medium",
         output_schema_key="fixture-validator", tool_ids=[tool_id], name="Validator",
     )
     monkeypatch.setattr(tool_roles, "is_validator_output_schema", lambda key: key == "fixture-validator")

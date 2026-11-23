@@ -27,7 +27,7 @@ scripts/
 │   └── run-tests.sh             # Docker Compose test runner
 │   └── llm_provider_smoke_local.sh  # Local LLM provider smoke checks (health/contracts)
 │   └── rerank_provider_smoke_local.sh  # Local rerank provider smoke across bedrock/local/none
-│   └── evaluate_figure_locator_classifier.py # Live GPT-6.1 Sol evaluation against labeled locator corpus
+│   └── evaluate_figure_locator_classifier.py # Live GPT-6.2 Sol evaluation against labeled locator corpus
 │   └── file_output_storage_preflight.sh # Deployment-stage probe for export temp/output writeability
 │   └── dev_release_smoke.py     # Deep dev-release smoke: upload, chat, custom flow, batch, optional rerank smoke, cleanup
 │   └── abc_literature_live_smoke.py # ABC Literature stage smoke with ephemeral Cognito users and evidence JSON
@@ -500,7 +500,7 @@ Useful selections:
 ./scripts/testing/agent_ui_smoke.sh --provider openai --case create --cost-warning-usd 5
 ```
 
-Codex app-server with `gpt-6.1-sol` and low reasoning is the default and does
+Codex app-server with `gpt-6.2-sol` and low reasoning is the default and does
 not use or fall back to `OPENAI_API_KEY`. Direct OpenAI billing requires the
 explicit `--provider openai` option. Curator-cookie support is retained for a
 local cookie-auth stack, but the harness rejects non-loopback application URLs.
@@ -887,50 +887,11 @@ deployment note; never commit them to a repository or attach them to a ticket.
      --plan /work/agent.plan.json --plan-sha256 <digest> --result /work/agent.result.json --commit
    ```
 
-### one_off/convert_gpt6_sol_agents_0100.py
+### Model retirements
 
-Moves saved custom agents and the flow steps that pin them from retired models
-to GPT-6.1 Sol (`gpt-6.1-sol`), so no curator has to re-save anything. The
-retired models are GPT-6 Sol (`gpt-6-sol`) and, for a database that still has
-versions from before the GPT-6 Sol switch, GPT-5.6 Sol and GPT-5.6 Terra
-(`gpt-5.6-sol`, `gpt-5.6-terra`), which GPT-6 Sol replaced. Alembic
-`r5a6b7c8d9e0` and `s6b7c8d9e0f1` move the editable agent rows, but a custom
-agent runs its saved head version and a flow step runs the exact version it
-pins, and those still name the retired model. Run it after
-`alembic upgrade head`.
-
-For every custom agent, archived ones included, it appends a copy of the head,
-and of each older version that an active flow step pins. Each copy is the saved
-version with only the model changed. Reasoning follows the migrations: `minimal`
-becomes `low`, off (`disabled`) becomes `medium`, `xhigh` becomes `high`. The head copy stays the head, and nothing else about any version
-changes. It then re-pins each of those steps to the copy of the version it
-pinned and saves the flow through the normal flow save as the flow's owner. A
-selected-fields file output that reads a re-pinned step moves with it only if
-its field layout was current before. Old versions are never edited. Steps in
-deleted flows are left alone and counted in the report.
-
-The run is refused before any write if a flow to be re-pinned belongs to an
-owner missing from `--owner-groups` (JSON `{"<user_id>": ["<group id>", ...]}`,
-the owner's reviewed active groups; `[]` is allowed). An agent or flow that
-can't be converted, for example a saved reasoning level GPT-6.1 Sol doesn't
-offer or a flow whose own validation already fails, is left unchanged. It is
-listed under `refused_agents` or `refused_flows` with the reason, and the
-script exits 3. Everything else is converted, and a re-run converts only what
-is left, so it is safe to run again.
-
-Without `--apply` the whole conversion runs and is rolled back (a dry run).
-The JSON report on stdout lists every owner, agent (old head, new head and
-each copy) and flow step touched, plus `before`/`after` counts of agent heads
-and flow pins still on a retired model. It contains agent and flow names; keep it in
-the private deployment note.
-
-```bash
-docker compose run --rm --no-deps -T --entrypoint python \
-  -v "$PWD/scripts/one_off:/app/scripts/one_off:ro" -v "$PWD/conversion:/work:ro" \
-  backend /app/scripts/one_off/convert_gpt6_sol_agents_0100.py \
-  --owner-groups /work/owner-groups.json > gpt61-dry-run.json
-# then the same command with --apply
-```
+The one-off GPT-6.1 Sol conversion script was replaced by a standing command in
+the backend image, `python -m src.services.model_move_cli`, driven by a reviewed
+moves file. See [`config/model_moves/README.md`](../config/model_moves/README.md).
 
 ## Utilities
 

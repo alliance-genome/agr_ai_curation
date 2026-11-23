@@ -28,7 +28,7 @@ def snapshot_data(instructions: str = "Find the genes.", output_contract: dict |
         source_ref="custom_agent:test",
     )])
     return {
-        "model_id": "gpt-6.1-sol", "model_temperature": 0.0, "model_reasoning": None,
+        "model_id": "gpt-6.2-sol", "model_temperature": 0.0, "model_reasoning": None,
         "instructions": instructions,
         "instructions_hash": "sha256:" + hashlib.sha256(instructions.encode()).hexdigest(),
         "prompt_layer_manifest": layers.to_manifest(), "group_prompt_layers": {},

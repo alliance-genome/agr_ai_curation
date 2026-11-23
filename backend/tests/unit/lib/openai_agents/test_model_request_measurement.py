@@ -1190,7 +1190,7 @@ def test_flatten_loaded_tool_definitions_counts_namespace_members():
 # ALL-1284: stable prompt cache key bound to the tool surface; cached-token share
 # ---------------------------------------------------------------------------
 
-_MODEL = "gpt-6.1-sol"
+_MODEL = "gpt-6.2-sol"
 _PROMPT_KEY = build_prompt_cache_key(
     PromptCacheIdentity(agent_key="allele_validation", static_prompt="Validate alleles."),
     model=_MODEL,
@@ -1480,16 +1480,16 @@ async def test_standalone_compaction_reserves_benchmark_budget_and_records_exact
     monkeypatch.setattr("agents.tracing.generation_span", lambda **kwargs: Span())
     async def compact(**kwargs):
         calls.append(kwargs)
-        return SimpleNamespace(id="cmp-1", model="gpt-6-astra",
+        return SimpleNamespace(id="cmp-1", model="gpt-6.2-astra",
             usage=ResponseUsage(input_tokens=123, output_tokens=17, total_tokens=140,
                 input_tokens_details=ResponseInputTokensDetails(cached_tokens=5, cache_write_tokens=0),
                 output_tokens_details=ResponseOutputTokensDetails(reasoning_tokens=0)))
     with pytest.raises(BenchmarkInvocationBudgetExceeded), capture_provider_usage(max_records=1) as records, observe_provider_invocations(Observer()):
         await call_measured_direct_request(surface="context_compaction", provider="openai", api="responses.compact",
-            kwargs={"model": "gpt-6-astra", "input": [{"role": "user", "content": "old"}]}, call=compact)
+            kwargs={"model": "gpt-6.2-astra", "input": [{"role": "user", "content": "old"}]}, call=compact)
         with pytest.raises(BenchmarkInvocationBudgetExceeded):
             await call_measured_direct_request(surface="context_compaction", provider="openai", api="responses.compact",
-                kwargs={"model": "gpt-6-astra", "input": []}, call=compact)
+                kwargs={"model": "gpt-6.2-astra", "input": []}, call=compact)
     assert len(calls) == len(records) == len(spans) == 1
     assert checkpoints[0][1] == spans[0][1]["model_request_id"]
     assert checkpoints[1] == ("completed", 123, 17)

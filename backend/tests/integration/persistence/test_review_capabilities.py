@@ -74,7 +74,7 @@ def test_two_extractors_in_one_run_each_review_under_their_own_rules(scope, monk
 
     monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
     monkeypatch.setenv("VALIDATION_REVIEW_MODEL", "")
-    supervisor = Agent(name="Supervisor", model="gpt-6-astra", instructions="Policy")
+    supervisor = Agent(name="Supervisor", model="gpt-6.2-astra", instructions="Policy")
     attach_agent_cost_identity(supervisor, {"agent_id": "supervisor", "agent_role": "supervisor"})
     supervisor.validation_review_policy_layers = ()
     rules = {"reagents": "Keep only reagents used in this study.",

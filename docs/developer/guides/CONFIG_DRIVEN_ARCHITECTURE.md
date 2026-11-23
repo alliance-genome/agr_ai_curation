@@ -313,7 +313,7 @@ output_schema: GeneValidationEnvelope
 
 # Model configuration
 model_config:
-  model: "${AGENT_GENE_MODEL:-gpt-6.1-sol}"
+  model: "${AGENT_GENE_MODEL:-gpt-6.2-sol}"
   temperature: 0.1
   reasoning: "medium"
 
@@ -436,11 +436,11 @@ Located at: `config/models.yaml`
 
 ```yaml
 models:
-  - model_id: gpt-6-astra
-    name: GPT-6 Astra
+  - model_id: gpt-6.2-astra
+    name: GPT-6.2 Astra
     provider: openai                    # Must match a key in providers.yaml
     description: Used by Agent Studio AI Chat. Available for document extraction by explicit selection.
-    guidance: Agent Studio AI Chat uses GPT-6 Astra; other agents default to GPT-6.1 Sol.
+    guidance: Agent Studio AI Chat uses GPT-6.2 Astra; other agents default to GPT-6.2 Sol.
     default: false                      # Exactly one model should be default
     supports_reasoning: true
     supports_temperature: false
@@ -449,10 +449,10 @@ models:
     recommended_for:
       - Paper extraction when explicitly selected
     avoid_for:
-      - Routing, formatting, validation and database lookups, where GPT-6.1 Sol is the default
+      - Routing, formatting, validation and database lookups, where GPT-6.2 Sol is the default
 
-  - model_id: gpt-6.1-sol
-    name: GPT-6.1 Sol
+  - model_id: gpt-6.2-sol
+    name: GPT-6.2 Sol
     provider: openai
     description: Default reasoning model for document extraction, validation, and curation.
     default: true
@@ -740,7 +740,7 @@ output_projection:
   inherited_parent_fields: []
 
 model_config:
-  model: "${AGENT_MY_AGENT_MODEL:-gpt-6.1-sol}"
+  model: "${AGENT_MY_AGENT_MODEL:-gpt-6.2-sol}"
   temperature: 0.2
   reasoning: "low"
 
@@ -1156,8 +1156,8 @@ GROQ_BASE_URL=https://api.groq.com/openai/v1
 LLM_PROVIDER_STRICT_MODE=true      # Fail startup if required keys missing (default: true)
 
 # Per-agent model overrides (in agent.yaml via ${VAR:-default})
-AGENT_GENE_MODEL=gpt-6.1-sol
-AGENT_SUPERVISOR_MODEL=gpt-6.1-sol
+AGENT_GENE_MODEL=gpt-6.2-sol
+AGENT_SUPERVISOR_MODEL=gpt-6.2-sol
 
 # Runtime paths (optional; these are the container defaults)
 AGR_RUNTIME_CONFIG_DIR=/runtime/config

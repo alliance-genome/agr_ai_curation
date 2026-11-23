@@ -586,7 +586,7 @@ async def _production_chat(scope, tmp_path, monkeypatch):
     envelope = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id=pack.pack_id, extracted_objects=objects)
     envelope = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex,
                                           typed=envelope.model_dump(mode="json"), envelope=envelope, provenance={})
-    supervisor = Agent(name="Supervisor", model="gpt-6-astra", instructions="Policy")
+    supervisor = Agent(name="Supervisor", model="gpt-6.2-astra", instructions="Policy")
     attach_agent_cost_identity(supervisor, {"agent_id": "supervisor", "agent_role": "supervisor"})
     from tests.integration.persistence.chat_turn_support import record_user_turn
 

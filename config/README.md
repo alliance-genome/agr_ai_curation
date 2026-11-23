@@ -242,8 +242,8 @@ Defines deployment override entries for the model catalog and maps each model to
 
 ```yaml
 models:
-  - model_id: gpt-6.1-sol
-    name: GPT-6.1 Sol
+  - model_id: gpt-6.2-sol
+    name: GPT-6.2 Sol
     provider: openai
     default: true
     curator_visible: true

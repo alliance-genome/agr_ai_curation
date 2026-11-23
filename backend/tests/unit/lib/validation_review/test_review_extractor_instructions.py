@@ -21,8 +21,8 @@ def phase(monkeypatch):
                         lambda **kwargs: logged.append(kwargs["metadata"]))
     monkeypatch.setattr("src.lib.openai_agents.extraction_trace_events.write_extraction_trace_event",
                         lambda **kwargs: traced.append(kwargs))
-    monkeypatch.setenv("VALIDATION_REVIEW_MODEL", "gpt-6.1-sol")
-    supervisor = Agent(name="Supervisor", model="gpt-6-astra", instructions="Policy",
+    monkeypatch.setenv("VALIDATION_REVIEW_MODEL", "gpt-6.2-sol")
+    supervisor = Agent(name="Supervisor", model="gpt-6.2-astra", instructions="Policy",
                        model_settings=ModelSettings(parallel_tool_calls=False))
     attach_agent_cost_identity(supervisor, {"agent_id": "supervisor", "agent_role": "supervisor"})
     supervisor.validation_review_policy_layers = (_make_layer(

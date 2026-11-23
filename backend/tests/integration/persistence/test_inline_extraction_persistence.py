@@ -198,7 +198,7 @@ async def test_direct_chat_real_builder_persists_before_completion(monkeypatch, 
 
     monkeypatch.setattr(runner, "_run_agent_with_tracing", with_resources)
     tool_context = catalog_service.ToolExecutionContext(database_url="unused")
-    agent = Agent(name="Synthetic direct gene", model="gpt-6-astra", tools=[
+    agent = Agent(name="Synthetic direct gene", model="gpt-6.2-astra", tools=[
         catalog_service._resolve_package_tool(name, tool_context)
         for name in ("stage_gene_mention_evidence", "finalize_gene_extraction")
     ])
