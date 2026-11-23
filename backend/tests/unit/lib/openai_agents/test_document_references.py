@@ -1501,3 +1501,43 @@ async def test_recording_evidence_on_a_span_another_agent_read_records_the_file(
         ("inv-a", [{"file_id": "file-1", "file_name": "Table S1.xlsx"}]),
         ("inv-b", [{"file_id": "file-1", "file_name": "Table S1.xlsx"}]),
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_files_read_write_saves_no_evidence(store, scope, monkeypatch):
+    # The files-read row and the evidence succeed or fail together: a new record is
+    # saved only from the tool's verified result, and an update to an existing record
+    # is committed only after the tool call (SourceBinding.commit_updates).
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+    from src.lib.openai_agents.tools import evidence_workspace
+    sheet_row = _section_chunk(12, "| abc-1 | 3 | 5 |")
+    tools = _section_reading_setup(store, scope, monkeypatch, [sheet_row], readable=THREE_FILES)
+    await _invoke(tools["read_chunk"], {"chunk_index": 12})
+    from dataclasses import replace as dataclass_replace
+    writer = dataclass_replace(scope, invocation_id="inv-b", agent_key="writer", lineage="inv-b/")
+    monkeypatch.setattr(refs, "_load_source_binding", lambda *args: binding(store, writer, readable=THREE_FILES))
+    accepted = await _invoke(tools["record_evidence"],
+                             {"entity": "abc-1", "selections": [{"chunk_index": 12, "span_index": 0}]})
+    existing = dict(accepted)
+    workspace = [existing]
+    token = evidence_workspace.set_active_evidence_records(workspace)
+    writer_c = dataclass_replace(scope, invocation_id="inv-c", agent_key="writer", lineage="inv-c/")
+    monkeypatch.setattr(refs, "_load_source_binding", lambda *args: binding(store, writer_c, readable=THREE_FILES))
+
+    def fail(self, chunk_indexes):
+        raise refs.DocumentReferenceError("files-read write failed")
+
+    monkeypatch.setattr(refs.SourceBinding, "record_files_shown", fail)
+    try:
+        with pytest.raises(DocumentReadError):
+            await _invoke(tools["record_evidence"],
+                          {"entity": "abc-1", "selections": [{"chunk_index": 12, "span_index": 0}]})
+        with pytest.raises(DocumentReadError):
+            await _invoke(tools["record_evidence"],
+                          {"entity": "abc-1 updated", "evidence_record_id": existing["evidence_record_id"],
+                           "selections": [{"chunk_index": 12, "span_index": 0}]})
+    finally:
+        evidence_workspace.reset_active_evidence_records(token)
+
+    assert workspace == [accepted] and existing == accepted
+    assert [invocation for invocation, _ in _files_read_rows(store)] == ["inv-a", "inv-b"]
