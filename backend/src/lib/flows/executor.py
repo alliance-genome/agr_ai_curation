@@ -2193,7 +2193,8 @@ def get_all_agent_tools(
             FlowDefinition.model_validate(flow.flow_definition), entries_by_node=custom_entries,
         )
         flow = cast(CurationFlow, SimpleNamespace(
-            id=flow.id, name=flow.name, flow_definition=hydrated.model_dump(mode="json"),
+            id=flow.id, user_id=flow.user_id, name=flow.name,
+            flow_definition=hydrated.model_dump(mode="json"),
         ))
     nodes = _get_ordered_executable_nodes(flow)
     nodes_by_id = {str(node.get("id")): node for node in nodes if node.get("id")}

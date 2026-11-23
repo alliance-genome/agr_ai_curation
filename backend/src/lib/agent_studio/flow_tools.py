@@ -26,6 +26,7 @@ import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from dataclasses import replace
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
@@ -2674,6 +2675,25 @@ def _current_flow_state(flow_context=None) -> tuple[
     return flow_context, nodes, node_by_id, projection
 
 
+def _viewer_owns_current_flow() -> bool:
+    """Whether the curator in Studio owns the flow open in Flow Builder.
+
+    A draft with no saved flow behind it is the curator's own. A saved flow is the
+    owner's; a project member sees it read-only and cannot change it.
+    """
+    flow_id = (get_current_flow_context() or {}).get("flow_id")
+    if not flow_id:
+        return True
+    from uuid import UUID
+
+    from src.lib.flows.access import get_visible_flow
+    from src.models.sql.database import SessionLocal
+
+    user_id = get_current_user_id()
+    with SessionLocal() as db:
+        return get_visible_flow(db, UUID(str(flow_id)), user_id).user_id == user_id
+
+
 def _refused_step_finding(
     node: Mapping[str, Any], revision_entries: Mapping[str, Mapping[str, Any] | None],
 ) -> Dict[str, Any] | None:
@@ -2691,6 +2711,8 @@ def _refused_step_finding(
     )
     if refused is None:
         return None
+    if not _viewer_owns_current_flow():
+        refused = replace(refused, owner=False)
     return {
         "severity": "CRITICAL",
         "code": refused.save_code,

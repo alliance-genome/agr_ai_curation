@@ -16,7 +16,7 @@ from tests.unit.lib.flows.test_execution_revisions import flow
 @pytest.fixture
 def setup(monkeypatch):
     definition = flow(None)
-    row = NS(id=uuid4(), name="Original flow", description="Original description",
+    row = NS(id=uuid4(), user_id=8, name="Original flow", description="Original description",
              flow_definition=definition.model_dump(mode="json"))
     curator = BenchmarkCuratorContext(subject="curator", auth_provider="oidc", db_user_id=7, active_groups=())
     access = Mock(return_value=row)
@@ -58,6 +58,9 @@ def test_runtime_reauthorizes_identity_but_executes_original_flow(setup, monkeyp
     monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: nullcontext(db))
     selected = runtime._flow_from_frozen_cell(cell, {"db_user_id": 7})
     access.assert_called_once_with(db, setup.row.id, 7)
+    # A member running a shared flow runs it as the owner's flow, not their own.
+    assert selected.user_id == setup.row.user_id
+    assert selected.user_id != 7
     assert selected.name == "Original flow"
     assert selected.description == "Original description"
     assert selected.flow_definition == snapshot.model_dump(mode="json")["definition"]

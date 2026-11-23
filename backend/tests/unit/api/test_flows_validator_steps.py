@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -338,11 +339,27 @@ def test_a_viewer_who_is_not_the_owner_is_told_only_the_owner_can_change_the_flo
             "output_schema_key": "AlleleResultEnvelope", "template_source": "allele_validation"}
     shared_copy = refused_flow_step("ca_11111111-1111-4111-8111-111111111111", copy, owner=False)
     assert shared_copy.explanation == (
-        "Owner's allele check is a copy, saved by the flow's owner, of a validator, and a copy of a "
+        "Owner's allele check is a copy of a validator saved by the flow's owner, and a copy of a "
         "validator cannot run in a flow. Only the flow's owner can remove this step."
     )
     shared_validator = refused_flow_step("gene_validation", AGENT_REGISTRY["gene_validation"], owner=False)
-    assert shared_validator.fix_hint.startswith("Only the flow's owner can remove this step. ")
+    # The viewer cannot change the flow, so they are not told to keep or add a step.
+    assert shared_validator.fix_hint == (
+        "Only the flow's owner can remove this step. Disease Extraction Agent, Gene Expression Extractor "
+        "and Gene Extraction Agent run the Gene Validation Agent check automatically."
+    )
+    single = refused_flow_step("gene_validation", AGENT_REGISTRY["gene_validation"], owner=False)
+    single = replace(single, checking_extractors=("Gene Extraction Agent",))
+    assert single.fix_hint == (
+        "Only the flow's owner can remove this step. Gene Extraction Agent runs the Gene Validation "
+        "Agent check automatically."
+    )
+    none_run = refused_flow_step("disease_validation", AGENT_REGISTRY["disease_validation"], owner=False)
+    assert none_run.fix_hint == (
+        "Only the flow's owner can remove this step. No extraction step runs the Disease Ontology Agent "
+        "check at present; the checks each extraction step does run are listed under Automatic checks "
+        "on that step in Flow Builder."
+    )
 
     now = datetime.now(timezone.utc)
     stored = SimpleNamespace(id=uuid4(), user_id=8, visibility="project", project_id=uuid4(), shared_at=now,
@@ -351,6 +368,80 @@ def test_a_viewer_who_is_not_the_owner_is_told_only_the_owner_can_change_the_flo
     opened = flows._flow_to_response(stored, viewer_user_id=7, active_group_ids=[])
     marked = [w for w in opened.validation_warnings if w.node_id == "val_1"]
     assert marked[0].message == shared_validator.explanation
+
+
+def test_a_member_running_a_shared_flow_is_told_only_the_owner_can_change_it(monkeypatch):
+    """The runner (7) is not the flow's owner (8): the run card says so and offers no edit."""
+    from src.lib.flows import executor
+    from src.lib.flows.unavailable_steps import build_flow_step_unavailable_message
+
+    copy_id = "ca_11111111-1111-4111-8111-111111111111"
+    revision_entry = {"agent_id": copy_id, "name": "Owner's allele check", "display_name": "Owner's allele check",
+                      "category": "Validation", "subcategory": "", "supervisor": {}, "is_active": True,
+                      "visible": True, "output_schema_key": "AlleleResultEnvelope",
+                      "template_source": "allele_validation", "requires_document": False,
+                      "required_params": []}
+    flow = SimpleNamespace(id=uuid4(), user_id=8, flow_definition=_flow(
+        [_node("task_1", "task_input", "task_input"),
+         {"id": "val_1", "type": "agent", "position": {"x": 0, "y": 0},
+          "data": {"agent_id": copy_id, "agent_display_name": "Owner's allele check", "output_key": "val_out"}}],
+        [{"id": "e1", "source": "task_1", "target": "val_1"}]))
+    monkeypatch.setattr(executor, "_runtime_custom_entries", lambda *_a, **_k: {"val_1": revision_entry})
+
+    _tools, _names, unavailable, _state = executor.get_all_agent_tools(
+        flow, include_unavailable=True, db_user_id=7, user_id="u1")
+
+    assert [(step["reason_code"], step["owner"]) for step in unavailable] == [("custom_validator_step", False)]
+    # No custom-detail offer: only the owner could act on it.
+    assert build_flow_step_unavailable_message(unavailable) == (
+        "Flow cannot start. Step 1 (Owner's allele check) is a copy of a validator saved by the flow's owner, "
+        "and a copy of a validator cannot run in a flow. Only the flow's owner can remove it in Flow Builder."
+    )
+    validator = refused_flow_step("gene_validation", AGENT_REGISTRY["gene_validation"], owner=False)
+    assert build_flow_step_unavailable_message([validator.as_unavailable_step(2, "gene_validation")]) == (
+        "Flow cannot start. Step 2 (Gene Validation Agent) is a validator, and validators cannot be flow "
+        "steps. Only the flow's owner can remove it in Flow Builder. Disease Extraction Agent, Gene "
+        "Expression Extractor and Gene Extraction Agent run the Gene Validation Agent check automatically."
+    )
+
+
+def test_studio_tells_a_project_member_viewing_a_shared_flow_that_only_the_owner_can_change_it(monkeypatch):
+    from src.lib.agent_studio import flow_tools
+
+    monkeypatch.setattr(flow_tools, "get_current_active_group_ids", lambda: ())
+    validator = {"id": "val_1", "type": "agent", "data": {"agent_id": "gene_validation"}}
+    expected_owner = refused_flow_step("gene_validation", AGENT_REGISTRY["gene_validation"])
+    expected_member = refused_flow_step("gene_validation", AGENT_REGISTRY["gene_validation"], owner=False)
+
+    monkeypatch.setattr(flow_tools, "_viewer_owns_current_flow", lambda: False)
+    assert flow_tools._refused_step_finding(validator, {})["message"] == expected_member.explanation
+    monkeypatch.setattr(flow_tools, "_viewer_owns_current_flow", lambda: True)
+    assert flow_tools._refused_step_finding(validator, {})["message"] == expected_owner.explanation
+
+
+@pytest.mark.parametrize(("owner_id", "owns"), [(7, True), (8, False)])
+def test_studio_judges_ownership_by_the_saved_flow_open_in_flow_builder(monkeypatch, owner_id, owns):
+    from contextlib import nullcontext
+    from src.lib.agent_studio import flow_tools
+    from src.lib.flows import access
+    from src.models.sql import database
+
+    flow_id = uuid4()
+    seen = []
+
+    def visible(db, requested_id, user_id):
+        seen.append((requested_id, user_id))
+        return SimpleNamespace(id=requested_id, user_id=owner_id)
+
+    monkeypatch.setattr(access, "get_visible_flow", visible)
+    monkeypatch.setattr(database, "SessionLocal", lambda: nullcontext(object()))
+    monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: 7)
+    monkeypatch.setattr(flow_tools, "get_current_flow_context", lambda: {"flow_id": str(flow_id)})
+    assert flow_tools._viewer_owns_current_flow() is owns
+    assert seen == [(flow_id, 7)]
+    # A draft that was never saved is the curator's own.
+    monkeypatch.setattr(flow_tools, "get_current_flow_context", lambda: {"flow_id": None})
+    assert flow_tools._viewer_owns_current_flow() is True
 
 
 def test_the_run_records_a_curators_copy_by_its_own_code_and_text(monkeypatch):

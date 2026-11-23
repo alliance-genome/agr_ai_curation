@@ -47,8 +47,14 @@ def join_names(names: Sequence[str]) -> str:
     return f"{', '.join(names[:-1])} and {names[-1]}"
 
 
-def checking_sentence(validator_name: str, checking_extractors: Sequence[str]) -> str:
-    """Which extraction steps run a validator's check, or that none does."""
+def checking_sentence(
+    validator_name: str, checking_extractors: Sequence[str], *, owner: bool = True
+) -> str:
+    """Which extraction steps run a validator's check, or that none does.
+
+    Only the flow's owner can change the flow, so only the owner is told to keep or add
+    an extraction step.
+    """
 
     if not checking_extractors:
         return (
@@ -57,11 +63,10 @@ def checking_sentence(validator_name: str, checking_extractors: Sequence[str]) -
         )
     names = join_names(list(checking_extractors))
     if len(checking_extractors) == 1:
-        return f"{names} runs the {validator_name} check automatically; keep or add it in the flow."
-    return (
-        f"{names} run the {validator_name} check automatically; keep or add the one for "
-        "your records."
-    )
+        fact = f"{names} runs the {validator_name} check automatically"
+        return f"{fact}; keep or add it in the flow." if owner else f"{fact}."
+    fact = f"{names} run the {validator_name} check automatically"
+    return f"{fact}; keep or add the one for your records." if owner else f"{fact}."
 
 
 def custom_detail_sentence(copy_name: str) -> str:
@@ -97,14 +102,14 @@ class RefusedFlowStep:
                 f"{self.agent_name} is a validator. Validators check an extraction step's "
                 "records automatically and cannot be flow steps."
             )
-        whose = "your copy" if self.owner else "a copy, saved by the flow's owner,"
-        return f"{self.agent_name} is {whose} of a validator, and a copy of a validator cannot run in a flow."
+        whose = "your copy of a validator" if self.owner else "a copy of a validator saved by the flow's owner"
+        return f"{self.agent_name} is {whose}, and a copy of a validator cannot run in a flow."
 
     @property
     def fix_hint(self) -> str:
         action = "Remove this step." if self.owner else "Only the flow's owner can remove this step."
         if self.kind == "validator":
-            return f"{action} {checking_sentence(self.agent_name, self.checking_extractors)}"
+            return f"{action} {checking_sentence(self.agent_name, self.checking_extractors, owner=self.owner)}"
         if self.custom_detail and self.owner:
             return f"{action} {custom_detail_sentence('your copy')}"
         return action

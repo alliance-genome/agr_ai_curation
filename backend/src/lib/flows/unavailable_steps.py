@@ -81,7 +81,7 @@ def _cause_sentence(code: str, steps: Sequence[Mapping[str, Any]]) -> str:
             what = (f"{subject} {'is a validator' if one else 'are validators'}, and validators cannot "
                     "be flow steps.")
             follow = [checking_sentence(str(step.get("agent_name") or "Unknown Agent"),
-                                        list(step["checking_extractors"])) for step in steps]
+                                        list(step["checking_extractors"]), owner=owner) for step in steps]
         else:
             whose = ("your copy of a validator" if one else "your copies of validators") if owner else (
                 "a copy of a validator saved by the flow's owner" if one

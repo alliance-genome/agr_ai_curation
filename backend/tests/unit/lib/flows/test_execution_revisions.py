@@ -413,7 +413,7 @@ def test_executor_rejects_missing_revision_before_building_any_specialist(monkey
     monkeypatch.setattr(executor, "SessionLocal", lambda: nullcontext(Mock()))
     build = Mock()
     monkeypatch.setattr(executor, "get_agent_by_id", build)
-    saved_flow = SimpleNamespace(flow_definition=flow(None).model_dump(mode="json"))
+    saved_flow = SimpleNamespace(user_id=7, flow_definition=flow(None).model_dump(mode="json"))
     with pytest.raises(module.FlowExecutionRevisionError) as error:
         executor.get_all_agent_tools(saved_flow, db_user_id=7)
     assert error.value.findings[0]["code"] == "missing_execution_revision"

@@ -89,7 +89,7 @@ async def test_same_label_profile_mappings_survive_flow_default_hydration(exampl
 
     monkeypatch.setattr(executor, "_create_streaming_tool", lambda **kwargs: unused_tool)
     saved_definition = definition.model_dump(mode="json")
-    saved_flow = SimpleNamespace(id="fixture", name="Fixture", flow_definition=deepcopy(saved_definition))
+    saved_flow = SimpleNamespace(id="fixture", user_id=1, name="Fixture", flow_definition=deepcopy(saved_definition))
     tools, _ = executor.get_all_agent_tools(saved_flow, db_user_id=1)
     assert len(tools) == 1
     assert saved_flow.flow_definition == saved_definition

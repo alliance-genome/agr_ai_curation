@@ -59,6 +59,7 @@ async def test_execute_flow_requires_persisted_repair_without_mutating_definitio
     original = deepcopy(stored_definition)
     stored_flow = SimpleNamespace(
         id=uuid4(),
+        user_id=1,
         name="Legacy allele flow",
         flow_definition=stored_definition,
     )
