@@ -134,6 +134,7 @@ def harness(monkeypatch):
 
     monkeypatch.setattr(measurement, "_publish", publish)
     delays = []
+    opened = [0]
     sleeping = {"real": False}
 
     async def record_sleep(delay):
@@ -151,8 +152,11 @@ def harness(monkeypatch):
         scripts = [list(script) for script in scripts]
         client = AsyncOpenAI(api_key="fixture", max_retries=0)
         model = OpenAIResponsesWSModel(model="gpt-test", openai_client=client)
-        monkeypatch.setattr(model, "_open_websocket_connection",
-                            AsyncMock(side_effect=lambda *a, **k: _Socket(scripts, sent)))
+        def open_socket(*args, **kwargs):
+            opened[0] += 1
+            return _Socket(scripts, sent)
+
+        monkeypatch.setattr(model, "_open_websocket_connection", AsyncMock(side_effect=open_socket))
         agent = Agent(name="reviewer", instructions="Review the packet.", model=model, tools=list(tools),
                       model_settings=ModelSettings(store=False, retry=build_default_model_retry()))
         config = RunConfig(tracing_disabled=True)
@@ -180,6 +184,8 @@ def harness(monkeypatch):
                                reports=[r for r in reports if r.get("runtime") == "agents_sdk"])
 
     run.sleep_for_real = lambda: sleeping.update(real=True)
+    run.delays_seen = lambda: list(delays)
+    run.sockets_opened = lambda: opened[0]
     return run
 
 
@@ -240,11 +246,12 @@ async def test_overload_after_response_start_raises_the_original_error_when_the_
     ({"retry-after-ms": "250", "retry-after": "9"}, "8", 0.25),
     ({"retry-after": "6", "retry-after-ms": "6000"}, "2", 2.0),
     ({"retry-after": "3600"}, "8", 8.0),
+    ({"retry-after-ms": "0", "retry-after": "0"}, "8", 0.0),
     ({}, "8", 0.0),
     ({"retry-after": "soon"}, "8", 0.0),
     ({"retry-after": "-5"}, "8", 0.0),
     ({"retry-after": "nan"}, "8", 0.0),
-], ids=["seconds", "milliseconds-first", "bounded", "huge-bounded", "missing", "not-a-number",
+], ids=["seconds", "milliseconds-first", "bounded", "huge-bounded", "zero", "missing", "not-a-number",
         "negative", "nan"])
 async def test_retry_after_is_bounded_and_otherwise_the_backoff_applies(
         harness, monkeypatch, streamed, headers, max_delay, expected):
@@ -344,6 +351,24 @@ async def test_a_resend_wait_beyond_the_review_deadline_ends_as_the_deadline_doe
     assert time.monotonic() - started < 3, "the 6 s retry wait did not outlive the 0.5 s deadline"
     assert run.delays == [6.0] and len(run.sent) == 1
     assert len(admissions) == len(settlements) == 1
+
+
+@pytest.mark.asyncio
+@both_modes
+async def test_cancelling_the_run_during_a_resend_wait_cancels_it(harness, streamed):
+    """A cancelled run does not finish its retry wait or send the resend."""
+    harness.sleep_for_real()
+    task = asyncio.create_task(harness([_PRODUCTION_ORDER, _success()], streamed=streamed))
+    deadline = time.monotonic() + 3
+    while not harness.delays_seen() and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+    assert harness.delays_seen() == [6.0], "the run is waiting to resend"
+    started = time.monotonic()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert time.monotonic() - started < 1
+    assert harness.sockets_opened() == 1, "the resend was never sent"
 
 
 @pytest.mark.asyncio
