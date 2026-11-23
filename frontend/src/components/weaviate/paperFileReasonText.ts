@@ -28,6 +28,8 @@ export const NOT_TICKABLE_REASON_TEXT: Record<NotTickableReasonCode, ProviderTex
   already_in_paper: () => 'Already in this paper',
   main_differs_from_paper: (provider) =>
     `${provider} now has a different main file for this paper than the one in the Library`,
+  // New, not approved: no promise about a version.
+  pdf_supplement_not_supported_yet: () => 'PDF supplements cannot be added yet.',
   paper_not_importable: (provider) => `This paper cannot be imported from ${provider}`,
   paper_already_in_library: () => 'You already have this paper in the Library',
 }

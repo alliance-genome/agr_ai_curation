@@ -156,6 +156,31 @@ describe('DocumentFilesSection (read only)', () => {
     expect(row).not.toHaveTextContent(/Converted by/)
   })
 
+  it('words a PDF supplement that cannot be added yet by its own line', async () => {
+    // #1127's shape: a converted PDF supplement, not tickable on the per-paper listing.
+    const pdf = { ...PAPER_LISTING.files[1], format: 'pdf', tickable: false, not_tickable_reason: 'pdf_supplement_not_supported_yet' }
+    stubApi({ status: 200, payload: listingWith([pdf]) })
+    renderSection(PROVIDER)
+
+    const list = await screen.findByRole('list', { name: 'Files in ABC Literature not in this paper' })
+    const row = within(list).getByRole('listitem')
+    expect(row).toHaveTextContent('PDF supplements cannot be added yet.')
+    expect(row).not.toHaveTextContent('This screen cannot describe this file yet.')
+    expect(row).not.toHaveTextContent(/Converted by/)
+  })
+
+  // From the review's surviving-mutant probe: pins the parser's refusal of a tickable main.
+  it('TODAY backend: differing main, unconverted, tickable -> whole part could not be shown, others hidden', async () => {
+    const main = { ...PAPER_LISTING.files[0], in_this_paper: false, tickable: true, not_tickable_reason: null, converted_text_id: null, converted_md5: null }
+    stubApi({ status: 200, payload: listingWith([main, PAPER_LISTING.files[1]]) })
+    renderSection(PROVIDER)
+
+    expect(await screen.findByText('This paper\'s files in ABC Literature could not be shown.')).toBeInTheDocument()
+    expect(screen.queryByText(/Converted by/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Made_up_S20')).not.toBeInTheDocument()
+    expect(screen.getByRole('list', { name: 'Files in this paper' })).toBeInTheDocument()
+  })
+
   it('words a file with an unknown code on its own line and still shows the rest', async () => {
     const unknown = { ...PAPER_LISTING.files[4], not_tickable_reason: 'pdf_supplement_later' }
     stubApi({ status: 200, payload: listingWith([PAPER_LISTING.files[1], unknown]) })

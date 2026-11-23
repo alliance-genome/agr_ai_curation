@@ -21,6 +21,8 @@ export const NOT_TICKABLE_REASON_CODES = [
   // P6f (agreed with b-p6f 23 Nov): the provider's main file is not the paper's stored
   // main. The per-paper listing never offers a main for adding.
   'main_differs_from_paper',
+  // P6f (#1127, Q6): a PDF supplement cannot be added on the per-paper listing yet.
+  'pdf_supplement_not_supported_yet',
   'paper_not_importable',
   'paper_already_in_library',
 ] as const
