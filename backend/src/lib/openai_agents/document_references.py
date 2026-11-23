@@ -371,7 +371,7 @@ async def _finish(task):
 
 
 @asynccontextmanager
-async def document_reference_scope(document_id: str, user_id: str):
+async def document_reference_scope(document_id: str, user_id: str, *, tool_name: str, call_id: str):
     owner, run_id, session_id = get_current_user_id(), get_current_trace_id(), get_current_session_id()
     if not owner or owner != user_id or not run_id:
         raise DocumentReadError("document_reference") from DocumentReferenceError("Missing authenticated source scope")
@@ -413,8 +413,10 @@ async def document_reference_scope(document_id: str, user_id: str):
         binding.commit_updates()
     except DocumentFilesChanged:
         logger.info("Withheld a document tool call: the paper's readable files changed",
-                    extra={"document_id": document_id, "run_id": run_id})
-        await record_runtime_payload("document_files_changed", {"document_id": document_id})
+                    extra={"document_id": document_id, "run_id": run_id, "tool_name": tool_name, "call_id": call_id})
+        # Ids only, never text: a trace ties the event to the withheld call.
+        await record_runtime_payload("document_files_changed", {
+            "document_id": document_id, "tool_name": tool_name, "call_id": call_id})
         raise
     except DocumentReadError:
         raise

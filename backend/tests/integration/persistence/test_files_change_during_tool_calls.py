@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -94,6 +95,7 @@ def paper(weaviate_connection, setup_collections, clean_chunks, monkeypatch):
     asyncio.run(store())
     monkeypatch.setattr(chunk_reads, "get_connection", lambda: weaviate_connection)
     run_id = f"run-{uuid4()}"
+    ids["run_id"] = run_id
     monkeypatch.setattr(refs, "get_current_user_id", lambda: TEST_USER_ID)
     monkeypatch.setattr(refs, "get_current_trace_id", lambda: run_id)
     monkeypatch.setattr(refs, "get_current_session_id", lambda: None)
@@ -195,10 +197,23 @@ SEARCH = ("search_document", {"query": "wing disc growth Dpp", "limit": 1, "sear
 RECORD = ("record_evidence", {"entity": "dpp", "selections": [{"chunk_index": 0, "span_index": 0}]}, "resolve")
 
 
+def _files_read_rows(ids):
+    """The run's files-read history rows, as the extraction result reads them (#1118)."""
+    from src.lib.document_files.files_read import _rows
+
+    with SessionLocal() as db:
+        return _rows(db, owner_id=TEST_USER_ID, run_id=ids["run_id"], invocation_ids=None)
+
+
+def _read_names(rows):
+    return [[entry["file_name"] for entry in row["files"]] for row in rows]
+
+
 async def _during_call(monkeypatch, ids, timing, change):
     name, arguments, method = timing
     if name == "record_evidence":
         await _call("read_chunk", ids, {"chunk_index": 0})  # the sentence is read first
+    ids["rows_before"] = _files_read_rows(ids)
     _during(monkeypatch, method, change, ids)
     return await _call(name, ids, arguments)
 
@@ -235,6 +250,8 @@ def _withheld(name):
 async def test_a_file_becoming_ready_during_a_call_leaves_its_answer_as_it_is(paper, monkeypatch, timing):
     result = await _during_call(monkeypatch, paper, timing, grow)
     assert _is_normal(timing[0], result)
+    # The call stands, so its files-read row is written: the main file it showed.
+    assert _read_names(_files_read_rows(paper)) == _read_names(paper["rows_before"]) + [["main.pdf"]]
 
 
 @pytest.mark.asyncio
@@ -251,6 +268,8 @@ async def test_a_file_the_call_did_not_show_removed_during_it_asks_the_model_to_
 ):
     result = await _during_call(monkeypatch, paper, timing, remove_other)
     assert result == _withheld(timing[0])
+    # A withheld call leaves no files-read row (it is written only once the call stands).
+    assert _files_read_rows(paper) == paper["rows_before"]
     if timing[0] == "record_evidence":
         # Nothing was saved: no verified result, so no evidence record is built from it.
         from src.lib.openai_agents.evidence_summary import build_record_evidence_summary_record
@@ -269,9 +288,11 @@ async def test_the_file_the_call_was_showing_removed_during_it_stays_a_failed_re
     name, arguments, method = timing
     if name == "record_evidence":
         await _call("read_chunk", paper, {"chunk_index": 3})
+    before = _files_read_rows(paper)
     _during(monkeypatch, method, remove_other, paper)  # the supplement the call shows
     with pytest.raises(DocumentReadError):
         await _call(name, paper, arguments)
+    assert _files_read_rows(paper) == before  # a call that ends the run leaves no row
 
 
 @pytest.mark.asyncio
@@ -279,6 +300,7 @@ async def test_the_file_the_call_was_showing_removed_during_it_stays_a_failed_re
 async def test_the_paper_deleted_during_a_call_stays_a_failed_read(paper, monkeypatch, timing):
     with pytest.raises(DocumentReadError):
         await _during_call(monkeypatch, paper, timing, delete_paper)
+    assert _files_read_rows(paper) == paper["rows_before"]
 
 
 # --- between two calls of one run --------------------------------------------------------------
@@ -380,6 +402,7 @@ async def test_a_read_of_a_file_removed_in_the_removal_order_before_its_fetch_as
 
     monkeypatch.setattr(weaviate_search, "get_chunk_by_index", removed_then_fetched)
     assert await _call("read_chunk", paper, {"chunk_index": 3}) == FILES_CHANGED
+    assert _files_read_rows(paper) == []
 
 
 @pytest.mark.asyncio
@@ -392,6 +415,39 @@ async def test_a_failed_fetch_with_the_readable_files_unchanged_stays_a_failed_r
     monkeypatch.setattr(weaviate_search, "get_chunk_by_index", nothing)
     with pytest.raises(DocumentReadError):
         await _call("read_chunk", paper, {"chunk_index": 0})
+    assert _files_read_rows(paper) == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_fetch_after_a_read_shown_its_spans_leaves_no_files_read_row(paper, monkeypatch):
+    """A section read issues the spans of its first piece, then a later fetch fails:
+    span issuance stays (it is immediate), but the failed call writes no files-read row."""
+    retain = refs.SourceBinding.retain
+
+    def retained_then_failing(self, reads):
+        retain(self, reads)
+        raise refs.DocumentReferenceError("fetch failed after the read was retained")
+
+    monkeypatch.setattr(refs.SourceBinding, "retain", retained_then_failing)
+    with pytest.raises(DocumentReadError):
+        await _call("read_section", paper, {"section_name": "Results"})
+    assert _files_read_rows(paper) == []
+
+
+@pytest.mark.asyncio
+async def test_a_withheld_call_is_recorded_in_run_history_with_its_tool_and_call_ids(paper, monkeypatch):
+    events = []
+
+    async def record(kind, value, **metadata):
+        events.append((kind, value))
+
+    monkeypatch.setattr(refs, "record_runtime_payload", record)
+    result = await _during_call(monkeypatch, paper, READ, remove_other)
+
+    assert result == FILES_CHANGED
+    # Ids only, never text: a trace can tie the event to the withheld call.
+    assert events == [("document_files_changed", {
+        "document_id": paper["document_id"], "tool_name": "read_chunk", "call_id": "call-read_chunk"})]
 
 
 def test_a_stored_withheld_read_projects_through_history_unchanged():
@@ -414,6 +470,7 @@ async def test_fan_out_prefetch_of_a_withheld_read_is_never_shared(paper, monkey
     runner = fanout_extraction.FanoutExtraction.__new__(fanout_extraction.FanoutExtraction)
     runner.read_tool = _tool("read_chunk", paper)
     runner._chunk_views = {}
+    runner.planner_agent = SimpleNamespace()  # a planner run without retained history
 
     view = await runner._chunk_view(0)
 

@@ -36,7 +36,7 @@ async def test_recheck_paper_lines_arrive_in_order_through_real_execution(planne
     binding.pin_generation()
 
     @asynccontextmanager
-    async def scoped(document, user):
+    async def scoped(document, user, *, tool_name, call_id):
         token = refs._ACTIVE_SOURCE.set(binding)
         try:
             yield

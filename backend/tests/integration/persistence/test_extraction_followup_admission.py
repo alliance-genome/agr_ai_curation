@@ -233,7 +233,7 @@ async def test_followup_reads_real_paper_tools_and_retains_exact_new_evidence(pl
     binding = refs.SourceBinding(doc, owner, 'fixture-generation', history_scope, history, [], single_file(doc))
     binding.pin_generation()
     @asynccontextmanager
-    async def scoped(document, user):
+    async def scoped(document, user, *, tool_name, call_id):
         assert (document, user) == (doc, owner)
         token = refs._ACTIVE_SOURCE.set(binding)
         try:

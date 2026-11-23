@@ -27,7 +27,9 @@ def scoped_document_tool(tool: Any, *, document_id: str, user_id: str) -> Any:
         from agr_ai_curation_runtime.document_errors import DocumentFilesChanged, files_changed_answer
 
         try:
-            async with _implementation().document_reference_scope(document_id, user_id):
+            async with _implementation().document_reference_scope(
+                document_id, user_id, tool_name=tool.name, call_id=ctx.tool_call_id,
+            ):
                 return await invoke(ctx, arguments)
         except DocumentFilesChanged:
             # The read is withheld, not failed: the model reads again with the current files.

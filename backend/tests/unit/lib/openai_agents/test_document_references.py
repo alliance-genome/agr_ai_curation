@@ -145,7 +145,7 @@ async def test_public_sdk_discovery_read_record_and_model_projection_preserve_ca
     chunk, spans = source()
     chunk.update(document_id="doc-a", page_number=3, section_title="Results", metadata={"page_number": 3, "section_title": "Results"})
     @asynccontextmanager
-    async def scoped(doc, user):
+    async def scoped(doc, user, *, tool_name, call_id):
         assert (doc, user) == ("doc-a", "alice")
         token = refs._ACTIVE_SOURCE.set(binding(store, scope))
         try:
@@ -371,8 +371,9 @@ async def test_section_read_issues_every_chunk_in_exactly_one_retain_transaction
     await _invoke(tools["read_section"], {"section_name": "Results"})
 
     assert retains == [40]
-    # One locked transaction re-reads the bindings once for the whole read.
-    assert scans.count(True) == 1
+    # One locked transaction re-reads the bindings once for the whole read, and one
+    # more writes the files-read row once the call stands (after the end-of-call check).
+    assert scans.count(True) == 2
     records = original_scan(store, scope, "doc-a")
     assert sorted(r["chunk_index"] for r in records if r["kind"] == refs._SPAN_KIND) == list(range(40))
 
@@ -424,7 +425,7 @@ async def test_source_scope_requires_authenticated_owner_before_database(monkeyp
     monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
     from agr_ai_curation_runtime.document_errors import DocumentReadError
     with pytest.raises(DocumentReadError) as caught:
-        async with refs.document_reference_scope("doc-a", "alice"):
+        async with refs.document_reference_scope("doc-a", "alice", tool_name="read_chunk", call_id="call-1"):
             pytest.fail("Foreign owner was admitted")
     assert isinstance(caught.value.__cause__, refs.DocumentReferenceError)
 
@@ -470,7 +471,7 @@ async def test_source_guard_reprocessing_during_tool_is_terminal_and_resets_cont
         raise refs.DocumentReferenceError("Document changed while reading")
     monkeypatch.setattr(refs, "_verify_source_generation", changed)
     with pytest.raises(DocumentReadError) as caught:
-        async with refs.document_reference_scope("doc-a", "alice"):
+        async with refs.document_reference_scope("doc-a", "alice", tool_name="read_chunk", call_id="call-1"):
             assert refs._ACTIVE_SOURCE.get() is value
     assert isinstance(caught.value.__cause__, refs.DocumentReferenceError)
     assert refs._ACTIVE_SOURCE.get() is None
@@ -492,7 +493,7 @@ async def test_cancelled_source_guard_drains_owned_worker_before_return(store, s
         return value
     monkeypatch.setattr(refs, "_load_source_binding", load)
     async def run():
-        async with refs.document_reference_scope("doc-a", "alice"):
+        async with refs.document_reference_scope("doc-a", "alice", tool_name="read_chunk", call_id="call-1"):
             pytest.fail("Cancelled read entered tool body")
     task = asyncio.create_task(run())
     assert await asyncio.to_thread(entered.wait, 5)
@@ -622,7 +623,7 @@ async def test_existing_evidence_update_waits_for_final_source_generation_check(
             raise refs.DocumentReferenceError("Source changed")
     monkeypatch.setattr(refs, "_verify_source_generation", verify)
     async def update():
-        async with refs.document_reference_scope("doc-a", "alice"):
+        async with refs.document_reference_scope("doc-a", "alice", tool_name="read_chunk", call_id="call-1"):
             refs.stage_evidence_update(existing, {"verified_quote": "Replacement source"})
             assert existing["verified_quote"] == "Original source"
     if changed:
@@ -1151,7 +1152,7 @@ async def test_a_span_id_on_an_unreadable_piece_is_a_source_failure(store, scope
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", AsyncMock(return_value=chunk))
     recorder = record_evidence._create_canonical_evidence_recorder("doc-a", "alice")
 
-    async with refs.document_reference_scope("doc-a", "alice"):
+    async with refs.document_reference_scope("doc-a", "alice", tool_name="read_chunk", call_id="call-1"):
         result = await recorder(entity="wg", span_ids=[spans[0]["span_id"]])
 
     assert result["resolution_failure"] == "unreadable_chunk"
@@ -1428,9 +1429,10 @@ async def test_a_search_hit_records_its_file_without_issuing_evidence(store, sco
     await _invoke(search, {"query": "abc-1 again"})
 
     assert [hit.content for hit in result.hits] == ["| abc-1 | 3 | 5 |", "Wingless was absent."]
+    # One row, written when the first search call stood; files in chunk order.
     assert _files_read_rows(store) == [
-        ("inv-a", [{"file_id": "file-1", "file_name": "Table S1.xlsx"},
-                   {"file_id": "file-0", "file_name": "paper.pdf"}]),
+        ("inv-a", [{"file_id": "file-0", "file_name": "paper.pdf"},
+                   {"file_id": "file-1", "file_name": "Table S1.xlsx"}]),
     ]
     kinds = {r["kind"] for r in refs._read_bindings(store, scope, "doc-a")}
     assert refs._SPAN_KIND not in kinds and refs._WINDOW_KIND not in kinds
@@ -1452,7 +1454,7 @@ async def test_a_search_with_no_hits_records_nothing(store, scope, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_a_read_scans_the_history_once_for_spans_and_files_read(store, scope, monkeypatch):
-    # The files-read check rides on the locked binding scan: no extra query per read.
+    # The files-read check rides on a locked binding scan: no separate files-read lookup.
     from sqlalchemy import event
     tools = _section_reading_setup(store, scope, monkeypatch,
                                    [_section_chunk(10, "Main text."), _section_chunk(12, "| a | 1 |")],
@@ -1471,8 +1473,9 @@ async def test_a_read_scans_the_history_once_for_spans_and_files_read(store, sco
     finally:
         event.remove(engine, "before_cursor_execute", count)
 
-    # The tool call's binding load and the read's locked re-scan; no files-read lookup.
-    assert len(selects) == 2
+    # The tool call's binding load, the read's locked re-scan, and the commit-time
+    # locked scan that writes the files-read row; no files-read lookup of its own.
+    assert len(selects) == 3
     assert all("kind IN" in statement for statement in selects)
     assert _files_read_rows(store)[-1] == ("inv-a", [{"file_id": "file-1", "file_name": "Table S1.xlsx"}])
 
@@ -1524,10 +1527,10 @@ async def test_a_failed_files_read_write_saves_no_evidence(store, scope, monkeyp
     writer_c = dataclass_replace(scope, invocation_id="inv-c", agent_key="writer", lineage="inv-c/")
     monkeypatch.setattr(refs, "_load_source_binding", lambda *args: binding(store, writer_c, readable=THREE_FILES))
 
-    def fail(self, chunk_indexes):
+    def fail(self):
         raise refs.DocumentReferenceError("files-read write failed")
 
-    monkeypatch.setattr(refs.SourceBinding, "record_files_shown", fail)
+    monkeypatch.setattr(refs.SourceBinding, "record_files_read", fail)
     try:
         with pytest.raises(DocumentReadError):
             await _invoke(tools["record_evidence"],
