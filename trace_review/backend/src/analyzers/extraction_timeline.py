@@ -1059,8 +1059,9 @@ class ExtractionTimelineAnalyzer:
             }} if fanout_events else {}),
             **({"files_read": {
                 "events": files_read_events,
-                "note": "Each saved extraction result with the paper files whose text the model was shown "
-                        "while producing it (file ids, names, role, converted artifact id and SHA-256).",
+                "note": "For each saved extraction result, the paper files the AI was shown text from while "
+                        "producing it, with each file's name, whether it is the main paper or a supplement, and a "
+                        "fingerprint of the converted text.",
             }} if files_read_events else {}),
             **({"dropped_evidence": {
                 "events": dropped_evidence_events,

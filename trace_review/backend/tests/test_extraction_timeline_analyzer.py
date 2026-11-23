@@ -799,3 +799,9 @@ def test_files_read_of_saved_results_are_shown(tmp_path, monkeypatch):
 
     [event] = timeline["files_read"]["events"]
     assert event["output"]["preview"] == files_read
+    # Approved by Chris, 23 Nov 2026 (decision 5).
+    assert timeline["files_read"]["note"] == (
+        "For each saved extraction result, the paper files the AI was shown text from while producing it, "
+        "with each file's name, whether it is the main paper or a supplement, and a fingerprint of the "
+        "converted text."
+    )
