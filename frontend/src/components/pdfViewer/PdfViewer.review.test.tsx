@@ -216,8 +216,8 @@ describe('P9b review fixes', () => {
       }
     }
 
-    it('evidence on row 7,001 of a long sheet reveals its part and highlights it', async () => {
-      stubViewerFetch({ textBlocks: [TEXT_SUPPLEMENT_BLOCKS.blocks[0]!, longSheet(9799)] })
+    it('evidence on rows 7,000 to 7,001 of a 9,000-row sheet reveals their part and highlights them without drawing every row', async () => {
+      stubViewerFetch({ textBlocks: [TEXT_SUPPLEMENT_BLOCKS.blocks[0]!, longSheet(8999)] })
       await showFourFilePaper()
       act(() => {
         dispatchPDFViewerNavigateEvidence(twoRowRecord(['| XS7000 | 25 C |', '| XS7001 | 25 C |']))
@@ -225,8 +225,40 @@ describe('P9b review fixes', () => {
 
       await waitFor(() => expect(document.querySelectorAll('tr[aria-current="true"]')).toHaveLength(2), { timeout: 8000 })
       expect(document.querySelectorAll('tbody tr')).toHaveLength(7500)
-      expect(screen.getByText('Showing rows 1 to 7,500 of 9,800.')).toBeInTheDocument()
+      expect(screen.getByText('Showing rows 1 to 7,500 of 9,000.')).toBeInTheDocument()
+      // Every shown row is page text the browser's find can reach; rows not yet shown are not in the page.
+      const pageText = document.body.textContent ?? ''
+      expect(pageText).toContain('XS7499')
+      expect(pageText).not.toContain('XS7500')
     }, 20000)
+
+    it('a section mark on a block after a long table, in a later section, is shown', async () => {
+      stubViewerFetch({
+        textBlocks: [
+          TEXT_SUPPLEMENT_BLOCKS.blocks[0]!,
+          longSheet(1999),
+          {
+            ...TEXT_SUPPLEMENT_BLOCKS.blocks[2]!,
+            text: 'Second sheet note.',
+            section_title: 'Sheet 2',
+            section_path: ['Sheet 2'],
+          },
+        ],
+      })
+      await showFourFilePaper()
+      act(() => {
+        dispatchPDFViewerNavigateEvidence(chatCommand({
+          verified_quote: 'A sentence that is not in this file.',
+          section: 'Sheet 2',
+          file_id: TEXT_SUPPLEMENT_FILE_ID,
+          file_name: 'Table_S1.xlsx',
+        }))
+      })
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Its section is shown instead.')
+      expect(document.querySelector('[data-highlight-kind="section"]')).toHaveTextContent('Second sheet note.')
+      expect(document.querySelectorAll('tbody tr')).toHaveLength(500)
+    })
 
     it('a text tab says what conversion does not keep; a PDF tab does not', async () => {
       stubViewerFetch()
