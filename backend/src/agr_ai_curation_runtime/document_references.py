@@ -31,7 +31,7 @@ def scoped_document_tool(tool: Any, *, document_id: str, user_id: str) -> Any:
                 return await invoke(ctx, arguments)
         except DocumentFilesChanged:
             # The read is withheld, not failed: the model reads again with the current files.
-            return files_changed_answer()
+            return files_changed_answer(tool.name)
 
     tool.on_invoke_tool = scoped_invoke
     return tool

@@ -1,8 +1,9 @@
 """What a run gets when the paper's files change during, or between, its tool calls.
 
 Real stores: PostgreSQL for the paper, its files and the run's source history;
-the real test Weaviate for the pieces. Real tools (read_chunk, search_document,
-record_evidence) through the real source binding and end-of-call check. A change
+the real test Weaviate for the pieces. Every tool is called through the path a
+run uses: ``catalog_service._resolve_package_tool`` (the runner adapter, with
+its result checks and model view), the real source binding and end-of-call check. A change
 "during" a call happens after the call has read its text and before its
 end-of-call check, the window a background add or supplement wait can hit.
 
@@ -23,7 +24,11 @@ from alembic.config import Config
 from pydantic import BaseModel
 from sqlalchemy import delete
 
-from agr_ai_curation_runtime.document_errors import FILES_CHANGED_MESSAGE, DocumentReadError
+from agr_ai_curation_runtime.document_errors import (
+    FILES_CHANGED_MESSAGE,
+    FILES_CHANGED_RECORD_MESSAGE,
+    DocumentReadError,
+)
 from src.lib.openai_agents import document_references as refs
 from src.lib.pipeline.store import store_chunks_to_weaviate
 from src.lib.weaviate_client import chunks as chunk_reads
@@ -80,7 +85,8 @@ def paper(weaviate_connection, setup_collections, clean_chunks, monkeypatch):
                 [{"chunk_index": index, "content": TEXT[index], "element_type": "NarrativeText",
                   "page_number": index + 1 if index <= 2 else None,
                   "section_title": "Results" if index <= 2 else "Sheet1",
-                  "parent_section": "Results" if index <= 2 else "Sheet1", "subsection": None, "metadata": {}}
+                  "parent_section": "Results" if index <= 2 else "Sheet1",
+                  "subsection": "Fly strains" if index == 1 else None, "metadata": {}}
                  for index in range(start, end + 1)],
                 str(document_id), weaviate_connection, TEST_USER_ID, chunk_range=(start, end),
             )
@@ -126,9 +132,13 @@ def delete_paper(ids):
 
 
 def _tool(name, ids):
-    from agr_ai_curation_alliance.tools import documents
+    """The tool object a run's agent gets: the runner adapter around the package tool."""
+    from src.lib.agent_studio import catalog_service
 
-    return getattr(documents, f"create_{name}_tool")({"document_id": ids["document_id"], "user_id": TEST_USER_ID})
+    context = catalog_service.ToolExecutionContext(
+        document_id=ids["document_id"], user_id=TEST_USER_ID, database_url="unused",
+    )
+    return catalog_service._resolve_package_tool(name, context)
 
 
 def _as_dict(result):
@@ -140,10 +150,12 @@ def _as_dict(result):
 
 
 async def _call(name, ids, arguments):
-    from src.lib.packages.package_runner_entrypoint import _build_tool_context
+    from agents.tool_context import ToolContext
 
     tool = _tool(name, ids)
-    return _as_dict(await tool.on_invoke_tool(_build_tool_context(tool.name, arguments), json.dumps(arguments)))
+    raw = json.dumps(arguments)
+    context = ToolContext(context=None, tool_name=name, tool_call_id=f"call-{name}", tool_arguments=raw)
+    return _as_dict(await tool.on_invoke_tool(context, raw))
 
 
 def _during(monkeypatch, method, change, ids):
@@ -177,6 +189,8 @@ def _during(monkeypatch, method, change, ids):
 
 
 READ = ("read_chunk", {"chunk_index": 0}, "retain")
+SECTION = ("read_section", {"section_name": "Results"}, "retain")
+SUBSECTION = ("read_subsection", {"parent_section": "Results", "subsection": "Fly strains"}, "retain")
 SEARCH = ("search_document", {"query": "wing disc growth Dpp", "limit": 1, "search_mode": "lexical"}, "search")
 RECORD = ("record_evidence", {"entity": "dpp", "selections": [{"chunk_index": 0, "span_index": 0}]}, "resolve")
 
@@ -191,39 +205,52 @@ async def _during_call(monkeypatch, ids, timing, change):
 
 def _is_normal(name, result):
     if name == "read_chunk":
-        return result["chunk"]["chunk_index"] == 0 and TEXT[0] in result["chunk"]["content"]
+        # The model's view renders the passage as numbered sentences.
+        return result["chunk"]["chunk_index"] == 0 and TEXT[0] in json.dumps(result)
+    if name == "read_section":
+        return TEXT[0] in json.dumps(result) and TEXT[3] not in json.dumps(result)
+    if name == "read_subsection":
+        return TEXT[1] in json.dumps(result)
     if name == "search_document":
         return bool(result["hits"]) and all(hit["chunk_index"] <= 2 for hit in result["hits"])
     return result["status"] == "verified" and TEXT[0] in result["verified_quote"]
 
 
 FILES_CHANGED = {"status": "files_changed", "error_code": "readable_files_changed", "message": FILES_CHANGED_MESSAGE}
+FILES_CHANGED_RECORD = {"status": "files_changed", "error_code": "readable_files_changed", "saved": False,
+                        "message": FILES_CHANGED_RECORD_MESSAGE}
+ALL_TIMINGS = [READ, SECTION, SUBSECTION, SEARCH, RECORD]
+ALL_IDS = ["read_chunk", "read_section", "read_subsection", "search", "record_evidence"]
+
+
+def _withheld(name):
+    return FILES_CHANGED_RECORD if name == "record_evidence" else FILES_CHANGED
 
 
 # --- during a call -----------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("timing", [READ, SEARCH, RECORD], ids=["read", "search", "record_evidence"])
+@pytest.mark.parametrize("timing", ALL_TIMINGS, ids=ALL_IDS)
 async def test_a_file_becoming_ready_during_a_call_leaves_its_answer_as_it_is(paper, monkeypatch, timing):
     result = await _during_call(monkeypatch, paper, timing, grow)
     assert _is_normal(timing[0], result)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("timing", [READ, SEARCH, RECORD], ids=["read", "search", "record_evidence"])
+@pytest.mark.parametrize("timing", ALL_TIMINGS, ids=ALL_IDS)
 async def test_a_status_change_that_leaves_the_readable_files_alone_changes_nothing(paper, monkeypatch, timing):
     result = await _during_call(monkeypatch, paper, timing, status_only)
     assert _is_normal(timing[0], result)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("timing", [READ, SEARCH, RECORD], ids=["read", "search", "record_evidence"])
+@pytest.mark.parametrize("timing", ALL_TIMINGS, ids=ALL_IDS)
 async def test_a_file_the_call_did_not_show_removed_during_it_asks_the_model_to_read_again(
     paper, monkeypatch, timing,
 ):
     result = await _during_call(monkeypatch, paper, timing, remove_other)
-    assert result == FILES_CHANGED
+    assert result == _withheld(timing[0])
     if timing[0] == "record_evidence":
         # Nothing was saved: no verified result, so no evidence record is built from it.
         from src.lib.openai_agents.evidence_summary import build_record_evidence_summary_record
@@ -248,7 +275,7 @@ async def test_the_file_the_call_was_showing_removed_during_it_stays_a_failed_re
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("timing", [READ, SEARCH, RECORD], ids=["read", "search", "record_evidence"])
+@pytest.mark.parametrize("timing", ALL_TIMINGS, ids=ALL_IDS)
 async def test_the_paper_deleted_during_a_call_stays_a_failed_read(paper, monkeypatch, timing):
     with pytest.raises(DocumentReadError):
         await _during_call(monkeypatch, paper, timing, delete_paper)
@@ -263,7 +290,7 @@ async def test_a_file_that_became_ready_between_calls_is_read_and_searched_from_
     grow(paper)
 
     added = await _call("read_chunk", paper, {"chunk_index": 5})
-    assert added["chunk"]["chunk_index"] == 5 and TEXT[5] in added["chunk"]["content"]
+    assert added["chunk"]["chunk_index"] == 5 and TEXT[5] in json.dumps(added)
     found = await _call("search_document", paper, {"query": "added methods text", "limit": 5, "search_mode": "lexical"})
     assert 5 in {hit["chunk_index"] for hit in found["hits"]}
 
@@ -276,7 +303,7 @@ async def test_after_a_file_is_removed_between_calls_the_next_calls_use_the_curr
     main = await _call("read_chunk", paper, {"chunk_index": 0})
     assert _is_normal("read_chunk", main)
     gone = await _call("read_chunk", paper, {"chunk_index": 3})
-    assert gone["chunk"] is None and "0 to 2" in gone["summary"]  # an answer naming the readable chunks
+    assert gone.get("chunk") is None and "0 to 2" in gone["summary"]  # an answer naming the readable chunks
     refused = await _call("record_evidence", paper,
                           {"entity": "row", "selections": [{"chunk_index": 3, "span_index": 0}]})
     assert refused.get("status") != "verified"
@@ -295,3 +322,100 @@ async def test_the_paper_deleted_between_calls_fails_the_next_read(paper):
     delete_paper(paper)
     with pytest.raises(DocumentReadError):
         await _call("read_chunk", paper, {"chunk_index": 0})
+
+
+
+# --- review additions: the withheld path keeps everything as it was --------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_withheld_update_of_an_existing_evidence_record_leaves_it_unchanged(paper, monkeypatch):
+    from copy import deepcopy
+
+    from src.lib.openai_agents.evidence_summary import build_record_evidence_summary_record
+    from src.lib.openai_agents.tools.evidence_workspace import (
+        reset_active_evidence_records,
+        set_active_evidence_records,
+    )
+
+    records: list[dict] = []
+    token = set_active_evidence_records(records)
+    try:
+        await _call("read_chunk", paper, {"chunk_index": 0})
+        await _call("read_chunk", paper, {"chunk_index": 1})
+        arguments = {"entity": "dpp", "selections": [{"chunk_index": 0, "span_index": 0}]}
+        first = await _call("record_evidence", paper, arguments)
+        assert first["status"] == "verified"
+        records.append(build_record_evidence_summary_record(
+            tool_name="record_evidence", tool_input=arguments, tool_output=first))
+        before = deepcopy(records)
+
+        _during(monkeypatch, "resolve", remove_other, paper)
+        result = await _call("record_evidence", paper, {
+            "entity": "dpp", "evidence_record_id": first["evidence_record_id"],
+            "selections": [{"chunk_index": 1, "span_index": 0}]})
+    finally:
+        reset_active_evidence_records(token)
+
+    assert result == FILES_CHANGED_RECORD
+    assert records == before  # the staged source update was not applied
+
+
+@pytest.mark.asyncio
+async def test_a_read_of_a_file_removed_in_the_removal_order_before_its_fetch_asks_to_read_again(
+    paper, monkeypatch,
+):
+    """The removal deletes the file's row, then its pieces. Both land after the call bound
+    its readable files and before read_chunk fetches the (removed) chunk: the call showed
+    nothing, so it is withheld, decided from the readable files, not the failed fetch."""
+    from agr_ai_curation_alliance.tools import weaviate_search
+    from src.lib.weaviate_client.chunks import delete_chunk_range
+
+    fetch = weaviate_search.get_chunk_by_index
+
+    async def removed_then_fetched(*args, **kwargs):
+        remove_other(paper)
+        delete_chunk_range(paper["document_id"], TEST_USER_ID, start=3, end=4)
+        return await fetch(*args, **kwargs)
+
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_index", removed_then_fetched)
+    assert await _call("read_chunk", paper, {"chunk_index": 3}) == FILES_CHANGED
+
+
+@pytest.mark.asyncio
+async def test_a_failed_fetch_with_the_readable_files_unchanged_stays_a_failed_read(paper, monkeypatch):
+    from agr_ai_curation_alliance.tools import weaviate_search
+
+    async def nothing(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_index", nothing)
+    with pytest.raises(DocumentReadError):
+        await _call("read_chunk", paper, {"chunk_index": 0})
+
+
+def test_a_stored_withheld_read_projects_through_history_unchanged():
+    import asyncio
+
+    from agr_ai_curation_runtime.document_errors import files_changed_answer
+
+    for tool in ("read_chunk", "read_section", "read_subsection", "search_document", "record_evidence"):
+        stored = {"event": {"tool_name": tool, "kind": "canonical_tool_result"},
+                  "payload": files_changed_answer(tool)}
+        projected = asyncio.run(refs.project_history_source_result(stored, user_id=TEST_USER_ID))
+        assert projected["payload"] == files_changed_answer(tool)
+
+
+@pytest.mark.asyncio
+async def test_fan_out_prefetch_of_a_withheld_read_is_never_shared(paper, monkeypatch):
+    from src.lib.openai_agents import fanout_extraction
+
+    _during(monkeypatch, "retain", remove_other, paper)
+    runner = fanout_extraction.FanoutExtraction.__new__(fanout_extraction.FanoutExtraction)
+    runner.read_tool = _tool("read_chunk", paper)
+    runner._chunk_views = {}
+
+    view = await runner._chunk_view(0)
+
+    assert FILES_CHANGED_MESSAGE in view
+    assert 0 not in runner._chunk_views  # the next writer that cites chunk 0 reads it again

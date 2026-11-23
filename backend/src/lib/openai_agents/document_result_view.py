@@ -6,7 +6,7 @@ from copy import deepcopy
 from typing import Any
 from uuid import uuid4
 
-from agr_ai_curation_runtime.document_errors import DocumentReadError
+from agr_ai_curation_runtime.document_errors import FILES_CHANGED_ERROR_CODE, DocumentReadError
 
 
 DOCUMENT_READ_TOOLS = frozenset({"read_chunk", "search_document", "read_section", "read_subsection"})
@@ -27,7 +27,9 @@ def require_document_read_result(tool_name: str, result: Any) -> None:
         )
     # Paging/request and response-size errors are not failed source retrievals.
     # Their existing structured recovery/reporting contracts remain in force.
-    if raw.get("error_code") == "invalid_result_cursor":
+    # A call withheld because the paper's files changed is not one either: the model
+    # reads again with the current files (DocumentFilesChanged).
+    if raw.get("error_code") in {"invalid_result_cursor", FILES_CHANGED_ERROR_CODE}:
         return
     if tool_name == "read_chunk" and raw.get("chunk") is None:
         raise DocumentReadError(tool_name)
@@ -35,6 +37,10 @@ def require_document_read_result(tool_name: str, result: Any) -> None:
 
 def document_result_view(tool_name: str, result: Any) -> tuple[Any, list[dict]]:
     require_document_read_result(tool_name, result)
+    raw = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
+    if isinstance(raw, dict) and raw.get("error_code") == FILES_CHANGED_ERROR_CODE:
+        # No source text and no provenance: the answer is shown to the model as it is.
+        return deepcopy(raw), []
     try:
         return _document_result_view(tool_name, result)
     except DocumentReadError:

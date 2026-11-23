@@ -26,13 +26,23 @@ class DocumentFilesChanged(Exception):
     """
 
 
+FILES_CHANGED_ERROR_CODE = "readable_files_changed"
+
 # Proposed wording (for Chris's sign-off). Keep in step with the outline's
 # "Files are still being added to this paper; they cannot be read yet."
 FILES_CHANGED_MESSAGE = "This paper's files changed while reading; read again to use the current files."
+# record_evidence's other refusals carry "saved": false and begin "Nothing was saved."
+FILES_CHANGED_RECORD_MESSAGE = (
+    "Nothing was saved. This paper's files changed while recording; read the sentences again, "
+    "then record them."
+)
 
 
-def files_changed_answer() -> dict[str, str]:
-    return {"status": "files_changed", "error_code": "readable_files_changed", "message": FILES_CHANGED_MESSAGE}
+def files_changed_answer(tool_name: str) -> dict[str, object]:
+    if tool_name == "record_evidence":
+        return {"status": "files_changed", "error_code": FILES_CHANGED_ERROR_CODE, "saved": False,
+                "message": FILES_CHANGED_RECORD_MESSAGE}
+    return {"status": "files_changed", "error_code": FILES_CHANGED_ERROR_CODE, "message": FILES_CHANGED_MESSAGE}
 
 
 def document_read_failure(error: BaseException) -> DocumentReadError | None:

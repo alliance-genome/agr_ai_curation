@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from copy import deepcopy
 import hashlib
 import json
+import logging
 from uuid import UUID, uuid4
 
 from sqlalchemy import select, text
@@ -34,12 +35,13 @@ from src.models.sql.agent_run_history import AgentHistoryEvent, AgentHistoryPayl
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.user import User
-from .run_history import ACTIVE_HISTORY, HistoryScope, HistoryStore, exact_json
+from .run_history import ACTIVE_HISTORY, HistoryScope, HistoryStore, exact_json, record_runtime_payload
 from .tool_surface import canonical_tool_name
 
 _SOURCE_KIND = "document_source_binding"
 _SPAN_KIND = "document_span_binding"
 _WINDOW_KIND = "document_span_window"
+logger = logging.getLogger(__name__)
 _ACTIVE_SOURCE: ContextVar["SourceBinding | None"] = ContextVar("document_source_binding", default=None)
 
 
@@ -345,6 +347,17 @@ def _verify_source_generation(binding: SourceBinding) -> None:
     raise DocumentFilesChanged()
 
 
+def _files_changed_only(binding: SourceBinding) -> None:
+    """After a failed fetch: raise ``DocumentFilesChanged`` only if a readable file the
+    call showed nothing from is gone; otherwise return and let the read failure stand."""
+    try:
+        _verify_source_generation(binding)
+    except DocumentFilesChanged:
+        raise
+    except DocumentReferenceError:
+        return
+
+
 async def _finish(task):
     """Drain owned synchronous work even when its waiter is cancelled repeatedly."""
     cancelled = False
@@ -377,7 +390,17 @@ async def document_reference_scope(document_id: str, user_id: str):
         if cancelled:
             raise asyncio.CancelledError
         token = _ACTIVE_SOURCE.set(binding)
-        yield binding
+        try:
+            yield binding
+        except DocumentReadError:
+            # A fetch can fail because its file stopped being readable during the call
+            # (a removal deletes the file's row, then its pieces). The readable-files
+            # comparison decides, never the error: a file gone that the call showed
+            # nothing from is "files changed"; anything else stays the failed read.
+            _, cancelled = await _finish(asyncio.create_task(asyncio.to_thread(_files_changed_only, binding)))
+            if cancelled:
+                raise asyncio.CancelledError
+            raise
         # Ingestion commits processing status before changing Weaviate, then a
         # new completion timestamp. Check both sides of the read/verify operation.
         _, cancelled = await _finish(asyncio.create_task(asyncio.to_thread(_verify_source_generation, binding)))
@@ -388,7 +411,12 @@ async def document_reference_scope(document_id: str, user_id: str):
         if cancelled:
             raise asyncio.CancelledError
         binding.commit_updates()
-    except (DocumentReadError, DocumentFilesChanged):
+    except DocumentFilesChanged:
+        logger.info("Withheld a document tool call: the paper's readable files changed",
+                    extra={"document_id": document_id, "run_id": run_id})
+        await record_runtime_payload("document_files_changed", {"document_id": document_id})
+        raise
+    except DocumentReadError:
         raise
     except Exception as exc:
         raise DocumentReadError("document_reference") from exc
