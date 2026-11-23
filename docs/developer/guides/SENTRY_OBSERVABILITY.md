@@ -720,6 +720,14 @@ error and the exception class. Intake removes the staged upload and returns the
 usual 503 even if reporting fails. An ordinary license denial returns 403 and
 produces no event.
 
+The PDF pipeline must commit the main file's artifact paths before publishing
+readiness. A missing file row or a rejected write fails the job with a fixed
+curator message. The existing `process_pdf_document_failed` report owns this
+failure. A failed optional hierarchy write reports separately under
+`document_pipeline` with operation `pipeline_hierarchy_metadata_write_failed`
+and only the exception type in context. Processing continues with the resolved
+hierarchy. Both outcomes survive reporting failures.
+
 When the final search-index metadata write fails, the paper import can complete
 in SQL while the Library still shows stale status or chunk counts. The writer
 reports `pipeline_final_index_metadata_write_failed` under `document_pipeline`
