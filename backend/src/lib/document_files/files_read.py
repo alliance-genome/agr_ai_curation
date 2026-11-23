@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.models.sql.agent_run_history import AgentHistoryEvent, AgentHistoryPayload
-from src.models.sql.pdf_document import PDFDocumentFile
+from src.models.sql.pdf_document import FILE_STATUS_READY, PDFDocumentFile
 
 FILES_READ_KIND = "document_files_read"
 
@@ -68,8 +68,8 @@ def files_read_for_result(
 
     Each entry: ``file_id``, ``file_name`` (as shown when read), ``role``,
     ``converted_artifact_id`` and ``converted_artifact_sha256`` from the file row.
-    A file removed before the result was saved keeps the name captured when it was
-    read, with no role or artifact.
+    A file removed (or being removed) before the result was saved keeps the name
+    captured when it was read, with no role or artifact.
     """
 
     names: dict[str, str] = {}
@@ -80,7 +80,7 @@ def files_read_for_result(
             names.setdefault(entry["file_id"], entry["file_name"])
     if not names:
         return []
-    rows = _file_rows(db, names)
+    rows = _file_rows(db, names, document_id=document_id)
     files_read = []
     for file_id in _tab_order(names, rows):
         row = rows.get(file_id)
@@ -98,11 +98,21 @@ def files_read_for_result(
     return files_read
 
 
-def _file_rows(db: Session, file_ids) -> dict[str, PDFDocumentFile]:
+def _file_rows(db: Session, file_ids, *, document_id: str) -> dict[str, PDFDocumentFile]:
+    """The paper's current files among these ids: ``ready`` rows only.
+
+    A row in any other state (a file being removed, a failed leftover) reads exactly
+    like a file that is gone: its entry keeps the name read, with no role or artifact.
+    """
+
     return {
         str(row.id): row
         for row in db.scalars(
-            select(PDFDocumentFile).where(PDFDocumentFile.id.in_([UUID(file_id) for file_id in file_ids]))
+            select(PDFDocumentFile).where(
+                PDFDocumentFile.id.in_([UUID(file_id) for file_id in file_ids]),
+                PDFDocumentFile.document_id == UUID(document_id),
+                PDFDocumentFile.status == FILE_STATUS_READY,
+            )
         )
     }
 
@@ -134,10 +144,7 @@ def union_files_read(
             entries_by_id.setdefault(entry["file_id"], entry)
     if not entries_by_id:
         return []
-    rows = {
-        file_id: row for file_id, row in _file_rows(db, entries_by_id).items()
-        if str(row.document_id) == document_id
-    }
+    rows = _file_rows(db, entries_by_id, document_id=document_id)
     return [dict(entries_by_id[file_id]) for file_id in _tab_order(entries_by_id, rows)]
 
 
