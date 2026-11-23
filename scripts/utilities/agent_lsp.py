@@ -929,16 +929,10 @@ def run_diagnostics(root: Path, files: list[str], timeout: float) -> dict[str, A
         package = json.loads(package_path.read_text())
         scripts = package.get("scripts") if isinstance(package, dict) else {}
         scripts = scripts if isinstance(scripts, dict) else {}
-        if relative == "frontend" and "type-check:changed" in scripts:
-            args = [
-                "npm",
-                "run",
-                "type-check:changed",
-                "--",
-                "--base",
-                "origin/main",
-            ]
-            name = "frontend type-check:changed"
+        if relative == "frontend" and "type-check" in scripts:
+            # The same whole-project check CI's Frontend Type Check job runs.
+            args = ["npm", "run", "type-check"]
+            name = "frontend type-check"
         elif "typecheck" in scripts:
             args = ["npm", "run", "typecheck"]
             name = f"{relative} typecheck"

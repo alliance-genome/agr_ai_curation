@@ -15,7 +15,7 @@ mkdir -p \
   "${temp_dir}/bin" \
   "${temp_dir}/cache"
 printf '{}\n' > "${temp_dir}/workspace/frontend/package-lock.json"
-printf '{"scripts":{"type-check:changed":"true"}}\n' > "${temp_dir}/workspace/frontend/package.json"
+printf '{"scripts":{"type-check":"true"}}\n' > "${temp_dir}/workspace/frontend/package.json"
 printf '{}\n' > "${temp_dir}/workspace/frontend/tsconfig.json"
 printf 'let value = 1\n' > "${temp_dir}/workspace/frontend/example.ts"
 printf '{}\n' > "${temp_dir}/workspace/agent_tests/midscene/package-lock.json"
@@ -204,7 +204,7 @@ diagnostics = module.run_diagnostics(
 assert diagnostics["status"] == "ok", diagnostics
 assert [command["name"] for command in diagnostics["commands"]] == [
     "agent_tests/midscene typecheck",
-    "frontend type-check:changed",
+    "frontend type-check",
 ], diagnostics
 unowned_diagnostics = module.run_diagnostics(
     root,
@@ -239,5 +239,5 @@ printf '%s\n' "${cli_output}" | jq -e \
 grep -q 'workspace/agent_tests/midscene|npm ci' "${temp_dir}/npm.log"
 grep -q 'workspace/frontend|npm ci' "${temp_dir}/npm.log"
 grep -q 'workspace/agent_tests/midscene|npm run typecheck' "${temp_dir}/npm.log"
-grep -q 'workspace/frontend|npm run type-check:changed' "${temp_dir}/npm.log"
+grep -q 'workspace/frontend|npm run type-check$' "${temp_dir}/npm.log"
 echo "agent_lsp TypeScript preparation tests passed"

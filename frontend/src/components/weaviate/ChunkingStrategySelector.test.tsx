@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '../../test/test-utils';
+import { render, screen, fireEvent, within } from '../../test/test-utils';
 import ChunkingStrategySelector from './ChunkingStrategySelector';
 
 const getSelectControl = (labelText: string) => {
   const label = screen.getByText(labelText, { selector: 'label' });
   const formControl = label.closest('.MuiFormControl-root');
-  if (!formControl) {
+  if (!(formControl instanceof HTMLElement)) {
     throw new Error(`Form control not found for label: ${labelText}`);
   }
   return within(formControl).getByRole('combobox');

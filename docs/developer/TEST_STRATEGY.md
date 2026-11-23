@@ -189,7 +189,7 @@ Frontend validation runs on the host Node toolchain:
 cd frontend
 npm ci
 npm run test -- --run src/path/to/File.test.tsx  # replace with the changed test file
-npm run type-check:changed -- --base origin/main
+npm run type-check
 ```
 
 Run the smallest frontend test selection that proves the changed behavior.
@@ -200,9 +200,11 @@ GitHub intentionally runs Vitest with its default parallel configuration for
 faster broad feedback. The low-concurrency `test:stable` script is a local
 diagnostic for concurrency-sensitive failures, not the CI-equivalent command.
 
-`FRONTEND_TYPECHECK_STATUS=baseline_only` means the TypeScript compiler found
-existing errors outside changed frontend files. Record the baseline debt, but do
-not treat it as ticket-local failure.
+`npm run type-check` is `tsc --noEmit` over the whole frontend, and the blocking
+`Frontend Type Check` job runs exactly that: any TypeScript error fails it,
+including one in a file the change did not touch. (`Frontend Build` is
+`vite build`, which strips types without checking them, and vitest does not type
+check.) Fix every error the check reports.
 
 ## Local Curator UI/API Smoke Pilot
 
@@ -431,7 +433,7 @@ If frontend changelog source files change, run a targeted frontend validation:
 
 ```bash
 cd frontend
-npm run type-check:changed -- --base origin/main
+npm run type-check
 ```
 
 Run the focused tests for any runtime UI components affected by the change.

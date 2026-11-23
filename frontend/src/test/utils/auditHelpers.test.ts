@@ -406,35 +406,7 @@ describe('getEventPrefix (T014)', () => {
   })
 
   it('handles all event types', () => {
-    const eventTypes: AuditEventType[] = [
-      'SUPERVISOR_START',
-      'SUPERVISOR_DISPATCH',
-      'CREW_START',
-      'AGENT_COMPLETE',
-      'AGENT_GENERATING',
-      'AGENT_THINKING',
-      'TOOL_START',
-      'TOOL_COMPLETE',
-      'LLM_CALL',
-      'SUPERVISOR_RESULT',
-      'SUPERVISOR_COMPLETE',
-      'SUPERVISOR_ERROR',
-      'SPECIALIST_RETRY',
-      'SPECIALIST_RETRY_SUCCESS',
-      'SPECIALIST_ERROR',
-      'FORMATTER_PROCESSING',
-      'DOMAIN_PLAN_CREATED',
-      'DOMAIN_PLANNING',
-      'DOMAIN_EXECUTION_START',
-      'DOMAIN_COMPLETED',
-      'DOMAIN_CATEGORY_ERROR',
-      'DOMAIN_SKIPPED',
-      'FLOW_STEP_EVIDENCE',
-      'FLOW_STEP_TIMING',
-      'FLOW_VALIDATION_GROUP_TIMING',
-      'FILE_READY',
-    ]
-
+    // A Record over AuditEventType: the compiler requires an entry for every event type.
     const expectedPrefixes: Record<AuditEventType, string> = {
       'SUPERVISOR_START': '[SUPERVISOR]',
       'SUPERVISOR_DISPATCH': '[SUPERVISOR]',
@@ -458,13 +430,14 @@ describe('getEventPrefix (T014)', () => {
       'DOMAIN_COMPLETED': '[DOMAIN]',
       'DOMAIN_CATEGORY_ERROR': '[DOMAIN ERROR]',
       'DOMAIN_SKIPPED': '[DOMAIN]',
+      'DOMAIN_WARNING': '[DOMAIN WARNING]',
       'FLOW_STEP_EVIDENCE': '[EVIDENCE]',
       'FLOW_STEP_TIMING': '[TIMING]',
       'FLOW_VALIDATION_GROUP_TIMING': '[TIMING]',
       'FILE_READY': '[FILE]',
     }
 
-    eventTypes.forEach(type => {
+    ;(Object.keys(expectedPrefixes) as AuditEventType[]).forEach(type => {
       expect(getEventPrefix(type)).toBe(expectedPrefixes[type])
     })
   })
@@ -1131,6 +1104,7 @@ describe('getEventSeverity (T016)', () => {
       'DOMAIN_COMPLETED': 'success',
       'DOMAIN_CATEGORY_ERROR': 'error',
       'DOMAIN_SKIPPED': 'info',
+      'DOMAIN_WARNING': 'warning',
       'FLOW_STEP_EVIDENCE': 'info',
       'FLOW_STEP_TIMING': 'info',
       'FLOW_VALIDATION_GROUP_TIMING': 'info',
