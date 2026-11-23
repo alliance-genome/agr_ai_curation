@@ -14,6 +14,7 @@ from sqlalchemy import select, text
 
 from src.lib.agent_studio import retired_model_conversion as conversion
 from src.lib.agent_studio import runtime_validation
+from src.lib.config.groups_loader import list_groups
 from src.lib.config.models_loader import get_default_model
 from src.lib.flows.execution_revisions import flow_execution_revision_findings
 from src.models.sql import database
@@ -244,12 +245,14 @@ def test_cli_dry_run_rolls_back_then_apply_commits_then_verify_is_clean(db, tmp_
     old_head = save_on_retired(db, agent, model="gpt-retired-test")
     make_flow(db, [(agent, old_head)])
     moves = _synthetic_moves_file(tmp_path)
-    groups = _write(tmp_path, "groups.json", {"1": ["FlyBaseCurator"]})
+    # A login maps provider groups to active groups; the command maps them the same way.
+    group = next(group for group in list_groups() if group.provider_groups)
+    groups = _write(tmp_path, "groups.json", {"1": [group.provider_groups[0]]})
 
     assert model_move_cli.main(["--moves", moves, "--provider-groups", groups]) == 0
     dry = json.loads(capsys.readouterr().out)
     assert dry["committed"] is False and dry["counts"]["steps_repinned"] == 1
-    assert dry["owner_groups"] == {"1": ["FB"]}
+    assert dry["owner_groups"] == {"1": [group.group_id]}
     assert _head(db, agent) == old_head.id
     assert model_move_cli.main(["--moves", moves, "--verify"]) == 3
     capsys.readouterr()

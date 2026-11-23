@@ -148,7 +148,7 @@ applicable pricing tiers. Never apply a default model's prices to another model.
 # active config/models.yaml entry. Output.models is the supported API export.
 python -m src.services.model_prices_cli --at 2026-09-15T00:00:00Z \
   --definitions /private/reviewed-langfuse-models.json \
-  --model gpt-6-astra --model gpt-6.1-sol \
+  --model gpt-6.2-astra --model gpt-6.2-sol \
   --model deepseek/deepseek-v4-pro-0813
 # Only after production release authorization: same command plus --apply.
 ```
@@ -181,6 +181,17 @@ tokens, with 2x input/cache and 1.5x output above 272K input tokens. Run the
 read-only coverage check above for `gpt-6.1-sol` before `--apply`; its calls
 stay unpriced until the reviewed definition matches. Historical `gpt-6-sol`
 calls keep their existing definition.
+
+November 23: GPT-6.2 Sol and GPT-6.2 Astra replaced GPT-6.1 Sol and GPT-6
+Astra (v0.11.14). The release applies a reviewed Langfuse definition for each
+new id and imports a new cost-ledger snapshot that adds both, then repoints
+`COST_PRICING_SNAPSHOT_ID`. OpenAI's pricing page lists `gpt-6.2-sol` at $2
+input, $0.10 cached input, $2.50 cache write (30 minutes) and $10 output per
+million tokens, and `gpt-6.2-astra` at $8, $0.40, $10 and $40, with 2x
+input/cache and 1.5x output above 272K input tokens and Fast mode at 2x. Neither
+6.2 model lists a Flex tier, so neither definition has one, and a call reported
+as Flex stays unpriced. Historical 6.1 Sol and 6 Astra calls keep their
+definitions.
 
 No production pricing is changed during code preparation. At release, review and
 apply the missing Astra definition separately, then run a bounded read-only report
