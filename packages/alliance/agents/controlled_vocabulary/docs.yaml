@@ -44,7 +44,7 @@ use_when:
 avoid_when:
   - "To get pick-list values validated; the domain pack already runs this check automatically on every disease, phenotype, and gene expression record an extractor produces."
   - "For ontology terms such as anatomy, life stage, or GO; use the Ontology Term Resolver Agent."
-  - "For genes or alleles; the Gene and Allele Validation Agents check them on the records whose domain pack runs those checks."
+  - "For genes or alleles; the Gene Validation Agent checks genes in gene, disease, gene expression, and GO records, and the Allele Validation Agent checks the alleles in allele records and the allele a disease record is about."
   - "To decide whether a term is the biologically right choice for the paper; that judgment stays with you."
 limitations:
   - "Requires the target vocabulary name or field context to avoid cross-vocabulary ambiguity."

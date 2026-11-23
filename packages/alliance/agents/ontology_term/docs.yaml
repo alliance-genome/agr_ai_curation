@@ -51,7 +51,7 @@ use_when:
   - "When you want to review how anatomy, life stage, GO, and other ontology wording in extracted records gets its official ID."
 avoid_when:
   - "To get ontology terms validated; the domain pack already runs this check automatically on every term an extractor supplies."
-  - "For gene symbols; the Gene Validation Agent checks genes on the records whose domain pack runs that check."
+  - "For gene symbols; the Gene Validation Agent checks genes in gene, disease, gene expression, and GO records."
   - "For chemicals; use the Chemical Ontology Agent."
   - "For fixed pick-list values such as relations or qualifiers; the Controlled Vocabulary Validation Agent checks those automatically."
   - "To pull terms out of a paper; that is an extractor's job."

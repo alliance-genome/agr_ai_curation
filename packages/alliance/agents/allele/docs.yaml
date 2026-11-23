@@ -28,7 +28,7 @@ use_when:
   - "When you want to review how alleles in extracted records are confirmed against Alliance records."
 avoid_when:
   - "To get alleles validated in a flow; the domain pack already runs this check automatically on the alleles in allele records and on the allele a disease record is about."
-  - "For genes; the Gene Validation Agent checks them on the records whose domain pack runs that check."
+  - "For genes; the Gene Validation Agent checks genes in gene, disease, gene expression, and GO records."
   - "For disease or phenotype terms; the Ontology Term Resolver Agent checks those automatically."
   - "To find the alleles a paper studies; that is the Allele/Variant Extraction Agent's job."
 limitations:

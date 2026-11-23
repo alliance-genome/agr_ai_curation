@@ -44,7 +44,7 @@ use_when:
 avoid_when:
   - "To get the reference on a gene expression or GO record validated; the domain pack already runs this check automatically."
   - "To read or summarize the paper's content; use the General PDF Extraction Agent."
-  - "To confirm the genes, alleles, or disease terms the paper reports; their own validators check them on the records whose domain pack runs those checks."
+  - "To confirm the genes, alleles, or disease terms the paper reports; their own validators check them on the kinds of record where that check is switched on."
   - "To add a paper that is missing from the Alliance literature database."
 limitations:
   - "Requires an identifier, title, or citation string from upstream extraction or domain-pack input."

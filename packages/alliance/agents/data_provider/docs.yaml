@@ -47,7 +47,7 @@ use_when:
   - "When you want to review how records are checked for a valid provider that matches their species."
 avoid_when:
   - "To get providers validated; the domain pack already runs this check automatically on every disease and gene expression record an extractor produces."
-  - "To confirm gene, allele, or model identifiers; the validator for that entity type checks them on the records whose domain pack runs that check."
+  - "To confirm gene, allele, or model identifiers; the Gene and Allele Validation Agents check them on the kinds of record where that check is switched on, and the AGM Validation Agent checks the model a disease record is about."
   - "For the reference on a record; the Reference Validation Agent checks it automatically on gene expression and GO records."
   - "For pick-list terms or ontology terms; the Controlled Vocabulary Validation Agent and the Ontology Term Resolver Agent check those automatically."
 limitations:
