@@ -111,10 +111,7 @@ def classify_conversion_answer(
 
 # Curator-facing job message when the stage itself fails unexpectedly; the main
 # paper stays usable. Proposed wording awaiting the owner's sign-off.
-SUPPLEMENT_STAGE_FAILED_MESSAGE = (
-    "The main paper is ready, but adding its supplements failed. "
-    "You can add them later from the Library."
-)
+SUPPLEMENT_STAGE_FAILED_MESSAGE = "The main paper is ready, but its supplements could not be added."
 
 
 class StageOutcomes(Protocol):

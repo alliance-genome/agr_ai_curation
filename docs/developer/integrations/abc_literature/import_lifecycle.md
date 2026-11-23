@@ -350,8 +350,8 @@ without them. When the main paper is ready, the job, still active, enters stage
 - **Shutdown.** The backend cancels running stages at shutdown, with the same
   outcome as a restart.
 - **Unexpected failure.** If the stage itself fails, the job ends failed with a
-  named message ("The main paper is ready, but adding its supplements failed.
-  You can add them later from the Library.", proposed wording), and one Sentry
+  named message ("The main paper is ready, but its supplements could not be
+  added.", proposed wording), and one Sentry
   event is sent (see `SENTRY_OBSERVABILITY.md`).
 
 **An expired curator login** is a named failure (`DocumentSourceLoginExpired`):
