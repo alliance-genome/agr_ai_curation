@@ -15,7 +15,7 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
-from agents import ModelSettings
+from agents import Agent, ModelSettings
 
 from src.lib.openai_agents import config as agent_config
 from src.lib.openai_agents.config import (
@@ -383,19 +383,19 @@ def test_agent_studio_settings_carry_stable_key():
 
 @pytest.mark.asyncio
 async def test_figure_locator_classifier_key_is_stable_across_batches(monkeypatch):
+    from src.lib.openai_agents import runner as agent_runner
     from src.lib.pipeline import figure_locator_resolution as locator
 
-    agents_built = []
+    classifier_agents = []
     monkeypatch.setattr(agent_config, "get_model_for_agent", lambda model, **_kwargs: model)
-    monkeypatch.setattr(
-        "agents.Agent", lambda **kwargs: agents_built.append(kwargs) or SimpleNamespace(**kwargs)
-    )
     monkeypatch.setattr(locator, "gen_ai_invoke_agent_span", lambda **_kwargs: nullcontext(None))
 
     async def run(agent, prompt, **_kwargs):
+        assert isinstance(agent, Agent)
+        classifier_agents.append(agent)
         raise RuntimeError("stop after construction")
 
-    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_with_owned_openai_resources", run)
+    monkeypatch.setattr(agent_runner, "run_agent_with_owned_openai_resources", run)
     for chunk_id in ("chunk-a", "chunk-b"):
         candidate = (SimpleNamespace(id=chunk_id, content=f"Figure {chunk_id}"), f"Figure {chunk_id}")
         with pytest.raises(RuntimeError, match="stop after construction"):
@@ -403,10 +403,17 @@ async def test_figure_locator_classifier_key_is_stable_across_batches(monkeypatc
                 [candidate], model_name=OPENAI_MODEL, reasoning_effort="low"
             )
 
-    keys = {_key(kwargs["model_settings"]) for kwargs in agents_built}
-    assert len(agents_built) == 2
-    assert len(keys) == 1
-    assert next(iter(keys)).startswith("figure_locator_classifier:")
+    first, second = classifier_agents
+    assert first is not second
+    first_key = _key(first.model_settings)
+    assert first_key == _key(second.model_settings)
+    assert first_key.startswith("figure_locator_classifier:")
+
+
+def test_safety_guardrail_is_an_sdk_agent():
+    from src.lib.openai_agents import guardrails
+
+    assert isinstance(guardrails._safety_guardrail_agent, Agent)
 
 
 def test_structured_retry_agent_gets_its_own_stable_key_only_for_native_openai():
