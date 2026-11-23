@@ -308,10 +308,15 @@ async def _run_readable_files(
 
 
 def _with_file(view: dict[str, Any], record: dict[str, Any], readable: ReadableFiles | None) -> dict[str, Any]:
-    """Show the record's file beside ``section``: the outline label the model uses with
-    ``file=``, or, for a file the run can no longer read, its stored display name
-    marked ``file_readable: false``. Records saved before files were recorded have
-    no ``file_id`` and get no file key."""
+    """Show the record's file beside ``section``.
+
+    ``file`` is the outline label the model passes back as a reading tool's
+    ``file``, so it is given only for a file readable in this run: it is always
+    safe to copy. A file the run can no longer read gets ``file_readable: false``
+    with the stored display name under ``file_name`` (never under ``file``: a stored
+    name can equal another readable file's label). Records saved before files were
+    recorded have no ``file_id`` and get no file key.
+    """
 
     file_id = _optional_string(record.get("file_id"))
     if not file_id:
@@ -322,14 +327,16 @@ def _with_file(view: dict[str, Any], record: dict[str, Any], readable: ReadableF
     file_keys: dict[str, Any] = (
         {"file": readable.label_of(current)}
         if current is not None and readable is not None
-        else {"file": record["file_name"], "file_readable": False}
+        else {"file_readable": False, "file_name": record["file_name"]}
     )
     placed: dict[str, Any] = {}
     for key, value in view.items():
+        if key in file_keys:
+            continue
         placed[key] = value
         if key == "section":
             placed.update(file_keys)
-    if "file" not in placed:
+    if not file_keys.keys() <= placed.keys():
         placed.update(file_keys)
     return placed
 
