@@ -1,5 +1,6 @@
 """Unit tests for Weaviate connection lifecycle helpers."""
 
+import logging
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -99,7 +100,7 @@ def test_connect_uses_env_overrides_for_grpc_in_custom_mode(monkeypatch):
     assert called["grpc_secure"] is False
 
 
-def test_connect_wraps_connection_errors(monkeypatch):
+def test_connect_wraps_connection_errors(monkeypatch, caplog):
     conn = wc.WeaviateConnection(url="http://localhost:8080")
 
     monkeypatch.setattr(
@@ -110,6 +111,8 @@ def test_connect_wraps_connection_errors(monkeypatch):
 
     with pytest.raises(Exception, match="Connection failed: boom"):
         conn.connect()
+    assert (wc.logger.name, logging.ERROR, "Failed to connect to Weaviate: RuntimeError") in caplog.record_tuples
+    assert "boom" not in caplog.text
 
 
 def test_disconnect_closes_and_clears_client_even_on_close_error():
@@ -158,10 +161,10 @@ async def test_async_connect_and_close_use_executor(monkeypatch):
     assert "disconnect-ran" in calls
 
 
-def test_session_context_yields_connected_client(monkeypatch):
+def test_session_context_yields_connected_client():
     conn = wc.WeaviateConnection(url="http://localhost:8080")
-    fake_client = object()
-    monkeypatch.setattr(conn, "connect", lambda: fake_client)
+    fake_client = SimpleNamespace(is_ready=lambda: True)
+    conn._client = fake_client
 
     with conn.session() as yielded:
         assert yielded is fake_client

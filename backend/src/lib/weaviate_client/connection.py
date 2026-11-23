@@ -43,8 +43,11 @@ class WeaviateConnection:
             self._client: Optional[WeaviateClient] = None
             self.initialized = True
 
-    def connect(self) -> WeaviateClient:
+    def connect(self, *, caller_reports_failure: bool = False) -> WeaviateClient:
         """Establish connection to Weaviate.
+
+        When the caller owns failure reporting, propagate the original error
+        so it can report the SDK error type without a second log event.
 
         Returns:
             Weaviate client instance
@@ -116,7 +119,9 @@ class WeaviateConnection:
             return self._client
 
         except Exception as e:
-            logger.error('Failed to connect to Weaviate: %s', e)
+            if caller_reports_failure:
+                raise
+            logger.error('Failed to connect to Weaviate: %s', type(e).__name__)
             raise Exception(f"Connection failed: {e}")
 
     def disconnect(self) -> None:
@@ -145,13 +150,13 @@ class WeaviateConnection:
             return False
 
     @contextmanager
-    def session(self):
+    def session(self, *, caller_reports_failure: bool = False):
         """Context manager for Weaviate session.
 
         Yields:
             Weaviate client instance
         """
-        client = self.connect()
+        client = self.connect(caller_reports_failure=caller_reports_failure)
         try:
             yield client
         finally:

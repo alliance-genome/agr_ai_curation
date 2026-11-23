@@ -135,15 +135,16 @@ async def test_frozen_copy_uses_normal_owned_ingestion_and_preserves_source(
 
     class SyntheticConnection:
         @contextmanager
-        def session(self):
+        def session(self, *, caller_reports_failure=False):
             yield raw_client
 
     connection = SyntheticConnection()
+    paper_collection = MagicMock()
 
     def owned_collections(client, user_subject):
         assert client is raw_client
         assert user_subject == subject
-        return collection, MagicMock()
+        return collection, paper_collection
 
     monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", owned_collections)
     monkeypatch.setattr(chunk_reader, "get_connection", lambda: connection)
@@ -305,6 +306,15 @@ async def test_frozen_copy_uses_normal_owned_ingestion_and_preserves_source(
         ]
         assert receipt.document_id == document_id
         assert receipt.chunk_count > 0
+        paper_collection.data.update.assert_called_with(
+            uuid=str(document_id),
+            properties={
+                "chunkCount": receipt.chunk_count,
+                "vectorCount": receipt.chunk_count,
+                "processingStatus": "completed",
+                "embeddingStatus": "completed",
+            },
+        )
         from src.lib.pipeline.text_preparation import TEXT_PREPARATION_VERSION
 
         assert receipt.text_preparation_version == TEXT_PREPARATION_VERSION

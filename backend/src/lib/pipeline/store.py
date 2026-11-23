@@ -12,6 +12,7 @@ import hashlib
 from weaviate.classes.query import Filter
 
 from ..exceptions import StorageError, CollectionNotFoundError, BatchInsertError
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from src.models.chunk import DocumentChunk, ChunkMetadata
 from ..weaviate_client.documents import update_document_status_detailed
 
@@ -678,32 +679,32 @@ async def update_document_metadata(
     def sync_update():
         """Synchronous function to update document metadata."""
         try:
-            with weaviate_client.session() as client:
-                # Get tenant-scoped collection (FR-011: user-specific data isolation)
-                try:
-                    from ..weaviate_helpers import get_user_collections
-                    chunk_collection, pdf_collection = get_user_collections(client, user_id)
-                    collection = pdf_collection
+            from ..weaviate_helpers import get_user_collections
 
-                    # Update the document
-                    collection.data.update(
-                        uuid=document_id,
-                        properties={
-                            "chunkCount": stored_chunks,
-                            "vectorCount": stored_chunks,
-                            "processingStatus": processing_status,
-                            "embeddingStatus": embedding_status,
-                        }
-                    )
-                    logger.info('Successfully updated metadata for document %s', document_id)
-
-                except Exception as e:
-                    logger.warning('Could not update document metadata: %s', e)
-                    # Document may not exist in PDFDocument collection yet
-                    # This is okay as we've stored the chunks successfully
-
-        except Exception as e:
-            logger.error('Metadata update failed: %s', e)
+            with weaviate_client.session(caller_reports_failure=True) as client:
+                _, pdf_collection = get_user_collections(client, user_id)
+                pdf_collection.data.update(
+                    uuid=document_id,
+                    properties={
+                        "chunkCount": stored_chunks,
+                        "vectorCount": stored_chunks,
+                        "processingStatus": processing_status,
+                        "embeddingStatus": embedding_status,
+                    },
+                )
+            logger.info('Successfully updated metadata for document %s', document_id)
+        except Exception as exc:
+            error = sanitized_runtime_error("Final index metadata write failed")
+            logger.warning("%s", error, extra={"sentry_skip_event": True})
+            try:
+                report_runtime_exception(
+                    error,
+                    component="document_pipeline",
+                    operation="pipeline_final_index_metadata_write_failed",
+                    context={"exception_type": type(exc).__name__},
+                )
+            except Exception:
+                logger.warning("Final index metadata failure reporting unavailable", extra={"sentry_skip_event": True})
 
     # Run synchronous update in async context
     await asyncio.get_event_loop().run_in_executor(None, sync_update)

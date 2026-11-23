@@ -2,8 +2,11 @@
 
 import asyncio
 import importlib
+import logging
+import subprocess
+import sys
+import textwrap
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -333,32 +336,110 @@ async def test_store_chunks_to_weaviate_raises_when_token_preflight_exceeds_limi
 
 
 @pytest.mark.asyncio
-async def test_update_document_metadata_best_effort():
-    stats = {
-        "stored_chunks": 2,
-        "storage_timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-    }
-
-    chunk_collection = MagicMock()
-    pdf_collection = MagicMock()
-    pdf_collection.data.update.side_effect = Exception("missing doc")
-
-    @contextmanager
-    def fake_session():
-        yield MagicMock()
-
+@pytest.mark.parametrize(
+    ("failure_at", "reporter_fails"),
+    [("update", False), ("session", False), ("update", True)],
+)
+async def test_update_document_metadata_best_effort(caplog, failure_at, reporter_fails):
     weaviate_client = MagicMock()
-    weaviate_client.session.side_effect = fake_session
+    pdf_collection = MagicMock()
+    failure = OSError("fake-private-index-detail")
+    if failure_at == "session":
+        weaviate_client.session.side_effect = failure
+    else:
+        pdf_collection.data.update.side_effect = failure
 
-    event_loop = MagicMock()
-    event_loop.run_in_executor.side_effect = lambda _, func: asyncio.sleep(0, result=func())
+    with (
+        patch("src.lib.weaviate_helpers.get_user_collections", return_value=(MagicMock(), pdf_collection)),
+        patch("src.lib.pipeline.store.report_runtime_exception") as report,
+    ):
+        if reporter_fails:
+            report.side_effect = RuntimeError("fake-private-capture-detail")
+        await update_document_metadata("doc-1", {"stored_chunks": 2}, weaviate_client, "test_user")
 
-    # Mock get_user_collections to return tenant-scoped collections
-    with patch("src.lib.pipeline.store.asyncio.get_event_loop", return_value=event_loop), \
-         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, pdf_collection)):
-        await update_document_metadata("doc-1", stats, weaviate_client, "test_user")
+    if failure_at == "update":
+        pdf_collection.data.update.assert_called_once()
+    report.assert_called_once()
+    error, = report.call_args.args
+    assert str(error) == "Final index metadata write failed"
+    assert error.__cause__ is None and error.__context__ is None
+    assert report.call_args.kwargs == {
+        "component": "document_pipeline",
+        "operation": "pipeline_final_index_metadata_write_failed",
+        "context": {"exception_type": "OSError"},
+    }
+    assert "fake-private-index-detail" not in caplog.text
+    assert "fake-private-capture-detail" not in caplog.text
+    warnings = [
+        record for record in caplog.records
+        if record.name == store_module.logger.name and record.levelno >= logging.WARNING
+    ]
+    assert len(warnings) == (2 if reporter_fails else 1)
+    assert all(record.sentry_skip_event for record in warnings)
 
-    pdf_collection.data.update.assert_called_once()
+
+def test_metadata_connection_failure_emits_one_sanitized_event():
+    # Isolate the real Sentry logging integration and its process-wide hooks.
+    script = textwrap.dedent("""
+        import asyncio
+        import logging
+        from unittest.mock import patch
+
+        import sentry_sdk
+        from sentry_sdk.integrations.logging import LoggingIntegration
+
+        from src.lib.observability.sentry import before_send
+        from src.lib.pipeline.store import update_document_metadata
+        from src.lib.weaviate_client.connection import WeaviateConnection
+
+        events = []
+        logging.basicConfig(level=logging.INFO)
+        sentry_sdk.init(
+            dsn="http://public@example.invalid/1",
+            transport=events.append,
+            before_send=before_send,
+            include_local_variables=False,
+            default_integrations=False,
+            integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+        )
+        failure = OSError("fake-private-sdk-detail")
+        with patch("weaviate.connect_to_local", side_effect=failure) as connect:
+            asyncio.run(update_document_metadata(
+                "private-document", {"stored_chunks": 2}, WeaviateConnection(), "private-user"
+            ))
+            connect.assert_called_once()
+
+        event, = events
+        assert event["contexts"]["runtime_exception"] == {
+            "component": "document_pipeline",
+            "operation": "pipeline_final_index_metadata_write_failed",
+            "exception_type": "OSError",
+        }
+        error, = event["exception"]["values"]
+        assert error["value"] == "Final index metadata write failed"
+        assert all(secret not in repr(event) for secret in (str(failure), "private-document", "private-user"))
+    """)
+    result = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert "fake-private-sdk-detail" not in result.stdout + result.stderr
+
+
+@pytest.mark.asyncio
+async def test_update_document_metadata_success():
+    weaviate_client = MagicMock()
+    pdf_collection = MagicMock()
+    with (
+        patch("src.lib.weaviate_helpers.get_user_collections", return_value=(MagicMock(), pdf_collection)) as collections,
+        patch("src.lib.pipeline.store.report_runtime_exception") as report,
+    ):
+        await update_document_metadata("doc-1", {"stored_chunks": 2}, weaviate_client, "test_user")
+
+    collections.assert_called_once_with(weaviate_client.session.return_value.__enter__.return_value, "test_user")
+    pdf_collection.data.update.assert_called_once_with(
+        uuid="doc-1",
+        properties={"chunkCount": 2, "vectorCount": 2, "processingStatus": "completed", "embeddingStatus": "completed"},
+    )
+    report.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -720,6 +720,14 @@ error and the exception class. Intake removes the staged upload and returns the
 usual 503 even if reporting fails. An ordinary license denial returns 403 and
 produces no event.
 
+When the final search-index metadata write fails, the paper import can complete
+in SQL while the Library still shows stale status or chunk counts. The writer
+reports `pipeline_final_index_metadata_write_failed` under `document_pipeline`
+with a fixed, chain-free error and only the exception class in runtime context.
+The writer also owns failures opening its Weaviate session. The connection
+passes the original exception to the writer without logging it. Companion
+warnings from the writer skip log-event promotion.
+
 When an ABC file listing has a converted supplement whose `source` names a file
 missing from the same listing, the ABC adapter leaves that file out and reports
 one warning under component `document_source` and operation
