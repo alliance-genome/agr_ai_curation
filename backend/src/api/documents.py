@@ -88,6 +88,7 @@ from ..models.sql.pdf_document import (
     PDFDocumentFile,
 )
 from ..models.sql.pdf_processing_job import PdfJobStatus
+from ..schemas.document_files import AddFilesRequest
 from ..schemas.documents import DocumentUpdateRequest, DocumentUpdateResponse
 from ..services.document_access import require_owned_document
 from ..services.processing_status_policy import (
@@ -596,7 +597,7 @@ async def _update_owned_document_metadata(
     try:
         metadata_changed = False
         if request.filename is not None and request.filename != document.filename:
-            latest_job = pdf_job_service.get_latest_job_for_document(
+            latest_job = pdf_job_service.get_latest_paper_job_for_document(
                 document_id=document_id,
                 user_id=document.user_id,
                 reconcile_stale=True,
@@ -1356,7 +1357,7 @@ async def get_document_endpoint(
         # Extract document data from nested structure
         doc_data = weaviate_doc.get("document", {})
         tenant_name = get_tenant_name(user["sub"])
-        latest_job = pdf_job_service.get_latest_job_for_document(
+        latest_job = pdf_job_service.get_latest_paper_job_for_document(
             document_id=document_id,
             user_id=db_user.id,
             reconcile_stale=True,
@@ -1476,210 +1477,242 @@ async def delete_document_endpoint(
     Requirements:
         - FR-014: Verify document ownership, return 403 for cross-user access
     """
-    # T031: Verify ownership from PostgreSQL FIRST (FR-014)
-    # Returns 404 if not found, 403 if not owned by user
-    session = SessionLocal()
+    # One lock per paper orders this delete against an add to it: no add can create its job
+    # between the active-job check below and the row delete (see document_files/paper_lock.py).
+    # Nobody waits for it: when another delete or add holds it, this answers 409 at once.
+    # Every database session of this delete is opened in a worker thread, so waiting for a
+    # pooled connection never blocks the event loop; a pool timeout is a 503.
+    from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+
+    from ..lib.document_files.paper_lock import PaperOperationInProgress, paper_delete_lock
+
     try:
+        # T031: Verify ownership from PostgreSQL FIRST (FR-014)
+        # Returns 404 if not found, 403 if not owned by user
         db_user = await provision_user_async(principal_from_claims(user))
-        pg_doc = verify_document_ownership(session, document_id, user, provisioned_user_id=db_user.id)
-    finally:
-        session.close()
 
-    # Only proceed with Weaviate query if ownership verified
-    try:
-        latest_job = pdf_job_service.get_latest_job_for_document(
-            document_id=document_id,
-            user_id=pg_doc.user_id,
-            reconcile_stale=True,
-        )
-        pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
-        active_job_status = latest_job.status if latest_job else None
-        pipeline_is_active = _is_pipeline_status_active(pipeline_status)
-        stale_pipeline_tracker = _is_stale_pipeline_tracker(
-            pipeline_status=pipeline_status,
-            latest_job=latest_job,
-        )
+        def owned_paper():
+            session = SessionLocal()
+            try:
+                return verify_document_ownership(session, document_id, user, provisioned_user_id=db_user.id)
+            finally:
+                session.close()
 
-        document = None
-        document_processing_status = "missing"
-        document_missing_in_weaviate = False
-        try:
-            document = await get_document(user["sub"], document_id)
-        except ValueError as exc:
-            if "not found" in str(exc).lower():
-                document_missing_in_weaviate = True
-                logger.warning(
-                    "Document %s exists in PostgreSQL but is missing in Weaviate; proceeding with stale-record delete checks.",
-                    document_id,
+        pg_doc = await asyncio.to_thread(owned_paper)
+
+        async with paper_delete_lock(document_id):
+            # Only proceed with Weaviate query if ownership verified
+            try:
+                latest_job = await asyncio.to_thread(
+                    lambda: pdf_job_service.get_latest_job_for_document(
+                        document_id=document_id,
+                        user_id=pg_doc.user_id,
+                        reconcile_stale=True,
+                    )
                 )
-            else:
-                raise
+                pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
+                active_job_status = latest_job.status if latest_job else None
+                pipeline_is_active = _is_pipeline_status_active(pipeline_status)
+                stale_pipeline_tracker = _is_stale_pipeline_tracker(
+                    pipeline_status=pipeline_status,
+                    latest_job=latest_job,
+                )
 
-        if document:
-            doc_payload = document.get("document", {})
-            document_processing_status = _extract_document_processing_status(doc_payload)
-
-        if active_job_status in _ACTIVE_PDF_JOB_STATUSES:
-            job_hint = f" and job status '{active_job_status}'" if active_job_status else ""
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Cannot delete document while it is being processed "
-                    f"(status '{document_processing_status}'{job_hint})"
-                ),
-            )
-        if pipeline_is_active and not stale_pipeline_tracker:
-            stage_value = getattr(getattr(pipeline_status, "current_stage", None), "value", getattr(pipeline_status, "current_stage", None))
-            raise HTTPException(
-                status_code=409,
-                detail=f"Cannot delete document while pipeline is actively processing (stage '{stage_value}')",
-            )
-        if stale_pipeline_tracker:
-            logger.warning(
-                "Allowing delete despite stale pipeline tracker with terminal job status=%s document=%s",
-                active_job_status,
-                document_id,
-            )
-        if (
-            document_processing_status in _ACTIVE_PROCESSING_STATUSES
-            and active_job_status not in _TERMINAL_PDF_JOB_STATUSES
-        ):
-            job_hint = f" and job status '{active_job_status}'" if active_job_status else ""
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Cannot delete document while it is being processed "
-                    f"(status '{document_processing_status}'{job_hint})"
-                ),
-            )
-        if (
-            document_processing_status in _ACTIVE_PROCESSING_STATUSES
-            and active_job_status in _TERMINAL_PDF_JOB_STATUSES
-        ):
-            logger.warning(
-                "Allowing delete despite stale document processing status=%s with terminal job status=%s document=%s",
-                document_processing_status,
-                active_job_status,
-                document_id,
-            )
-
-        cleanup_snapshot: dict[str, Any] | None = None
-        cleanup_session = SessionLocal()
-        try:
-            doc_to_cleanup = cleanup_session.execute(
-                select(ViewerPDFDocument).where(ViewerPDFDocument.id == uuid.UUID(document_id))
-            ).scalars().first()
-            if doc_to_cleanup:
-                cleanup_snapshot = _document_cleanup_snapshot(doc_to_cleanup)
-        finally:
-            cleanup_session.close()
-
-        result = {"success": True, "chunks_deleted": 0}
-        if not document_missing_in_weaviate:
-            result = await delete_document(user["sub"], document_id)
-
-        if not result.get("success"):
-            raise HTTPException(
-                status_code=500,
-                detail=result.get("message", "Failed to delete document")
-            )
-
-        # Cleanup PostgreSQL and filesystem artifacts. Any failure here must
-        # surface to the caller so smoke/release checks cannot report a clean
-        # delete while leaving private artifacts behind. The Weaviate helper may
-        # also delete the SQL row, so file paths are snapshotted before it runs.
-        cleanup_session = SessionLocal()
-        try:
-            doc_to_delete = cleanup_session.execute(
-                select(ViewerPDFDocument).where(ViewerPDFDocument.id == uuid.UUID(document_id))
-            ).scalars().first()
-            cleanup_values = cleanup_snapshot
-            if doc_to_delete:
-                cleanup_values = _document_cleanup_snapshot(doc_to_delete)
-
-            if cleanup_values:
-                cleanup_document_curation_dependencies(cleanup_session, cleanup_values["id"])
-                # Delete physical files
-                base_storage = FilePath(get_pdf_storage_path())
-                user_sub = str(user["sub"])
-
-                for file_values in cleanup_values["files"]:
-                    # 1. Delete original PDF directory/file for normal uploads.
-                    # Text files use file_path as a provider placeholder and
-                    # store the downloaded artifact separately.
-                    if file_values["display_mode"] != DISPLAY_MODE_TEXT:
-                        _delete_user_document_directory_or_file_if_present(
-                            base_storage=base_storage,
-                            relative_path=file_values["file_path"],
-                            user_sub=user_sub,
-                            document_id=document_id,
+                document = None
+                document_processing_status = "missing"
+                document_missing_in_weaviate = False
+                try:
+                    document = await get_document(user["sub"], document_id)
+                except ValueError as exc:
+                    if "not found" in str(exc).lower():
+                        document_missing_in_weaviate = True
+                        logger.warning(
+                            "Document %s exists in PostgreSQL but is missing in Weaviate; proceeding with stale-record delete checks.",
+                            document_id,
                         )
+                    else:
+                        raise
 
-                    # 2. Delete PDFX JSON: {user_id}/pdfx_json/{doc_id}.json
-                    _unlink_user_storage_file_if_present(
-                        base_storage=base_storage,
-                        relative_path=file_values["pdfx_json_path"],
-                        user_sub=user_sub,
-                        document_id=document_id,
-                        label="PDFX JSON",
+                if document:
+                    doc_payload = document.get("document", {})
+                    document_processing_status = _extract_document_processing_status(doc_payload)
+
+                if active_job_status in _ACTIVE_PDF_JOB_STATUSES:
+                    job_hint = f" and job status '{active_job_status}'" if active_job_status else ""
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Cannot delete document while it is being processed "
+                            f"(status '{document_processing_status}'{job_hint})"
+                        ),
+                    )
+                if pipeline_is_active and not stale_pipeline_tracker:
+                    stage_value = getattr(getattr(pipeline_status, "current_stage", None), "value", getattr(pipeline_status, "current_stage", None))
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Cannot delete document while pipeline is actively processing (stage '{stage_value}')",
+                    )
+                if stale_pipeline_tracker:
+                    logger.warning(
+                        "Allowing delete despite stale pipeline tracker with terminal job status=%s document=%s",
+                        active_job_status,
+                        document_id,
+                    )
+                if (
+                    document_processing_status in _ACTIVE_PROCESSING_STATUSES
+                    and active_job_status not in _TERMINAL_PDF_JOB_STATUSES
+                ):
+                    job_hint = f" and job status '{active_job_status}'" if active_job_status else ""
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Cannot delete document while it is being processed "
+                            f"(status '{document_processing_status}'{job_hint})"
+                        ),
+                    )
+                if (
+                    document_processing_status in _ACTIVE_PROCESSING_STATUSES
+                    and active_job_status in _TERMINAL_PDF_JOB_STATUSES
+                ):
+                    logger.warning(
+                        "Allowing delete despite stale document processing status=%s with terminal job status=%s document=%s",
+                        document_processing_status,
+                        active_job_status,
+                        document_id,
                     )
 
-                    # 3. Delete Processed JSON: the file's stored processed_json_path
-                    _unlink_user_storage_file_if_present(
-                        base_storage=base_storage,
-                        relative_path=file_values["processed_json_path"],
-                        user_sub=user_sub,
-                        document_id=document_id,
-                        label="Processed JSON",
+                def snapshot_for_cleanup() -> dict[str, Any] | None:
+                    snapshot_session = SessionLocal()
+                    try:
+                        doc_to_cleanup = snapshot_session.execute(
+                            select(ViewerPDFDocument).where(ViewerPDFDocument.id == uuid.UUID(document_id))
+                        ).scalars().first()
+                        return _document_cleanup_snapshot(doc_to_cleanup) if doc_to_cleanup else None
+                    finally:
+                        snapshot_session.close()
+
+                cleanup_snapshot = await asyncio.to_thread(snapshot_for_cleanup)
+
+                result = {"success": True, "chunks_deleted": 0}
+                if not document_missing_in_weaviate:
+                    result = await delete_document(user["sub"], document_id)
+
+                if not result.get("success"):
+                    raise HTTPException(
+                        status_code=500,
+                        detail=result.get("message", "Failed to delete document")
                     )
 
-                    # 4. Delete provider/source Markdown: the file's stored source_markdown_path
-                    _unlink_user_storage_file_if_present(
-                        base_storage=base_storage,
-                        relative_path=file_values["source_markdown_path"],
-                        user_sub=user_sub,
-                        document_id=document_id,
-                        label="Source Markdown",
-                    )
+                # Cleanup PostgreSQL and filesystem artifacts. Any failure here must
+                # surface to the caller so smoke/release checks cannot report a clean
+                # delete while leaving private artifacts behind. The Weaviate helper may
+                # also delete the SQL row, so file paths are snapshotted before it runs.
+                def finish_delete() -> None:
+                    cleanup_session = SessionLocal()
+                    try:
+                        doc_to_delete = cleanup_session.execute(
+                            select(ViewerPDFDocument).where(ViewerPDFDocument.id == uuid.UUID(document_id))
+                        ).scalars().first()
+                        cleanup_values = cleanup_snapshot
+                        if doc_to_delete:
+                            cleanup_values = _document_cleanup_snapshot(doc_to_delete)
 
-                # Delete DB record
-                if doc_to_delete:
-                    cleanup_session.delete(doc_to_delete)
-                    cleanup_session.commit()
-                    logger.info('Deleted PostgreSQL record for %s', document_id)
-                else:
-                    cleanup_session.commit()
+                        if cleanup_values:
+                            cleanup_document_curation_dependencies(cleanup_session, cleanup_values["id"])
+                            # Delete physical files
+                            base_storage = FilePath(get_pdf_storage_path())
+                            user_sub = str(user["sub"])
 
-                # Invalidate document metadata cache to prevent stale cache hits
-                from src.lib.document_cache import invalidate_cache
-                invalidate_cache(user["sub"], document_id)
-        except HTTPException:
-            cleanup_session.rollback()
-            raise
-        except Exception as db_error:
-            logger.error('Failed to cleanup PostgreSQL for %s: %s', document_id, db_error)
-            cleanup_session.rollback()
-            raise
-        finally:
-            cleanup_session.close()
+                            for file_values in cleanup_values["files"]:
+                                # 1. Delete original PDF directory/file for normal uploads.
+                                # Text files use file_path as a provider placeholder and
+                                # store the downloaded artifact separately.
+                                if file_values["display_mode"] != DISPLAY_MODE_TEXT:
+                                    _delete_user_document_directory_or_file_if_present(
+                                        base_storage=base_storage,
+                                        relative_path=file_values["file_path"],
+                                        user_sub=user_sub,
+                                        document_id=document_id,
+                                    )
 
-        return OperationResult(
-            success=True,
-            message=f"Document {document_id} and {result['chunks_deleted']} chunks deleted successfully",
-            operation="delete_document",
-            document_id=document_id
-        )
+                                # 2. Delete PDFX JSON: {user_id}/pdfx_json/{doc_id}.json
+                                _unlink_user_storage_file_if_present(
+                                    base_storage=base_storage,
+                                    relative_path=file_values["pdfx_json_path"],
+                                    user_sub=user_sub,
+                                    document_id=document_id,
+                                    label="PDFX JSON",
+                                )
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise_sanitized_http_exception(
-            logger,
-            status_code=500,
-            detail="Failed to delete document",
-            log_message=f"Error deleting document {document_id}",
-            exc=e,
-        )
+                                # 3. Delete Processed JSON: the file's stored processed_json_path
+                                _unlink_user_storage_file_if_present(
+                                    base_storage=base_storage,
+                                    relative_path=file_values["processed_json_path"],
+                                    user_sub=user_sub,
+                                    document_id=document_id,
+                                    label="Processed JSON",
+                                )
+
+                                # 4. Delete provider/source Markdown: the file's stored source_markdown_path
+                                _unlink_user_storage_file_if_present(
+                                    base_storage=base_storage,
+                                    relative_path=file_values["source_markdown_path"],
+                                    user_sub=user_sub,
+                                    document_id=document_id,
+                                    label="Source Markdown",
+                                )
+
+                            # Delete DB record
+                            if doc_to_delete:
+                                cleanup_session.delete(doc_to_delete)
+                                cleanup_session.commit()
+                                logger.info('Deleted PostgreSQL record for %s', document_id)
+                            else:
+                                cleanup_session.commit()
+
+                            # Invalidate document metadata cache to prevent stale cache hits
+                            from src.lib.document_cache import invalidate_cache
+                            invalidate_cache(user["sub"], document_id)
+                    except HTTPException:
+                        cleanup_session.rollback()
+                        raise
+                    except Exception as db_error:
+                        logger.error('Failed to cleanup PostgreSQL for %s: %s', document_id, db_error)
+                        cleanup_session.rollback()
+                        raise
+                    finally:
+                        cleanup_session.close()
+
+                await asyncio.to_thread(finish_delete)
+
+                return OperationResult(
+                    success=True,
+                    message=f"Document {document_id} and {result['chunks_deleted']} chunks deleted successfully",
+                    operation="delete_document",
+                    document_id=document_id
+                )
+
+            except (HTTPException, PoolTimeoutError):
+                raise
+            except Exception as e:
+                raise_sanitized_http_exception(
+                    logger,
+                    status_code=500,
+                    detail="Failed to delete document",
+                    log_message=f"Error deleting document {document_id}",
+                    exc=e,
+                )
+    except PaperOperationInProgress:
+        raise HTTPException(
+            status_code=409,
+            detail="Another operation on this paper is in progress; try again in a moment.",
+        ) from None
+    except PoolTimeoutError:
+        logger.warning("Paper delete refused: no database connection free", extra={"document_id": document_id})
+        raise HTTPException(
+            status_code=503,
+            detail="The server is busy right now; try deleting the paper again in a moment.",
+        ) from None
 
 
 @router.post("/documents/upload", response_model=DocumentResponse, status_code=201)
@@ -1921,6 +1954,61 @@ async def list_document_source_files_for_paper(
     )
 
 
+@router.post("/documents/{document_id}/files", status_code=202)
+async def add_files_to_paper_endpoint(
+    payload: AddFilesRequest,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    document_id: str = Path(..., description="Document ID"),
+    user: dict[str, Any] = get_auth_dependency(),
+):
+    """Add converted supplements from the paper's provider file listing (codes only).
+
+    Starts one job; the files are checked and added in the background, and each
+    file's outcome is in the job's ``metadata.supplements``. Owner only.
+    """
+    from ..lib.document_sources.supplement_add import (
+        ChosenFile,
+        SupplementAddJobRequest,
+        SupplementAddRequestError,
+        run_supplement_add_job,
+        start_supplement_add,
+    )
+    from ..lib.observability.background_tasks import add_observed_background_task
+    from ..lib.pdf_jobs.service import ActiveJobExistsError
+
+    if not external_document_source_import_enabled():
+        raise HTTPException(status_code=503, detail={"error": "document_source_import_disabled"})
+    document_uuid = _parse_document_uuid(document_id)
+    db_user = await provision_user_async(principal_from_claims(user))
+    context = await _document_source_context_or_503(request=request, user=user)
+    if not (context.curator_token or "").strip():
+        raise HTTPException(status_code=409, detail={"error": "document_source_curator_token_unavailable"})
+    files = tuple(
+        ChosenFile(provider_file_id=item.provider_file_id, md5=item.md5, converted_md5=item.converted_md5)
+        for item in payload.files
+    )
+    try:
+        job = await asyncio.to_thread(start_supplement_add, document_uuid, db_user.id, files)
+    except SupplementAddRequestError as refused:
+        raise HTTPException(
+            status_code=422, detail={"error": refused.code, "limit_value": refused.limit_value},
+        ) from None
+    except ActiveJobExistsError:
+        raise HTTPException(status_code=409, detail={"error": "import_in_progress"}) from None
+    add_observed_background_task(
+        background_tasks,
+        run_supplement_add_job,
+        SupplementAddJobRequest(
+            job_id=uuid.UUID(job.job_id), document_id=document_uuid, user_id=db_user.auth_sub,
+            owner_user_id=db_user.id, context=context, files=files,
+        ),
+        task_name="supplement_add",
+        tags={"document_id": str(document_uuid), "job_id": job.job_id},
+    )
+    return job
+
+
 @router.get("/documents/{document_id}/status")
 async def get_document_processing_status(
     document_id: str = Path(..., description="Document ID"),
@@ -1955,7 +2043,7 @@ async def get_document_processing_status(
 
         # Get pipeline status (in-memory) and durable job fallback.
         pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
-        job = pdf_job_service.get_latest_job_for_document(
+        job = pdf_job_service.get_latest_paper_job_for_document(
             document_id=document_id,
             user_id=db_user.id,
             reconcile_stale=True,
@@ -2083,7 +2171,7 @@ async def stream_document_progress(
                 # Get current pipeline status
                 pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
                 try:
-                    job = pdf_job_service.get_latest_job_for_document(
+                    job = pdf_job_service.get_latest_paper_job_for_document(
                         document_id=document_id,
                         user_id=db_user.id,
                         reconcile_stale=True,

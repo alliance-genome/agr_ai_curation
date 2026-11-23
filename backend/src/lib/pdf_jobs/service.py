@@ -250,7 +250,8 @@ def _reconcile_terminal_document(session, job: PdfProcessingJob) -> bool:
     if latest_job is None or latest_job.id != job.id:
         return False
 
-    if document.status in TERMINAL_PROCESSING_STATUSES:
+    pending_files = [file_row for file_row in document.files if file_row.status == FILE_STATUS_PENDING]
+    if document.status in TERMINAL_PROCESSING_STATUSES and not pending_files:
         return False
 
     terminal_message = job.error_message or job.message
@@ -258,6 +259,15 @@ def _reconcile_terminal_document(session, job: PdfProcessingJob) -> bool:
         raise ValueError(f"Terminal job {job.id} has no failure message to reconcile")
     if job.completed_at is None:
         raise ValueError(f"Terminal job {job.id} has no completed_at to reconcile")
+
+    if document.status in TERMINAL_PROCESSING_STATUSES:
+        # Files being added to a finished paper (P7c1): they cannot outlive the
+        # failed or cancelled add as pending. The paper and its other files stay as
+        # they are; the next add on the paper deletes these rows and their pieces.
+        for file_row in pending_files:
+            file_row.status = FILE_STATUS_FAILED
+            file_row.error_message = terminal_message[:get_pdf_document_error_message_max_chars()]
+        return True
 
     mapped_status = PDF_JOB_STATUS_TO_PROCESSING_STATUS[job.status]
     document.status = mapped_status
@@ -531,28 +541,43 @@ def create_job(*, document_id: UUID | str, user_id: int, filename: Optional[str]
     """
     session = SessionLocal()
     try:
-        job = PdfProcessingJob(
-            document_id=_to_uuid(document_id),
-            user_id=user_id,
-            filename=filename,
-            status=PdfJobStatus.PENDING.value,
-            current_stage="pending",
-            progress_percentage=0,
-            message="Queued for background processing",
-            cancel_requested=False,
-        )
-        session.add(job)
-        try:
-            session.commit()
-        except IntegrityError as exc:
-            session.rollback()
-            if _violates_constraint(exc, ONE_ACTIVE_JOB_PER_PAPER_INDEX):
-                raise ActiveJobExistsError(document_id) from exc
-            raise
-        session.refresh(job)
-        return _to_response(job)
+        return create_job_in_session(session, document_id=document_id, user_id=user_id, filename=filename)
     finally:
         session.close()
+
+
+def create_job_in_session(
+    session, *, document_id: UUID | str, user_id: int, filename: Optional[str] = None,
+    metadata: Optional[dict] = None,
+) -> PdfJobResponse:
+    """Create a paper's job in ``session`` and commit it.
+
+    A caller adding a job to an existing paper locks the paper row in the same
+    session first (``SELECT ... FOR UPDATE``), so stale-job recovery cannot decide
+    about the paper between that lock and this insert. A second active job raises
+    ``ActiveJobExistsError`` after rolling the session back.
+    """
+    job = PdfProcessingJob(
+        document_id=_to_uuid(document_id),
+        user_id=user_id,
+        filename=filename,
+        status=PdfJobStatus.PENDING.value,
+        current_stage="pending",
+        progress_percentage=0,
+        message="Queued for background processing",
+        cancel_requested=False,
+        metadata_json=dict(metadata) if metadata else None,
+    )
+    session.add(job)
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        if _violates_constraint(exc, ONE_ACTIVE_JOB_PER_PAPER_INDEX):
+            raise ActiveJobExistsError(document_id) from exc
+        raise
+    session.refresh(job)
+    return _to_response(job)
 
 
 def get_job(*, job_id: UUID | str, user_id: int, reconcile_stale: bool = True) -> Optional[PdfJobResponse]:
@@ -614,13 +639,55 @@ def get_job_by_id(*, job_id: UUID | str, reconcile_stale: bool = True) -> Option
         session.close()
 
 
+# ``metadata_json["job_kind"]`` of a job that adds files to an existing paper (P7c1).
+# Such a job never stands for the paper's own processing state.
+JOB_KIND_KEY = "job_kind"
+SUPPLEMENT_ADD_JOB_KIND = "supplement_add"
+
+
+def _not_an_add_job():
+    return or_(
+        PdfProcessingJob.metadata_json.is_(None),
+        PdfProcessingJob.metadata_json[JOB_KIND_KEY].astext.is_distinct_from(SUPPLEMENT_ADD_JOB_KIND),
+    )
+
+
+def is_supplement_add_job(job: PdfJobResponse | PdfProcessingJob) -> bool:
+    metadata = job.metadata if isinstance(job, PdfJobResponse) else job.metadata_json
+    return bool(metadata) and metadata.get(JOB_KIND_KEY) == SUPPLEMENT_ADD_JOB_KIND
+
+
 def get_latest_job_for_document(
     *,
     document_id: UUID | str,
     user_id: int,
     reconcile_stale: bool = True,
 ) -> Optional[PdfJobResponse]:
-    """Return most recent job for a document owned by user."""
+    """Return the most recent job of any kind for a document owned by user (the delete's check)."""
+    return _latest_job(document_id=document_id, user_id=user_id, reconcile_stale=reconcile_stale, paper_jobs_only=False)
+
+
+def get_latest_paper_job_for_document(
+    *,
+    document_id: UUID | str,
+    user_id: int,
+    reconcile_stale: bool = True,
+) -> Optional[PdfJobResponse]:
+    """The most recent job that processes the paper itself: jobs adding files to it are left out.
+
+    Every reading of a paper's processing status uses this one, so an add (running,
+    failed or cancelled) never shows the paper as processing, failed or cancelled.
+    """
+    return _latest_job(document_id=document_id, user_id=user_id, reconcile_stale=reconcile_stale, paper_jobs_only=True)
+
+
+def _latest_job(
+    *,
+    document_id: UUID | str,
+    user_id: int,
+    reconcile_stale: bool,
+    paper_jobs_only: bool,
+) -> Optional[PdfJobResponse]:
     session = SessionLocal()
     try:
         statement = (
@@ -632,6 +699,8 @@ def get_latest_job_for_document(
             .order_by(*_JOB_CREATION_ORDERING)
             .limit(1)
         )
+        if paper_jobs_only:
+            statement = statement.where(_not_an_add_job())
         if reconcile_stale:
             statement = statement.with_for_update()
         job = session.execute(statement).scalar_one_or_none()

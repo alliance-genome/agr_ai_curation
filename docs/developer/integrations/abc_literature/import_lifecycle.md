@@ -41,6 +41,51 @@ paper's files have all succeeded (the paper's status and completion time, and
 the search-index document's status and summed piece count). See
 `docs/developer/guides/PAPER_FILES_MIGRATION.md`.
 
+### Adding converted supplements to a paper (KANBAN-1976 / ALL-1460, P7c1)
+
+`POST /weaviate/documents/{document_id}/files` (owner only; a frozen benchmark
+paper is not found) adds converted Word and Excel supplements from the paper's
+file listing. The body is `{files: [{provider_file_id, md5, converted_md5}]}`
+as the listing showed them. The request locks the paper row, then creates the
+paper's one active job (`409 import_in_progress` when another is active); `422`
+for an empty list, a file chosen twice, or more files than
+`DOCUMENT_MAX_FILES_PER_PAPER` allows counting the paper's files. The add then
+runs in the background (`supplement_add.add_files_to_paper`, also called by an
+import's supplement stage inside its own job):
+
+- **No conversion request is sent.** Only files ABC has already converted are added.
+- **Check phase, nothing written.** The paper is listed again with the curator's
+  login (`paper_reference_mismatch` stops the add). Each chosen file, in listing
+  order, is left out with a `FileReason` code at the first step it fails:
+  `file_not_in_reference`, `already_in_paper`, `file_not_tickable` (no converted
+  text), `file_changed_since_listed` (either MD5), `paper_file_limit`; the download
+  with the curator's login and `DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES` (`too_large`,
+  `source_file_missing`, `source_unavailable`, `source_download_failed`,
+  `access_denied`); the checks R1, R2, R4 to R7 (a stored refusal is not
+  downloaded again); the clean-up (`markdown_invalid`); and the paper total
+  `DOCUMENT_PAPER_MAX_TEXT_BYTES` over the ready files' `text_bytes`, main file
+  included (`paper_text_limit`; a later smaller file can still fit).
+- **Sections by structure, no model** (`pipeline/structural_sections.py`): the
+  heading levels decide; with the provider's "first top-level title is the
+  file's title" profile, the next level is the section (one per workbook sheet)
+  and the one after it the subsection. No figure locators run for a supplement.
+- **Write phase.** Rows `pending` (role `supplement`, display mode `text`, no page
+  count, tab order after the paper's files), stored Markdown and processed JSON
+  per file id (the JSON carries the same section fields as the stored pieces),
+  piece ranges and pieces; then every new file becomes `ready` together. The
+  paper's search-index piece count is updated and its document-context cache
+  cleared. A failure while writing deletes this add's pieces (by range), stored
+  files and rows. **The paper's status and completion time never change.**
+- The job ends `completed` ("Added N of M files."), `failed` when no file was
+  added, on a stop code (`metadata.error_code`), or past
+  `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS`, or `cancelled`. Each file's outcome is
+  in `metadata.supplements` (`state` `added` or `left_out`, `reason_code`,
+  `measured_value`, `limit_value`, `file_id`).
+- **A dead add.** The stale sweep fails its job; its `pending` rows become
+  `failed` and the paper is untouched. The next add on the paper first deletes
+  those rows' pieces (by range), stored files and rows. Until the sweep, the paper
+  takes no other add and cannot be deleted.
+
 ## Upload Checksum Preflight
 
 When `DOCUMENT_SOURCE_PROVIDER=abc_literature` and

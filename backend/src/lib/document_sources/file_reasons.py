@@ -50,6 +50,20 @@ class FileReason(str, Enum):
     # The import stopped waiting before the provider had converted the file.
     NOT_CONVERTED_IN_TIME = "not_converted_in_time"
 
+    # Why adding a chosen file to a paper left it out (P7c1). ``ALREADY_IN_PAPER``,
+    # ``TOO_LARGE`` (the download cap is R1's limit) and the check reasons also apply.
+    FILE_NOT_IN_REFERENCE = "file_not_in_reference"
+    # The file has no converted text the add could import (unconverted, a data file, a type not read).
+    FILE_NOT_TICKABLE = "file_not_tickable"
+    FILE_CHANGED_SINCE_LISTED = "file_changed_since_listed"
+    SOURCE_FILE_MISSING = "source_file_missing"
+    SOURCE_UNAVAILABLE = "source_unavailable"
+    SOURCE_DOWNLOAD_FAILED = "source_download_failed"
+    ACCESS_DENIED = "access_denied"
+    MARKDOWN_INVALID = "markdown_invalid"
+    PAPER_TEXT_LIMIT = "paper_text_limit"
+    PAPER_FILE_LIMIT = "paper_file_limit"
+
 
 class SupplementState(str, Enum):
     """The state of one chosen supplement in a job's ``metadata.supplements`` (interface I1).
@@ -91,6 +105,21 @@ PROVIDER_OBSERVATION_REASONS: frozenset[FileReason] = frozenset({
     FileReason.PROVIDER_NOT_CONVERTED,
     FileReason.PROVIDER_CONVERSION_FAILED,
     FileReason.NOT_CONVERTED_IN_TIME,
+})
+
+
+ADD_REFUSAL_REASONS: frozenset[FileReason] = CHECK_REASONS | frozenset({
+    FileReason.ALREADY_IN_PAPER,
+    FileReason.FILE_NOT_IN_REFERENCE,
+    FileReason.FILE_NOT_TICKABLE,
+    FileReason.FILE_CHANGED_SINCE_LISTED,
+    FileReason.SOURCE_FILE_MISSING,
+    FileReason.SOURCE_UNAVAILABLE,
+    FileReason.SOURCE_DOWNLOAD_FAILED,
+    FileReason.ACCESS_DENIED,
+    FileReason.MARKDOWN_INVALID,
+    FileReason.PAPER_TEXT_LIMIT,
+    FileReason.PAPER_FILE_LIMIT,
 })
 
 

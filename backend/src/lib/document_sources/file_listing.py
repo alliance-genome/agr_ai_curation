@@ -157,6 +157,9 @@ class ListedFile:
     not_tickable_reason: FileReason | None
     # Per-paper listing only; ``None`` for files no import of this paper chose or that were added.
     last_provider_observation: ProviderObservation | None
+    # The provider's own records, for an import or add of this entry; never sent to the browser.
+    source_artifact: SourceArtifact
+    converted_artifact: SourceArtifact | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,10 +410,8 @@ async def list_reference_files(
     unconverted_tickable = will_ask_provider(decision, bearer_kind=bearer_kind, route=route)
     paper_reason, existing_document_id = await _paper_refusal(decision, route, find_paper_in_library)
     files: list[ListedFile] = []
-    if decision.selected is not None and decision.status in (
-        ReferenceImportDecisionStatus.READY,
-        ReferenceImportDecisionStatus.CONVERSION_RUNNING,
-    ):
+    if decision.can_import:
+        assert decision.selected is not None
         source = decision.selected.source_artifact
         converted = decision.selected.converted_artifact
         main_in_paper = source.artifact_id in in_paper
@@ -431,6 +432,8 @@ async def list_reference_files(
             tickable=paper_reason is None and not main_in_paper,
             not_tickable_reason=paper_reason or (FileReason.ALREADY_IN_PAPER if main_in_paper else None),
             last_provider_observation=None,
+            source_artifact=source,
+            converted_artifact=converted,
         ))
 
     candidates: dict[str, _Candidate] = {}
@@ -563,6 +566,8 @@ async def list_reference_files(
                 (provider_observations[file_id] for file_id in copy_ids if file_id in provider_observations),
                 None,
             ),
+            source_artifact=original,
+            converted_artifact=candidate.converted,
         ))
 
     return FileListing(
@@ -585,8 +590,8 @@ async def _paper_refusal(
 ) -> tuple[FileReason | None, str | None]:
     """Whether an import through this listing refuses the whole paper, read from the import's decision.
 
-    On the identifier listing, an import goes ahead only when the decision selected a
-    main file and is ``READY`` or ``CONVERSION_RUNNING`` (``_import_one_identifier``);
+    On the identifier listing, an import goes ahead only when ``decision.can_import``
+    (the import's own gate, ``_import_one_identifier``);
     anything else (no main file, access denied, an ambiguous main, a failed conversion)
     ends it with an error, so no file can be ticked (``paper_not_importable``;
     ``main_status`` says which). When the curator already has the paper, the import
@@ -598,11 +603,7 @@ async def _paper_refusal(
     if route is not ListingRoute.IDENTIFIER:
         return None, None
     assert find_paper_in_library is not None
-    importable = decision.selected is not None and decision.status in (
-        ReferenceImportDecisionStatus.READY,
-        ReferenceImportDecisionStatus.CONVERSION_RUNNING,
-    )
-    if not importable:
+    if not decision.can_import:
         return FileReason.PAPER_NOT_IMPORTABLE, None
     existing = await find_paper_in_library(decision)
     if existing is not None:

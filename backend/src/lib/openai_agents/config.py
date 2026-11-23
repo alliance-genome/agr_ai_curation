@@ -2167,6 +2167,16 @@ def get_document_file_listing_check_limit() -> int:
     return max(1, _get_env_int_with_fallback("DOCUMENT_FILE_LISTING_CHECK_LIMIT", 20))
 
 
+def get_document_max_files_per_paper() -> int:
+    """Most files one paper holds, its main file included; an add leaves out files past it."""
+    return max(1, _get_env_int_with_fallback("DOCUMENT_MAX_FILES_PER_PAPER", 20))
+
+
+def get_document_paper_max_text_bytes() -> int:
+    """Most text one paper holds: the summed text size of its ready files, main file included."""
+    return max(1, _get_env_int_with_fallback("DOCUMENT_PAPER_MAX_TEXT_BYTES", 2_000_000))
+
+
 def get_document_file_few_characters_note_below() -> int:
     """Readable characters below which a file gets the "almost no text" note (never a refusal)."""
     return max(0, _get_env_int_with_fallback("DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW", 200))

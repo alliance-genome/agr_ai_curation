@@ -55,8 +55,8 @@ def patch_stream_dependencies(monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr(documents, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=7)))
     monkeypatch.setattr(main.documents, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=7)))
-    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
-    monkeypatch.setattr(main.documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(main.documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
 
 
 def _sse_events(response) -> list[dict]:
@@ -178,7 +178,7 @@ def test_progress_stream_prefers_terminal_durable_job_over_pipeline(client: Test
 
     with patch("src.api.documents.get_document", new_callable=AsyncMock) as mock_get_document, \
          patch("src.api.documents.pipeline_tracker.get_pipeline_status", new_callable=AsyncMock) as mock_status, \
-         patch("src.api.documents.pdf_job_service.get_latest_job_for_document") as mock_job:
+         patch("src.api.documents.pdf_job_service.get_latest_paper_job_for_document") as mock_job:
         mock_get_document.return_value = {"document": {"id": document_id}}
         mock_status.return_value = running_status
         mock_job.return_value = terminal_job
@@ -215,7 +215,7 @@ def test_progress_stream_prefers_cancelled_durable_job_over_pipeline(client: Tes
 
     with patch("src.api.documents.get_document", new_callable=AsyncMock) as mock_get_document, \
          patch("src.api.documents.pipeline_tracker.get_pipeline_status", new_callable=AsyncMock) as mock_status, \
-         patch("src.api.documents.pdf_job_service.get_latest_job_for_document") as mock_job:
+         patch("src.api.documents.pdf_job_service.get_latest_paper_job_for_document") as mock_job:
         mock_get_document.return_value = {"document": {"id": document_id}}
         mock_status.return_value = running_status
         mock_job.return_value = terminal_job
@@ -258,7 +258,7 @@ def test_progress_stream_ignores_stale_terminal_pipeline_when_job_active(
 
     with patch("src.api.documents.get_document", new_callable=AsyncMock) as mock_get_document, \
          patch("src.api.documents.pipeline_tracker.get_pipeline_status", new_callable=AsyncMock) as mock_status, \
-         patch("src.api.documents.pdf_job_service.get_latest_job_for_document") as mock_job, \
+         patch("src.api.documents.pdf_job_service.get_latest_paper_job_for_document") as mock_job, \
          patch("src.api.documents.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         mock_get_document.return_value = {"document": {"id": document_id}}
         mock_status.return_value = stale_terminal_status
