@@ -58,8 +58,7 @@ describe('DocumentFilters', () => {
     expect(onFilterChange).toHaveBeenCalledWith({ searchTerm: 'test.pdf' });
 
     const searchInputRoot = searchInput.closest('.MuiInputBase-root');
-    expect(searchInputRoot).toBeTruthy();
-    if (!searchInputRoot) {
+    if (!(searchInputRoot instanceof HTMLElement)) {
       throw new Error('Unable to find search input root');
     }
     fireEvent.click(within(searchInputRoot).getByRole('button'));

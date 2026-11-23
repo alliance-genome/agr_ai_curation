@@ -8,7 +8,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 assert_contains() {
   local pattern="$1"
   local file="$2"
-  if ! rg -n --fixed-strings "$pattern" "$file" >/dev/null 2>&1; then
+  if ! grep -n -F -- "$pattern" "$file" >/dev/null 2>&1; then
     echo "Expected to find '$pattern' in $file" >&2
     exit 1
   fi
@@ -25,7 +25,7 @@ log_file="${DOCKER_STUB_LOG:?}"
 printf 'args=%s\n' "$*" >> "${log_file}"
 printf 'docker_host=%s\n' "${DOCKER_HOST:-unset}" >> "${log_file}"
 
-if [[ "$*" == *" run --rm backend-unit-tests"* ]]; then
+if [[ "$*" == *" run --build --rm backend-unit-tests"* ]]; then
   echo "simulated unit test failure" >&2
   exit 3
 fi
@@ -54,7 +54,7 @@ test_run_tests_cleans_up_on_failure() {
     exit 1
   fi
 
-  assert_contains "args=compose -f ${REPO_ROOT}/docker-compose.test.yml run --rm backend-unit-tests" "${docker_log}"
+  assert_contains "args=compose -f ${REPO_ROOT}/docker-compose.test.yml run --build --rm backend-unit-tests" "${docker_log}"
   assert_contains "docker_host=unix:///run/user/$(id -u)/docker.sock" "${docker_log}"
   assert_contains "args=compose -f ${REPO_ROOT}/docker-compose.test.yml down" "${docker_log}"
   if [[ -e "${temp_root}/.test-stack.env" ]]; then

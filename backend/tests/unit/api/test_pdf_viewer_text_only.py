@@ -207,10 +207,13 @@ def test_viewer_api_shapes_for_a_text_paper_and_a_plain_upload(
     detail = pdf_viewer.get_document_detail(document_id=_DOC_ID, db=db, user=user).model_dump(mode="json")
     url = pdf_viewer.get_document_viewer_url(document_id=_DOC_ID, db=db, user=user).model_dump(mode="json")
 
-    assert {key: detail[key] for key in ("page_count", "viewer_url", "viewer_mode")} == {
+    # file_size and file_hash are the main file's own values (a None here passed every test before).
+    assert {key: detail[key] for key in ("page_count", "viewer_url", "viewer_mode", "file_size", "file_hash")} == {
         "page_count": page_count,
         "viewer_url": expected_url,
         "viewer_mode": display_mode,
+        "file_size": 2048,
+        "file_hash": "b" * 64,
     }
     assert url == {"viewer_url": expected_url, "viewer_mode": display_mode, "has_main_file": True}
     assert detail["has_main_file"] is True

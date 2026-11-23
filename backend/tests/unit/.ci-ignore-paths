@@ -1,5 +1,19 @@
-# Paths are relative to backend/
+# Paths are relative to backend/. The unit job runs pytest on tests/unit/ with
+# each path below passed as --ignore. Every entry says why it is here and where
+# those tests run instead; a unit test file that runs without services has no
+# entry.
+#
+# Not unit tests: they need PostgreSQL, Redis and Weaviate and run in their own
+# CI jobs. They sit outside tests/unit/, so these entries only guard against a
+# widened test path.
+#   tests/contract     -> "Backend Contract Core Tests"
+#   tests/integration  -> "Backend Integration Tests" (outside persistence/)
+#                         and "Backend Persistence Tests" (persistence/)
 tests/integration
 tests/contract
-tests/unit/api/test_files.py
-tests/unit/lib/batch/test_batch_service.py
+#
+# tests/unit/api/test_files.py and tests/unit/lib/batch/test_batch_service.py
+# were ignored from the first CI workflow (a65882199, Jan 2026) as "Requires
+# PostgreSQL". That no longer holds: test_files.py uses an in-memory SQLite
+# engine and test_batch_service.py uses mocks; both pass with no database
+# (53 tests, 23 Nov 2026), so they run in the unit job.

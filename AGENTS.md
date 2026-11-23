@@ -70,18 +70,18 @@ Host-side frontend validation:
 
 - Focused frontend tests:
   `cd frontend && npm ci && npm run test -- --run src/path/to/File.test.tsx`
-- Scoped TypeScript guard:
-  `cd frontend && npm run type-check:changed -- --base origin/main`
+- TypeScript check (whole frontend, must report no errors):
+  `cd frontend && npm run type-check`
 
 Use focused tests for local implementation and review. The blocking GitHub
 `Frontend Tests` job is the authoritative clean-checkout broad suite; run
 `npm run test:stable` locally only when documented cross-cutting risk requires
 it, not as routine pre-PR validation.
 
-`type-check:changed` runs the full TypeScript compiler but fails only on
-changed frontend TypeScript files or unscoped/config-level errors. If it reports
-`FRONTEND_TYPECHECK_STATUS=baseline_only`, record the baseline debt and do not
-treat it as a change-local failure.
+`type-check` is `tsc --noEmit` over the whole frontend. The blocking GitHub
+`Frontend Type Check` job runs the same command, so any TypeScript error fails
+CI, including one in a file the change did not touch (for example after
+changing an exported type). Fix it; there is no baseline of tolerated errors.
 
 Other useful validation:
 

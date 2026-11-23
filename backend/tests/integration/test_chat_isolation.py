@@ -478,6 +478,58 @@ class TestChatIsolation:
         assert hidden_from_user1.status_code == 404
         assert hidden_from_user2.status_code == 404
 
+    def test_deleting_a_chat_session_is_204_for_its_owner_and_404_for_another_user(
+        self, test_db, get_auth_mock, curator1_user, curator2_user,
+        client_as_curator1,
+    ):
+        """DELETE /api/chat/session/{id}: only the owner can delete; another user gets 404.
+
+        HTTP level, against the real repository: another user's DELETE answers 404 and
+        changes nothing; the owner's answers 204 with no body and soft-deletes the session,
+        which then disappears from the owner's history.
+        """
+        for mock_user in (curator1_user, curator2_user):
+            test_db.add(User(
+                auth_sub=mock_user.uid,
+                email=mock_user.email,
+                display_name=mock_user.email,
+                created_at=datetime.now(timezone.utc),
+                last_login=datetime.now(timezone.utc),
+                is_active=True,
+            ))
+        test_db.commit()
+
+        session_id = f"chat-delete-{uuid4().hex[:8]}"
+        ChatHistoryRepository(test_db).create_session(
+            session_id=session_id,
+            user_auth_sub=curator1_user["sub"],
+            chat_kind=ASSISTANT_CHAT_KIND,
+            title="session to delete",
+            created_at=_ts(11, 0),
+        )
+        test_db.commit()
+
+        def stored_session():
+            test_db.expire_all()
+            return test_db.query(ChatSessionModel).filter(
+                ChatSessionModel.session_id == session_id
+            ).one()
+
+        get_auth_mock.set_user("chat2")
+        other_user = client_as_curator1.delete(f"/api/chat/session/{session_id}")
+        assert other_user.status_code == 404, other_user.text
+        assert stored_session().deleted_at is None
+
+        get_auth_mock.set_user("chat1")
+        owner = client_as_curator1.delete(f"/api/chat/session/{session_id}")
+        assert owner.status_code == 204, owner.text
+        assert owner.content == b""
+        assert stored_session().deleted_at is not None
+        assert client_as_curator1.get(f"/api/chat/history/{session_id}").status_code == 404
+
+        again = client_as_curator1.delete(f"/api/chat/session/{session_id}")
+        assert again.status_code == 404, again.text
+
     def test_assistant_rescue_is_user_specific_and_idempotent(
         self, test_db, get_auth_mock, curator1_user, curator2_user,
         client_as_curator1,
