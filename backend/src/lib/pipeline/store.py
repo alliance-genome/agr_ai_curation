@@ -237,14 +237,30 @@ async def _store_owned(
     )
     try:
         return await asyncio.shield(storage)
+    except StorageError as exc:
+        # The worker wraps write failures with a cause. Input errors have none.
+        if exc.__cause__ is not None:
+            logger.error("%s", exc)
+        raise
     except asyncio.CancelledError:
         async def finish_cancelled_storage() -> None:
             try:
                 await storage
-            except Exception:
-                # The storage path already reports failures. Preserve cancellation
-                # while still waiting for its writes and failure handling to end.
-                logger.warning("Storage failed while draining cancelled document %s", document_id)
+            except Exception as exc:
+                error = sanitized_runtime_error("Chunk storage failed during cancellation")
+                logger.warning("%s", error, extra={"sentry_skip_event": True})
+                try:
+                    report_runtime_exception(
+                        error,
+                        component="document_pipeline",
+                        operation="pipeline_cancelled_storage_write_failed",
+                        context={"exception_type": type(exc).__name__},
+                    )
+                except Exception:
+                    logger.warning(
+                        "Chunk storage failure reporting unavailable during cancellation",
+                        extra={"sentry_skip_event": True},
+                    )
             # Do not advertise a cancelled import as completed. The paper's
             # summed chunk count is written only when a new paper finishes;
             # the caller owns SQL/job terminal status. A file added to a finished
@@ -364,9 +380,7 @@ async def _store_to_weaviate(
                 await update_document_status_detailed(document_id, user_id, embedding_status="failed")
         except Exception as status_err:  # pragma: no cover - best-effort status update
             logger.warning("Failed to mark document %s embedding status as failed: %s", document_id, status_err)
-        error_msg = f"Weaviate storage failed: {str(e)}"
-        logger.error(error_msg)
-        raise StorageError(error_msg) from e
+        raise StorageError(f"Weaviate storage failed: {e}") from e
 
 
 async def store_chunks_to_weaviate(
@@ -519,6 +533,7 @@ async def store_chunks_to_weaviate(
                 document_id,
                 expected_count,
                 persisted_count,
+                extra={"sentry_skip_event": True},
             )
             _cleanup_chunk_uuids(collection, candidate_uuids)
             raise BatchInsertError(
@@ -545,6 +560,7 @@ async def store_chunks_to_weaviate(
                 "Cleaned up %d potentially partial chunk objects for document %s",
                 deleted_count,
                 document_id,
+                extra={"sentry_skip_event": True},
             )
 
     def sync_store():
@@ -553,7 +569,7 @@ async def store_chunks_to_weaviate(
 
         try:
             # Connect to Weaviate
-            with weaviate_client.session() as client:
+            with weaviate_client.session(caller_reports_failure=True) as client:
                 # Get tenant-scoped collection (FR-011: user-specific data isolation)
                 from ..weaviate_helpers import get_user_collections
                 try:
@@ -562,7 +578,7 @@ async def store_chunks_to_weaviate(
                 except Exception as e:
                     # Fail fast - collection should exist from startup
                     error_msg = f"DocumentChunk collection not found. Database not properly initialized: {e}"
-                    logger.error(error_msg)
+                    logger.error(error_msg, extra={"sentry_skip_event": True})
                     raise CollectionNotFoundError(error_msg) from e
 
                 prepared_batch: List[tuple[int, str, Dict[str, Any]]] = []
@@ -580,7 +596,8 @@ async def store_chunks_to_weaviate(
                                 chunk_index,
                                 chunk_uuid,
                                 document_id,
-                                add_err,
+                                type(add_err).__name__,
+                                extra={"sentry_skip_event": True},
                             )
                             _cleanup_chunk_uuids(collection, candidate_uuids)
                             raise BatchInsertError(
@@ -594,12 +611,6 @@ async def store_chunks_to_weaviate(
                         batch_error_count = int(batch.number_errors)
                     except Exception:
                         batch_error_count = 0
-                if batch_error_count > 0:
-                    logger.error(
-                        "Batch reported %d errors for document %s",
-                        batch_error_count,
-                        document_id,
-                    )
                 failed_objects = getattr(batch, "failed_objects", None)
                 if isinstance(failed_objects, list) and failed_objects:
                     failed_details = []
@@ -609,15 +620,22 @@ async def store_chunks_to_weaviate(
                         "Batch failed objects for document %s (showing first 10): %s",
                         document_id,
                         "; ".join(failed_details),
+                        extra={"sentry_skip_event": True},
                     )
                     _cleanup_chunk_uuids(collection, candidate_uuids)
                     raise BatchInsertError(
                         f"Batch insert failed for {len(failed_objects)} objects",
                         failed_objects=list(failed_objects),
                     )
-
                 logger.info("Batch insert sent %d chunks, verifying persistence...", len(prepared_batch))
                 persisted_count = _verify_document_chunks(collection, expected_count=len(prepared_batch))
+                if batch_error_count > 0:
+                    # Verification succeeded, so no propagated failure will report these errors.
+                    logger.error(
+                        "Batch reported %d errors for document %s",
+                        batch_error_count,
+                        document_id,
+                    )
                 stored_ids = [chunk_uuid for _, chunk_uuid, _ in prepared_batch]
                 stored_count = persisted_count
                 failed_count = 0
@@ -629,7 +647,7 @@ async def store_chunks_to_weaviate(
                 )
 
         except Exception as e:
-            logger.error('Error in sync_store: %s', e)
+            logger.error('Error in sync_store: %s', e, extra={"sentry_skip_event": True})
             raise
 
     # Run synchronous storage in async context

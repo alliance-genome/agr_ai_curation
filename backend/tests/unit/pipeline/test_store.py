@@ -6,7 +6,6 @@ import logging
 import subprocess
 import sys
 import textwrap
-from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -90,7 +89,7 @@ async def test_store_to_weaviate_calls_status_updates():
 
 
 @pytest.mark.asyncio
-async def test_store_to_weaviate_marks_failed_and_raises_when_storage_fails():
+async def test_store_to_weaviate_marks_failed_and_raises_when_storage_fails(caplog):
     chunks = [{"chunk_index": 0, "content": "hello"}]
     document_id = "doc-1"
     weaviate_client = MagicMock()
@@ -103,9 +102,11 @@ async def test_store_to_weaviate_marks_failed_and_raises_when_storage_fails():
     with patch("src.lib.pipeline.store.store_chunks_to_weaviate", new=fake_chunks_store), patch(
         "src.lib.pipeline.store.update_document_metadata", new=AsyncMock()
     ) as mock_metadata, patch("src.lib.pipeline.store.update_document_status_detailed", new=AsyncMock()) as mock_status:
-        with pytest.raises(store_module.StorageError):
+        with pytest.raises(store_module.StorageError, match="Weaviate storage failed: failed"):
             await store_to_weaviate(chunks, document_id, weaviate_client, "test_user", chunk_range=(0, 0))
 
+    failure_log, = [r for r in caplog.records if r.name == store_module.logger.name and r.levelno == logging.ERROR]
+    assert not getattr(failure_log, "sentry_skip_event", False)
     assert mock_status.await_count == 2
     assert mock_status.await_args_list[1].kwargs["embedding_status"] == "failed"
     mock_metadata.assert_not_awaited()
@@ -114,13 +115,7 @@ async def test_store_to_weaviate_marks_failed_and_raises_when_storage_fails():
 @pytest.mark.asyncio
 async def test_store_chunks_to_weaviate_raises_when_collection_missing():
     weaviate_client = MagicMock()
-    session_client = MagicMock()
-
-    @contextmanager
-    def fake_session():
-        yield session_client
-
-    weaviate_client.session.side_effect = fake_session
+    session_client = weaviate_client.session.return_value.__enter__.return_value
     session_client.collections.get.side_effect = Exception("missing")
 
     event_loop = MagicMock()
@@ -192,11 +187,6 @@ async def test_store_chunks_to_weaviate_success_path():
     pdf_collection = MagicMock()
     batch_ctx = MagicMock()
 
-    @contextmanager
-    def fake_session():
-        yield MagicMock()
-
-    weaviate_client.session.side_effect = fake_session
     chunk_collection.batch.rate_limit.return_value.__enter__.return_value = batch_ctx
     batch_ctx.number_errors = 0
     chunk_collection.aggregate.over_all.return_value = MagicMock(total_count=2)  # For verification
@@ -250,12 +240,6 @@ async def test_store_chunks_to_weaviate_raises_when_batch_reports_failed_objects
     batch_ctx.number_errors = 0
     batch_ctx.failed_objects = [{"message": "openai token overflow"}]
 
-    @contextmanager
-    def fake_session():
-        yield MagicMock()
-
-    weaviate_client.session.side_effect = fake_session
-
     event_loop = MagicMock()
 
     def run_executor(_, func):
@@ -285,12 +269,6 @@ async def test_store_chunks_to_weaviate_raises_when_batch_add_object_fails():
     batch_ctx.add_object.side_effect = Exception("single add_object failed")
     batch_ctx.failed_objects = []
 
-    @contextmanager
-    def fake_session():
-        yield MagicMock()
-
-    weaviate_client.session.side_effect = fake_session
-
     event_loop = MagicMock()
     event_loop.run_in_executor.side_effect = lambda _, func: asyncio.sleep(0, result=func())
 
@@ -317,12 +295,6 @@ async def test_store_chunks_to_weaviate_raises_when_token_preflight_exceeds_limi
             return list(range(store_module.TOKEN_HARD_LIMIT + 10))
 
     monkeypatch.setattr(store_module, "_tiktoken_encoder", FakeEncoder())
-
-    @contextmanager
-    def fake_session():
-        yield MagicMock()
-
-    weaviate_client.session.side_effect = fake_session
 
     event_loop = MagicMock()
     event_loop.run_in_executor.side_effect = lambda _, func: asyncio.sleep(0, result=func())
@@ -378,9 +350,9 @@ async def test_update_document_metadata_best_effort(caplog, failure_at, reporter
     assert all(record.sentry_skip_event for record in warnings)
 
 
-def test_metadata_connection_failure_emits_one_sanitized_event():
+def _run_with_sentry_logging(script):
     # Isolate the real Sentry logging integration and its process-wide hooks.
-    script = textwrap.dedent("""
+    setup = textwrap.dedent("""
         import asyncio
         import logging
         from unittest.mock import patch
@@ -389,7 +361,6 @@ def test_metadata_connection_failure_emits_one_sanitized_event():
         from sentry_sdk.integrations.logging import LoggingIntegration
 
         from src.lib.observability.sentry import before_send
-        from src.lib.pipeline.store import update_document_metadata
         from src.lib.weaviate_client.connection import WeaviateConnection
 
         events = []
@@ -402,6 +373,16 @@ def test_metadata_connection_failure_emits_one_sanitized_event():
             default_integrations=False,
             integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
         )
+    """)
+    result = subprocess.run([sys.executable, "-c", setup + textwrap.dedent(script)], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    return result
+
+
+def test_metadata_connection_failure_emits_one_sanitized_event():
+    result = _run_with_sentry_logging("""
+        from src.lib.pipeline.store import update_document_metadata
+
         failure = OSError("fake-private-sdk-detail")
         with patch("weaviate.connect_to_local", side_effect=failure) as connect:
             asyncio.run(update_document_metadata(
@@ -419,9 +400,60 @@ def test_metadata_connection_failure_emits_one_sanitized_event():
         assert error["value"] == "Final index metadata write failed"
         assert all(secret not in repr(event) for secret in (str(failure), "private-document", "private-user"))
     """)
-    result = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True)
-    assert result.returncode == 0, result.stderr
     assert "fake-private-sdk-detail" not in result.stdout + result.stderr
+
+
+def test_cancelled_connection_failure_emits_one_sanitized_event():
+    _run_with_sentry_logging("""
+        import threading
+        import pytest
+
+        from src.lib.pipeline.store import StorageError, store_added_file_pieces
+
+        async def exercise_connection_failure():
+            loop = asyncio.get_running_loop()
+            connecting = asyncio.Event()
+            release = threading.Event()
+            failure = OSError("fake-private-sdk-detail")
+
+            def fail_connect(**kwargs):
+                loop.call_soon_threadsafe(connecting.set)
+                assert release.wait(5), "test did not release SDK connection"
+                raise failure
+
+            def store():
+                return store_added_file_pieces(
+                    [{"chunk_index": 0, "content": "private-chunk"}],
+                    "private-document", WeaviateConnection(), "private-user", chunk_range=(0, 0),
+                )
+
+            with patch("weaviate.connect_to_local", side_effect=fail_connect):
+                task = asyncio.create_task(store())
+                try:
+                    await asyncio.wait_for(connecting.wait(), 5)
+                    task.cancel("original cancellation")
+                finally:
+                    release.set()
+                with pytest.raises(asyncio.CancelledError, match="^original cancellation$"):
+                    await task
+
+                event, = events
+                assert event["contexts"]["runtime_exception"] == {
+                    "component": "document_pipeline",
+                    "operation": "pipeline_cancelled_storage_write_failed",
+                    "exception_type": "StorageError",
+                }
+                error, = event["exception"]["values"]
+                assert error["value"] == "Chunk storage failed during cancellation"
+                assert all(secret not in repr(event) for secret in (
+                    str(failure), "private-chunk", "private-document", "private-user",
+                ))
+
+                with pytest.raises(StorageError, match="Weaviate storage failed"):
+                    await store()
+
+        asyncio.run(exercise_connection_failure())
+    """)
 
 
 @pytest.mark.asyncio
@@ -443,8 +475,14 @@ async def test_update_document_metadata_success():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("blocked_stage", ["batch"])
-async def test_cancelled_storage_drains_worker_before_failure_and_retry(monkeypatch, blocked_stage):
+@pytest.mark.parametrize(
+    ("write_fails", "reporter_fails"),
+    [(False, False), (True, False), (True, True)],
+    ids=["successful-write", "failed-write", "failed-write-and-reporter"],
+)
+async def test_cancelled_storage_drains_worker_before_failure_and_retry(
+    monkeypatch, caplog, write_fails, reporter_fails,
+):
     """A deadline must not let a late executor write resurrect terminal state."""
     import threading
     from types import SimpleNamespace
@@ -454,19 +492,17 @@ async def test_cancelled_storage_drains_worker_before_failure_and_retry(monkeypa
     loop = asyncio.get_running_loop()
     persisted = {}
     properties = {"chunkCount": 0, "vectorCount": 0}
-    block_once = True
-
-    def block(stage):
-        nonlocal block_once
-        if block_once and stage == blocked_stage:
-            block_once = False
-            loop.call_soon_threadsafe(entered.set)
-            assert release.wait(5), "test did not release storage worker"
-
+    write_detail = "fake-private-chunk-write"
+    report = MagicMock(side_effect=RuntimeError("fake-private-capture-detail") if reporter_fails else None)
+    monkeypatch.setattr(store_module, "report_runtime_exception", report)
     batch = MagicMock(number_errors=0, failed_objects=[])
 
     def insert(*, uuid, properties):
-        block("batch")
+        if not release.is_set():
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5), "test did not release storage worker"
+            if write_fails:
+                raise OSError(write_detail)
         persisted[uuid] = properties
 
     batch.add_object.side_effect = insert
@@ -475,12 +511,6 @@ async def test_cancelled_storage_drains_worker_before_failure_and_retry(monkeypa
     chunks_collection.aggregate.over_all.side_effect = lambda **_: SimpleNamespace(total_count=len(persisted))
     pdf_collection = MagicMock()
 
-    def update(*, uuid, properties: dict):
-        block("metadata")
-        document_properties.update(properties)
-
-    document_properties = properties
-    pdf_collection.data.update.side_effect = update
     connection = MagicMock()
     monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", lambda *_: (chunks_collection, pdf_collection))
 
@@ -495,7 +525,7 @@ async def test_cancelled_storage_drains_worker_before_failure_and_retry(monkeypa
     task = asyncio.create_task(store_to_weaviate(chunks, "doc-1", connection, "test_user", chunk_range=(0, 1)))
     try:
         await asyncio.wait_for(entered.wait(), 5)
-        task.cancel()
+        task.cancel("original cancellation")
         # Synchronize with the cancellation handler without a wall-clock sleep.
         for _ in range(5):
             await asyncio.sleep(0)
@@ -504,15 +534,42 @@ async def test_cancelled_storage_drains_worker_before_failure_and_retry(monkeypa
         await asyncio.sleep(0)
     finally:
         release.set()
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError, match="^original cancellation$"):
             await task
     # A cancelled import is marked failed; its summed count is never written.
     assert properties == {
         "chunkCount": 0, "vectorCount": 0,
         "processingStatus": "failed", "embeddingStatus": "failed",
     }
-    assert len(persisted) == 2
+    assert len(persisted) == (0 if write_fails else 2)
     pdf_collection.data.update.assert_not_called()
+
+    if write_fails:
+        report.assert_called_once()
+        error, = report.call_args.args
+        assert isinstance(error, RuntimeError)
+        assert str(error) == "Chunk storage failed during cancellation"
+        assert error.__cause__ is None and error.__context__ is None
+        assert report.call_args.kwargs == {
+            "component": "document_pipeline",
+            "operation": "pipeline_cancelled_storage_write_failed",
+            "context": {"exception_type": "StorageError"},
+        }
+        assert write_detail not in repr(report.call_args)
+        warnings = [
+            r for r in caplog.records if r.name == store_module.logger.name and r.levelno >= logging.WARNING
+        ]
+        assert all(getattr(r, "sentry_skip_event", False) for r in warnings)
+        drain_logs = [r for r in warnings if r.funcName == "finish_cancelled_storage"]
+        expected_messages = ["Chunk storage failed during cancellation"]
+        if reporter_fails:
+            expected_messages.append("Chunk storage failure reporting unavailable during cancellation")
+        assert [r.getMessage() for r in drain_logs] == expected_messages
+        assert all(r.exc_info is None for r in drain_logs)
+        assert write_detail not in caplog.text
+        assert "fake-private-capture-detail" not in caplog.text
+    else:
+        report.assert_not_called()
 
     # The same deterministic chunk IDs are reused on a retry of the same range.
     result = await store_to_weaviate(chunks, "doc-1", connection, "test_user", chunk_range=(0, 1))
@@ -527,11 +584,6 @@ def _storage_fixture(total_count):
     chunk_collection.batch.rate_limit.return_value.__enter__.return_value = batch_ctx
     chunk_collection.aggregate.over_all.return_value = MagicMock(total_count=total_count)
 
-    @contextmanager
-    def fake_session():
-        yield MagicMock()
-
-    weaviate_client.session.side_effect = fake_session
     event_loop = MagicMock()
     event_loop.run_in_executor.side_effect = lambda _, func: asyncio.sleep(0, result=func())
     return weaviate_client, chunk_collection, batch_ctx, event_loop
