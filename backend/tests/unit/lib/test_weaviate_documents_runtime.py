@@ -393,26 +393,98 @@ async def test_create_document_raises_on_insert_error():
 
 
 @pytest.mark.asyncio
-async def test_delete_document_success_with_chunk_count(monkeypatch):
-    delete_result = SimpleNamespace(successful="2", matches=3)
+@pytest.mark.parametrize(
+    ("successful", "failed", "reporter_raises"),
+    [
+        pytest.param(2, 1, False, id="partial-wipe"),
+        pytest.param(2, 0, False, id="unaccounted-match"),
+        pytest.param(3, 1, False, id="reported-failure-with-equal-counts"),
+        pytest.param(2, 1, True, id="reporter-failure"),
+    ],
+)
+async def test_delete_document_preserves_owners_until_chunk_wipe_completes(
+    monkeypatch, successful, failed, reporter_raises,
+):
+    user_id = "fake-sensitive-curator"
+    document_id = "dddddddd-0000-0000-0000-000000000123"
+    private_detail = "fake-sensitive-provider-detail"
     chunk_collection = MagicMock()
-    chunk_collection.data.delete_many.return_value = delete_result
+    chunk_collection.data.delete_many.side_effect = [
+        SimpleNamespace(successful=successful, matches=3, failed=failed, objects=[private_detail]),
+        SimpleNamespace(successful=1, matches=1, failed=0),
+    ]
     pdf_collection = MagicMock()
     pdf_collection.data.delete_by_id.return_value = True
-    connection = _connection_with_client(MagicMock())
+    client = MagicMock()
+    monkeypatch.setattr(documents, "get_connection", lambda: _connection_with_client(client))
+    collections = MagicMock(return_value=(chunk_collection, pdf_collection))
+    monkeypatch.setattr(documents, "get_user_collections", collections)
+    db = MagicMock()
+    db.execute.return_value.scalar_one_or_none.return_value = SimpleNamespace(id=42)
+    paper = SimpleNamespace(id=UUID(document_id), user_id=42)
+    db.get.return_value = paper
+    get_db = MagicMock(side_effect=lambda: iter([db]))
+    monkeypatch.setattr(documents, "get_db", get_db)
+    cleanup = MagicMock()
+    monkeypatch.setattr(documents, "cleanup_document_curation_dependencies", cleanup)
+    report = MagicMock(side_effect=RuntimeError(private_detail) if reporter_raises else None)
+    monkeypatch.setattr(documents.runtime, "report_runtime_exception", report)
 
-    # PostgreSQL delete path should not fail the overall delete if unavailable.
-    monkeypatch.setattr(documents, "get_db", lambda: (_ for _ in ()).throw(RuntimeError("db unavailable")))
+    result = await documents.delete_document(user_id, document_id)
+    counts = {"chunks_deleted": successful, "chunks_matched": 3, "chunks_failed": failed}
+    assert result == {
+        "success": False,
+        "message": "Document deletion reported as unsuccessful",
+        "documentId": document_id,
+        **counts,
+        "postgres_deleted": False,
+    }
+    collections.assert_called_once_with(client, user_id)
+    pdf_collection.data.delete_by_id.assert_not_called()
+    get_db.assert_not_called()
+    report.assert_called_once()
+    (error,) = report.call_args.args
+    assert str(error) == "Paper chunk deletion was incomplete"
+    assert error.__cause__ is None and error.__context__ is None
+    assert report.call_args.kwargs == {
+        "component": "weaviate_client",
+        "operation": "paper_delete_chunk_wipe_incomplete",
+        "context": counts,
+    }
+    for sensitive in (user_id, document_id, private_detail):
+        assert sensitive not in repr(report.call_args)
 
-    with patch("src.lib.weaviate_client.documents.get_connection", return_value=connection), \
-         patch("src.lib.weaviate_client.documents.get_user_collections", return_value=(chunk_collection, pdf_collection)), \
-         patch("src.lib.weaviate_client.documents.asyncio.get_event_loop", return_value=_event_loop_with_sync_executor()):
-        result = await documents.delete_document("user-1", "doc-1")
+    retry = await documents.delete_document(user_id, document_id)
+    assert retry == {
+        "success": True,
+        "message": "Document and chunks deleted successfully",
+        "documentId": document_id,
+        "chunks_deleted": 1,
+        "chunks_matched": 1,
+        "postgres_deleted": True,
+    }
+    pdf_collection.data.delete_by_id.assert_called_once_with(document_id)
+    cleanup.assert_called_once_with(db, paper.id)
+    db.delete.assert_called_once_with(paper)
+    db.commit.assert_called_once_with()
+    report.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_document_without_chunks_keeps_success_when_sql_unavailable(monkeypatch):
+    chunks, papers = MagicMock(), MagicMock()
+    chunks.data.delete_many.return_value = SimpleNamespace(successful=0, matches=0, failed=0)
+    papers.data.delete_by_id.return_value = True
+    monkeypatch.setattr(documents, "get_connection", lambda: _connection_with_client(MagicMock()))
+    monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
+    monkeypatch.setattr(documents, "get_db", MagicMock(side_effect=RuntimeError("db unavailable")))
+
+    result = await documents.delete_document("user-1", "doc-1")
 
     assert result["success"] is True
-    assert result["chunks_deleted"] == 2
-    assert result["chunks_matched"] == 3
+    assert result["chunks_deleted"] == result["chunks_matched"] == 0
     assert result["postgres_deleted"] is False
+    papers.data.delete_by_id.assert_called_once_with("doc-1")
 
 
 @pytest.mark.asyncio

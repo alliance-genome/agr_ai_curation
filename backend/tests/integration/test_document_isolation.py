@@ -76,7 +76,7 @@ def mock_weaviate():
         mock_chunk_with_tenant.data = MagicMock()  # For .data.insert() calls
         mock_chunk_with_tenant.data.insert = MagicMock(return_value="mock-chunk-uuid")
         mock_chunk_with_tenant.data.delete_many = MagicMock(
-            return_value=SimpleNamespace(successful=0)
+            return_value=SimpleNamespace(successful=0, matches=0, failed=0)
         )
         mock_chunk_with_tenant.query.fetch_objects = MagicMock(
             return_value=SimpleNamespace(objects=[])
