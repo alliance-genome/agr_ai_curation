@@ -183,6 +183,7 @@ INSPECT_SAVED_STUDIO_RESOURCE_TOOL = {
         f"of that flow from the last {get_agent_studio_recent_flow_run_window_days()} days, "
         "newest first, with status, document_loaded, trace_id, "
         "failure_reason and per-step reason_codes (document_required, attachment_only_validator, "
+        "custom_validator_step, "
         "agent_unresolvable, missing_agent_id, provider_disabled, agent_unavailable). Answer from those "
         "recorded codes. reason_codes null means an older record without codes: rely on its "
         "failure_reason and document_loaded and do not guess a cause. Ask for a Run ID only when no "

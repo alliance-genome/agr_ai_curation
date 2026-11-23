@@ -173,7 +173,9 @@ def _flow_from_frozen_cell(cell: ResolvedBenchmarkCell, case_input: dict[str, An
     if frozen.source_kind == "saved_flow":
         flow_id = UUID(frozen.source_id)
         with SessionLocal() as db:
-            get_visible_flow(db, flow_id, user_id)
+            # The saved flow keeps its owner, so a member running a shared flow is told
+            # that only the owner can change it.
+            owner_id = get_visible_flow(db, flow_id, user_id).user_id
     else:
         # Installed recipe visibility must still permit this curator. Content
         # changes do not replace the flow definition captured at preparation.
@@ -181,8 +183,10 @@ def _flow_from_frozen_cell(cell: ResolvedBenchmarkCell, case_input: dict[str, An
         if not any(recipe["name"] == frozen.source_id for recipe in available):
             raise ValueError("Frozen recipe is no longer available")
         flow_id = uuid5(NAMESPACE_URL, f"agr-benchmark-flow:{frozen.source_id}")
+        # An installed recipe has no owner; the curator running it works from it as their own.
+        owner_id = user_id
     return CurationFlow(
-        id=flow_id, user_id=user_id, name=frozen.title, description=frozen.description,
+        id=flow_id, user_id=owner_id, name=frozen.title, description=frozen.description,
         flow_definition=thaw_json(frozen.definition), is_active=True,
     )
 

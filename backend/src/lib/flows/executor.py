@@ -76,10 +76,7 @@ from src.lib.curation_workspace.models import CurationExtractionResultRecord as 
 from src.lib.config.schema_discovery import resolve_output_schema
 from src.lib.flows.persisted_flow_migrations import validate_persisted_flow_definition
 from src.lib.file_outputs import sanitize_output_descriptor
-from src.lib.agent_studio.flow_agent_policy import (
-    agent_allows_ordinary_flow_step,
-    attachment_only_validator_reason,
-)
+from src.lib.agent_studio.refused_flow_steps import refused_flow_step
 from src.lib.flows.chat_output_delivery import (
     chat_output_delivery_scope,
     current_chat_output_delivery,
@@ -2196,7 +2193,8 @@ def get_all_agent_tools(
             FlowDefinition.model_validate(flow.flow_definition), entries_by_node=custom_entries,
         )
         flow = cast(CurationFlow, SimpleNamespace(
-            id=flow.id, name=flow.name, flow_definition=hydrated.model_dump(mode="json"),
+            id=flow.id, user_id=flow.user_id, name=flow.name,
+            flow_definition=hydrated.model_dump(mode="json"),
         ))
     nodes = _get_ordered_executable_nodes(flow)
     nodes_by_id = {str(node.get("id")): node for node in nodes if node.get("id")}
@@ -2963,20 +2961,17 @@ def get_all_agent_tools(
             })
             continue
 
-        if not agent_allows_ordinary_flow_step(agent_id, entry):
-            agent_name = entry.get("name", agent_id)
-            reason = attachment_only_validator_reason(agent_name)
+        refused = refused_flow_step(
+            agent_id, entry, active_group_ids=list(active_groups or []),
+            # Only the flow's owner can change it; a project member running it is told so.
+            owner=flow.user_id == db_user_id,
+        )
+        if refused is not None:
             logger.warning(
-                "[Flow Executor] Agent '%s' is attachment-only, skipping ordinary flow step",
-                agent_id,
+                "[Flow Executor] Agent '%s' cannot be an ordinary flow step (%s)",
+                agent_id, refused.run_code,
             )
-            unavailable_steps.append({
-                "step": step_num,
-                "agent_id": agent_id,
-                "agent_name": agent_name,
-                "reason": reason,
-                "reason_code": "attachment_only_validator",
-            })
+            unavailable_steps.append(refused.as_unavailable_step(step_num, agent_id))
             continue
 
         # Check if this agent requires document and we don't have one

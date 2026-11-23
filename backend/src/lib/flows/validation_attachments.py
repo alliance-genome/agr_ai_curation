@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from src.lib.domain_packs.registry import load_domain_pack_registry
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
+    ValidationBindingState,
     ValidationAttachmentOption,
     validate_active_validator_agent_references,
 )
@@ -444,11 +445,95 @@ def _group_schedule_entry(group: Mapping[str, Any]) -> dict[str, Any]:
     return entry
 
 
+def _validator_agent_keys(package_id: str | None, agent_id: str | None) -> frozenset[str]:
+    """Every key a flow step or a saved copy can use for one packaged validator: its
+    package agent ID and its unified-agents key (the folder name unless declared)."""
+    from src.lib.config.agent_loader import canonical_system_agent_key, get_agent_definition_for_package
+
+    if not package_id or not agent_id:
+        return frozenset()
+    definition = get_agent_definition_for_package(package_id, agent_id)
+    if definition is None:
+        return frozenset({agent_id})
+    return frozenset({agent_id, canonical_system_agent_key(definition)})
+
+
+def extraction_agents_running_validator(
+    validator_agent_key: str,
+    *,
+    active_group_ids: list[str] | tuple[str, ...] = (),
+    agent_registry: Mapping[str, Mapping[str, Any]] | None = None,
+) -> tuple[str, ...]:
+    """Names of the extraction agents that run this validator as an active automatic check.
+
+    Read from each agent's domain-pack bindings, for the agents the curator's groups
+    can use; empty when no extraction agent runs it.
+    """
+
+    from src.lib.agent_access import is_resource_access_allowed
+
+    if agent_registry is None:
+        from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
+
+        agent_registry = AGENT_REGISTRY
+    registries = _domain_pack_validation_registries()
+    names: set[str] = set()
+    for entry in agent_registry.values():
+        if not is_resource_access_allowed(
+            visibility_allowed=True,
+            allowed_group_ids=list(entry.get("allowed_group_ids") or []),
+            active_group_ids=list(active_group_ids),
+            resource_kind="agent",
+        ):
+            continue
+        if "extract" not in str(entry.get("category") or "").lower():
+            continue
+        curation = entry.get("curation")
+        pack_id = curation.get("domain_pack_id") if isinstance(curation, Mapping) else None
+        registry = registries.get(str(pack_id).strip()) if pack_id else None
+        if registry is None:
+            continue
+        # Every validator an active binding can run, including the ones a binding
+        # routes to by subject type (a disease record whose subject is an allele
+        # or a model). Bindings under development never run and are not counted.
+        if any(
+            binding.state is ValidationBindingState.ACTIVE
+            and any(
+                validator_agent_key in _validator_agent_keys(ref.package_id, ref.agent_id)
+                for ref in binding.validator_agents()
+            )
+            for binding in registry.bindings
+        ):
+            names.add(str(entry.get("name") or ""))
+    return tuple(sorted(name for name in names if name))
+
+
+def validator_supports_custom_detail(validator_agent_key: str | None) -> bool:
+    """Whether a saved copy of this validator can be attached to a Custom Output Structure
+    detail: an active binding runs it and opts into custom-profile reuse."""
+
+    if not validator_agent_key:
+        return False
+    for registry in domain_pack_validation_registries().values():
+        for binding in registry.bindings:
+            ref = binding.validator_agent
+            if (
+                binding.custom_profile_reuse is not None
+                and binding.state is ValidationBindingState.ACTIVE
+                and ref is not None
+                and validator_agent_key in _validator_agent_keys(ref.package_id, ref.agent_id)
+            ):
+                return True
+    return False
+
+
 __all__ = [
     "FlowValidationAttachmentError",
     "apply_flow_validation_attachment_defaults",
     "domain_pack_validation_registries",
+    "extraction_agents_running_validator",
     "validation_attachment_catalog_by_agent",
     "validation_attachment_options_for_agent",
     "validation_schedule_from_node_data",
+    "validator_supports_custom_detail",
 ]

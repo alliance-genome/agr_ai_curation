@@ -52,6 +52,14 @@ describe('FlowNode', () => {
     expect(screen.getByText('v3')).toBeInTheDocument()
   })
 
+  it('gives a marked step a focusable, named error mark so its message reaches keyboard and screen readers', () => {
+    const message = 'Gene Validation Agent is a validator. Remove this step.'
+    render(<FlowNode data={buildNodeData({ hasError: true, errorMessage: message })} selected={false} />)
+
+    const mark = screen.getByRole('img', { name: message })
+    expect(mark).toHaveAttribute('tabindex', '0')
+  })
+
   it('does not render a prompt version label when prompt_version is missing', () => {
     render(<FlowNode data={buildNodeData()} selected={false} />)
 

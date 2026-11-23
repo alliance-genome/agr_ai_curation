@@ -113,7 +113,9 @@ async def create_batch(
         if any(str(node.get("data", {}).get("agent_id", "")).startswith("ca_")
                for node in flow.flow_definition.get("nodes", [])) else {}
     )
-    validation = validate_flow_for_batch(flow.flow_definition, entries_by_node=revision_entries)
+    validation = validate_flow_for_batch(flow.flow_definition, entries_by_node=revision_entries,
+                                     active_group_ids=active_group_ids,
+                                     owner=flow.user_id == db_user.id)
     if not validation.valid:
         raise HTTPException(
             status_code=400,
@@ -404,4 +406,6 @@ async def validate_flow_for_batch_endpoint(
         if any(str(node.get("data", {}).get("agent_id", "")).startswith("ca_")
                for node in flow.flow_definition.get("nodes", [])) else {}
     )
-    return validate_flow_for_batch(flow.flow_definition, entries_by_node=revision_entries)
+    return validate_flow_for_batch(flow.flow_definition, entries_by_node=revision_entries,
+                                     active_group_ids=active_group_ids,
+                                     owner=flow.user_id == db_user.id)

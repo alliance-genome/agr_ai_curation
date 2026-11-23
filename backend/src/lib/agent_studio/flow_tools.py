@@ -26,6 +26,7 @@ import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from dataclasses import replace
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
@@ -73,10 +74,10 @@ from .authoring_validation import (
     validate_flow_authoring_draft,
 )
 from .diagnostic_tools import get_diagnostic_tools_registry
+from .refused_flow_steps import refused_flow_step
 from .flow_agent_policy import (
     INTERNAL_FLOW_AGENT_IDS,
     agent_allows_ordinary_flow_step,
-    attachment_only_validator_reason,
     flow_palette_show_in_palette,
 )
 
@@ -2674,18 +2675,49 @@ def _current_flow_state(flow_context=None) -> tuple[
     return flow_context, nodes, node_by_id, projection
 
 
-def _attachment_only_finding(node: Mapping[str, Any]) -> Dict[str, Any] | None:
+def _viewer_owns_current_flow() -> bool:
+    """Whether the curator in Studio owns the flow open in Flow Builder.
+
+    A draft with no saved flow behind it is the curator's own. A saved flow is the
+    owner's; a project member sees it read-only and cannot change it.
+    """
+    flow_id = (get_current_flow_context() or {}).get("flow_id")
+    if not flow_id:
+        return True
+    from uuid import UUID
+
+    from src.lib.flows.access import get_visible_flow
+    from src.models.sql.database import SessionLocal
+
+    user_id = get_current_user_id()
+    with SessionLocal() as db:
+        return get_visible_flow(db, UUID(str(flow_id)), user_id).user_id == user_id
+
+
+def _refused_step_finding(
+    node: Mapping[str, Any], revision_entries: Mapping[str, Mapping[str, Any] | None],
+) -> Dict[str, Any] | None:
+    """The save refusal for a step the flow policy refuses, as a flow-state finding.
+
+    A curator's own agent is judged by its pinned revision, as save and run judge it.
+    """
     data = _flow_node_data(node)
     agent_id = str(data.get("agent_id") or "unknown")
-    entry = AGENT_REGISTRY.get(agent_id)
-    if not isinstance(entry, dict) or agent_allows_ordinary_flow_step(agent_id, entry):
+    node_id = str(node.get("id"))
+    entry = revision_entries.get(node_id) if agent_id.startswith("ca_") else AGENT_REGISTRY.get(agent_id)
+    refused = refused_flow_step(
+        agent_id, entry if isinstance(entry, Mapping) else None,
+        active_group_ids=list(get_current_active_group_ids()),
+    )
+    if refused is None:
         return None
-    agent_name = str(entry.get("name") or data.get("agent_display_name") or agent_id)
+    if not _viewer_owns_current_flow():
+        refused = replace(refused, owner=False)
     return {
         "severity": "CRITICAL",
-        "code": "attachment_only_validator_step",
-        "node_ids": [str(node.get("id"))],
-        "message": attachment_only_validator_reason(agent_name),
+        "code": refused.save_code,
+        "node_ids": [node_id],
+        "message": refused.explanation,
     }
 
 
@@ -2751,29 +2783,45 @@ def _current_flow_findings(
                 }
             )
 
+    revision_entries: Mapping[str, Mapping[str, Any] | None] = {}
+    contract_findings: Sequence[Mapping[str, Any]] = ()
+    if any(str(_flow_node_data(node).get("agent_id", "")).startswith("ca_") for node in nodes):
+        from pydantic import ValidationError
+        from src.models.sql.database import SessionLocal
+        from src.lib.flows.execution_revisions import (
+            flow_execution_revision_findings,
+            resolve_flow_execution_revisions,
+        )
+        from src.schemas.flows import FlowDefinition
+
+        definition = _flow_context_definition(get_current_flow_context() or {})
+        with SessionLocal() as db:
+            contract_findings = flow_execution_revision_findings(
+                db, definition,
+                user_id=get_current_user_id(), active_group_ids=list(get_current_active_group_ids()),
+            )
+            try:
+                parsed = FlowDefinition.model_validate(definition)
+            except ValidationError:
+                parsed = None  # the projection issues above already report the draft's shape
+            if parsed is not None:
+                revision_entries = resolve_flow_execution_revisions(
+                    db, parsed, user_id=get_current_user_id(),
+                    active_group_ids=list(get_current_active_group_ids()),
+                ).entries_by_node
+
     for node_id in projection.control_node_ids:
         node = node_by_id.get(node_id)
         if node is None:
             continue
         data = _flow_node_data(node)
-        if (
-            _flow_node_type(node) in {"task_input", "output"}
-            or data.get("agent_id") in {"task_input", "supervisor"}
-        ):
+        if _flow_node_type(node) in {"task_input", "output"} or data.get("agent_id") == "task_input":
             continue
-        finding = _attachment_only_finding(node)
+        finding = _refused_step_finding(node, revision_entries)
         if finding is not None:
             findings.append(finding)
 
-    if any(str(_flow_node_data(node).get("agent_id", "")).startswith("ca_") for node in nodes):
-        from src.models.sql.database import SessionLocal
-        from src.lib.flows.execution_revisions import flow_execution_revision_findings
-
-        with SessionLocal() as db:
-            contract_findings = flow_execution_revision_findings(
-                db, _flow_context_definition(get_current_flow_context() or {}),
-                user_id=get_current_user_id(), active_group_ids=list(get_current_active_group_ids()),
-            )
+    if contract_findings:
         findings.extend({
             **finding, "severity": "CRITICAL",
             "node_ids": [finding["node_id"]] if finding.get("node_id") else [],

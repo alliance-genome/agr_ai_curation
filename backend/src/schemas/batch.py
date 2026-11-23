@@ -142,3 +142,5 @@ class BatchValidationResponse(BaseModel):
     """Flow validation result for batch compatibility."""
     valid: bool
     errors: List[str] = []
+    # Codes of steps the flow policy refuses (the same codes a flow save returns).
+    error_codes: List[str] = []

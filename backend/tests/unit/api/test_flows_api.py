@@ -339,7 +339,10 @@ def test_flow_definition_payload_requires_typed_validation_formatter_sources(
                 None if agent_id == "csv_formatter" else output_schema_key
             ),
             "is_active": True if agent_id == "csv_formatter" else is_active,
-            "supervisor": {"enabled": agent_id == "csv_formatter"},
+            # A typed validation agent sources an output only where it may be an ordinary
+            # step at all (supervisor routing on, like chemical_validation); an
+            # attachment-only validator is refused as a step whatever it feeds (ALL-1648).
+            "supervisor": {"enabled": True},
         },
     )
 
@@ -759,7 +762,7 @@ def test_flow_definition_payload_rejects_attachment_only_validator_control_flow(
         )
 
     assert exc.value.status_code == 422
-    assert "runs through automatic extraction checks" in str(exc.value.detail)
+    assert "Allele Validation is a validator. Validators check an extraction step's records" in str(exc.value.detail)
     assert "e1" in str(exc.value.detail)
 
 

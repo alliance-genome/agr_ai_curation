@@ -13,10 +13,7 @@ from typing import Any, Callable, Iterable, Literal, Mapping, Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from src.lib.agent_studio.flow_agent_policy import (
-    agent_allows_ordinary_flow_step,
-    attachment_only_validator_reason,
-)
+from src.lib.agent_studio.refused_flow_steps import refused_flow_step
 from src.lib.executable_flow_graph import ExecutableFlowTopologyError
 from src.lib.flow_edge_roles import (
     OUTPUT_ATTACHMENT_EDGE_ROLE,
@@ -472,11 +469,6 @@ def validate_flow_authoring_draft(
             for edge in flow_definition.edges
             if edge.role == VALIDATION_ATTACHMENT_EDGE_ROLE
         }
-        output_sources = {
-            edge.source
-            for edge in flow_definition.edges
-            if edge.role == OUTPUT_ATTACHMENT_EDGE_ROLE
-        }
         control_edges: dict[str, list[str]] = {}
         for edge in flow_definition.edges:
             if edge.role != DEFAULT_FLOW_EDGE_ROLE:
@@ -511,15 +503,19 @@ def validate_flow_authoring_draft(
                     )
                 )
                 continue
-            if node.id in output_sources and agent_can_source_output_attachment(entry):
-                continue
-            if entry is None or agent_allows_ordinary_flow_step(node.data.agent_id, entry):
+            # The flow policy decides first, whatever the step feeds: a validator that
+            # sources an output attachment is still refused as an ordinary step.
+            refused = refused_flow_step(
+                node.data.agent_id, entry, active_group_ids=context.active_group_ids,
+            )
+            if refused is None:
                 continue
             if node.id in validation_targets and not connected_control_edges:
+                # A historical validator sidecar: unsupported_validator_override reports it.
                 continue
             findings.append(
                 AuthoringValidationFinding(
-                    code="attachment_only_agent_in_control_flow",
+                    code=refused.save_code,
                     severity="error",
                     path=(
                         f"flow_definition.edges.{connected_control_edges[0]}"
@@ -532,8 +528,8 @@ def validate_flow_authoring_draft(
                         if connected_control_edges
                         else None
                     ),
-                    message=attachment_only_validator_reason("This validation agent"),
-                    fix_hint="Use the extraction step's automatic checks; separate validator attachments are not supported.",
+                    message=refused.message,
+                    fix_hint=refused.fix_hint,
                 )
             )
 
