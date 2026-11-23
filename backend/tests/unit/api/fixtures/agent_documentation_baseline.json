@@ -176,8 +176,8 @@
   },
   "allele_validation": {
     "avoid_when": [
-      "To get alleles validated in a flow; the domain pack already runs this check automatically on every allele an extractor produces.",
-      "For genes; the Gene Validation Agent checks those automatically.",
+      "To get alleles validated in a flow; the domain pack already runs this check automatically on the alleles in allele records and on the allele a disease record is about.",
+      "For genes; the Gene Validation Agent checks them on the records whose domain pack runs that check.",
       "For disease or phenotype terms; the Ontology Term Resolver Agent checks those automatically.",
       "To find the alleles a paper studies; that is the Allele/Variant Extraction Agent's job."
     ],
@@ -235,7 +235,7 @@
       "Allele symbols written with angle brackets are matched to their superscript form automatically \u2014 you don't need to reformat them.",
       "Very broad searches return at most 500 matches (100 by default), so narrow your search if you don't see the allele you expect."
     ],
-    "note": "Validation runs automatically. This check runs on every allele an extractor produces, including the allele a disease record is about, so you do not need to set it up yourself. A clone made in the Agent Workshop does not change this automatic check; you can attach your clone as the validator on an allele detail of your own Custom Output Structure, as long as the clone keeps this agent's answer format.",
+    "note": "Validation runs automatically. This check runs on the alleles in allele records and on the allele a disease record is about, so you do not need to set it up yourself. A clone made in the Agent Workshop does not change this automatic check; you can attach your clone as the validator on an allele detail of your own Custom Output Structure, as long as the clone keeps this agent's answer format.",
     "summary": "Validates allele/variant identifiers against the Alliance Curation Database by symbol, ID, or gene association.",
     "use_when": [
       "When you want your own version of this check, with a changed prompt or different tools, to attach as the validator on an allele detail of a Custom Output Structure.",
@@ -343,7 +343,7 @@
       "Multiple results for common names (e.g., 'glucose' matches many stereoisomers) - selects most biologically relevant form",
       "Every answer comes from a fresh, live lookup against ChEBI \u2014 it never answers from memory."
     ],
-    "note": "This check does not run automatically yet. No domain pack includes chemical validation, so add this agent to your flow when you need ChEBI terms and IDs confirmed. Other checks declared by the domain packs run automatically.",
+    "note": "This check does not run automatically yet. No domain pack includes chemical validation, so add this agent to your flow when you need ChEBI terms and IDs confirmed. The domain packs' active checks run automatically.",
     "summary": "Confirms chemical compound names against ChEBI (Chemical Entities of Biological Interest) and gives you the matching official ChEBI term and ID for a chemical annotation.",
     "use_when": [
       "After an extractor names a chemical, drug, or treatment compound that needs an official ChEBI term and ID.",
@@ -355,7 +355,7 @@
     "avoid_when": [
       "To get pick-list values validated; the domain pack already runs this check automatically on every disease, phenotype, and gene expression record an extractor produces.",
       "For ontology terms such as anatomy, life stage, or GO; use the Ontology Term Resolver Agent.",
-      "For genes or alleles; the Gene and Allele Validation Agents check those automatically.",
+      "For genes or alleles; the Gene and Allele Validation Agents check them on the records whose domain pack runs those checks.",
       "To decide whether a term is the biologically right choice for the paper; that judgment stays with you."
     ],
     "capabilities": [
@@ -408,7 +408,7 @@
     "avoid_when": [
       "To get pick-list values validated; the domain pack already runs this check automatically on every disease, phenotype, and gene expression record an extractor produces.",
       "For ontology terms such as anatomy, life stage, or GO; use the Ontology Term Resolver Agent.",
-      "For genes or alleles; the Gene and Allele Validation Agents check those automatically.",
+      "For genes or alleles; the Gene and Allele Validation Agents check them on the records whose domain pack runs those checks.",
       "To decide whether a term is the biologically right choice for the paper; that judgment stays with you."
     ],
     "capabilities": [
@@ -556,7 +556,7 @@
   "data_provider": {
     "avoid_when": [
       "To get providers validated; the domain pack already runs this check automatically on every disease and gene expression record an extractor produces.",
-      "To confirm gene, allele, or model identifiers; the validator for that entity type checks them automatically.",
+      "To confirm gene, allele, or model identifiers; the validator for that entity type checks them on the records whose domain pack runs that check.",
       "For the reference on a record; the Reference Validation Agent checks it automatically on gene expression and GO records.",
       "For pick-list terms or ontology terms; the Controlled Vocabulary Validation Agent and the Ontology Term Resolver Agent check those automatically."
     ],
@@ -617,7 +617,7 @@
   "data_provider_validation": {
     "avoid_when": [
       "To get providers validated; the domain pack already runs this check automatically on every disease and gene expression record an extractor produces.",
-      "To confirm gene, allele, or model identifiers; the validator for that entity type checks them automatically.",
+      "To confirm gene, allele, or model identifiers; the validator for that entity type checks them on the records whose domain pack runs that check.",
       "For the reference on a record; the Reference Validation Agent checks it automatically on gene expression and GO records.",
       "For pick-list terms or ontology terms; the Controlled Vocabulary Validation Agent and the Ontology Term Resolver Agent check those automatically."
     ],
@@ -1241,7 +1241,7 @@
   "gene_validation": {
     "avoid_when": [
       "To get genes validated in a flow; the domain pack already runs this check automatically on the genes in every gene, disease, gene expression, and GO record an extractor produces.",
-      "For alleles or variants; the Allele Validation Agent checks those automatically.",
+      "For alleles or variants; the Allele Validation Agent checks the alleles in allele records and the allele a disease record is about.",
       "For disease or other ontology terms; the Ontology Term Resolver Agent checks those automatically. For chemicals, use the Chemical Ontology Agent.",
       "To find the genes a paper studies; that is the Gene Extraction Agent's job."
     ],
@@ -1446,7 +1446,7 @@
   "ontology_term_validation": {
     "avoid_when": [
       "To get ontology terms validated; the domain pack already runs this check automatically on every term an extractor supplies.",
-      "For gene symbols; the Gene Validation Agent checks genes automatically.",
+      "For gene symbols; the Gene Validation Agent checks genes on the records whose domain pack runs that check.",
       "For chemicals; use the Chemical Ontology Agent.",
       "For fixed pick-list values such as relations or qualifiers; the Controlled Vocabulary Validation Agent checks those automatically.",
       "To pull terms out of a paper; that is an extractor's job."
@@ -1759,7 +1759,7 @@
     "avoid_when": [
       "To get the reference on a gene expression or GO record validated; the domain pack already runs this check automatically.",
       "To read or summarize the paper's content; use the General PDF Extraction Agent.",
-      "To confirm the genes, alleles, or disease terms the paper reports; their own validators check those automatically.",
+      "To confirm the genes, alleles, or disease terms the paper reports; their own validators check them on the records whose domain pack runs those checks.",
       "To add a paper that is missing from the Alliance literature database."
     ],
     "capabilities": [
@@ -1814,7 +1814,7 @@
     "avoid_when": [
       "To get the reference on a gene expression or GO record validated; the domain pack already runs this check automatically.",
       "To read or summarize the paper's content; use the General PDF Extraction Agent.",
-      "To confirm the genes, alleles, or disease terms the paper reports; their own validators check those automatically.",
+      "To confirm the genes, alleles, or disease terms the paper reports; their own validators check them on the records whose domain pack runs those checks.",
       "To add a paper that is missing from the Alliance literature database."
     ],
     "capabilities": [

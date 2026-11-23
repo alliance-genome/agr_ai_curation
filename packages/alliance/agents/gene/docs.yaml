@@ -27,7 +27,7 @@ use_when:
   - "When you want to review how genes in extracted records are confirmed."
 avoid_when:
   - "To get genes validated in a flow; the domain pack already runs this check automatically on the genes in every gene, disease, gene expression, and GO record an extractor produces."
-  - "For alleles or variants; the Allele Validation Agent checks those automatically."
+  - "For alleles or variants; the Allele Validation Agent checks the alleles in allele records and the allele a disease record is about."
   - "For disease or other ontology terms; the Ontology Term Resolver Agent checks those automatically. For chemicals, use the Chemical Ontology Agent."
   - "To find the genes a paper studies; that is the Gene Extraction Agent's job."
 limitations:
