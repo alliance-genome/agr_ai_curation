@@ -663,10 +663,9 @@ class UploadExecutionService:
                     request.reference, wait=False, request_bearer_token=curator_token,
                 )
             wait_ends_at = requested_at + deadline_seconds
+            request_timeout_seconds = get_document_source_request_timeout_seconds()
             # The end request goes out when another read would no longer fit.
-            end_request_at = wait_ends_at - (
-                poll_interval_seconds + get_document_source_request_timeout_seconds()
-            )
+            end_request_at = wait_ends_at - (poll_interval_seconds + request_timeout_seconds)
             while True:
                 if pdf_job_service.is_cancel_requested(job_id=request.job_id):
                     raise PDFCancellationError("Processing cancelled by user request")
@@ -776,6 +775,10 @@ class UploadExecutionService:
                     # it was read once above, and nothing is asked outside the hold.
                     raise RuntimeError(f"Provider conversion exceeded {deadline_seconds:g} seconds")
                 if not sent.get("end_sent_at") and now >= end_request_at:
+                    if now + request_timeout_seconds >= wait_ends_at:
+                        # No room left to send and be answered before the deadline:
+                        # end as a paper past its deadline does, asking nothing.
+                        raise RuntimeError(f"Provider conversion exceeded {deadline_seconds:g} seconds")
                     # Nothing appeared in time: ask the provider once more, only to
                     # learn why. Sent within the deadline of the paper's own request,
                     # so at a deadline of at most an hour it falls inside ABC's
@@ -786,6 +789,9 @@ class UploadExecutionService:
                         job_id=request.job_id, which="end_sent_at",
                     )
                     sent["end_sent_at"] = "sent"
+                    if time.time() + request_timeout_seconds >= wait_ends_at:
+                        # The record write took the room: recorded, never sent.
+                        raise RuntimeError(f"Provider conversion exceeded {deadline_seconds:g} seconds")
                     last_result = await provider.request_conversion(
                         request.reference, wait=False, request_bearer_token=curator_token,
                     )

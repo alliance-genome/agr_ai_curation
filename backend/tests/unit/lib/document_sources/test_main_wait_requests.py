@@ -106,7 +106,8 @@ class _Abc:
 class _Job:
     """The durable job: its status, cancel flag and metadata, as the job service keeps them."""
 
-    def __init__(self, *, metadata=None):
+    def __init__(self, *, metadata=None, record_delay: float = 0.0):
+        self.record_delay = record_delay
         self.status = "pending"
         self.cancel_requested = False
         self.metadata: dict = dict(metadata or {})
@@ -126,6 +127,9 @@ class _Job:
                 self.metadata.update(kwargs["metadata"])
 
         def _record(*, job_id, which):
+            import time
+
+            time.sleep(self.record_delay)  # a slow database write
             requests = dict(self.metadata.get(jobs.CONVERSION_REQUESTS_KEY) or {})
             requests[which] = "2026-11-23T12:00:00+00:00"
             self.metadata[jobs.CONVERSION_REQUESTS_KEY] = requests
@@ -522,3 +526,24 @@ async def test_in_a_batch_no_end_request_comes_after_that_papers_deadline(
     ]
     assert len(abc.request_times) == 1 + second_paper_requests
     assert [status for status, _ in jobs.jobs["job-2"].ended] == ["failed"]
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("seconds_ago", "record_delay"), [
+    (2.7, 0.0),  # starts 0.3 s before its deadline: no room for a request (0.5 s timeout)
+    (2.0, 0.8),  # room at first, but the record write ends too close to the deadline
+], ids=["starts_0.3s_before_the_deadline", "slow_record_write"])
+async def test_the_end_request_is_sent_only_while_it_can_be_answered_before_the_deadline(
+    monkeypatch, quiet, seconds_ago, record_delay,
+):
+    """Re-review of #1137: the end request is sent only while now plus the request
+    timeout is still before the wait's end, so it is sent and answered inside it."""
+
+    abc = _Abc(answers=[FAILED])
+    job = _Job(metadata=_sent_at_import(seconds_ago=seconds_ago), record_delay=record_delay).install(monkeypatch)
+
+    await _service(abc, []).execute_provider_conversion(_request())
+
+    assert abc.conversion_requests == 0
+    assert job.ended == [("failed", "Provider conversion exceeded 3 seconds")]
