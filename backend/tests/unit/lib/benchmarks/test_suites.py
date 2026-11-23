@@ -131,9 +131,11 @@ def _checked_in_catalog():
 def _real_flow_route_ids() -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
     """Derive flow route slots from the recipes a real install offers.
 
-    Mirrors build_curator_route_catalog: the recipes come from the same
-    filtered loader, runtime-only agents have no model slot, and only
-    agent-backed scheduled validators get a validator slot.
+    Mirrors the per-recipe loop in
+    src.lib.benchmarks.runtime_catalog.build_curator_route_catalog, which
+    needs a database session: the recipes come from the same filtered
+    loader, runtime-only agents have no model slot, and only agent-backed
+    scheduled validators get a validator slot. Change both together.
     """
     from src.lib.agent_studio.flow_tools import build_flow_definition_from_recipe
     from src.lib.benchmarks.flow_catalog import load_benchmark_flow_templates

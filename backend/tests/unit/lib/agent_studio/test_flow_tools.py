@@ -15,6 +15,7 @@ from src.api import agent_studio as api_module
 from src.lib.agent_access import is_resource_access_allowed
 from src.lib.agent_studio.models import FlowContextDefinition
 from src.lib.flow_edge_roles import SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
+from src.lib.packages.paths import get_runtime_config_dir
 from src.lib.packages.flow_recipes import (
     FlowRecipeCatalog,
     FlowRecipeLoadError,
@@ -796,7 +797,64 @@ def test_startup_validation_rejects_a_recipe_step_that_is_an_attachment_only_val
 
     message = str(exc_info.value)
     assert "Validate Genes" in message and "org.example" in message and str(source_path) in message
-    assert "gene_validation" in message
+    # One refused step reads in the singular and names the setting an operator can act on,
+    # including the runtime override folder that can change it.
+    assert "names a step that cannot be a flow step" in message
+    assert "'gene_validation' has category Validation with supervisor routing not enabled" in message
+    assert str(get_runtime_config_dir() / "agents") in message
+
+
+def test_startup_validation_names_an_internal_agent_step_for_what_it_is(monkeypatch, tmp_path):
+    from src.lib.packages.flow_recipes import (
+        FlowRecipeCatalog,
+        FlowRecipeLoadError,
+        FlowRecipeManifest,
+        LoadedFlowRecipeManifest,
+    )
+
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "pdf_extraction": {"category": "Extraction"},
+            "gene_validation": {"category": "Validation", "supervisor": {"enabled": False}},
+            "task_input": {"name": "Initial Instructions", "category": "Input"},
+        },
+    )
+    catalog = FlowRecipeCatalog(
+        contributions=(
+            LoadedFlowRecipeManifest(
+                package_id="org.example",
+                export_name="default",
+                source_path=tmp_path / "flow_recipes.yaml",
+                manifest=FlowRecipeManifest.model_validate(
+                    {
+                        "flow_recipes_api_version": "1.0.0",
+                        "recipes": [
+                            {
+                                "name": "Two Refused Steps",
+                                "description": "Two steps the flow policy refuses",
+                                "steps": [
+                                    {"agent_id": "task_input"},
+                                    {"agent_id": "pdf_extraction"},
+                                    {"agent_id": "gene_validation"},
+                                ],
+                            }
+                        ],
+                    }
+                ),
+            ),
+        )
+    )
+
+    with pytest.raises(FlowRecipeLoadError) as exc_info:
+        flow_tools.validate_installed_flow_recipe_catalog(catalog)
+
+    message = str(exc_info.value)
+    assert "names steps that cannot be flow steps" in message
+    assert "'task_input' is an internal agent that is never a flow step" in message
+    assert "'gene_validation' has category Validation" in message
+    assert "attachment-only validators" not in message
 
 
 def test_get_flow_templates_handler_reports_core_only_install(monkeypatch):
