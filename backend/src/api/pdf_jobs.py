@@ -177,7 +177,7 @@ async def cancel_pdf_job(
         message = f"Job already terminal ({updated.status}); no cancellation needed"
     elif updated.status == PdfJobStatus.CANCELLED.value:
         # A wait no task was polling any more: this cancel ended it at once.
-        message = "Cancelled; the import had stopped running and is now ended"
+        message = "Import cancelled. It had already stopped running, so it was ended now."
     else:
         message = "Cancellation requested; background processing termination is best-effort"
 

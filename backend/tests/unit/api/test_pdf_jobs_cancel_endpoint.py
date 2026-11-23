@@ -38,7 +38,7 @@ async def _cancel(monkeypatch, before: str, after: str):
 async def test_a_cancel_that_ended_a_stopped_wait_is_reported_as_a_cancel(monkeypatch):
     response = await _cancel(monkeypatch, before="running", after="cancelled")
 
-    assert response.message == "Cancelled; the import had stopped running and is now ended"
+    assert response.message == "Import cancelled. It had already stopped running, so it was ended now."
 
 
 @pytest.mark.asyncio
