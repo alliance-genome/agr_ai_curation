@@ -116,6 +116,27 @@ export function DocumentHierarchyView({ data }: DocumentHierarchyViewProps) {
         </Paper>
       )}
 
+      {/* Files of the paper (0.12.0 outlines name each file) */}
+      {data.files && data.files.some((file) => file.name) && (
+        <Paper sx={{ p: 3, mb: 3 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>Files</Typography>
+          {data.files.map((file) => (
+            <Box key={file.number} sx={{ mb: 1 }}>
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                File {file.number}: {file.name} ({file.role}, {file.kind}, {file.chunk_count} chunks,
+                chunks {file.chunk_index_start} to {file.chunk_index_end})
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {file.sections.map((section) => section.name).join(', ') || 'No sections'}
+              </Typography>
+            </Box>
+          ))}
+          {data.files_being_added && (
+            <Chip label="Files were still being added" size="small" color="warning" />
+          )}
+        </Paper>
+      )}
+
       {/* Detailed Section Breakdown */}
       {data.sections.length > 0 && (
         <Paper sx={{ p: 3, mb: 3 }}>

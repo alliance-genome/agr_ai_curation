@@ -66,7 +66,7 @@ def render_fixture() -> dict:
     result = weaviate_search.SectionReadResult(
         summary="Read 5 passages from Methods.",
         section=weaviate_search.NumberedSection(
-            requested_section="Methods", matched_sections=["Methods"], page_numbers=[3],
+            requested_section="Methods", file="paper.pdf", page_numbers=[3],
             total_chunk_count=len(passages), passages=passages,
         ),
     )

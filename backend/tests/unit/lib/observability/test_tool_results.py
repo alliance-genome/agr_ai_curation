@@ -67,6 +67,16 @@ from src.lib.observability import tool_results, runtime
         ({"status": "needs_source_read", "error_code": "unissued_document_selection", "saved": False}, False, False, None),
         ({"status": "needs_source_read", "error_code": "unreadable_document_selection", "saved": False}, False, False, None),
         ({"status": "needs_source_read"}, False, True, None),
+        # A section request the model corrects from the exact names it gets back is a normal
+        # answer, like read_chunk's range answer: successful in chat and in Agent Studio.
+        ({"summary": "No section named 'Methods'.", "section": None, "error_code": "section_not_found"},
+         False, True, None),
+        ({"summary": "No section named 'Methods'.", "section": None, "error_code": "section_not_found"},
+         True, True, None),
+        ({"summary": "In more than one file.", "section": None, "error_code": "section_ambiguous"},
+         True, True, None),
+        ({"summary": "No readable file named 'x'.", "section": None, "error_code": "unknown_file"},
+         True, True, None),
         ({"status": "invalid_arguments", "error_code": "invalid_tool_arguments", "saved": False}, False, False, None),
         ({"status": "invalid_arguments"}, False, True, None),
         # Unhashable values are compared, never hashed.

@@ -78,6 +78,45 @@ files and removed files are never readable.
 - The document-context cache records the readable files each outline was built
   from; a run with other readable files builds its own.
 
+## Section names are exact, within one file
+
+`read_section(section_name, file=None)` and
+`read_subsection(parent_section, subsection, file=None)` read the pieces whose
+stored `parentSection` (and `subsection`) equal the requested names exactly
+(Q9): "Methods" does not read "Materials and Methods". The names are compared in
+code over a names-only listing of the readable pieces, and only the chosen pieces'
+text is read. The search index is never asked to match a name: it tokenizes names
+by word (its `equal` would return "Materials and Methods" for "Methods") and it
+refuses a name made only of stopwords or punctuation ("a", "(").
+`file` is a file name as the outline shows it (`file_labels`: numbered over all of
+the paper's files by tab order, so a label does not move when another file
+becomes ready; a second file with the same display name is "name (2)", skipping
+any suffix another file really has). It is optional when
+the section is in one readable file. A request the model can correct returns
+`section: null` with a summary and an `error_code`, and the run continues:
+
+- `section_not_found`: every exact section name, file by file, as stored (pieces
+  with no stored section name, listed as "Unknown" in the outline, are not
+  offered); for a subsection, the section's subsection names, or that the
+  section has no subsections;
+- `section_ambiguous`: the files holding the section, asking for `file`;
+- `unknown_file`: the readable file names.
+
+The outline in agent prompts (`prompt_utils.format_hierarchy_for_prompt`) lists
+each readable file in tab order ("File n of m: name (role, kind, k chunks, chunks
+a to b)") with its sections and subsections by exact stored name.
+`get_document_sections_hierarchical` returns `files` beside the whole-paper
+`sections`. The outline is built at the start of a run: a file that becomes
+ready during the run is readable from the next tool call (its pieces appear in
+search results, and `read_section` with its name and the file works), but the
+outline the model was given does not list it.
+
+While the paper has files being added (its `pending` file rows, counted by
+`readable_files_in_session` within the run's scope), the outline adds "Files are
+still being added to this paper; they cannot be read yet." The count is taken for
+every run and never cached with the outline. A dead add's pending rows count
+until the reconciler marks them `failed` (the stale-job rule), then the line stops.
+
 ## Selections that have not been read
 
 If `record_evidence` selects a chunk or span window that has not been issued in

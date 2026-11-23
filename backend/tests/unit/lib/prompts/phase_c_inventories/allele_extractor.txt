@@ -134,7 +134,7 @@ It does NOT search allele names, allele IDs, gene names, synonyms, or generic en
 Do NOT stage a reference; the source paper is resolved downstream from the curation workspace document identity, not from free text.
 
 # AE-21 high-yield Methods harvesting hint kept once
-For comprehensive allele harvesting, `read_section('Methods')` is often more reliable than search alone because strain lists and genotype tables may not rank highly in semantic search.
+For comprehensive allele harvesting, reading the paper's methods section with `read_section` is often more reliable than search alone because strain lists and genotype tables may not rank highly in semantic search; use the section's name exactly as the paper's outline shows it (for example "Materials and Methods").
 
 # AE-42 read_chunk -> select spans -> record_evidence one evidence unit
 select the backend-generated sentence numbers (`span_index`) that directly support one evidence unit, from the passage as `read_section`, `read_subsection` or `read_chunk(chunk_index)` showed it (a passage found only through `search_document` must be read with `read_chunk` first), and call `record_evidence(entity=..., selections=[{"chunk_index": ..., "span_index": ...}])`.

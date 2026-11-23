@@ -1276,6 +1276,70 @@ def _fetch_section_chunks(user_id: str, filters_for: Any) -> List[Dict[str, Any]
         return [_section_chunk(obj) for obj in objects]
 
 
+def _index_runs(indexes: List[int]) -> List[tuple[int, int]]:
+    """Consecutive piece numbers as (first, last) runs."""
+    runs: List[tuple[int, int]] = []
+    for index in indexes:
+        if runs and index == runs[-1][1] + 1:
+            runs[-1] = (runs[-1][0], index)
+        else:
+            runs.append((index, index))
+    return runs
+
+
+def _exact_section_chunks(
+    document_id: str,
+    user_id: str,
+    readable_filter: Any,
+    parent_section: str,
+    subsection: Optional[str],
+) -> List[Dict[str, Any]]:
+    """The readable pieces whose stored names equal the requested ones, in chunk order.
+
+    Section names are compared in code over a names-only listing of the readable
+    pieces (Q9: an identifier copied from the outline, compared exactly). The
+    search index is never asked to match a name: it tokenizes names by word, so
+    its equal filter would also return "Materials and Methods" for "Methods", and
+    it refuses a name made only of stopwords or punctuation ("a", "(", "").
+    Only the selected pieces' text is then read.
+    """
+    connection = get_connection()
+    if not connection:
+        raise RuntimeError("No Weaviate connection established")
+    with connection.session() as client:
+        from ..weaviate_helpers import get_user_collections
+
+        chunk_collection, _ = get_user_collections(client, user_id)
+        listed = _fetch_every_object(
+            chunk_collection,
+            filters=readable_filter,
+            return_properties=["chunkIndex", "parentSection", "subsection"],
+        )
+    wanted = sorted({
+        obj.properties.get("chunkIndex") for obj in listed
+        if obj.properties.get("parentSection") == parent_section
+        and (subsection is None or obj.properties.get("subsection") == subsection)
+    })
+    if not wanted:
+        return []
+    if any(type(index) is not int for index in wanted):
+        raise ValueError("A stored section piece has no integer chunkIndex")
+    runs = [
+        Filter.by_property("chunkIndex").greater_or_equal(first)
+        & Filter.by_property("chunkIndex").less_or_equal(last)
+        for first, last in _index_runs(wanted)
+    ]
+    selected = readable_filter & (runs[0] if len(runs) == 1 else Filter.any_of(runs))
+    chunks = _fetch_section_chunks(user_id, lambda _Filter: selected)
+    if [chunk["chunk_index"] for chunk in chunks] != wanted or any(
+        chunk["parent_section"] != parent_section
+        or (subsection is not None and chunk["subsection"] != subsection)
+        for chunk in chunks
+    ):
+        raise ValueError("Section pieces changed between listing and reading")
+    return chunks
+
+
 async def get_chunks_by_parent_section(
     document_id: str,
     parent_section: str,
@@ -1284,12 +1348,12 @@ async def get_chunks_by_parent_section(
     readable: ReadableFiles,
 ) -> List[Dict[str, Any]]:
     """
-    Retrieve every readable chunk whose top-level section name contains ``parent_section``.
+    Retrieve every readable chunk whose top-level section name is exactly ``parent_section``.
 
-    Uses the LLM-resolved parentSection field for section boundaries. Matching is
-    a substring match, so one call can cover several stored section names; each
-    returned chunk carries its own ``parent_section``. Returns every match in
-    chunk order, however many there are, inside the run's readable files only.
+    Uses the LLM-resolved parentSection field for section boundaries. The name
+    must equal the stored name (Q9): "Methods" does not match "Materials and
+    Methods". Returns every match in chunk order, however many there are,
+    inside ``readable`` only; pass one file's ``ReadableFiles`` to read one file.
 
     Args:
         document_id: Document UUID
@@ -1306,11 +1370,10 @@ async def get_chunks_by_parent_section(
     if readable_filter is None:
         return []
 
-    def _filters(Filter):
-        return readable_filter & Filter.by_property("parentSection").like(f"*{parent_section}*")
-
-    chunks = await asyncio.to_thread(_fetch_section_chunks, user_id, _filters)
-    logger.info("Found %s chunks for parent section '%s'", len(chunks), parent_section)
+    chunks = await asyncio.to_thread(
+        _exact_section_chunks, document_id, user_id, readable_filter, parent_section, None,
+    )
+    logger.info("Found %s chunks for one parent section", len(chunks))
     return chunks
 
 
@@ -1325,9 +1388,9 @@ async def get_chunks_by_subsection(
     """
     Retrieve every readable chunk of a subsection within a parent section.
 
-    Uses the LLM-resolved parentSection and subsection fields, each matched as a
-    substring. Returns every match in chunk order, however many there are, inside
-    the run's readable files only.
+    Uses the LLM-resolved parentSection and subsection fields, each equal to the
+    stored name (Q9). Returns every match in chunk order, however many there
+    are, inside ``readable`` only.
     Example: get_chunks_by_subsection(doc_id, "Methods", "Fly Strains", user_id, readable=readable)
 
     Args:
@@ -1346,18 +1409,84 @@ async def get_chunks_by_subsection(
     if readable_filter is None:
         return []
 
-    def _filters(Filter):
-        return (
-            readable_filter
-            & Filter.by_property("parentSection").like(f"*{parent_section}*")
-            & Filter.by_property("subsection").like(f"*{subsection}*")
-        )
-
-    chunks = await asyncio.to_thread(_fetch_section_chunks, user_id, _filters)
+    chunks = await asyncio.to_thread(
+        _exact_section_chunks, document_id, user_id, readable_filter, parent_section, subsection,
+    )
     logger.info(
         "Found %s chunks for subsection '%s' in '%s'", len(chunks), subsection, parent_section,
     )
     return chunks
+
+
+def _outline(objects: List[Any]) -> tuple[List[Dict[str, Any]], List[str]]:
+    """Sections in order of first appearance, each with its subsections, pages and chunk count."""
+    from collections import defaultdict
+
+    sections = defaultdict(lambda: {
+        "subsections": defaultdict(lambda: {"pages": set(), "chunks": 0, "first_index": float('inf')}),
+        "pages": set(),
+        "chunks": 0,
+        "first_index": float('inf'),
+        "is_top_level": True
+    })
+
+    top_level_order = []
+    stored_names = set()
+
+    for obj in objects:
+        props = obj.properties
+        if props.get("parentSection"):
+            stored_names.add(props["parentSection"])
+        parent = props.get("parentSection") or "Unknown"
+        subsection = props.get("subsection")
+        page = props.get("pageNumber")
+        idx = props.get("chunkIndex")
+        # Retain chunks without inventing page/index metadata. Stable
+        # sorting places wholly unindexed subsections after known ones.
+        if idx is None:
+            idx = float('inf')
+
+        # Track order of first occurrence
+        if parent not in top_level_order:
+            top_level_order.append(parent)
+
+        if page is not None:
+            sections[parent]["pages"].add(page)
+        sections[parent]["chunks"] += 1
+        sections[parent]["first_index"] = min(sections[parent]["first_index"], idx)
+
+        if subsection:
+            if page is not None:
+                sections[parent]["subsections"][subsection]["pages"].add(page)
+            sections[parent]["subsections"][subsection]["chunks"] += 1
+            sections[parent]["subsections"][subsection]["first_index"] = min(
+                sections[parent]["subsections"][subsection]["first_index"], idx
+            )
+
+    result = []
+    for parent in top_level_order:
+        info = sections[parent]
+        subs = []
+        for sub_name, sub_info in sorted(
+            info["subsections"].items(),
+            key=lambda x: x[1]["first_index"]
+        ):
+            subs.append({
+                "name": sub_name,
+                "page_numbers": sorted(sub_info["pages"]),
+                "chunk_count": sub_info["chunks"]
+            })
+
+        result.append({
+            "name": parent,
+            # False for pieces with no stored section name, listed as "Unknown".
+            "name_stored": parent in stored_names,
+            "is_top_level": True,
+            "page_numbers": sorted(info["pages"]),
+            "chunk_count": info["chunks"],
+            "subsections": subs
+        })
+    return result, top_level_order
 
 
 async def get_document_sections_hierarchical(
@@ -1384,8 +1513,20 @@ async def get_document_sections_hierarchical(
             },
             ...
         ],
-        "top_level_sections": ["<paper title>", "Abstract", "Introduction", "Materials and Methods", "Results", "Discussion", "References"]
+        "top_level_sections": ["<paper title>", "Abstract", "Introduction", "Materials and Methods", "Results", "Discussion", "References"],
+        "files": [
+            {
+                "file_id": "...", "name": "paper.pdf", "role": "main", "kind": "PDF",
+                "chunk_index_start": 0, "chunk_index_end": 41, "chunk_count": 42,
+                "sections": [...], "top_level_sections": [...]
+            },
+            ...
+        ]
     }
+
+    ``sections`` and ``top_level_sections`` cover every readable file together;
+    ``files`` lists each readable file in tab order with its own outline, under
+    the name the model sees (``ReadableFiles.labelled``).
 
     Args:
         document_id: Document UUID
@@ -1399,7 +1540,7 @@ async def get_document_sections_hierarchical(
         raise ValueError("user_id is required for tenant-scoped section listing")
     readable_filter = readable_pieces_filter(document_id, readable)
     if readable_filter is None:
-        return {"sections": [], "top_level_sections": []}
+        return {"sections": [], "top_level_sections": [], "files": []}
 
     def _fetch():
         connection = get_connection()
@@ -1423,75 +1564,32 @@ async def get_document_sections_hierarchical(
                 ],
             )
 
-            # Build hierarchical structure
-            sections = defaultdict(lambda: {
-                "subsections": defaultdict(lambda: {"pages": set(), "chunks": 0, "first_index": float('inf')}),
-                "pages": set(),
-                "chunks": 0,
-                "first_index": float('inf'),
-                "is_top_level": True
-            })
-
-            top_level_order = []
-
+            by_file: Dict[str, List[Any]] = defaultdict(list)
             for obj in objects:
-                props = obj.properties
-                parent = props.get("parentSection") or "Unknown"
-                subsection = props.get("subsection")
-                page = props.get("pageNumber")
-                idx = props.get("chunkIndex")
-                # Retain chunks without inventing page/index metadata. Stable
-                # sorting places wholly unindexed subsections after known ones.
-                if idx is None:
-                    idx = float('inf')
+                own_file = readable.file_for(obj.properties.get("chunkIndex"))
+                if own_file is None:
+                    raise ValueError("Section listing returned a piece outside the readable files")
+                by_file[own_file.file_id].append(obj)
 
-                # Track order of first occurrence
-                if parent not in top_level_order:
-                    top_level_order.append(parent)
-
-                if page is not None:
-                    sections[parent]["pages"].add(page)
-                sections[parent]["chunks"] += 1
-                sections[parent]["first_index"] = min(sections[parent]["first_index"], idx)
-
-                if subsection:
-                    if page is not None:
-                        sections[parent]["subsections"][subsection]["pages"].add(page)
-                    sections[parent]["subsections"][subsection]["chunks"] += 1
-                    sections[parent]["subsections"][subsection]["first_index"] = min(
-                        sections[parent]["subsections"][subsection]["first_index"], idx
-                    )
-
-            # Convert to output format
-            result = []
-            for parent in top_level_order:
-                info = sections[parent]
-                pages = sorted(info["pages"])
-
-                # Sort subsections by first_index
-                subs = []
-                for sub_name, sub_info in sorted(
-                    info["subsections"].items(),
-                    key=lambda x: x[1]["first_index"]
-                ):
-                    sub_pages = sorted(sub_info["pages"])
-                    subs.append({
-                        "name": sub_name,
-                        "page_numbers": sub_pages,
-                        "chunk_count": sub_info["chunks"]
-                    })
-
-                result.append({
-                    "name": parent,
-                    "is_top_level": True,
-                    "page_numbers": pages,
-                    "chunk_count": info["chunks"],
-                    "subsections": subs
+            sections, top_level_order = _outline(objects)
+            files = []
+            for label, own_file in readable.labelled():
+                file_sections, file_top_level = _outline(by_file.get(own_file.file_id, []))
+                files.append({
+                    "file_id": own_file.file_id,
+                    "name": label,
+                    "role": own_file.role,
+                    "kind": own_file.kind,
+                    "chunk_index_start": own_file.chunk_index_start,
+                    "chunk_index_end": own_file.chunk_index_end,
+                    "chunk_count": own_file.chunk_count,
+                    "sections": file_sections,
+                    "top_level_sections": file_top_level,
                 })
-
             return {
-                "sections": result,
+                "sections": sections,
                 "top_level_sections": top_level_order,
+                "files": files,
             }
 
     # Dispatch failures propagate to optional-context recovery; never run I/O on the loop.

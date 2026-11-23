@@ -15,6 +15,8 @@ from tests.readable_files_support import files, single_file
 
 # What the source binding of each tool call may read; reset for every test.
 _READABLE: dict = {}
+# Stored section names per file label, for the not-found answers.
+_OUTLINE: dict = {}
 
 
 class _Tracker:
@@ -38,7 +40,15 @@ def identity_function_tool(monkeypatch):
     monkeypatch.setattr(weaviate_search, "scoped_document_tool", lambda tool, **kwargs: tool)
     monkeypatch.setattr(weaviate_search, "retain_issued_spans", AsyncMock())
     _READABLE["value"] = single_file("doc-12345678")
+    _OUTLINE.clear()
     monkeypatch.setattr(weaviate_search, "current_readable_files", lambda: _READABLE["value"])
+
+    async def outline(document_id, user_id, *, readable):
+        # The stored section names of each readable file (none unless a test sets them).
+        return {"files": [{"name": label, "sections": _OUTLINE.get(label, [])}
+                          for label, _file in readable.labelled()]}
+
+    monkeypatch.setattr(weaviate_search, "get_document_sections_hierarchical", outline)
 
 
 def test_search_tool_schema_exposes_search_mode_enum(monkeypatch):
@@ -595,7 +605,8 @@ async def test_read_section_tool_no_content(monkeypatch):
     tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1", tracker=tracker)
     result = await tool("Methods")
 
-    assert "No content found for section" in result.summary
+    assert result.summary == "No section named 'Methods' in the readable files. Section names, exactly as stored: none."
+    assert result.error_code == "section_not_found"
     assert result.section is None
     assert captured["document_id"] == "doc-12345678"
     assert captured["parent_section"] == "Methods"
@@ -620,19 +631,21 @@ async def test_read_section_tool_returns_whole_numbered_passages_and_issues_them
                 "chunk_index": 19, "id": "chunk-methods-2",
                 "content": "Paragraph two",
                 "pageNumber": 3,
-                "parent_section": "Supplementary Methods",
+                "parent_section": "Materials and Methods",
                 "metadata": {"doc_items": [{"id": "bbox-2"}]},
             },
         ]
 
     monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _chunks)
     tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
-    result = await tool("Methods")
+    result = await tool("Materials and Methods")
 
     section = result.section
     assert section is not None
-    assert section.requested_section == "Methods"
-    assert section.matched_sections == ["Materials and Methods", "Supplementary Methods"]
+    assert result.error_code is None
+    assert section.requested_section == "Materials and Methods"
+    assert section.file == "paper.pdf"
+    assert not hasattr(section, "matched_sections")
     assert section.page_numbers == [2, 3]
     assert section.total_chunk_count == 2
     assert section.text_contains is None and section.matched_chunk_count is None
@@ -644,8 +657,7 @@ async def test_read_section_tool_returns_whole_numbered_passages_and_issues_them
     assert [s.text for s in section.passages[0].evidence_spans] == ["Paragraph one.", "It has two sentences."]
     assert section.passages[0].doc_items == [{"id": "bbox-1"}]
     assert section.passages[1].doc_items == [{"id": "bbox-2"}]
-    assert "'Materials and Methods', 'Supplementary Methods'" in result.summary
-    assert "Read all 2 chunks" in result.summary
+    assert result.summary.startswith("Read all 2 chunks of 'Materials and Methods'. Each passage lists")
     assert not hasattr(section, "content") and not hasattr(section, "source_chunks")
 
     # Every shown span is issued, in one batched call for the whole read.
@@ -681,7 +693,7 @@ async def test_read_section_tool_retrieves_provider_figure_metadata(monkeypatch)
     result = await tool(PROVIDER_FIGURE_METADATA_SECTION)
 
     assert result.section is not None
-    assert result.section.matched_sections == [PROVIDER_FIGURE_METADATA_SECTION]
+    assert result.section.file == "paper.pdf"
     assert "Fig. 1A shows wg expression" in result.section.passages[0].content
     assert result.section.passages[0].subsection == f"{PROVIDER_FIGURE_SUBSECTION_PREFIX} Figure 1"
 
@@ -716,7 +728,9 @@ async def test_read_subsection_tool_no_content_and_success(monkeypatch):
     tool = weaviate_search.create_read_subsection_tool("doc-123", "user-1")
     monkeypatch.setattr(weaviate_search, "get_chunks_by_subsection", _no_chunks)
     empty_result = await tool("Methods", "Fly Strains")
-    assert "No content found for subsection" in empty_result.summary
+    assert empty_result.summary == (
+        "No section named 'Methods' in the readable files. Section names, exactly as stored: none.")
+    assert empty_result.error_code == "section_not_found"
     assert empty_result.subsection is None
     assert captured == {
         "document_id": "doc-123", "parent_section": "Methods",
@@ -740,7 +754,7 @@ async def test_read_subsection_tool_no_content_and_success(monkeypatch):
                 "parent_section": "Methods",
                 "metadata": {
                     "pageNumber": 10,
-                    "subsection": "Fly Strains and stocks",
+                    "subsection": "Fly Strains",
                 },
                 "doc_items": [],
             },
@@ -752,15 +766,14 @@ async def test_read_subsection_tool_no_content_and_success(monkeypatch):
     assert section is not None
     assert section.requested_section == "Methods"
     assert section.requested_subsection == "Fly Strains"
-    assert section.matched_sections == ["Methods"]
-    assert section.matched_subsections == ["Fly Strains", "Fly Strains and stocks"]
+    assert section.file == "paper.pdf"
     assert section.page_numbers == [9, 10]
     assert [p.content for p in section.passages] == ["Line one", "Line two"]
     assert [p.chunk_id for p in section.passages] == ["chunk-subsection-1", "chunk-subsection-2"]
     assert section.total_chunk_count == 2
     assert section.passages[0].doc_items == [{"id": "bbox-1"}]
     assert section.passages[1].doc_items is None
-    assert "subsections 'Fly Strains', 'Fly Strains and stocks'" in success_result.summary
+    assert success_result.summary.startswith("Read all 2 chunks of 'Methods > Fly Strains'.")
     weaviate_search.retain_issued_spans.assert_awaited_once()
 
 
@@ -791,7 +804,7 @@ async def test_read_subsection_tool_retrieves_provider_figure_entry(monkeypatch)
     result = await tool(PROVIDER_FIGURE_METADATA_SECTION, provider_subsection)
 
     assert result.subsection is not None
-    assert result.subsection.matched_subsections == [provider_subsection]
+    assert result.subsection.file == "paper.pdf"
     assert "Fig. 2B shows eve expression" in result.subsection.passages[0].content
     assert result.subsection.passages[0].chunk_id == "chunk-provider-figure-2"
 
@@ -897,7 +910,7 @@ async def test_section_summary_names_no_sections_when_no_passage_has_a_section_n
     tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
 
     result = await tool("Results")
-    assert result.section.matched_sections == []
+    assert result.section.file == "paper.pdf"
     assert "Matched section names" not in result.summary
     assert result.summary.startswith("Read all 1 chunks of 'Results'. Each passage lists numbered sentences;")
 
@@ -1175,7 +1188,7 @@ async def test_subsection_real_retrieval_to_registered_tool_and_model_view(
     if mode == "filtered":
         payload["text_contains"] = "passage 0"
         selected = [0]
-    if mode in {"missing_identity", "missing_index"}:
+    if mode in {"missing_identity", "missing_index"} and not partial_name:
         from agr_ai_curation_runtime.document_errors import DocumentReadError
         with pytest.raises(DocumentReadError):
             await tool.on_invoke_tool(_build_tool_context(tool.name, payload), json.dumps(payload))
@@ -1183,17 +1196,19 @@ async def test_subsection_real_retrieval_to_registered_tool_and_model_view(
         return
     canonical = await tool.on_invoke_tool(_build_tool_context(tool.name, payload), json.dumps(payload))
     raw = canonical.model_dump(mode="json")
-    if mode == "no_match":
+    if mode == "no_match" or partial_name:
+        # Names are exact (Q9): "Animals" is not "Animals and expression".
         assert raw["subsection"] is None
-        assert "No content found" in raw["summary"]
-        assert set(raw) == {"summary", "subsection"}
+        assert raw["error_code"] == "section_not_found"
+        assert raw["summary"].startswith("No ")
+        weaviate_search.retain_issued_spans.assert_not_awaited()
         return
     result = raw["subsection"]
     assert [p["content"] for p in result["passages"]] == [texts[index] for index in selected]
     assert result["total_chunk_count"] == count
     assert result["matched_chunk_count"] == (1 if mode == "filtered" else None)
-    assert result["matched_sections"] == [parent]
-    assert result["matched_subsections"] == ["Animals and expression"]
+    assert result["file"] == "paper.pdf"
+    assert "matched_sections" not in result
     assert [p["chunk_id"] for p in result["passages"]] == [str(objects[index].uuid) for index in selected]
     assert [p["chunk_index"] for p in result["passages"]] == [30 + index for index in selected]
     view = _document_model_result("read_subsection", canonical)
@@ -1204,7 +1219,7 @@ async def test_subsection_real_retrieval_to_registered_tool_and_model_view(
         assert not {"content", "evidence_spans", "chunk_id", "doc_items"} & set(passage)
     assert emitted[0]["doc_items"] == [item for p in result["passages"] for item in p["doc_items"]]
     assert len(emitted) == 1
-    assert tenants == ["owner-1"]
+    assert tenants == ["owner-1", "owner-1"]  # names listed, then the chosen pieces read, both in the tenant
     assert all(str(obj.uuid) not in json.dumps(view) for obj in objects)
     (reads,), _ = weaviate_search.retain_issued_spans.await_args
     assert [(chunk["chunk_index"], chunk["id"], issued) for chunk, _spans, issued in reads] == [
@@ -1260,8 +1275,179 @@ async def test_read_section_reads_a_section_named_abstract(monkeypatch):
 
     section = result.section
     assert requested == ["Abstract"]
-    assert section is not None and section.matched_sections == ["Abstract"]
+    assert section is not None and section.file == "paper.pdf"
     assert [p.chunk_index for p in section.passages] == [0]
     assert [s.text for s in section.passages[0].evidence_spans] == [
         "A synthetic summary sentence.", "A second synthetic sentence.",
     ]
+
+
+# --- Exact section names within one file (Q9, P8c) ------------------------------------
+
+
+def _paper_with_two_sheets():
+    return files("doc-12345678", ("paper.pdf", 0, 11), ("Table S1.xlsx", 12, 13), ("Table S1.xlsx", 14, 15))
+
+
+def _sheet_chunk(index, section="Sheet1"):
+    return {"chunk_index": index, "id": f"chunk-{index}", "text": f"Row {index}.", "parent_section": section}
+
+
+@pytest.mark.asyncio
+async def test_a_section_in_several_files_asks_for_the_file(monkeypatch):
+    _READABLE["value"] = _paper_with_two_sheets()
+
+    async def _chunks(**kwargs):
+        return [_sheet_chunk(index) for index in range(12, 16) if kwargs["readable"].contains(index)]
+
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _chunks)
+    tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
+
+    result = await tool("Sheet1")
+
+    assert result.section is None
+    assert result.error_code == "section_ambiguous"
+    assert result.summary == (
+        "Section 'Sheet1' is in more than one file: Table S1.xlsx, Table S1.xlsx (2). "
+        "Call again with file set to one of these names."
+    )
+    weaviate_search.retain_issued_spans.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_reads_only_that_files_section(monkeypatch):
+    _READABLE["value"] = _paper_with_two_sheets()
+    asked = []
+
+    async def _chunks(**kwargs):
+        asked.append(kwargs["readable"])
+        return [_sheet_chunk(index) for index in range(12, 16) if kwargs["readable"].contains(index)]
+
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _chunks)
+    tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
+
+    result = await tool("Sheet1", file="Table S1.xlsx (2)")
+
+    assert result.error_code is None
+    assert result.section.file == "Table S1.xlsx (2)"
+    assert [p.chunk_index for p in result.section.passages] == [14, 15]
+    assert [(f.chunk_index_start, f.chunk_index_end) for f in asked[0].files] == [(14, 15)]
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_file_lists_the_readable_files(monkeypatch):
+    _READABLE["value"] = _paper_with_two_sheets()
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section",
+                        AsyncMock(side_effect=AssertionError("no read for an unknown file")))
+    tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
+
+    result = await tool("Sheet1", file="Table S2.xlsx")
+
+    assert result.error_code == "unknown_file"
+    assert result.summary == (
+        "There is no readable file named 'Table S2.xlsx'. "
+        "Readable files: paper.pdf, Table S1.xlsx, Table S1.xlsx (2)."
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_short_name_gets_every_exact_name_file_by_file(monkeypatch):
+    """A built-in prompt still saying read_section('Methods') gets a helpful answer, not an error."""
+    _READABLE["value"] = files("doc-12345678", ("paper.pdf", 0, 11), ("Table S1.xlsx", 12, 13))
+    _OUTLINE["paper.pdf"] = [{"name": "Introduction", "subsections": []},
+                             {"name": "Materials and Methods", "subsections": [{"name": "Fly strains"}]}]
+    _OUTLINE["Table S1.xlsx"] = [{"name": "Sheet1", "subsections": []}]
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", AsyncMock(return_value=[]))
+    tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
+
+    result = await tool("Methods")
+
+    assert result.section is None
+    assert result.error_code == "section_not_found"
+    assert result.summary == (
+        "No section named 'Methods' in the readable files. Section names, exactly as stored: "
+        "paper.pdf: 'Introduction', 'Materials and Methods'; Table S1.xlsx: 'Sheet1'."
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_missing_subsection_lists_that_sections_subsections(monkeypatch):
+    _OUTLINE["paper.pdf"] = [{"name": "Materials and Methods",
+                              "subsections": [{"name": "Fly strains"}, {"name": "Imaging"}]}]
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_subsection", AsyncMock(return_value=[]))
+    tool = weaviate_search.create_read_subsection_tool("doc-12345678", "user-1")
+
+    result = await tool("Materials and Methods", "Strains")
+
+    assert result.error_code == "section_not_found"
+    assert result.summary == (
+        "No subsection 'Strains' in section 'Materials and Methods' in the readable files. "
+        "Subsection names of 'Materials and Methods', exactly as stored: paper.pdf: 'Fly strains', 'Imaging'."
+    )
+
+
+@pytest.mark.asyncio
+async def test_section_answers_reach_the_model_and_do_not_end_the_run(monkeypatch):
+    from agents import function_tool
+    from src.lib.agent_studio.catalog_service import _document_model_result
+
+    monkeypatch.setattr(weaviate_search, "function_tool", function_tool)
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", AsyncMock(return_value=[]))
+    tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
+    payload = {"section_name": "Methods"}
+
+    result = await tool.on_invoke_tool(_build_tool_context(tool.name, payload), json.dumps(payload))
+
+    assert _document_model_result("read_section", result.model_dump(mode="json"))["error_code"] == "section_not_found"
+
+
+def test_section_tools_take_an_optional_file(monkeypatch):
+    from agents import function_tool
+
+    monkeypatch.setattr(weaviate_search, "function_tool", function_tool)
+    for factory in (weaviate_search.create_read_section_tool, weaviate_search.create_read_subsection_tool):
+        schema = factory("doc-12345678", "user-1").params_json_schema
+        assert "file" in schema["properties"]
+
+
+@pytest.mark.asyncio
+async def test_a_subsection_of_a_section_without_subsections_says_so(monkeypatch):
+    """Recorded call shape: read_subsection("Methods", "Animals") on a paper whose Methods has none."""
+    _OUTLINE["paper.pdf"] = [{"name": "Introduction", "subsections": []}, {"name": "Methods", "subsections": []}]
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_subsection", AsyncMock(return_value=[]))
+    tool = weaviate_search.create_read_subsection_tool("doc-12345678", "user-1")
+
+    result = await tool("Methods", "Animals")
+
+    assert result.error_code == "section_not_found"
+    assert result.summary == (
+        "Section 'Methods' in the readable files has no subsections. Read it whole with read_section."
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_subsection_of_a_missing_section_gets_the_section_names(monkeypatch):
+    _OUTLINE["paper.pdf"] = [{"name": "Materials and Methods", "subsections": [{"name": "Animals"}]}]
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_subsection", AsyncMock(return_value=[]))
+    tool = weaviate_search.create_read_subsection_tool("doc-12345678", "user-1")
+
+    result = await tool("Methods", "Animals")
+
+    assert result.summary == (
+        "No section named 'Methods' in the readable files. "
+        "Section names, exactly as stored: paper.pdf: 'Materials and Methods'."
+    )
+
+
+@pytest.mark.asyncio
+async def test_pieces_without_a_stored_section_name_are_not_offered_as_a_name(monkeypatch):
+    _OUTLINE["paper.pdf"] = [{"name": "Unknown", "name_stored": False, "subsections": []},
+                             {"name": "Results", "name_stored": True, "subsections": []}]
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", AsyncMock(return_value=[]))
+    tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
+
+    result = await tool("Methods")
+
+    assert result.summary == (
+        "No section named 'Methods' in the readable files. Section names, exactly as stored: paper.pdf: 'Results'."
+    )

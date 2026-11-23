@@ -4396,9 +4396,15 @@
     "documentation": {
       "parameters": [
         {
-          "description": "The section to read, such as Methods or Introduction.",
+          "description": "The section to read, exactly as the paper's outline names it, such as Materials and Methods.",
           "name": "section_name",
           "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The file that holds the section, when more than one file has a section of that name.",
+          "name": "file",
+          "required": false,
           "type": "string"
         },
         {
@@ -4408,7 +4414,7 @@
           "type": "string"
         }
       ],
-      "summary": "Returns the complete text of every passage in a section, grouped by the paper's own structure rather than by page order, however long the section is, so it gives full coverage of the section even when a search might overlook a faintly matching passage. This is the way to read an entire section, including tables and figure legends. Every passage is read in full and shown as numbered sentences, and any of those sentences can be saved as evidence directly, without reading the passage again. The section name matches as part of a name, so Methods also matches Materials and Methods; the result lists every section name that matched. In a table, each row is one numbered line, shown under the table's column names."
+      "summary": "Returns the complete text of every passage in a section, grouped by the paper's own structure rather than by page order, however long the section is, so it gives full coverage of the section even when a search might overlook a faintly matching passage. This is the way to read an entire section, including tables and figure legends. Every passage is read in full and shown as numbered sentences, and any of those sentences can be saved as evidence directly, without reading the passage again. The section name must match the paper's outline exactly; when a paper has several files with a section of that name, the file is named too. In a table, each row is one numbered line, shown under the table's column names."
     },
     "methods": null,
     "name": "Read Section",
@@ -4444,13 +4450,19 @@
           "type": "string"
         },
         {
+          "description": "The file that holds the subsection, when more than one file has that subsection.",
+          "name": "file",
+          "required": false,
+          "type": "string"
+        },
+        {
           "description": "Return only the passages containing this text (case-insensitive), each one whole, and say how many of the subsection's passages matched.",
           "name": "text_contains",
           "required": false,
           "type": "string"
         }
       ],
-      "summary": "Returns the complete text of every passage in one subsection, grouped by the paper's own structure rather than by page order, however long it is, so it gives full coverage of that subsection even when a search might overlook a faintly matching passage. This is the way to read a whole subsection, including its figure legends. Every passage is read in full and shown as numbered sentences, and any of those sentences can be saved as evidence directly, without reading the passage again. Both names match as part of a name; the result lists every section and subsection name that matched. In a table, each row is one numbered line, shown under the table's column names."
+      "summary": "Returns the complete text of every passage in one subsection, grouped by the paper's own structure rather than by page order, however long it is, so it gives full coverage of that subsection even when a search might overlook a faintly matching passage. This is the way to read a whole subsection, including its figure legends. Every passage is read in full and shown as numbered sentences, and any of those sentences can be saved as evidence directly, without reading the passage again. Both names must match the paper's outline exactly; when a paper has several files with that subsection, the file is named too. In a table, each row is one numbered line, shown under the table's column names."
     },
     "methods": null,
     "name": "Read Subsection",
@@ -4751,7 +4763,7 @@
     "agent_methods": null,
     "binding_kind": "context_factory",
     "category": "Document",
-    "description": "Search the uploaded PDF for passages relevant to a query, using meaning-based matching, exact word matching, or a blend.",
+    "description": "Search the paper's files for passages relevant to a query, using meaning-based matching, exact word matching, or a blend.",
     "documentation": {
       "parameters": [
         {
@@ -4785,7 +4797,7 @@
           "type": "enum"
         }
       ],
-      "summary": "Finds passages in the uploaded PDF that match a query. The default blended search combines meaning-based and exact-word matching, so it catches passages worded differently from the query (for example \"expressed in\" versus \"detected in\"). Exact-word matching is best for specific gene symbols, strains, alleles, probes, or identifiers, and very short queries automatically lean on exact-word matching. The search can be limited to particular sections, such as Results or figure legends. The matching passages can then be read in full to pick out exact supporting quotes. Every selected match is returned in rank order with its full text. Read Chunk provides the exact spans used to record evidence."
+      "summary": "Finds passages in the paper's files that match a query. The default blended search combines meaning-based and exact-word matching, so it catches passages worded differently from the query (for example \"expressed in\" versus \"detected in\"). Exact-word matching is best for specific gene symbols, strains, alleles, probes, or identifiers, and very short queries automatically lean on exact-word matching. The search can be limited to particular sections, such as Results or figure legends. The matching passages can then be read in full to pick out exact supporting quotes. Every selected match is returned in rank order with its full text. Read Chunk provides the exact spans used to record evidence."
     },
     "methods": null,
     "name": "Search Document",

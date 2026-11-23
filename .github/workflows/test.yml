@@ -242,7 +242,7 @@ jobs:
           echo "## Contract Core Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Contract-core tests completed." >> $GITHUB_STEP_SUMMARY
-          echo "Legacy/stale contract tests remain out-of-scope for this gate and are tracked in docs/developer/TEST_STRATEGY.md." >> $GITHUB_STEP_SUMMARY
+          echo "Runs all of backend/tests/contract; legacy fail-first specs and live curation DB contracts skip themselves." >> $GITHUB_STEP_SUMMARY
 
   trace-review-backend-tests:
     name: TraceReview Backend Tests

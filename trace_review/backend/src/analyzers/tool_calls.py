@@ -17,7 +17,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from .document_read_results import SECTION_READ_RESULT_KEYS, section_read_display
+from .document_read_results import SECTION_ANSWER_CODES, SECTION_READ_RESULT_KEYS, section_read_display
 from .domain_envelopes import DomainEnvelopeTraceAnalyzer
 from .compact_validators import annotate_compact_validator_calls
 
@@ -72,6 +72,12 @@ class ToolResultParser:
                     result["parsed"]["warnings"] = warnings
                 result["summary"] = cls._generate_json_summary(json_data)
                 section_reads = cls._section_reads(tool_name, json_data)
+                answer = cls._section_answer(tool_name, json_data)
+                if answer:
+                    # The read asked for a name the paper does not have (or in several files);
+                    # the model got the exact names back and the run went on.
+                    result["parsed"]["section_answer"] = answer
+                    result["summary"] = f"Answer: {answer['error_code']}. {answer['summary']}"
                 if section_reads:
                     result["parsed"].update(section_reads)
                     result["summary"] = cls._generate_summary(
@@ -104,6 +110,16 @@ class ToolResultParser:
             result["parse_status"] = "unparsed"
 
         return result
+
+    @classmethod
+    def _section_answer(cls, tool_name: Optional[str], json_data: Any) -> Optional[Dict[str, Any]]:
+        """A section read answered with section_not_found, section_ambiguous or unknown_file (0.12.0)."""
+        if tool_name not in SECTION_READ_RESULT_KEYS or not isinstance(json_data, dict):
+            return None
+        code = json_data.get("error_code")
+        if code not in SECTION_ANSWER_CODES:
+            return None
+        return {"error_code": code, "summary": json_data.get("summary") or ""}
 
     @classmethod
     def _section_reads(cls, tool_name: Optional[str], json_data: Any) -> Dict[str, Any]:
@@ -901,11 +917,18 @@ class ToolCallAnalyzer:
         # Detect duplicates
         duplicates_info = ToolCallAnalyzer._detect_duplicates(tool_calls)
 
+        section_answers = {code: 0 for code in SECTION_ANSWER_CODES}
+        for call in tool_calls:
+            answer = ((call.get("tool_result") or {}).get("parsed") or {}).get("section_answer")
+            if answer:
+                section_answers[answer["error_code"]] += 1
+
         return {
             "total_count": len(tool_calls),
             "unique_tools": unique_tools,
             "tool_calls": tool_calls,
-            "duplicates": duplicates_info
+            "duplicates": duplicates_info,
+            "section_answers": section_answers,
         }
 
     @staticmethod

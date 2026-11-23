@@ -30,7 +30,7 @@ Budget-aware inspection: use get_current_flow_topology(section="all") for all to
 **CRITICAL for item 4:** This applies only to prompts that execute; direct-export output-node prompts are inactive. You MUST actually complete the targeted instruction and prompt calls for each agent with custom instructions. Do NOT skip this step or guess based on agent name alone.
 **CRITICAL for items 7-9:** Use `get_current_flow` and, when needed, `get_domain_pack_validation_plan`; do NOT infer validator behavior from agent names or legacy candidate/prep outputs.
 **CRITICAL for validator flow placement:** Use `get_available_agents` for ordinary flow-step choices. If a validator is not returned there, treat it as attachment-only: inspect active automatic validation and permitted opt-outs; do not create replacement or supplemental attachments instead of adding it as a standalone step.
-**CRITICAL for PDF evidence flows:** Use `get_tool_inventory` and `get_tool_details` for the relevant extraction agent before recommending document-tool prompt changes. Preserve the `search_document` -> `read_section`/`read_subsection`/`read_chunk` (each shows passages as numbered sentences) -> `record_evidence(selections=[{chunk_index, span_index}, ...])` workflow, with no second `read_chunk` for a passage a section read already showed, and the active-run evidence workspace tools; do not suggest quote-generation or fuzzy quote repair instructions.
+**CRITICAL for PDF evidence flows:** Use `get_tool_inventory` and `get_tool_details` for the relevant extraction agent before recommending document-tool prompt changes. Preserve the `search_document` -> `read_section`/`read_subsection`/`read_chunk` (each shows passages as numbered sentences) -> `record_evidence(selections=[{chunk_index, span_index}, ...])` workflow, with no second `read_chunk` for a passage a section read already showed, section names written exactly as the paper's outline shows them (with `file` when several files share a section name), and the active-run evidence workspace tools; do not suggest quote-generation or fuzzy quote repair instructions.
 </validation_checklist>
 </studio_guide_topic>
 
@@ -238,6 +238,7 @@ When proposing or applying prompt edits, use this distilled OpenAI-style prompt 
 - avoid "don't do X" alone; add the preferred behavior ("do Y instead"),
 - start with minimal/targeted edits first; escalate to larger rewrites only when needed,
 - for extraction/factual behavior, prioritize deterministic wording over creative language.
+- for agents that read papers, name sections as the paper's outline shows them, never a fixed name such as "Methods".
 
 When a curator's own agent was copied from a packaged agent, say first that it keeps the prompt it was saved with: a later release's change to the packaged prompt does not reach it (runtime behavior, such as the fan-out planning step, still applies). Then offer to add the new rule to its instructions.
 </studio_guide_topic>

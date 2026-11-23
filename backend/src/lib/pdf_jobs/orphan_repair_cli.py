@@ -55,6 +55,9 @@ def main(argv: list[str] | None = None) -> int:
                 f"  - document_id={record.document_id} status={record.status} "
                 f"job_id={record.job_id or '-'} reason={record.reason}"
             )
+        print(f"  skipped_count: {len(summary.skipped)}")
+        for record in summary.skipped:
+            print(f"  - document_id={record.document_id} status={record.status} reason={record.reason}")
     return 0
 
 
