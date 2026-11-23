@@ -270,20 +270,6 @@ async def test_unconverted_changed_unlisted_and_already_added_files_are_left_out
 
 
 @pytest.mark.asyncio
-async def test_a_converted_pdf_supplement_is_left_out_until_p7c2(monkeypatch, storage):
-    # The add refuses it itself, with the code the listing shows: it is never stored as text.
-    _, provider = _provider([*ROWS, *_pair(70, "WB", extension="pdf")], {**GOOD, "71": GOOD["21"]})
-    _paper_lookup(monkeypatch)
-    result = await _add(provider, [_chosen(70), _chosen(20)])
-
-    outcomes = _by_id(result)
-    assert outcomes["70"].outcome == "left_out"
-    assert outcomes["70"].reason_code is FileReason.PDF_SUPPLEMENT_NOT_SUPPORTED_YET
-    assert outcomes["20"].outcome == "added"
-    assert [row.display_name for row in storage.inserted] == ["Made_up_S20.xlsx"]
-
-
-@pytest.mark.asyncio
 async def test_the_paper_total_counts_the_main_file_and_later_smaller_files_can_still_fit(monkeypatch, storage):
     monkeypatch.setenv("DOCUMENT_PAPER_MAX_TEXT_BYTES", "1100")
     big = _workbook("Made_up_S20", *[f"Sheet{index}" for index in range(8)])

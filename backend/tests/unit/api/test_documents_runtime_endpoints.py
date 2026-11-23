@@ -1209,6 +1209,8 @@ async def test_delete_document_endpoint_removes_text_source_markdown(monkeypatch
     _patch_session_factory(monkeypatch, [verify_session, snapshot_session, cleanup_session])
 
     monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
+    # The shared stored-file helper reads the same setting where it is defined.
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
     monkeypatch.setattr(documents, "delete_document", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 0}))
@@ -1252,6 +1254,8 @@ async def test_delete_document_endpoint_uses_snapshot_when_helper_removes_sql_ro
     _patch_session_factory(monkeypatch, [verify_session, snapshot_session, cleanup_session])
 
     monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
+    # The shared stored-file helper reads the same setting where it is defined.
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
     monkeypatch.setattr(documents, "delete_document", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 2}))
@@ -1287,6 +1291,8 @@ async def test_delete_document_endpoint_raises_when_cleanup_fails(monkeypatch, t
     _patch_session_factory(monkeypatch, [verify_session, snapshot_session, cleanup_session])
 
     monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
+    # The shared stored-file helper reads the same setting where it is defined.
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
     monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
     monkeypatch.setattr(documents, "delete_document", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 0}))
@@ -1294,11 +1300,11 @@ async def test_delete_document_endpoint_raises_when_cleanup_fails(monkeypatch, t
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
 
-    def _raise_cleanup(**kwargs):
-        if kwargs.get("relative_path"):
+    def _raise_cleanup(paths, *, owner_subject):
+        if list(paths):
             raise RuntimeError("source cleanup failed")
 
-    monkeypatch.setattr(documents, "_unlink_user_storage_file_if_present", _raise_cleanup)
+    monkeypatch.setattr(documents, "remove_stored_files", _raise_cleanup)
     caplog.set_level(logging.ERROR, logger=documents.logger.name)
 
     with pytest.raises(HTTPException) as exc:

@@ -84,8 +84,10 @@ from ..models.api_schemas import (
 )
 from ..models.document import EmbeddingStatus, ProcessingStatus
 from ..models.sql.database import SessionLocal
+from ..lib.document_files.service import remove_stored_files
 from ..models.sql.pdf_document import (
     DISPLAY_MODE_TEXT,
+    FILE_ROLE_SUPPLEMENT,
     PDFDocument as ViewerPDFDocument,
     PDFDocumentFile,
 )
@@ -741,6 +743,7 @@ def _document_cleanup_snapshot(document: ViewerPDFDocument) -> dict[str, Any]:
         "id": document.id,
         "files": [
             {
+                "role": file_row.role,
                 "display_mode": file_row.display_mode,
                 "file_path": file_row.file_path,
                 "pdfx_json_path": file_row.pdfx_json_path,
@@ -752,25 +755,46 @@ def _document_cleanup_snapshot(document: ViewerPDFDocument) -> dict[str, Any]:
     }
 
 
-def _unlink_user_storage_file_if_present(
-    *,
-    base_storage: FilePath,
-    relative_path: str | None,
-    user_sub: str,
-    document_id: str,
-    label: str,
-) -> None:
-    """Delete one stored artifact after validating it belongs to the user."""
-    if not relative_path:
-        return
-    artifact_path = validate_user_file_path(
-        base_storage / relative_path,
-        base_storage,
-        user_sub,
+def _removed_paths(file_values: dict[str, Any]) -> tuple[str, ...]:
+    """The stored paths a paper delete removes for one file row.
+
+    A text file's ``file_path`` is a provider placeholder, never removed.
+    """
+
+    keys = ("pdfx_json_path", "processed_json_path", "source_markdown_path") + (
+        () if file_values["display_mode"] == DISPLAY_MODE_TEXT else ("file_path",)
     )
-    if artifact_path.exists():
-        artifact_path.unlink()
-        logger.info("Deleted %s for document %s", label, document_id)
+    return tuple(file_values[key] for key in keys if file_values[key])
+
+
+def _require_removable_paths(cleanup_values: dict[str, Any], base_storage: FilePath, user_sub: str) -> None:
+    """Refuse (403) when any path a paper delete would remove lies outside the curator's storage."""
+
+    for file_values in cleanup_values["files"]:
+        for relative in _removed_paths(file_values):
+            path = _removable_path(base_storage, relative, user_sub)
+            # A stored path names a file; a real folder there only comes from a corrupted
+            # row, and the delete must not start (it would fail half-way).
+            if path.is_dir() and not path.is_symlink():
+                logger.warning("A stored path names a folder, not a file: %s for %s", relative, user_sub)
+                raise HTTPException(status_code=403, detail="Access denied: file path validation failed")
+
+
+def _removable_path(base_storage: FilePath, relative: str, user_sub: str) -> FilePath:
+    """The path a delete may remove for one stored path (else 403).
+
+    The one rule (``storage_paths.owner_storage_entry``): the path's folder, resolved,
+    lies inside the curator's storage, and the path's own name is not followed, so a
+    link is removed as a link and its target is never touched.
+    """
+
+    from src.lib.document_files.storage_paths import StoredPathOutsideOwnerStorage, owner_storage_entry
+
+    try:
+        return owner_storage_entry(base_storage / relative, base_storage, user_sub)
+    except StoredPathOutsideOwnerStorage as exc:
+        logger.warning("Path traversal attempt detected: %s sits outside user storage for %s", relative, user_sub)
+        raise HTTPException(status_code=403, detail="Access denied: file path validation failed") from exc
 
 
 def _delete_user_document_directory_or_file_if_present(
@@ -780,23 +804,46 @@ def _delete_user_document_directory_or_file_if_present(
     user_sub: str,
     document_id: str,
 ) -> None:
-    """Delete an uploaded PDF artifact directory, or the file if it lives at user root."""
+    """Delete a main file's stored PDF: its paper folder only when the path proves it.
+
+    The one rule for what a paper delete may remove (ALL-1460, P7c2): the folder
+    ``{user}/{document_id}/`` is removed only when the stored path, resolved inside
+    the user's storage, lies under exactly that folder and the folder is not a link.
+    Any other layout (a file directly under the user's folder, a file in a shared
+    subfolder) loses only the file itself; a link loses only the link, never its
+    target. A path outside the user's storage is refused (403) before the delete
+    starts (``_require_removable_paths``).
+    """
     if not relative_path:
         return
-    file_path = validate_user_file_path(
-        base_storage / relative_path,
-        base_storage,
-        user_sub,
-    )
+    file_path = _removable_path(base_storage, relative_path, user_sub)
     user_storage_root = (base_storage.resolve() / user_sub).resolve()
-    doc_dir = file_path.parent
-    if doc_dir.exists() and doc_dir != user_storage_root:
-        shutil.rmtree(doc_dir)
+    paper_dir = user_storage_root / document_id
+    owns_folder = (
+        file_path.relative_to(user_storage_root).parts[:1] == (document_id,)
+        and len(file_path.relative_to(user_storage_root).parts) >= 2
+        and not paper_dir.is_symlink()
+        and paper_dir.resolve() == paper_dir
+    )
+    if owns_folder and paper_dir.is_dir():
+        shutil.rmtree(paper_dir)
         logger.info("Deleted filesystem artifacts for document %s", document_id)
         return
-    if file_path.exists():
+    if file_path.is_symlink() or file_path.exists():
         file_path.unlink()
         logger.info("Deleted PDF file for document %s", document_id)
+
+
+def _remove_empty_paper_folders(base_storage: FilePath, user_sub: str, document_id: str) -> None:
+    """Remove ``{user}/{paper}/supplement_pdf/`` and then ``{user}/{paper}/`` when they are empty.
+
+    Only empty folders, with ``rmdir``: never a folder that still holds anything.
+    """
+
+    paper_dir = base_storage.resolve() / user_sub / document_id
+    for folder in (paper_dir / "supplement_pdf", paper_dir):
+        if folder.is_dir() and not folder.is_symlink() and not any(folder.iterdir()):
+            folder.rmdir()
 
 
 def _pipeline_payload_from_job(job: Any) -> dict[str, Any] | None:
@@ -1605,6 +1652,13 @@ async def delete_document_endpoint(
                         snapshot_session.close()
 
                 cleanup_snapshot = await asyncio.to_thread(snapshot_for_cleanup)
+                # Every path this delete would remove must stay inside the curator's storage,
+                # checked before anything is deleted (pieces, index object, rows, files): one
+                # outside refuses the whole delete (403) and the paper stays as it was.
+                if cleanup_snapshot:
+                    await asyncio.to_thread(
+                        _require_removable_paths, cleanup_snapshot, FilePath(get_pdf_storage_path()), str(user["sub"]),
+                    )
 
                 result = {"success": True, "chunks_deleted": 0}
                 if not document_missing_in_weaviate:
@@ -1635,45 +1689,29 @@ async def delete_document_endpoint(
                             # Delete physical files
                             base_storage = FilePath(get_pdf_storage_path())
                             user_sub = str(user["sub"])
-
+                            single_files: list[str] = []
                             for file_values in cleanup_values["files"]:
-                                # 1. Delete original PDF directory/file for normal uploads.
-                                # Text files use file_path as a provider placeholder and
-                                # store the downloaded artifact separately.
-                                if file_values["display_mode"] != DISPLAY_MODE_TEXT:
+                                # A main stored PDF may take its paper folder with it (only
+                                # when the path proves the folder is this paper's). Every
+                                # other stored path, whatever the row's status, is removed
+                                # one file at a time by the one shared helper, which never
+                                # removes a folder and never follows a link (ALL-1460).
+                                if (file_values["role"] != FILE_ROLE_SUPPLEMENT
+                                        and file_values["display_mode"] != DISPLAY_MODE_TEXT):
                                     _delete_user_document_directory_or_file_if_present(
                                         base_storage=base_storage,
                                         relative_path=file_values["file_path"],
                                         user_sub=user_sub,
                                         document_id=document_id,
                                     )
-
-                                # 2. Delete PDFX JSON: {user_id}/pdfx_json/{doc_id}.json
-                                _unlink_user_storage_file_if_present(
-                                    base_storage=base_storage,
-                                    relative_path=file_values["pdfx_json_path"],
-                                    user_sub=user_sub,
-                                    document_id=document_id,
-                                    label="PDFX JSON",
-                                )
-
-                                # 3. Delete Processed JSON: the file's stored processed_json_path
-                                _unlink_user_storage_file_if_present(
-                                    base_storage=base_storage,
-                                    relative_path=file_values["processed_json_path"],
-                                    user_sub=user_sub,
-                                    document_id=document_id,
-                                    label="Processed JSON",
-                                )
-
-                                # 4. Delete provider/source Markdown: the file's stored source_markdown_path
-                                _unlink_user_storage_file_if_present(
-                                    base_storage=base_storage,
-                                    relative_path=file_values["source_markdown_path"],
-                                    user_sub=user_sub,
-                                    document_id=document_id,
-                                    label="Source Markdown",
-                                )
+                                    single_files.extend(
+                                        path for path in _removed_paths(file_values)
+                                        if path != file_values["file_path"]
+                                    )
+                                else:
+                                    single_files.extend(_removed_paths(file_values))
+                            remove_stored_files(single_files, owner_subject=user_sub)
+                            _remove_empty_paper_folders(base_storage, user_sub, document_id)
 
                             # Delete DB record
                             if doc_to_delete:

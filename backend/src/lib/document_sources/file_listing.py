@@ -65,7 +65,6 @@ from src.lib.document_sources.models import (
     DocumentSourceUnavailable,
     ProviderBearerKind,
     SourceArtifact,
-    SourceArtifactFormat,
     SourceArtifactRole,
     SourceReference,
     SupplementFileCategory,
@@ -214,8 +213,11 @@ def converted_text_access_allowed(
     return _authorized(original, groups) and _authorized(converted, groups)
 
 
-class ConvertedTextDownloadFailure(str, Enum):
-    """Why a converted text could not be downloaded. Values are codes; never rename one."""
+class ProviderFileDownloadFailure(str, Enum):
+    """Why a provider file (a converted text or an original PDF) could not be downloaded.
+
+    Values are codes; never rename one (a listing check stores them as ``text_*``).
+    """
 
     TOO_LARGE = "too_large"
     UNAVAILABLE = "text_unavailable"
@@ -231,7 +233,7 @@ class DownloadOutcome(Generic[R]):
     """What ``use`` returned for the downloaded bytes, or why there were no bytes."""
 
     result: R | None = None
-    failure: ConvertedTextDownloadFailure | None = None
+    failure: ProviderFileDownloadFailure | None = None
     limit_value: int | None = None
 
 
@@ -252,7 +254,7 @@ def _download_limiter() -> asyncio.Semaphore:
     return limiter
 
 
-async def download_converted_text(
+async def download_provider_file(
     provider: DocumentSourceProvider,
     artifact_id: str,
     *,
@@ -260,7 +262,10 @@ async def download_converted_text(
     max_bytes: int,
     use: Callable[[bytes], R],
 ) -> DownloadOutcome[R]:
-    """Download one converted text and hand its bytes to ``use``, within the process-wide limit.
+    """Download one provider file and hand its bytes to ``use``, within the process-wide limit.
+
+    The one bounded download for a converted text (listing checks, adds) and a
+    supplement's original PDF (adds).
 
     At most ``DOCUMENT_FILE_DOWNLOAD_CONCURRENCY`` downloads run at once across the
     process, and a download stops past ``max_bytes``. ``use`` runs in a worker
@@ -275,13 +280,13 @@ async def download_converted_text(
                 artifact_id, request_bearer_token=request_bearer_token, max_bytes=max_bytes,
             )
         except DocumentSourceArtifactTooLarge as exc:
-            return DownloadOutcome(failure=ConvertedTextDownloadFailure.TOO_LARGE, limit_value=exc.max_bytes)
+            return DownloadOutcome(failure=ProviderFileDownloadFailure.TOO_LARGE, limit_value=exc.max_bytes)
         except DocumentSourceUnavailable:
-            return DownloadOutcome(failure=ConvertedTextDownloadFailure.UNAVAILABLE)
+            return DownloadOutcome(failure=ProviderFileDownloadFailure.UNAVAILABLE)
         except DocumentSourceArtifactNotFound:
-            return DownloadOutcome(failure=ConvertedTextDownloadFailure.MISSING)
+            return DownloadOutcome(failure=ProviderFileDownloadFailure.MISSING)
         except DocumentSourceAccessDenied:
-            return DownloadOutcome(failure=ConvertedTextDownloadFailure.ACCESS_DENIED)
+            return DownloadOutcome(failure=ProviderFileDownloadFailure.ACCESS_DENIED)
         return DownloadOutcome(result=await asyncio.to_thread(use, content))
 
 
@@ -511,11 +516,11 @@ async def list_reference_files(
         text = candidate.converted
         assert text is not None and text.md5sum
         profile = FileProfile(single_title_required=provider.converted_text_has_single_title(candidate.original))
-        outcome = await download_converted_text(
+        outcome = await download_provider_file(
             provider, text.artifact_id, request_bearer_token=request_bearer_token,
             max_bytes=limits.max_bytes, use=lambda content: assess_converted_file(content, profile, limits),
         )
-        if outcome.failure is ConvertedTextDownloadFailure.TOO_LARGE:
+        if outcome.failure is ProviderFileDownloadFailure.TOO_LARGE:
             assessment = FileAssessment(refused=True, reason=FileReason.TOO_LARGE, limit_value=outcome.limit_value)
         elif outcome.failure is not None:
             # Not a property of the file: reported, never stored, tried once per listing.
@@ -544,10 +549,6 @@ async def list_reference_files(
         check = checks.get(original.artifact_id, ListedFileCheck(ListedFileCheckStatus.NOT_CHECKED))
         not_tickable = paper_reason or _not_tickable_reason(
             status=status, check=check, in_this_paper=in_this_paper, unconverted_tickable=unconverted_tickable,
-            # Until P7c2 a PDF supplement cannot be added as its PDF (the provider's file format field).
-            pdf_supplement_on_paper=(
-                route is ListingRoute.PAPER and original.artifact_format is SourceArtifactFormat.PDF
-            ),
         )
         files.append(ListedFile(
             provider_file_id=original.artifact_id,
@@ -632,7 +633,6 @@ def _not_tickable_reason(
     check: ListedFileCheck,
     in_this_paper: bool,
     unconverted_tickable: bool,
-    pdf_supplement_on_paper: bool,
 ) -> FileReason | None:
     """Why a supplement cannot be ticked, or ``None`` when it can. Codes from ``NOT_TICKABLE_REASONS``.
 
@@ -647,8 +647,6 @@ def _not_tickable_reason(
 
     if in_this_paper:
         return FileReason.ALREADY_IN_PAPER
-    if pdf_supplement_on_paper:
-        return FileReason.PDF_SUPPLEMENT_NOT_SUPPORTED_YET
     if status is ListedFileStatus.LARGE_DATA_FILE:
         return FileReason.LARGE_DATA_FILE
     if status is ListedFileStatus.TYPE_NOT_SUPPORTED:
