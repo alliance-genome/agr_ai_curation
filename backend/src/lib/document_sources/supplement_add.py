@@ -44,7 +44,7 @@ from src.lib.document_sources.file_listing import (
     download_converted_text,
 )
 from src.lib.document_sources.file_reasons import ADD_REFUSAL_REASONS, FileReason, SupplementState
-from src.lib.document_sources.models import DocumentSourceError, DocumentSourceProvider
+from src.lib.document_sources.models import DocumentSourceError, DocumentSourceProvider, SourceArtifactFormat
 from src.lib.observability.cost_context import costed_document_processing
 from src.models.sql.pdf_document import (
     DISPLAY_MODE_TEXT,
@@ -235,6 +235,11 @@ async def add_files_to_paper(
         if listed.file_role != FILE_ROLE_SUPPLEMENT:
             # A paper's main file is never added to an existing paper.
             outcomes[file_id] = left_out(FileReason.FILE_NOT_TICKABLE)
+            continue
+        if listed.source_artifact.artifact_format is SourceArtifactFormat.PDF:
+            # Until P7c2 adds a PDF supplement as its PDF, never store one as text. The add's
+            # own rule on the provider's file format, whatever the listing flag says.
+            outcomes[file_id] = left_out(FileReason.PDF_SUPPLEMENT_NOT_SUPPORTED_YET)
             continue
         if listed.converted_md5 != chosen.converted_md5 or listed.md5 != chosen.md5:
             outcomes[file_id] = left_out(FileReason.FILE_CHANGED_SINCE_LISTED)

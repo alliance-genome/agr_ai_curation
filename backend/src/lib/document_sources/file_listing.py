@@ -65,6 +65,7 @@ from src.lib.document_sources.models import (
     DocumentSourceUnavailable,
     ProviderBearerKind,
     SourceArtifact,
+    SourceArtifactFormat,
     SourceArtifactRole,
     SourceReference,
     SupplementFileCategory,
@@ -428,9 +429,10 @@ async def list_reference_files(
             artifact_format=source.artifact_format.value,
             category=None,
             single_title_required=False,
-            # The main paper is always part of an import; it is never added twice.
-            tickable=paper_reason is None and not main_in_paper,
-            not_tickable_reason=paper_reason or (FileReason.ALREADY_IN_PAPER if main_in_paper else None),
+            # The main paper is always part of an import; it is never added twice. On the
+            # per-paper listing it is never added at all: the paper already has its main.
+            tickable=paper_reason is None and route is not ListingRoute.PAPER,
+            not_tickable_reason=paper_reason or _main_not_tickable_reason(route, main_in_paper=main_in_paper),
             last_provider_observation=None,
             source_artifact=source,
             converted_artifact=converted,
@@ -542,6 +544,10 @@ async def list_reference_files(
         check = checks.get(original.artifact_id, ListedFileCheck(ListedFileCheckStatus.NOT_CHECKED))
         not_tickable = paper_reason or _not_tickable_reason(
             status=status, check=check, in_this_paper=in_this_paper, unconverted_tickable=unconverted_tickable,
+            # Until P7c2 a PDF supplement cannot be added as its PDF (the provider's file format field).
+            pdf_supplement_on_paper=(
+                route is ListingRoute.PAPER and original.artifact_format is SourceArtifactFormat.PDF
+            ),
         )
         files.append(ListedFile(
             provider_file_id=original.artifact_id,
@@ -611,12 +617,22 @@ async def _paper_refusal(
     return None, None
 
 
+def _main_not_tickable_reason(route: ListingRoute, *, main_in_paper: bool) -> FileReason | None:
+    """Why the provider's main file cannot be ticked, or ``None`` (identifier listing only)."""
+
+    if route is not ListingRoute.PAPER:
+        return None
+    # ABC's current main is the paper's stored main, or another file (the provider replaced it).
+    return FileReason.ALREADY_IN_PAPER if main_in_paper else FileReason.MAIN_DIFFERS_FROM_PAPER
+
+
 def _not_tickable_reason(
     *,
     status: ListedFileStatus,
     check: ListedFileCheck,
     in_this_paper: bool,
     unconverted_tickable: bool,
+    pdf_supplement_on_paper: bool,
 ) -> FileReason | None:
     """Why a supplement cannot be ticked, or ``None`` when it can. Codes from ``NOT_TICKABLE_REASONS``.
 
@@ -631,6 +647,8 @@ def _not_tickable_reason(
 
     if in_this_paper:
         return FileReason.ALREADY_IN_PAPER
+    if pdf_supplement_on_paper:
+        return FileReason.PDF_SUPPLEMENT_NOT_SUPPORTED_YET
     if status is ListedFileStatus.LARGE_DATA_FILE:
         return FileReason.LARGE_DATA_FILE
     if status is ListedFileStatus.TYPE_NOT_SUPPORTED:
