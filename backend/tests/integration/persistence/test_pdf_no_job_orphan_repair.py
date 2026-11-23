@@ -181,3 +181,73 @@ def test_repair_selects_only_aged_pending_no_job_documents_and_is_idempotent(
                 delete(PDFDocument).where(PDFDocument.id.in_(document_ids))
             )
             cleanup_session.commit()
+
+
+def test_repair_never_fails_a_pending_paper_whose_main_file_was_processed(monkeypatch):
+    """A pending no-job paper with processed output, extraction output or index pieces is skipped.
+
+    v0.11.13 (KANBAN-2160): 48 papers the pre-job pipeline left pending were fully processed;
+    the orphan repair must report such a paper and never mark it failed.
+    """
+
+    command.upgrade(Config(str(BACKEND_ROOT / "alembic.ini")), "head")
+    now = datetime(2026, 8, 27, 12, tzinfo=timezone.utc)
+    processed_id, extraction_only_id, indexed_only_id, orphan_id = (uuid4() for _ in range(4))
+    document_ids = (processed_id, extraction_only_id, indexed_only_id, orphan_id)
+    file_columns = {
+        processed_id: {"processed_json_path": "made-up/processed.json", "pdfx_json_path": "made-up/pdfx.json"},
+        extraction_only_id: {"pdfx_json_path": "made-up/pdfx.json"},
+        indexed_only_id: {"chunk_index_start": 0, "chunk_index_end": 2, "chunk_count": 3},
+        orphan_id: {},
+    }
+
+    monkeypatch.setenv("PDF_NO_JOB_ORPHAN_THRESHOLD_SECONDS", "86400")
+    monkeypatch.setenv("PDF_NO_JOB_ORPHAN_BATCH_SIZE", "10")
+    monkeypatch.setenv("PDF_NO_JOB_ORPHAN_REPAIR_TIMEOUT_SECONDS", "30")
+    monkeypatch.setenv("PDF_NO_JOB_ORPHAN_REPAIR_RETRY_COUNT", "0")
+
+    try:
+        with SessionLocal() as setup_session:
+            owner_id = ensure_test_pdf_owner(
+                setup_session,
+                auth_sub=f"pdf_no_job_orphan_guard_{uuid4()}",
+            )
+            for document_id, columns in file_columns.items():
+                paper = _document(
+                    document_id=document_id,
+                    owner_id=owner_id,
+                    status="pending",
+                    uploaded_at=now - timedelta(days=7),
+                )
+                for key, value in columns.items():
+                    setattr(paper.files[0], key, value)
+                setup_session.add(paper)
+            setup_session.commit()
+
+        dry_run = pdf_job_service.reconcile_pending_documents_without_jobs(apply=False, now=now)
+        assert [record.document_id for record in dry_run.records] == [str(orphan_id)]
+        assert {record.document_id for record in dry_run.skipped} == {
+            str(processed_id),
+            str(extraction_only_id),
+            str(indexed_only_id),
+        }
+
+        applied = pdf_job_service.reconcile_pending_documents_without_jobs(apply=True, now=now)
+        assert [record.document_id for record in applied.records] == [str(orphan_id)]
+        assert all(record.status == "skipped" for record in applied.skipped)
+        assert applied.to_json()["skipped_count"] == 3
+
+        with SessionLocal() as inspection_session:
+            assert inspection_session.get(PDFDocument, orphan_id).status == "failed"
+            for document_id in (processed_id, extraction_only_id, indexed_only_id):
+                assert inspection_session.get(PDFDocument, document_id).status == "pending"
+                assert (
+                    inspection_session.scalar(
+                        select(PdfProcessingJob.id).where(PdfProcessingJob.document_id == document_id)
+                    )
+                    is None
+                )
+    finally:
+        with SessionLocal() as cleanup_session:
+            cleanup_session.execute(delete(PDFDocument).where(PDFDocument.id.in_(document_ids)))
+            cleanup_session.commit()
