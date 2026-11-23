@@ -1262,6 +1262,14 @@ def clear_package_tool_runtime_caches() -> None:
         if callable(reset):
             reset()
 
+    # Caches derived from the same package registry: the tool-role maps and the
+    # package-declared tool loading namespaces and policies.
+    from src.lib.config.tool_loading_loader import reset_tool_loading_cache
+    from src.lib.packages import tool_roles
+
+    tool_roles.reset_cache()
+    reset_tool_loading_cache()
+
 
 def get_tool_registry() -> Dict[str, Dict[str, Any]]:
     """Return a copy of the lazily materialized tool registry."""

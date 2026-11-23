@@ -194,13 +194,14 @@ def require_supervisor_review_tool_boundary(tool_ids: Iterable[str]) -> None:
 
 
 def reset_cache() -> None:
-    """Clear the registry-derived role caches (tests and package reloads)."""
+    """Clear every cache this module keeps (each is derived from the package registry).
 
-    tool_metadata_by_name.cache_clear()
-    builder_finalization_tool_names.cache_clear()
-    builder_stage_tool_names.cache_clear()
-    builder_catalog_tool_names.cache_clear()
-    identity_lookup_tool_names.cache_clear()
+    Finds them itself, so a cache added here later is cleared too.
+    """
+
+    for value in tuple(globals().values()):
+        if getattr(value, "__module__", None) == __name__ and callable(getattr(value, "cache_clear", None)):
+            value.cache_clear()
 
 
 __all__ = [
