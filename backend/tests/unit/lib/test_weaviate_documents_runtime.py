@@ -209,29 +209,33 @@ async def test_search_similar_filters_self_and_applies_limit():
 @pytest.mark.asyncio
 async def test_re_embed_document_success():
     chunk_collection = MagicMock()
-    chunk_collection.query.fetch_objects.return_value = SimpleNamespace(objects=[1, 2, 3, 4])
     pdf_collection = MagicMock()
     connection = _connection_with_client(MagicMock())
+    # The paper's readable pieces: its ready files' ranges (a leftover range is not counted).
+    readable = SimpleNamespace(files=(SimpleNamespace(chunk_count=3), SimpleNamespace(chunk_count=1)))
 
     with patch("src.lib.weaviate_client.documents.get_connection", return_value=connection), \
          patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, pdf_collection)), \
+         patch("src.lib.document_files.readable.resolve_readable_files", return_value=readable) as resolve, \
          patch("src.lib.weaviate_client.documents.asyncio.get_event_loop", return_value=_event_loop_with_sync_executor()):
         result = await documents.re_embed_document("doc-1", "user-1")
 
     assert result["success"] is True
     assert result["total_chunks"] == 4
+    resolve.assert_called_once_with("doc-1", "user-1")
+    chunk_collection.query.fetch_objects.assert_not_called()
     pdf_collection.data.update.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_re_embed_document_failure_returns_error():
     chunk_collection = MagicMock()
-    chunk_collection.query.fetch_objects.side_effect = RuntimeError("query failed")
     pdf_collection = MagicMock()
     connection = _connection_with_client(MagicMock())
 
     with patch("src.lib.weaviate_client.documents.get_connection", return_value=connection), \
          patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, pdf_collection)), \
+         patch("src.lib.document_files.readable.resolve_readable_files", side_effect=RuntimeError("query failed")), \
          patch("src.lib.weaviate_client.documents.asyncio.get_event_loop", return_value=_event_loop_with_sync_executor()):
         result = await documents.re_embed_document("doc-1", "user-1")
 
