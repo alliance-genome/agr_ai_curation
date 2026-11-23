@@ -334,6 +334,10 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     # Classifies ABC conversion answers over ABC show_all rows through the Alliance adapter.
     Path("backend/tests/unit/lib/document_sources/test_supplement_wait.py"),
     Path("backend/tests/unit/lib/document_sources/test_supplement_add.py"),
+    # The supplement stage over ABC answers and show_all rows through the Alliance adapter.
+    Path("backend/tests/unit/lib/document_sources/test_supplement_stage.py"),
+    # Imports with chosen supplements, on the importer tests' ABC-group fakes.
+    Path("backend/tests/unit/lib/document_sources/test_identifier_import_supplements.py"),
     Path("backend/tests/unit/lib/document_sources/test_access_health.py"),
     # Dev machine-reader access gate drives real ABC MOD group ids (FB/WB).
     Path("backend/tests/unit/lib/document_sources/test_dev_reader_access.py"),

@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+import time
 from typing import Any, Protocol
 
 from fastapi import BackgroundTasks
@@ -25,6 +26,7 @@ from src.lib.document_sources.ingestion import (
 from src.lib.document_sources.main_text import select_preferred_main_text_artifact
 from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
+    DocumentSourceLoginExpired,
     DocumentSourceProvider,
     ProviderBearerKind,
     SourceArtifact,
@@ -50,6 +52,8 @@ from src.models.document import ProcessingStatus
 from src.models.pipeline import ProcessingStage
 from src.models.sql.pdf_processing_job import PdfJobStatus, PdfProcessingJob
 from src.services.processing_status_policy import TERMINAL_PDF_JOB_STATUSES
+
+from src.lib.document_sources.supplement_plan import SupplementPlan
 
 from . import service as pdf_job_service
 
@@ -167,6 +171,9 @@ class UploadExecutionRequest:
     job_id: str
     user_id: str
     file_path: Path
+    # The supplements to add once the paper is ready (KANBAN-1976 / ALL-1460, P7b).
+    supplements: SupplementPlan | None = None
+    login_expires_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -184,6 +191,12 @@ class ProviderMarkdownExecutionRequest:
     source_provenance: Mapping[str, Any]
     file_path: Path
     figure_metadata_artifact_ids: tuple[str, ...] = ()
+    supplements: SupplementPlan | None = None
+    # The curator's login expiry (epoch seconds); ``None`` for the machine reader.
+    login_expires_at: float | None = None
+    # Whether this import sent the provider's conversion request, and its last answer.
+    conversion_requested: bool = False
+    last_conversion_answer: SourceConversionResult | None = None
 
 
 @dataclass(frozen=True)
@@ -202,6 +215,8 @@ class ProviderConversionExecutionRequest:
     source_provenance: Mapping[str, Any]
     file_path: Path
     figure_metadata_artifact_ids: tuple[str, ...] = ()
+    supplements: SupplementPlan | None = None
+    login_expires_at: float | None = None
 
 
 class _JobFinalizedElsewhere(Exception):
@@ -601,6 +616,7 @@ class UploadExecutionService:
             curator_token = (request.curator_token or "").strip()
             if not curator_token:
                 raise RuntimeError("Provider conversion requires a request curator token")
+            _refuse_if_login_expired(request)
 
             provider = self._document_source_provider_factory()
             while True:
@@ -669,6 +685,10 @@ class UploadExecutionService:
                             source_provenance=source_provenance,
                             figure_metadata_artifact_ids=figure_metadata_artifact_ids,
                             file_path=request.file_path,
+                            supplements=request.supplements,
+                            login_expires_at=request.login_expires_at,
+                            conversion_requested=True,
+                            last_conversion_answer=last_result,
                         ),
                         skip_replay_guard=True,
                     )
@@ -701,7 +721,7 @@ class UploadExecutionService:
                 request.document_id,
                 extra={"sentry_skip_event": True},
             )
-            if not isinstance(exc, PDFCancellationError):
+            if not isinstance(exc, (PDFCancellationError, DocumentSourceLoginExpired)):
                 self._report_execution_failure(
                     exc,
                     task_name="pdf_jobs.execute_provider_conversion",
@@ -830,6 +850,7 @@ class UploadExecutionService:
             curator_token = (request.curator_token or "").strip()
             if not curator_token:
                 raise RuntimeError("Provider Markdown download requires a request curator token")
+            _refuse_if_login_expired(request)
 
             pdf_job_service.update_progress(
                 job_id=request.job_id,
@@ -902,9 +923,11 @@ class UploadExecutionService:
                 )
             if pdf_job_service.is_cancel_requested(job_id=request.job_id):
                 raise PDFCancellationError("Processing cancelled by user request")
-            await self._mark_completed_and_sync_tracker(
+            await self._complete_main_paper(
                 request,
                 message="Processing completed",
+                conversion_requested=request.conversion_requested,
+                last_answer=request.last_conversion_answer,
             )
         except _ProviderMainMarkdownAccessDenied:
             raise
@@ -914,7 +937,7 @@ class UploadExecutionService:
                 request.document_id,
                 extra={"sentry_skip_event": True},
             )
-            if not isinstance(exc, PDFCancellationError):
+            if not isinstance(exc, (PDFCancellationError, DocumentSourceLoginExpired)):
                 self._report_execution_failure(
                     exc,
                     task_name="pdf_jobs.execute_provider_markdown",
@@ -1057,6 +1080,8 @@ class UploadExecutionService:
                 job_id=request.job_id,
                 user_id=request.user_id,
                 file_path=file_path,
+                supplements=request.supplements,
+                login_expires_at=request.login_expires_at,
             ),
             skip_replay_guard=True,
         )
@@ -1094,6 +1119,78 @@ class UploadExecutionService:
             raise
         finally:
             session.close()
+
+    async def _complete_main_paper(
+        self,
+        request: UploadExecutionRequest
+        | ProviderMarkdownExecutionRequest
+        | ProviderConversionExecutionRequest,
+        *,
+        message: str,
+        observability_receipt: dict[str, Any] | None = None,
+        conversion_requested: bool = False,
+        last_answer: SourceConversionResult | None = None,
+    ) -> None:
+        """The main paper is ready: complete the job, or hand it to the supplement stage.
+
+        The stage runs as its own task, so the next paper of the request starts
+        meanwhile; the job stays active until the stage ends it.
+        """
+        plan = request.supplements
+        if plan is None:
+            await self._mark_completed_and_sync_tracker(
+                request, message=message, observability_receipt=observability_receipt,
+            )
+            return
+        from src.lib.document_sources import supplement_wait
+        from src.lib.document_sources.file_listing_service import list_files_for_paper
+        from src.lib.document_sources.supplement_add import add_files_to_paper
+
+        service = self
+
+        class _Outcomes:
+            async def completed(self) -> None:
+                await service._mark_completed_and_sync_tracker(
+                    request, message=message, observability_receipt=observability_receipt,
+                )
+
+            async def cancelled(self) -> None:
+                await service._mark_cancelled_and_sync_tracker(
+                    request, reason="Processing cancelled by user request",
+                )
+
+            async def failed(self, failure_message: str) -> None:
+                await service._mark_failed_and_sync_tracker(
+                    request, message=failure_message, stage=ProcessingStage.FAILED.value,
+                )
+
+        outcomes = _Outcomes()
+        main_ready_at = time.time()
+
+        async def run() -> None:
+            provider = self._document_source_provider_factory()
+            try:
+                await supplement_wait.run_supplement_stage(
+                    job_id=str(request.job_id),
+                    document_id=str(request.document_id),
+                    owner_user_id=plan.owner_user_id,
+                    reference=plan.reference,
+                    plan=plan,
+                    conversion_requested=conversion_requested,
+                    last_answer=last_answer,
+                    main_ready_at=main_ready_at,
+                    provider=provider,
+                    weaviate_client=get_connection(),
+                    outcomes=outcomes,
+                    list_files=list_files_for_paper,
+                    add_files=add_files_to_paper,
+                )
+            finally:
+                await provider.aclose()
+
+        supplement_wait.start_supplement_stage(
+            job_id=str(request.job_id), run=run, outcomes=outcomes,
+        )
 
     async def _mark_completed_and_sync_tracker(
         self,
@@ -1392,7 +1489,7 @@ class UploadExecutionService:
             return
 
         if success:
-            await self._mark_completed_and_sync_tracker(
+            await self._complete_main_paper(
                 request,
                 message="Processing completed",
                 observability_receipt=observability_receipt,
@@ -1405,6 +1502,22 @@ class UploadExecutionService:
             stage=ProcessingStage.FAILED.value,
             observability_receipt=observability_receipt,
         )
+
+
+def _refuse_if_login_expired(
+    request: ProviderMarkdownExecutionRequest | ProviderConversionExecutionRequest,
+) -> None:
+    """A paper queued behind others whose curator login is about to expire fails by name.
+
+    Checked before any provider call, with the same reserve the supplement wait
+    keeps for adding files.
+    """
+    if request.login_expires_at is None:
+        return
+    from src.lib.openai_agents.config import get_document_supplement_add_reserve_seconds
+
+    if time.time() >= request.login_expires_at - get_document_supplement_add_reserve_seconds():
+        raise DocumentSourceLoginExpired()
 
 
 def _conversion_job_metadata(result: SourceConversionResult) -> dict[str, Any]:

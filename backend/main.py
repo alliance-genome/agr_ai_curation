@@ -556,6 +556,11 @@ async def lifespan(app: FastAPI):
     finally:
         await review_worker.stop()
         await app.state.connections_health_monitor.close()
+        from src.lib.document_sources.supplement_wait import stop_supplement_stages
+
+        # Supplement waits end with the process; their jobs stay active for the
+        # stale sweep, and their papers (already completed) stay usable.
+        await stop_supplement_stages()
         await stop_pdf_job_recovery()
         await stop_submission_attempt_cleanup()
         from src.lib.pipeline.text_cleanup import shutdown_text_cleanup

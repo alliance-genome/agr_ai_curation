@@ -25,9 +25,9 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 from uuid import UUID
 
-from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.file_listing import FileListing
 from src.lib.document_sources.file_reasons import FileReason, SupplementState
+from src.lib.document_sources.supplement_plan import ChosenSupplement, SupplementPlan
 from src.lib.document_sources.models import (
     DocumentSourceError,
     DocumentSourceProvider,
@@ -117,26 +117,6 @@ SUPPLEMENT_STAGE_FAILED_MESSAGE = (
 )
 
 
-@dataclass(frozen=True, slots=True)
-class ChosenSupplement:
-    """One supplement the curator ticked, as the listing showed it (interface I6)."""
-
-    provider_file_id: str
-    md5: str | None
-    # ``None`` for a file the provider had not converted when it was listed.
-    converted_md5: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class SupplementPlan:
-    """The supplements an import adds after its main paper, and the login to add them with."""
-
-    chosen: tuple[ChosenSupplement, ...]
-    request_context: DocumentSourceRequestContext
-    # The curator's login expiry (epoch seconds), from the request's validated claims.
-    login_expires_at: float
-
-
 class StageOutcomes(Protocol):
     """How the stage ends the import's job (the execution service implements it)."""
 
@@ -206,10 +186,12 @@ async def run_supplement_stage(
     final answer.
     """
 
-    wait_ends_at = min(
-        main_ready_at + get_document_supplement_wait_timeout_seconds(),
-        plan.login_expires_at - get_document_supplement_add_reserve_seconds(),
-    )
+    wait_ends_at = main_ready_at + get_document_supplement_wait_timeout_seconds()
+    if plan.login_expires_at is not None:
+        wait_ends_at = min(
+            wait_ends_at,
+            plan.login_expires_at - get_document_supplement_add_reserve_seconds(),
+        )
     token = plan.request_context.curator_token
     entries: dict[str, _Entry] = {}
 
