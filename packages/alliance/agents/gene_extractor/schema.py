@@ -18,6 +18,7 @@ from pydantic import (
     model_validator,
 )
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DefinitionState, SchemaRef
+from src.schemas.evidence_workspace import evidence_record_page, evidence_record_section
 from src.schemas.models.base import MentionCandidate
 
 
@@ -131,8 +132,21 @@ class GeneMentionEvidencePayload(BaseModel):
         description="Stable ID returned by the paper evidence verification tool"
     )
     verified_quote: StrictStr = Field(description="Verbatim paper text verified by record_evidence")
-    page: int = Field(ge=1, description="1-based page containing the verified quote")
-    section: StrictStr = Field(description="Document section containing the verified quote")
+    page: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "1-based page containing the quote, as returned by record_evidence; empty when "
+            "the file has no page numbers (for example a converted spreadsheet)"
+        ),
+    )
+    section: StrictStr | None = Field(
+        default=None,
+        description=(
+            "Document section containing the quote, as returned by record_evidence; empty when "
+            "the file has no heading before the quote"
+        ),
+    )
     chunk_id: StrictStr = Field(description="Document chunk identifier used to verify the quote")
     subsection: StrictStr | None = Field(default=None, description="Subsection heading, if available")
     figure_reference: StrictStr | None = Field(
@@ -144,7 +158,6 @@ class GeneMentionEvidencePayload(BaseModel):
         "mention",
         "evidence_record_id",
         "verified_quote",
-        "section",
         "chunk_id",
         mode="before",
     )
@@ -162,6 +175,7 @@ class GeneMentionEvidencePayload(BaseModel):
         "rationale",
         "subsection",
         "figure_reference",
+        "section",
         mode="before",
     )
     @classmethod
@@ -184,6 +198,8 @@ class GeneMentionEvidencePayload(BaseModel):
     @field_validator("page", mode="before")
     @classmethod
     def _validate_page(cls, value: object) -> object:
+        if value is None:
+            return None
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError("page must be an integer")
         return value
@@ -309,8 +325,6 @@ class GeneExtractionResultEnvelope(RuntimeGeneExtractionResultEnvelope):
 
             required_evidence_fields = {
                 "verified_quote": evidence_record.verified_quote,
-                "page": evidence_record.page,
-                "section": evidence_record.section,
                 "chunk_id": evidence_record.chunk_id,
             }
             missing_evidence_fields = sorted(
@@ -318,7 +332,16 @@ class GeneExtractionResultEnvelope(RuntimeGeneExtractionResultEnvelope):
                 for field_name, value in required_evidence_fields.items()
                 if value is None
             )
-            if missing_evidence_fields:
+            located = {
+                "page": evidence_record.page,
+                "section": evidence_record.section,
+                "file_id": evidence_record.file_id,
+            }
+            if (
+                missing_evidence_fields
+                or not evidence_record_page(located)[0]
+                or not evidence_record_section(located)[0]
+            ):
                 raise ValueError(
                     "metadata.evidence_records[] entries referenced by gene_mention_evidence "
                     "must include verified_quote, page, section, and chunk_id"

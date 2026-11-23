@@ -10,6 +10,7 @@ from src.lib.openai_agents.models import (
     AlleleExtractionResultEnvelope as RuntimeAlleleExtractionResultEnvelope,
 )
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DefinitionState
+from src.schemas.evidence_workspace import evidence_record_page, evidence_record_section
 
 
 _EXPECTED_OBJECT_ROLES = {
@@ -71,6 +72,11 @@ class AlleleExtractionResultEnvelope(RuntimeAlleleExtractionResultEnvelope):
             for record in self.metadata.evidence_records
             if record.evidence_record_id
         }
+        evidence_files_by_id = {
+            record.evidence_record_id: record.file_id
+            for record in self.metadata.evidence_records
+            if record.evidence_record_id
+        }
         declared_pending_refs = {
             (obj.pending_ref_id, obj.object_type)
             for obj in self.curatable_objects
@@ -89,6 +95,7 @@ class AlleleExtractionResultEnvelope(RuntimeAlleleExtractionResultEnvelope):
                 self._validate_required_payload_fields(
                     obj,
                     _REQUIRED_EVIDENCE_QUOTE_PAYLOAD_FIELDS,
+                    evidence_files_by_id=evidence_files_by_id,
                 )
         return self
 
@@ -115,7 +122,9 @@ class AlleleExtractionResultEnvelope(RuntimeAlleleExtractionResultEnvelope):
         evidence_record_ids: set[str],
         declared_pending_refs: set[tuple[str, str]],
     ) -> None:
-        cls._validate_required_payload_fields(obj, _REQUIRED_ASSOCIATION_PAYLOAD_FIELDS)
+        cls._validate_required_payload_fields(
+            obj, _REQUIRED_ASSOCIATION_PAYLOAD_FIELDS, evidence_files_by_id={}
+        )
         if obj.payload.get("association_kind") != "allele_paper_evidence":
             raise ValueError(
                 "AllelePaperEvidenceAssociation payload.association_kind must be "
@@ -208,11 +217,26 @@ class AlleleExtractionResultEnvelope(RuntimeAlleleExtractionResultEnvelope):
         cls,
         obj: CuratableObjectEnvelope,
         field_names: tuple[str, ...],
+        *,
+        evidence_files_by_id: Mapping[str, str | None],
     ) -> None:
+        # A quote's page and section are required unless its evidence record names
+        # a file (ALL-1460).
+        located = {
+            "page": obj.payload.get("page"),
+            "section": obj.payload.get("section"),
+            "file_id": evidence_files_by_id.get(obj.payload.get("evidence_record_id")),
+        }
         missing_fields = [
             field_name
             for field_name in field_names
-            if _is_missing_payload_value(obj.payload.get(field_name))
+            if (
+                not evidence_record_page(located)[0]
+                if field_name == "page"
+                else not evidence_record_section(located)[0]
+                if field_name == "section"
+                else _is_missing_payload_value(obj.payload.get(field_name))
+            )
         ]
         if missing_fields:
             raise ValueError(

@@ -4518,3 +4518,21 @@ def test_historical_flow_pin_cannot_authorize_new_validator_execution(monkeypatc
         else:
             run_package_scoped_validator_agent(request, binding=binding)
     constructor.assert_not_called()
+
+
+def test_validator_sees_the_file_name_of_evidence_that_names_its_file():
+    # ALL-1460 P8b3: a quote from a supplement names its file and may have no page.
+    quoted = _paper_evidence_record("evidence-1", "Treatment disrupted segmentation.")
+    supplement = _paper_evidence_record(
+        "evidence-2", "| abc-1 | 3 | 5 |", page=None,
+        file_id="6f1c2a9e-5b4d-4c3e-9a8b-7d6e5f4a3b2c", file_name="Table_S1.xlsx",
+    )
+    request = _quoted_evidence_request("domain-validation:file", [quoted, supplement], [quoted])
+
+    payload = validator_request_payload_for_agent(request)
+
+    expected = _model_evidence("evidence-2", "| abc-1 | 3 | 5 |")
+    del expected["page"]
+    expected["file_name"] = "Table_S1.xlsx"
+    assert payload["evidence"] == [expected]
+    assert "file_id" not in payload["evidence"][0]

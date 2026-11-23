@@ -260,6 +260,7 @@ async def test_record_list_attach_discard_finalize_flow_omits_discarded(workspac
     }
     canonical = canonicalize_structured_result_payload(
         payload,
+        payload_evidence="model_written",
         preferred_evidence_records=workspace_records,
     )
 

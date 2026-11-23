@@ -697,6 +697,7 @@ def stage_extraction_payload(
     canonical_payload = canonicalize_structured_result_payload(
         dict(payload),
         preferred_evidence_records=preferred_evidence_records,
+        payload_evidence="model_written",
     )
     workspace.apply_scope_metadata(
         document_id=_scope_value_from_payload(
@@ -790,7 +791,9 @@ def _evidence_record_ids(
 ) -> list[str]:
     ids = [
         record.get("evidence_record_id")
-        for record in extract_evidence_records_from_structured_result(dict(payload))
+        for record in extract_evidence_records_from_structured_result(
+            dict(payload), payload_evidence="persisted",
+        )
         if isinstance(record, Mapping)
     ]
     if evidence_records:

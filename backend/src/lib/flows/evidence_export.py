@@ -178,7 +178,7 @@ def build_flow_evidence_records(
     for extraction_result in extraction_results:
         registry.add_many(
             extract_evidence_records_from_structured_result(
-                extraction_result.payload_json
+                extraction_result.payload_json, payload_evidence="persisted",
             )
         )
 
@@ -197,7 +197,7 @@ def build_flow_evidence_steps(
         local_registry = _EvidenceRegistry()
         local_registry.add_many(
             extract_evidence_records_from_structured_result(
-                extraction_result.payload_json
+                extraction_result.payload_json, payload_evidence="persisted",
             )
         )
         metadata = dict(extraction_result.metadata or {})

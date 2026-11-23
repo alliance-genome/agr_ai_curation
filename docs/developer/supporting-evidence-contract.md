@@ -44,6 +44,12 @@ rewritten.
   submission intent fingerprints, stays exactly as it was.
 - The evidence record ID does not include the file: the chunk ID already fixes
   it.
+- The page rule lives in one place, `evidence_record_page`
+  (`backend/src/schemas/evidence_workspace.py`). The canonical evidence models
+  (`EvidenceRecord`, `EvidenceSourceFragment`, the generic PDF agent's records)
+  carry `file_id` and `file_name`, and every domain pack's conversions, builder
+  output schemas and the gene export apply the rule: a quote copied into an
+  object payload may have no page when its evidence record names a file.
 
 ## Shipped binding audit (ALL-1214)
 
@@ -138,7 +144,8 @@ that receive it. Sibling bindings keep their current input and their answers.
 The persisted request keeps every evidence record whole. The model input
 (`validator_request_payload_for_agent`) shows each request-level `evidence`
 record as `evidence_record_id`, `entity`, `section`, `subsection`, `page`,
-`figure_reference` and `verified_quote` only, and leaves out a record whose ID and quote already appear
+`file_name` (only on evidence that names its file), `figure_reference` and
+`verified_quote` only, and leaves out a record whose ID and quote already appear
 in `selected_inputs.evidence_quotes`. That input keeps its name and shape, because
 custom validators read it. A batch input lists each distinct record once in
 `evidence_records`; each request names its own in `evidence_record_ids`. A record

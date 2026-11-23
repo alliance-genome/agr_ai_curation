@@ -27,6 +27,8 @@ from src.schemas.models.base import EvidenceRecord
 __all__ = [
     "WORKSPACE_ONLY_FIELDS",
     "EvidenceIntegrityError",
+    "evidence_record_page",
+    "evidence_record_section",
     "canonical_evidence_payload",
     "is_discarded",
     "normalize_workspace_records",
@@ -59,6 +61,44 @@ _CANONICAL_FIELDS: frozenset[str] = frozenset(EvidenceRecord.model_fields)
 #: The legacy alias and the canonical list it mirrors.
 _SPAN_ALIAS = "span_ids"
 _SPAN_CANONICAL = "source_span_ids"
+
+
+def evidence_record_page(record: Mapping[str, Any]) -> tuple[bool, int | None]:
+    """Return ``(valid, page)`` for one evidence record (ALL-1460).
+
+    The one page rule for evidence. A record that names its file (every record
+    made since 0.12.0 has ``file_id``) may have no page: its file has no page
+    numbers there, so its page is None. A record without ``file_id`` was saved
+    before files were recorded and still needs a positive page, exactly as
+    before. Keyed on the stored ``file_id``, never on text.
+    """
+
+    page = record.get("page")
+    if isinstance(page, int) and not isinstance(page, bool) and page > 0:
+        return True, page
+    file_id = record.get("file_id")
+    if page is None and isinstance(file_id, str) and file_id.strip():
+        return True, None
+    return False, None
+
+
+def evidence_record_section(record: Mapping[str, Any]) -> tuple[bool, str | None]:
+    """Return ``(valid, section)`` for one evidence record (ALL-1460).
+
+    The section rule, keyed the same way as the page rule. A record that names
+    its file may have no section: text before a file's first heading has none.
+    A record without ``file_id`` was saved before files were recorded and still
+    needs a non-empty section, exactly as before.
+    """
+
+    section = record.get("section")
+    if isinstance(section, str) and section.strip():
+        return True, section.strip()
+    file_id = record.get("file_id")
+    empty = section is None or (isinstance(section, str) and not section.strip())
+    if empty and isinstance(file_id, str) and file_id.strip():
+        return True, None
+    return False, None
 
 
 class EvidenceIntegrityError(Exception):

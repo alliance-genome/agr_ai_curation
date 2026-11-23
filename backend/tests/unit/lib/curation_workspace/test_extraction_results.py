@@ -448,7 +448,7 @@ def test_build_extraction_envelope_candidate_with_evidence_prefers_candidate_pay
     monkeypatch.setattr(
         module,
         "extract_evidence_records_from_structured_result",
-        lambda payload: observed_payloads.append(payload) or [{"entity": "notch"}],
+        lambda payload, **_kwargs: observed_payloads.append(payload) or [{"entity": "notch"}],
     )
 
     raw_output = json.dumps(_sample_envelope_payload())

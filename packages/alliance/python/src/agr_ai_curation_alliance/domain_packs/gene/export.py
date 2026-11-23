@@ -26,6 +26,7 @@ from src.lib.domain_packs.resolvable_values import (
     effective_value,
     value_covered_by_validator,
 )
+from src.schemas.evidence_workspace import evidence_record_page, evidence_record_section
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DomainEnvelope,
@@ -82,8 +83,13 @@ def build_gene_mention_evidence_export(
         )
 
     selected = set(selected_object_ids or ())
+    evidence_files = {
+        record.get("evidence_record_id"): record.get("file_id")
+        for record in envelope.metadata.get("evidence_records") or []
+        if isinstance(record, Mapping)
+    }
     records = [
-        _gene_evidence_record(domain_object)
+        _gene_evidence_record(domain_object, evidence_files=evidence_files)
         for domain_object in envelope.extracted_objects
         if domain_object.object_type == GENE_MENTION_EVIDENCE_OBJECT_TYPE
         and (not selected or stable_object_id(domain_object) in selected)
@@ -171,7 +177,11 @@ class GeneMentionEvidenceExportAdapter(DeterministicExportAdapter):
         )
 
 
-def _gene_evidence_record(domain_object: CuratableObjectEnvelope) -> dict[str, Any]:
+def _gene_evidence_record(
+    domain_object: CuratableObjectEnvelope,
+    *,
+    evidence_files: Mapping[str, Any],
+) -> dict[str, Any]:
     """One export record; an unresolved gene is exported as explicitly unresolved.
 
     ``validated_reference`` carries the gene's paper wording, its resolution state and lookup
@@ -198,7 +208,11 @@ def _gene_evidence_record(domain_object: CuratableObjectEnvelope) -> dict[str, A
     )
 
     evidence = {
-        field: _required_payload_value(domain_object.payload, field)
+        field: (
+            _required_locator(domain_object.payload, evidence_files, field)
+            if field in ("page", "section")
+            else _required_payload_value(domain_object.payload, field)
+        )
         for field in _REQUIRED_EVIDENCE_FIELDS
     }
     evidence.update(
@@ -225,6 +239,30 @@ def _gene_evidence_record(domain_object: CuratableObjectEnvelope) -> dict[str, A
             "write_target": None,
         },
     }
+
+
+def _required_locator(
+    payload: Mapping[str, Any], evidence_files: Mapping[str, Any], field_path: str
+) -> Any:
+    """Page or section, required unless the evidence record names a file (ALL-1460).
+
+    The key stays in the export: null when the file has no page numbers there, or
+    no heading before the quote.
+    """
+
+    located = {
+        "page": payload.get("page"),
+        "section": payload.get("section"),
+        "file_id": evidence_files.get(payload.get("evidence_record_id")),
+    }
+    rule = evidence_record_page if field_path == "page" else evidence_record_section
+    valid, value = rule(located)
+    if not valid:
+        if field_path == "section" and isinstance(located["section"], str):
+            raise ValueError("gene_mention_evidence payload has blank section")
+        raise ValueError(f"gene_mention_evidence payload is missing {field_path}")
+    # The stored value, exactly as saved; null when the evidence names a file without one.
+    return None if value is None else located[field_path]
 
 
 def _required_payload_value(payload: Mapping[str, Any], field_path: str) -> Any:

@@ -116,9 +116,12 @@ _VALIDATOR_EXECUTION_FAILURE_EXPLANATION = (
 )
 # Fields of a supplied evidence record the validator model sees: its ID, label,
 # locators and quote. Span, chunk and envelope provenance stays on the persisted
-# request and in _check_evidence.
+# request and in _check_evidence. ``file_name`` (ALL-1460) tells the validator a
+# quote comes from a supplement; it is absent on evidence saved before files
+# were recorded, so their view is unchanged. Selected-input quote bundles do not
+# carry it (that would change the allele capability's declared bundle fields).
 _MODEL_EVIDENCE_RECORD_FIELDS = (
-    "evidence_record_id", "entity", "section", "subsection", "page",
+    "evidence_record_id", "entity", "section", "subsection", "page", "file_name",
     "figure_reference", "verified_quote",
 )
 
