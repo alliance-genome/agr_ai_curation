@@ -746,7 +746,9 @@ are `pipeline_failure_file_status_write_failed`,
 `pipeline_failure_sql_status_write_failed`, and
 `pipeline_failure_index_status_write_failed`. Each report carries a fixed
 message and the exception class, or the index helper's error code when it
-returns an unsuccessful result. Reconciliation continues if reporting fails.
+returns an unsuccessful result. The SQL operation covers the whole session,
+including rollback and close. Even if cleanup and reporting both fail, the
+pipeline still attempts the index update and preserves the original outcome.
 
 When the final search-index metadata write fails, the paper import can complete
 in SQL while the Library still shows stale status or chunk counts. The writer

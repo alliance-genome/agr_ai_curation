@@ -328,15 +328,57 @@ async def test_failed_status_reconciliation_reports_each_write(
     assert all(record.sentry_skip_event for record in caplog.records if record.levelno >= logging.WARNING)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup", ["rollback", "close"])
+@pytest.mark.parametrize("failure_reporter", ["reporter_raises"], indirect=True)
+async def test_sql_session_failure_preserves_original_pipeline_failure(
+    orchestrator, monkeypatch, caplog, cleanup, failure_reporter,
+):
+    document_id = "e5639b2e-61b7-4c77-bbd4-5dbb76129947"
+    session = MagicMock()
+    session.commit.side_effect = ValueError("PRIVATE_COMMIT_ERROR")
+    getattr(session, cleanup).side_effect = ConnectionError("PRIVATE_CLEANUP_ERROR")
+    monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: session)
+    update_index = AsyncMock(return_value={"success": True})
+    monkeypatch.setattr("src.lib.weaviate_client.documents.update_document_status_detailed", update_index)
+    orchestrator._current_file_id = None
+    orchestrator._current_user_id = "PRIVATE_USER_ID"
+    orchestrator.tracker = AsyncMock()
+    original = RuntimeError("original processing failure")
+
+    await orchestrator._handle_failure(document_id, original)
+
+    session.rollback.assert_called_once_with()
+    session.close.assert_called_once_with()
+    update_index.assert_awaited_once_with(document_id, "PRIVATE_USER_ID", embedding_status="failed")
+    orchestrator.tracker.handle_pipeline_failure.assert_awaited_once_with(
+        document_id, original, stage=ProcessingStage.FAILED, sentry_reported=False,
+    )
+    failure_reporter.assert_called_once()
+    report = failure_reporter.call_args
+    assert report.kwargs == {
+        "component": "document_pipeline",
+        "operation": "pipeline_failure_sql_status_write_failed",
+        "context": {"exception_type": "ConnectionError"},
+    }
+    (error,) = report.args
+    assert error.__cause__ is error.__context__ is None
+    assert error.__traceback__ is not None
+    assert "PRIVATE_" not in repr(report) + caplog.text
+    assert document_id not in repr(report) + caplog.text
+    assert_write_failure_logs_are_safe(caplog)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["processing", "completed"])
-def test_nonfailed_sql_status_rethrows_original_write_error(orchestrator, monkeypatch, status):
+async def test_nonfailed_sql_status_rethrows_original_write_error(orchestrator, monkeypatch, status):
     session = MagicMock()
     error = RuntimeError("commit failed")
     session.commit.side_effect = error
     monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: session)
     with patch("src.lib.pipeline.orchestrator.report_runtime_exception") as report:
         with pytest.raises(RuntimeError) as raised:
-            orchestrator._write_sql_document_status("e5639b2e-61b7-4c77-bbd4-5dbb76129947", status=status)
+            await orchestrator._sync_sql_document_status("e5639b2e-61b7-4c77-bbd4-5dbb76129947", status=status)
     assert raised.value is error
     session.rollback.assert_called_once_with()
     session.close.assert_called_once_with()

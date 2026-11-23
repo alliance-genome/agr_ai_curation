@@ -533,10 +533,19 @@ class DocumentPipelineOrchestrator:
     ) -> None:
         # A source binding briefly locks the document generation row.
         # Never wait on that row from the event-loop thread.
-        await asyncio.to_thread(
-            self._write_sql_document_status, document_id,
-            status=status, error_message=error_message,
-        )
+        try:
+            await asyncio.to_thread(
+                self._write_sql_document_status, document_id,
+                status=status, error_message=error_message,
+            )
+        except Exception as exc:
+            if status != "failed":
+                raise
+            _report_status_write_failure(
+                "Could not mark SQL document status as failed",
+                operation="pipeline_failure_sql_status_write_failed",
+                context={"exception_type": type(exc).__name__},
+            )
 
     def _write_sql_document_status(
         self, document_id: str, *, status: str, error_message: Optional[str] = None,
@@ -574,20 +583,12 @@ class DocumentPipelineOrchestrator:
                 ]
 
             session.commit()
-            logger.info("Updated SQL document status for %s to %s", document_id, status)
-        except Exception as e:
+        except Exception:
             session.rollback()
-            # Processing/completion commits protect source generation. A failed
-            # status notification must not replace the original pipeline error.
-            if status != "failed":
-                raise
-            _report_status_write_failure(
-                "Could not mark SQL document status as failed",
-                operation="pipeline_failure_sql_status_write_failed",
-                context={"exception_type": type(e).__name__},
-            )
+            raise
         finally:
             session.close()
+        logger.info("Updated SQL document status for %s to %s", document_id, status)
 
     async def _update_file_paths(
         self,
