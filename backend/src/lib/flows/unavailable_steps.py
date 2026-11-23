@@ -14,7 +14,6 @@ FLOW_STEP_UNAVAILABLE_REASON_CODES = frozenset({
     "document_required",
     "attachment_only_validator",
     "custom_validator_step",
-    "internal_agent_step",
     "agent_unresolvable",
     "missing_agent_id",
     "provider_disabled",
@@ -70,29 +69,27 @@ def _cause_sentence(code: str, steps: Sequence[Mapping[str, Any]]) -> str:
             f"{subject} {'needs' if one else 'need'} a PDF. Open Documents in the top "
             "navigation and load a paper into chat, then run the flow again."
         )
-    if code == "attachment_only_validator":
-        from src.lib.agent_studio.refused_flow_steps import checking_sentence
+    if code in {"attachment_only_validator", "custom_validator_step"}:
+        from src.lib.agent_studio.refused_flow_steps import checking_sentence, custom_detail_sentence
 
-        return " ".join([
-            f"{subject} {'is a validator' if one else 'are validators'}, and validators cannot "
-            f"be flow steps. In Flow Builder, remove {'it' if one else 'them'}.",
-            *(
-                checking_sentence(str(step.get("agent_name") or "Unknown Agent"),
-                                  list(step["checking_extractors"]))
-                for step in steps
-            ),
-        ])
-    if code == "custom_validator_step":
-        return (
-            f"{subject} {'is your copy of a validator' if one else 'are your copies of validators'}, "
-            "and a copy of a validator cannot run in a flow. "
+        owner = all(step["owner"] for step in steps)
+        where = (
             f"In Flow Builder, remove {'it' if one else 'them'}."
+            if owner else f"Only the flow's owner can remove {'it' if one else 'them'} in Flow Builder."
         )
-    if code == "internal_agent_step":
-        return (
-            f"{subject} {'is an internal agent and cannot be a flow step' if one else 'are internal agents and cannot be flow steps'}. "
-            f"In Flow Builder, remove {'it' if one else 'them'}."
-        )
+        if code == "attachment_only_validator":
+            what = (f"{subject} {'is a validator' if one else 'are validators'}, and validators cannot "
+                    "be flow steps.")
+            follow = [checking_sentence(str(step.get("agent_name") or "Unknown Agent"),
+                                        list(step["checking_extractors"])) for step in steps]
+        else:
+            whose = ("your copy of a validator" if one else "your copies of validators") if owner else (
+                "a copy of a validator saved by the flow's owner" if one
+                else "copies of validators saved by the flow's owner")
+            what = f"{subject} {'is' if one else 'are'} {whose}, and a copy of a validator cannot run in a flow."
+            follow = [custom_detail_sentence(str(step.get("agent_name") or "the copy"))
+                      for step in steps if step["custom_detail"] and owner]
+        return " ".join([what, where, *follow])
     if code == "agent_unresolvable":
         return (
             f"{subject} {'uses an agent that is' if one else 'use agents that are'} no longer available. "

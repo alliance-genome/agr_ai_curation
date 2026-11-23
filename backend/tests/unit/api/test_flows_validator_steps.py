@@ -150,7 +150,8 @@ def test_a_validator_no_extraction_agent_runs_says_so_and_claims_none():
 
     assert refused.checking_extractors == ()
     assert refused.fix_hint == (
-        "Remove this step. No extraction step runs the Disease Ontology Agent check at present."
+        "Remove this step. No extraction step runs the Disease Ontology Agent check at present; the "
+        "checks each extraction step does run are listed under Automatic checks on that step in Flow Builder."
     )
 
 
@@ -162,14 +163,37 @@ def test_group_restricted_extraction_agents_are_named_only_for_their_groups():
     assert "RGD GO Paper Curator" in rgd.checking_extractors
 
 
-def test_an_internal_agent_is_never_called_a_validator():
-    refused = refused_flow_step("supervisor", AGENT_REGISTRY["supervisor"])
+def test_an_internal_agent_cannot_be_a_flow_step_at_all():
+    """FlowDefinition refuses supervisor and task_input, so no refusal text exists for them."""
+    payload = repaired_a()
+    payload["nodes"].append(_node("sup_1", "supervisor"))
+    payload["edges"].append({"id": "e9", "source": "pdf_1", "target": "sup_1"})
+    with pytest.raises(Exception, match="cannot be used in flows"):
+        FlowDefinition.model_validate(payload)
+    with pytest.raises(ValueError, match="FlowDefinition refuses it"):
+        refused_flow_step("supervisor", AGENT_REGISTRY["supervisor"])
 
-    assert refused.kind == "internal"
-    assert refused.save_code == "internal_agent_in_control_flow"
-    assert refused.run_code == "internal_agent_step"
-    assert refused.explanation == "Supervisor Agent is an internal agent and cannot be a flow step. Remove this step."
-    assert "validator" not in refused.explanation
+
+def test_a_validator_reached_through_subject_routing_names_the_extractor_that_routes_to_it():
+    """The disease pack routes a disease record's allele or model subject to those validators."""
+    agm = refused_flow_step("agm_validation", AGENT_REGISTRY["agm_validation"])
+    allele = refused_flow_step("allele_validation", AGENT_REGISTRY["allele_validation"])
+
+    assert agm.checking_extractors == ("Disease Extraction Agent",)
+    assert "No extraction step" not in agm.fix_hint
+    assert allele.checking_extractors == ("Allele/Variant Extraction Agent", "Disease Extraction Agent")
+
+
+def test_a_binding_still_being_built_is_never_named():
+    """Reference checks in the disease, allele and phenotype packs are under development."""
+    reference = refused_flow_step("reference_validation", AGENT_REGISTRY["reference_validation"])
+
+    assert "Gene Expression Extractor" in reference.checking_extractors
+    for not_running in ("Disease Extraction Agent", "Allele/Variant Extraction Agent", "Phenotype Extraction Agent"):
+        assert not_running not in reference.checking_extractors
+    # The phenotype pack's subject routing is under development too.
+    agm = refused_flow_step("agm_validation", AGENT_REGISTRY["agm_validation"])
+    assert "Phenotype Extraction Agent" not in agm.checking_extractors
 
 
 @pytest.mark.parametrize(
@@ -187,6 +211,7 @@ def test_a_curators_validator_copy_cannot_run_and_custom_detail_is_offered_only_
 
     assert refused.kind == "custom_validator"
     assert refused.save_code == "custom_validator_in_control_flow"
+    assert refused.run_code == "custom_validator_step"
     assert refused.message == (
         "My allele check is your copy of a validator, and a copy of a validator cannot run in a flow."
     )
@@ -306,3 +331,53 @@ def test_studio_flow_state_reports_the_save_refusal_including_a_curators_copy(mo
     assert copy_finding["node_ids"] == ["val_2"]
     # A copy no registry knows is still judged by its pinned revision.
     assert copy_id not in AGENT_REGISTRY
+
+
+def test_a_viewer_who_is_not_the_owner_is_told_only_the_owner_can_change_the_flow():
+    copy = {"name": "Owner's allele check", "category": "Validation", "supervisor": {},
+            "output_schema_key": "AlleleResultEnvelope", "template_source": "allele_validation"}
+    shared_copy = refused_flow_step("ca_11111111-1111-4111-8111-111111111111", copy, owner=False)
+    assert shared_copy.explanation == (
+        "Owner's allele check is a copy, saved by the flow's owner, of a validator, and a copy of a "
+        "validator cannot run in a flow. Only the flow's owner can remove this step."
+    )
+    shared_validator = refused_flow_step("gene_validation", AGENT_REGISTRY["gene_validation"], owner=False)
+    assert shared_validator.fix_hint.startswith("Only the flow's owner can remove this step. ")
+
+    now = datetime.now(timezone.utc)
+    stored = SimpleNamespace(id=uuid4(), user_id=8, visibility="project", project_id=uuid4(), shared_at=now,
+                             name="Shared flow", description=None, flow_definition=shape_a(),
+                             execution_count=0, last_executed_at=None, created_at=now, updated_at=now)
+    opened = flows._flow_to_response(stored, viewer_user_id=7, active_group_ids=[])
+    marked = [w for w in opened.validation_warnings if w.node_id == "val_1"]
+    assert marked[0].message == shared_validator.explanation
+
+
+def test_the_run_records_a_curators_copy_by_its_own_code_and_text(monkeypatch):
+    """A pinned revision with a validator-result schema runs as a copy, not as the packaged validator."""
+    from src.lib.flows import executor
+    from src.lib.flows.unavailable_steps import build_flow_step_unavailable_message
+
+    copy_id = "ca_11111111-1111-4111-8111-111111111111"
+    revision_entry = {"agent_id": copy_id, "name": "My allele check", "display_name": "My allele check",
+                      "category": "Validation", "subcategory": "", "supervisor": {}, "is_active": True,
+                      "visible": True, "output_schema_key": "AlleleResultEnvelope",
+                      "template_source": "allele_validation", "requires_document": False,
+                      "required_params": []}
+    flow = SimpleNamespace(id=uuid4(), user_id=7, flow_definition=_flow(
+        [_node("task_1", "task_input", "task_input"),
+         {"id": "val_1", "type": "agent", "position": {"x": 0, "y": 0},
+          "data": {"agent_id": copy_id, "agent_display_name": "My allele check", "output_key": "val_out"}}],
+        [{"id": "e1", "source": "task_1", "target": "val_1"}]))
+    monkeypatch.setattr(executor, "_runtime_custom_entries", lambda *_a, **_k: {"val_1": revision_entry})
+
+    _tools, _names, unavailable, _state = executor.get_all_agent_tools(
+        flow, include_unavailable=True, db_user_id=7, user_id="u1")
+
+    assert [(step["reason_code"], step["custom_detail"]) for step in unavailable] == [("custom_validator_step", True)]
+    assert build_flow_step_unavailable_message(unavailable) == (
+        "Flow cannot start. Step 1 (My allele check) is your copy of a validator, and a copy of a validator "
+        "cannot run in a flow. In Flow Builder, remove it. You can attach My allele check as the validator "
+        "on a detail of your own Custom Output Structure, as long as it keeps the answer format of the "
+        "validator it was copied from."
+    )

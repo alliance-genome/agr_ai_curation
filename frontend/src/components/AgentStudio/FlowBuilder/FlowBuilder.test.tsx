@@ -2042,7 +2042,7 @@ describe('FlowBuilder', () => {
     ).toBeInTheDocument()
   }, 15000)
 
-  it('marks the step a load warning names and keeps it from being saved until removed', async () => {
+  it('marks the step a load warning names and refuses Save while that step is there', async () => {
     const user = userEvent.setup()
     const stepMessage = (
       'Gene Validation Agent is a validator. Validators check an extraction step\'s records '
@@ -2112,6 +2112,13 @@ describe('FlowBuilder', () => {
       | { data?: { hasError?: boolean } }
       | undefined
     expect(taskNode?.data?.hasError).toBeFalsy()
+
+    // Save is stopped in the builder with the server's message; nothing is sent.
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Save'))
+    expect(await screen.findByText(stepMessage)).toBeInTheDocument()
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+    expect(serviceMocks.createFlow).not.toHaveBeenCalled()
   }, 15000)
 
   it('loads and resaves distinct extraction sources attached to one formatter', async () => {

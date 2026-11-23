@@ -108,6 +108,12 @@ import {
   validateFlowDraft,
 } from '@/services/agentStudioService'
 import type { FlowSummaryResponse } from './types'
+import {
+  currentServerStepIssue,
+  serverStepIssuesFromLoad,
+  type ServerStepIssue,
+  type ServerStepIssues,
+} from './serverStepIssues'
 import logger from '@/services/logger'
 import { notifyFlowListInvalidated } from '@/features/flows/flowListInvalidation'
 import {
@@ -426,14 +432,15 @@ export const rebuildValidationGroupsFromEdges = (
 const computeValidationErrors = (
   currentNodes: AgentNode[],
   currentEdges: FlowEdge[],
-  serverStepIssues: ReadonlyMap<string, string> = new Map(),
+  serverStepIssues: ServerStepIssues = new Map(),
 ): Array<{ nodeId: string; message: string }> => {
   const errors: Array<{ nodeId: string; message: string }> = []
 
   // Steps the server named when the flow was opened (for example a validator saved
-  // as an ordinary step). The mark stays until the step is removed.
+  // as an ordinary step). The mark stays while the step is the one loaded: removing
+  // it, or changing its agent or pinned revision, clears it.
   currentNodes.forEach(node => {
-    const issue = serverStepIssues.get(node.id)
+    const issue = currentServerStepIssue(node, serverStepIssues)
     if (issue) {
       errors.push({ nodeId: node.id, message: issue })
     }
@@ -1010,14 +1017,10 @@ function FlowBuilderInner({
   // Ref to hold revalidateValidators function (defined later, needed in loadFlow)
   const revalidateValidatorsRef = useRef<(() => void) | null>(null)
   // Step problems the server reported when the flow was opened, keyed by node ID.
-  const serverStepIssuesRef = useRef<Map<string, string>>(new Map())
+  const serverStepIssuesRef = useRef<Map<string, ServerStepIssue>>(new Map())
 
   const applyFlow = useCallback((flow: FlowResponse) => {
-    serverStepIssuesRef.current = new Map(
-      (flow.validation_warnings ?? [])
-        .filter((warning) => typeof warning.node_id === 'string' && warning.node_id.length > 0)
-        .map((warning) => [warning.node_id as string, warning.message]),
-    )
+    serverStepIssuesRef.current = serverStepIssuesFromLoad(flow.validation_warnings, flow.flow_definition.nodes)
     setFlowUnsaved(false)
     setFlowAccess(flow)
     setSelectedNode(null)

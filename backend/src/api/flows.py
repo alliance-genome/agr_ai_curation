@@ -489,6 +489,7 @@ def _refused_step_warnings(
     entries_by_node: Mapping[str, Mapping[str, Any] | None],
     db_user_id: int | None,
     active_group_ids: list[str] | None,
+    owner: bool,
 ) -> list[FlowValidationWarning]:
     """Mark each step the flow policy refuses, so the opened flow names it.
 
@@ -504,7 +505,7 @@ def _refused_step_warnings(
             if node.id in entries_by_node
             else _flow_agent_policy_entry(agent_id, db_user_id=db_user_id, active_group_ids=active_group_ids)
         )
-        refused = refused_flow_step(agent_id, entry, active_group_ids=list(active_group_ids or []))
+        refused = refused_flow_step(agent_id, entry, active_group_ids=list(active_group_ids or []), owner=owner)
         if refused is None:
             continue
         warnings.append(FlowValidationWarning(
@@ -552,6 +553,7 @@ def _flow_to_response(
     validation_warnings.extend(_refused_step_warnings(
         flow_definition, entries_by_node=resolved.entries_by_node,
         db_user_id=viewer_user_id, active_group_ids=active_group_ids,
+        owner=flow.user_id == viewer_user_id,
     ))
     if (any(edge.role == VALIDATION_ATTACHMENT_EDGE_ROLE for edge in flow_definition.edges)
             or any(group.state in {"replaced", "supplemental"}

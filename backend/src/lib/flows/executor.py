@@ -2960,20 +2960,17 @@ def get_all_agent_tools(
             })
             continue
 
-        refused = refused_flow_step(agent_id, entry, active_group_ids=list(active_groups or []))
+        refused = refused_flow_step(
+            agent_id, entry, active_group_ids=list(active_groups or []),
+            # Only the flow's owner can change it; a project member running it is told so.
+            owner=flow.user_id == db_user_id,
+        )
         if refused is not None:
             logger.warning(
                 "[Flow Executor] Agent '%s' cannot be an ordinary flow step (%s)",
                 agent_id, refused.run_code,
             )
-            unavailable_steps.append({
-                "step": step_num,
-                "agent_id": agent_id,
-                "agent_name": refused.agent_name,
-                "reason": refused.explanation,
-                "reason_code": refused.run_code,
-                "checking_extractors": list(refused.checking_extractors),
-            })
+            unavailable_steps.append(refused.as_unavailable_step(step_num, agent_id))
             continue
 
         # Check if this agent requires document and we don't have one

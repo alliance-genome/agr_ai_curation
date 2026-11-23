@@ -476,6 +476,7 @@ def extraction_agents_running_validator(
         from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
 
         agent_registry = AGENT_REGISTRY
+    registries = _domain_pack_validation_registries()
     names: set[str] = set()
     for entry in agent_registry.values():
         if not is_resource_access_allowed(
@@ -485,11 +486,23 @@ def extraction_agents_running_validator(
             resource_kind="agent",
         ):
             continue
+        if "extract" not in str(entry.get("category") or "").lower():
+            continue
+        curation = entry.get("curation")
+        pack_id = curation.get("domain_pack_id") if isinstance(curation, Mapping) else None
+        registry = registries.get(str(pack_id).strip()) if pack_id else None
+        if registry is None:
+            continue
+        # Every validator an active binding can run, including the ones a binding
+        # routes to by subject type (a disease record whose subject is an allele
+        # or a model). Bindings under development never run and are not counted.
         if any(
-            option.state is ValidationBindingState.ACTIVE
-            and validator_agent_key
-            in _validator_agent_keys(option.validator_package_id, option.validator_agent_id)
-            for option in _options_for_agent_entry(entry)
+            binding.state is ValidationBindingState.ACTIVE
+            and any(
+                validator_agent_key in _validator_agent_keys(ref.package_id, ref.agent_id)
+                for ref in binding.validator_agents()
+            )
+            for binding in registry.bindings
         ):
             names.add(str(entry.get("name") or ""))
     return tuple(sorted(name for name in names if name))

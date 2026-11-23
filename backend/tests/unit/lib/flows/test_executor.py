@@ -1733,6 +1733,7 @@ class TestDbUserIdPropagation:
         monkeypatch.setattr("src.lib.flows.executor.get_agent_metadata", _metadata)
 
         flow = _make_flow([_agent_node("n1", "allele_validation")])
+        flow.user_id = None  # run as its owner (no database user in this test)
         tools, created_names, unavailable_steps, _execution_state = get_all_agent_tools(
             flow,
             include_unavailable=True,
@@ -1746,16 +1747,8 @@ class TestDbUserIdPropagation:
             "allele_validation", {"name": "Allele Validation Agent", "category": "Validation",
                                   "supervisor": {"enabled": False}},
         )
-        assert unavailable_steps == [
-            {
-                "step": 1,
-                "agent_id": "allele_validation",
-                "agent_name": "Allele Validation Agent",
-                "reason": expected.explanation,
-                "reason_code": "attachment_only_validator",
-                "checking_extractors": list(expected.checking_extractors),
-            }
-        ]
+        assert unavailable_steps == [expected.as_unavailable_step(1, "allele_validation")]
+        assert unavailable_steps[0]["reason_code"] == "attachment_only_validator"
         assert "Allele/Variant Extraction Agent" in expected.checking_extractors
         mock_get_agent.assert_not_called()
         mock_streaming.assert_not_called()
@@ -4667,7 +4660,7 @@ class TestExecuteFlowTermination:
         supervisor = SimpleNamespace(_flow_unavailable_steps=[{
             "step": 1, "agent_id": agent_id, "agent_name": "Required step", "reason": reason,
             "error_code": "provider_disabled" if agent_id == "disabled_agent" else None,
-            "reason_code": reason_code, "checking_extractors": [],
+            "reason_code": reason_code, "checking_extractors": [], "custom_detail": False, "owner": True,
         }])
         monkeypatch.setattr("src.lib.flows.executor.create_flow_supervisor", lambda **kwargs: supervisor)
         monkeypatch.setattr("src.lib.flows.executor.build_flow_prompt", lambda *args: "fixture")

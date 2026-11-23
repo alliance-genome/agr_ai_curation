@@ -194,8 +194,9 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
       >
         {hasError && (
           <Tooltip title={data.errorMessage || 'Configuration error'}>
-            <ErrorBadge>
-              <ErrorOutlineIcon fontSize="small" />
+            {/* Focusable and named, so the message reaches keyboard and screen-reader users. */}
+            <ErrorBadge tabIndex={0} role="img" aria-label={data.errorMessage || 'Configuration error'}>
+              <ErrorOutlineIcon fontSize="small" aria-hidden="true" />
             </ErrorBadge>
           </Tooltip>
         )}

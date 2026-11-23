@@ -45,6 +45,7 @@ def _flow(*agent_ids):
     }
     flow.name = "Identify Mouse Allele IDs"
     flow.id = "f05d8320-c96d-4145-8c67-f18408edb3ca"
+    flow.user_id = None  # run as its owner (no database user in these tests)
     return flow
 
 

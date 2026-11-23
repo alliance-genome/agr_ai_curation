@@ -31,6 +31,7 @@ def has_batch_capability(agent_id: str, capability: str) -> bool:
 def validate_flow_for_batch(
     flow_definition: dict, *, entries_by_node: Mapping[str, Mapping[str, Any] | None] | None = None,
     active_group_ids: list[str] | None = None,
+    owner: bool = True,
 ) -> BatchValidationResponse:
     """Validate a flow is compatible with batch processing.
 
@@ -60,7 +61,9 @@ def validate_flow_for_batch(
             (entries_by_node or {}).get(node.get("id"))
             if agent_id.startswith(CUSTOM_AGENT_KEY_PREFIX) else AGENT_REGISTRY.get(agent_id)
         )
-        refused = refused_flow_step(agent_id, entry, active_group_ids=list(active_group_ids or []))
+        refused = refused_flow_step(
+            agent_id, entry, active_group_ids=list(active_group_ids or []), owner=owner,
+        )
         if refused is not None:
             errors.append(refused.explanation)
             error_codes.append(refused.save_code)

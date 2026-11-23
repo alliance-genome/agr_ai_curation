@@ -163,7 +163,7 @@ async def test_repaired_historical_flow_lists_opens_validates_and_reaches_execut
         opened.flow_definition, enforce_agent_references=True, enforce_agent_step_policy=True,
     )
     FlowDefinition.model_validate(validated)
-    prepared_flow = SimpleNamespace(id=flow.id, name=flow.name, flow_definition=validated)
+    prepared_flow = SimpleNamespace(id=flow.id, name=flow.name, user_id=flow.user_id, flow_definition=validated)
     monkeypatch.setattr(executor, "_resolve_flow_agent_entry",
                         lambda agent_id, **_kwargs: AGENT_REGISTRY[agent_id])
     monkeypatch.setattr(executor, "get_agent_by_id", lambda *_args, **_kwargs: object())

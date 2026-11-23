@@ -140,6 +140,9 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/integration/test_alliance_flow_group_context.py"),
     # Direct-run context isolation exercises the real packaged expression builder.
     Path("backend/tests/unit/lib/openai_agents/test_runner_direct_builder.py"),
+    # ALL-1648 names the extraction agents that run a validator, only for the
+    # curator's groups: needs the shipped group-restricted RGD extraction agent.
+    Path("backend/tests/unit/api/test_flows_validator_steps.py"),
     # Benchmark identity integration verifies the shipped provider-group mapping.
     Path("backend/tests/unit/lib/benchmarks/test_execution_context.py"),
     Path("backend/tests/unit/lib/benchmarks/test_curator_authorization.py"),
