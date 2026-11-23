@@ -222,31 +222,46 @@ class SourceBinding:
         """
         if not self.shown_chunk_indexes:
             return
+        # Files-read rows are append-only, so a file already in this invocation's
+        # records (re-read under the lock by ``retain``, or loaded with the binding)
+        # stays recorded: skip the locked scan when every shown file is there.
+        if {self._shown_file(index).file_id for index in self.shown_chunk_indexes} <= self._files_recorded():
+            return
         with self._locked_transaction() as db:
             self._record_files_read(sorted(self.shown_chunk_indexes), db=db)
 
-    def _record_files_read(self, chunk_indexes, *, db) -> None:
-        """Record the files these pieces belong to that the invocation had not been shown.
+    def _shown_file(self, index: int):
+        file = self.readable.file_for(index)
+        if file is None:
+            raise DocumentReferenceError("A shown chunk is not part of a readable file")
+        return file
 
-        One row per newly shown set of files (ALL-1460, Q8), so a long run writes at
-        most one row per file per invocation, in the read's own transaction. The
-        "already shown" set comes from the bindings scanned under the same lock.
-        Every agent run with history enabled has its own invocation; with history
-        disabled each tool call gets a fresh one, so each read then writes a row.
-        """
-        shown: dict[str, str] = {}
-        for index in chunk_indexes:
-            file = self.readable.file_for(index)
-            if file is None:
-                raise DocumentReferenceError("A shown chunk is not part of a readable file")
-            shown.setdefault(file.file_id, file.display_name)
+    def _files_recorded(self) -> set[str]:
+        """The files this invocation's files-read records name, from ``self.records``."""
         invocation_id = self.history_scope.invocation_id
-        already = {
+        return {
             entry["file_id"]
             for record in self.records
             if record["kind"] == FILES_READ_KIND and record["invocation_id"] == invocation_id
             for entry in record["files"]
         }
+
+    def _record_files_read(self, chunk_indexes, *, db) -> None:
+        """Record the files these pieces belong to that the invocation had not been shown.
+
+        One row per newly shown set of files (ALL-1460, Q8), so a long run writes at
+        most one row per file per invocation, written by ``record_files_read`` once the
+        call stands. The "already shown" set comes from the bindings scanned under the
+        same lock.
+        Every agent run with history enabled has its own invocation; with history
+        disabled each tool call gets a fresh one, so each read then writes a row.
+        """
+        shown: dict[str, str] = {}
+        for index in chunk_indexes:
+            file = self._shown_file(index)
+            shown.setdefault(file.file_id, file.display_name)
+        invocation_id = self.history_scope.invocation_id
+        already = self._files_recorded()
         new_files = [
             {"file_id": file_id, "file_name": name}
             for file_id, name in shown.items()
@@ -283,7 +298,6 @@ class SourceBinding:
                 raise DocumentReferenceError("Document has no readable file")
             if not self.readable.contains(selection.chunk_index):
                 raise UnreadableDocumentSelectionError(selection, self.readable)
-            self.note_shown([selection.chunk_index])
             if selection.chunk_index not in chunks:
                 chunks[selection.chunk_index] = await get_chunk_by_index(
                     chunk_index=selection.chunk_index, user_id=self.user_id, document_id=self.document_id,
@@ -416,7 +430,8 @@ async def document_reference_scope(document_id: str, user_id: str, *, tool_name:
                     extra={"document_id": document_id, "run_id": run_id, "tool_name": tool_name, "call_id": call_id})
         # Ids only, never text: a trace ties the event to the withheld call.
         await record_runtime_payload("document_files_changed", {
-            "document_id": document_id, "tool_name": tool_name, "call_id": call_id})
+            "document_id": document_id, "tool_name": tool_name, "call_id": call_id},
+            tool_name=tool_name, call_id=call_id)
         raise
     except DocumentReadError:
         raise

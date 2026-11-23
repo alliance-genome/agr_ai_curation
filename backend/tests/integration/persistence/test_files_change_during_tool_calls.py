@@ -435,6 +435,50 @@ async def test_a_failed_fetch_after_a_read_shown_its_spans_leaves_no_files_read_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("selections", [
+    # Sentences from two files: refused as selections in several files.
+    [{"chunk_index": 0, "span_index": 0}, {"chunk_index": 3, "span_index": 0}],
+    # The first sentence was read, the second never was: refused as unissued.
+    [{"chunk_index": 3, "span_index": 0}, {"chunk_index": 1, "span_index": 0}],
+], ids=["several_files", "unissued_second"])
+async def test_a_refused_record_evidence_leaves_no_files_read_row(paper, selections):
+    """A refusal shows the model no paper text, so no file is recorded as read for it."""
+    await _call("read_chunk", paper, {"chunk_index": 0})
+    await _call("read_chunk", paper, {"chunk_index": 3})
+    before = _files_read_rows(paper)
+
+    result = await _call("record_evidence", paper, {"entity": "dpp", "selections": selections})
+
+    assert result.get("status") != "verified" and "verified_quote" not in result
+    assert _files_read_rows(paper) == before
+
+
+@pytest.mark.asyncio
+async def test_the_files_changed_event_row_names_its_tool_and_call(paper, monkeypatch):
+    """The run-history row itself carries the tool name and call id, as other per-call events do."""
+    from sqlalchemy import select
+
+    from src.lib.context import set_current_trace_id, set_current_user_id
+    from src.lib.openai_agents.run_history import ACTIVE_HISTORY, HistoryScope, RunHistory
+    from src.models.sql.agent_run_history import AgentHistoryEvent
+
+    set_current_user_id(TEST_USER_ID)
+    set_current_trace_id(paper["run_id"])
+    history = RunHistory(HistoryScope(TEST_USER_ID, paper["run_id"], f"inv-{uuid4().hex[:8]}", "extractor", "x/"))
+    token = ACTIVE_HISTORY.set(history)
+    try:
+        assert await _during_call(monkeypatch, paper, READ, remove_other) == FILES_CHANGED
+    finally:
+        ACTIVE_HISTORY.reset(token)
+
+    with SessionLocal() as db:
+        rows = db.execute(select(AgentHistoryEvent.tool_name, AgentHistoryEvent.call_id).where(
+            AgentHistoryEvent.run_id == paper["run_id"],
+            AgentHistoryEvent.kind == "document_files_changed")).all()
+    assert [tuple(row) for row in rows] == [("read_chunk", "call-read_chunk")]
+
+
+@pytest.mark.asyncio
 async def test_a_withheld_call_is_recorded_in_run_history_with_its_tool_and_call_ids(paper, monkeypatch):
     events = []
 

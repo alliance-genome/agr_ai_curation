@@ -1473,11 +1473,22 @@ async def test_a_read_scans_the_history_once_for_spans_and_files_read(store, sco
     finally:
         event.remove(engine, "before_cursor_execute", count)
 
-    # The tool call's binding load, the read's locked re-scan, and the commit-time
-    # locked scan that writes the files-read row; no files-read lookup of its own.
+    # First read of a file in this invocation: the tool call's binding load, the read's
+    # locked re-scan, and the commit-time locked scan that writes the files-read row.
     assert len(selects) == 3
     assert all("kind IN" in statement for statement in selects)
     assert _files_read_rows(store)[-1] == ("inv-a", [{"file_id": "file-1", "file_name": "Table S1.xlsx"}])
+
+    # A later read of a file this invocation already recorded: the records re-read under
+    # the read's lock already hold it (rows are append-only), so no third scan and no row.
+    selects.clear()
+    event.listen(engine, "before_cursor_execute", count)
+    try:
+        await _invoke(tools["read_chunk"], {"chunk_index": 10})
+    finally:
+        event.remove(engine, "before_cursor_execute", count)
+    assert len(selects) == 2
+    assert len(_files_read_rows(store)) == 2
 
 
 @pytest.mark.asyncio
