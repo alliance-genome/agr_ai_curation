@@ -46,6 +46,7 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import CloseIcon from '@mui/icons-material/Close'
 import {
   createAgentStudioSession,
+  reportAgentStudioStreamProtocolError,
   streamOpusChat,
   stopAgentStudioChat,
 } from '@/services/agentStudioService'
@@ -778,7 +779,7 @@ function OpusChat({
   // Attach serial tool events to the current assistant message. Live events
   // correlate by call_id; durable replay events intentionally fall back to the
   // existing serial order because historical replay does not expose call IDs.
-  const handleToolEvent = useCallback((event: OpusChatEvent): boolean => {
+  const handleToolEvent = useCallback((event: OpusChatEvent, sessionId: string): boolean => {
     if (event.type === 'TOOL_USE' && event.tool_name && event.tool_input) {
       if (event.call_id) {
         pendingToolCallIdsRef.current.add(event.call_id)
@@ -818,15 +819,8 @@ function OpusChat({
       }
     } else if (event.type === 'TOOL_RESULT' && event.result) {
       if (event.call_id && !pendingToolCallIdsRef.current.delete(event.call_id)) {
-        logger.error(
-          'Agent Studio tool event correlation failure',
-          new Error('Agent Studio tool event correlation failure'),
-          {
-            component: 'OpusChat',
-            action: 'correlate_tool_result',
-            metadata: { eventType: event.type, hasCallId: true },
-          },
-        )
+        void reportAgentStudioStreamProtocolError('correlation_mismatch', sessionId, event.type)
+          .catch(() => { /* Best effort. Keep the curator's retry message on delivery failure. */ })
         setMessages((prev) => {
           const updated = [...prev]
           const lastAssistantIdx = updated.findLastIndex((message) => message.role === 'assistant')
@@ -1080,7 +1074,7 @@ function OpusChat({
           setStreamStatus('Reading your current draft…')
         } else if (event.type === 'TOOL_USE' || event.type === 'TOOL_RESULT') {
           setStreamStatus('Working on your request…')
-          if (!handleToolEvent(event)) break
+          if (!handleToolEvent(event, activeSessionId)) break
         } else if (
           event.type === 'CONTEXT_OVERFLOW'
           || event.type === 'REFUSAL'
