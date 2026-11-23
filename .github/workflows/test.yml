@@ -18,6 +18,7 @@ on:
       - 'scripts/testing/**'
       - 'scripts/tests/**'
       - 'trace_review/**'
+      - 'agent_tests/**'
       - 'docs/testing/executable-flow-graph-parity.json'
       - '.github/workflows/test.yml'
   push:
@@ -37,6 +38,7 @@ on:
       - 'scripts/testing/**'
       - 'scripts/tests/**'
       - 'trace_review/**'
+      - 'agent_tests/**'
       - 'docs/testing/executable-flow-graph-parity.json'
       - '.github/workflows/test.yml'
 
@@ -244,6 +246,58 @@ jobs:
           echo "Contract-core tests completed." >> $GITHUB_STEP_SUMMARY
           echo "Runs all of backend/tests/contract; legacy fail-first specs and live curation DB contracts skip themselves." >> $GITHUB_STEP_SUMMARY
 
+  backend-integration-tests:
+    name: Backend Integration Tests
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_PROJECT_NAME: backend-integration-ci
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend integration test image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.test
+          push: false
+          load: true
+          tags: backend-integration-ci-backend-integration-tests:latest
+          # The same backend/Dockerfile.test as the contract job: share its cache.
+          cache-from: type=gha,scope=backend-contract-test
+          cache-to: type=gha,mode=max,scope=backend-contract-test,ignore-error=true
+
+      # tests/integration outside persistence/ (the persistence job runs that folder).
+      # Tests that need what CI cannot give skip themselves and say why: the live
+      # PDFX smoke (PDFX_LIVE_ENABLE), the release-history migration convergence
+      # check (MIGRATION_CONVERGENCE_TEST_DATABASE_URL plus production exports) and
+      # the external curation database queries (CURATION_DB_URL).
+      - name: Run integration tests (outside persistence)
+        run: |
+          docker compose -f docker-compose.test.yml up -d --wait postgres-test redis-test weaviate-test
+          docker compose -f docker-compose.test.yml run --rm backend-integration-tests \
+            bash -lc "alembic upgrade head && python -m pytest -q --tb=short --strict-markers -rs tests/integration --ignore=tests/integration/persistence"
+
+      - name: Verify Docker tests left no backend cache artifacts
+        if: always()
+        shell: bash
+        run: bash scripts/testing/assert_no_backend_test_cache_artifacts.sh
+
+      - name: Cleanup
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v
+
+      - name: Integration Summary
+        if: always()
+        run: |
+          echo "## Integration Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Runs backend/tests/integration outside persistence/; live-service tests skip themselves." >> $GITHUB_STEP_SUMMARY
+
   trace-review-backend-tests:
     name: TraceReview Backend Tests
     runs-on: ubuntu-latest
@@ -281,6 +335,43 @@ jobs:
       - name: Cleanup TraceReview test resources
         if: always()
         run: docker compose -p trace_review -f trace_review/docker-compose.yml down --volumes --remove-orphans --rmi local
+
+  trace-review-frontend-tests:
+    name: TraceReview Frontend Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: trace_review/frontend/package-lock.json
+      - name: Install TraceReview frontend dependencies
+        working-directory: trace_review/frontend
+        run: npm ci
+      - name: Run TraceReview frontend tests
+        working-directory: trace_review/frontend
+        run: npx vitest run
+
+  midscene-harness-offline-tests:
+    name: Midscene Harness Offline Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # node --test expands the tests/**/*.test.ts glob itself from Node 21 on.
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: agent_tests/midscene/package-lock.json
+      - name: Install harness dependencies
+        working-directory: agent_tests/midscene
+        run: npm ci
+      # Type check, offline unit tests and scenario YAML validation; no browser,
+      # no app, no model calls (the live smoke run stays manual).
+      - name: Run harness offline checks
+        working-directory: agent_tests/midscene
+        run: npm run check
 
   installer-shell-regression-tests:
     name: Installer Shell Regression Suite
@@ -391,6 +482,24 @@ jobs:
         run: bash scripts/tests/test_agent_pr_gate_backend_smoke.sh
       - name: Check installed package freshness across builds and workspaces
         run: python3 scripts/tests/test_docker_test_compose_freshness.py
+      # Stub-based tests of the local test and preflight scripts (docker is only
+      # stubbed or asked for `compose config`); nothing else ran them.
+      - name: Check local test and preflight scripts
+        run: |
+          for test_script in \
+            test_ensure_local_langfuse_env.sh \
+            test_file_output_storage_preflight.sh \
+            test_frontend_typecheck_changed.sh \
+            test_pdf_viewer_route_preflight.sh \
+            test_prepare_test_stack.sh \
+            test_rerank_provider_smoke_local.sh \
+            test_reranker_compose_profiles.sh \
+            test_run_tests.sh \
+            test_trace_review_preflight.sh; do
+            echo "::group::${test_script}"
+            bash "scripts/tests/${test_script}"
+            echo "::endgroup::"
+          done
 
   backend-persistence-tests:
     name: Backend Persistence Tests
