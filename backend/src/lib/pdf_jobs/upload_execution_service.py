@@ -1157,10 +1157,16 @@ class UploadExecutionService:
             )
         except pdf_job_service.ActiveJobExistsError:
             # The curator deleted the paper, or started an add or a delete on it,
-            # in the moment after it became ready: its supplements are not waited for.
+            # in the moment after it became ready: its supplements are not waited
+            # for, and the import's own job says so for each chosen file.
             logger.info(
                 "Supplement stage of document %s not started: the paper is busy or gone",
                 request.document_id,
+            )
+            await asyncio.to_thread(
+                pdf_job_service.record_supplement_outcomes_on_finished_job,
+                job_id=request.job_id,
+                supplements=supplement_wait.not_started_entries(plan),
             )
             return
         stage_job_id = str(stage_job.job_id)

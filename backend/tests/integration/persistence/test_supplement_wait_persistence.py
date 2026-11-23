@@ -188,3 +188,92 @@ def test_the_outline_signal_reads_a_living_wait_and_drops_a_dead_one(owner, monk
         assert job_service.supplement_wait_active(db, paper.id) is False
     with SessionLocal() as db:
         assert job_service.supplement_wait_active(db, uuid4()) is False
+
+
+def test_a_delete_ends_a_stage_from_its_first_moment(owner):
+    """Born in the waiting stage: no poll or heartbeat is needed before a delete can end it."""
+
+    owner_id, _ = owner
+    paper = _ready_paper(owner_id)
+    stage = job_service.start_supplement_wait_job(document_id=paper.id, user_id=owner_id, filename=paper.filename)
+
+    assert job_service.end_supplement_wait_for_delete(document_id=paper.id, user_id=owner_id) is True
+    latest = job_service.get_latest_job_for_document(document_id=paper.id, user_id=owner_id)
+    assert (latest.job_id, latest.status) == (stage.job_id, "cancelled")
+
+
+@pytest.mark.asyncio
+async def test_a_failing_stage_ends_its_own_job_and_never_touches_the_paper(owner, monkeypatch):
+    """Through the real hand-off and the real failure path (the stage task's guard and
+    its outcomes): the stage job fails by name, the paper and its main file stay as they
+    were (mutation M6)."""
+
+    import asyncio
+
+    from src.lib.document_sources import supplement_wait
+    from src.lib.document_sources.access import DocumentSourceRequestContext
+    from src.lib.document_sources.models import ProviderBearerKind
+    from src.lib.document_sources.supplement_plan import ChosenSupplement, SupplementPlan
+    from src.lib.pdf_jobs import upload_execution_service as execution
+    from src.lib.pdf_jobs.upload_execution_service import (
+        ProviderMarkdownExecutionRequest,
+        UploadExecutionService,
+    )
+
+    owner_id, subject = owner
+    document_id = uuid4()
+    paper = new_paper(
+        id=document_id, user_id=owner_id, filename=f"{PREFIX}{document_id}.pdf", status="completed",
+        file_path=f"owner/{document_id}/made-up.pdf", file_hash=document_id.hex * 2,
+        file_size=100, page_count=2,
+    )
+    with SessionLocal.begin() as db:
+        db.add(paper)
+    import_job = job_service.create_job(document_id=paper.id, user_id=owner_id, filename=paper.filename)
+    reported = []
+
+    async def _failing_stage(**_kwargs):
+        raise KeyError("made-up bug")
+
+    class _Provider:
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(supplement_wait, "run_supplement_stage", _failing_stage)
+    monkeypatch.setattr(supplement_wait, "report_runtime_exception", lambda exc, **kwargs: reported.append(kwargs))
+    monkeypatch.setattr(execution, "get_connection", lambda: None)
+    service = UploadExecutionService(
+        pipeline_tracker=AsyncMock(), document_source_provider_factory=lambda: _Provider(),
+    )
+    request = ProviderMarkdownExecutionRequest(
+        document_id=str(paper.id), job_id=str(import_job.job_id), user_id=subject,
+        owner_user_id=owner_id, filename=paper.filename, converted_artifact_id="made-up-text",
+        curator_token="made-up-token", bearer_kind=ProviderBearerKind.CURATOR,
+        source_provenance={}, file_path=Path("/tmp/made-up.pdf"),
+        supplements=SupplementPlan(
+            chosen=(ChosenSupplement(provider_file_id="20", md5="md5-20", converted_md5="md5-21"),),
+            request_context=DocumentSourceRequestContext(
+                provider_groups=("made-up-staff",), authorized_group_ids=("made-up-group",),
+                bearer_kind=ProviderBearerKind.CURATOR, curator_token="made-up-token",
+            ),
+            login_expires_at=None, owner_user_id=owner_id, reference="MADEUP:1",
+        ),
+    )
+
+    await service._complete_main_paper(request, message="Processing completed")
+    await asyncio.wait_for(asyncio.gather(*list(supplement_wait._stage_tasks)), timeout=30)
+
+    with SessionLocal() as db:
+        jobs = {
+            job.id: job for job in db.query(PdfProcessingJob).filter(PdfProcessingJob.document_id == paper.id)
+        }
+    from uuid import UUID
+
+    assert jobs[UUID(str(import_job.job_id))].status == "completed"
+    (stage_job,) = [job for job in jobs.values() if (job.metadata_json or {}).get("job_kind") == "supplement_wait"]
+    assert stage_job.status == "failed"
+    assert stage_job.error_message == supplement_wait.SUPPLEMENT_STAGE_FAILED_MESSAGE
+    assert reported and reported[0]["operation"] == "supplement_stage"
+    assert _main_file_status(paper) == "ready"
+    with SessionLocal() as db:
+        assert db.get(PDFDocument, paper.id).status == "completed"

@@ -318,11 +318,15 @@ supplement stage start, under a job of its own kind (`job_kind:
 supplement_wait`). Like an add's job, that job never stands for the paper's
 processing state: the paper reads `completed` and stays usable (read, chat,
 curate, rename, delete) during the wait and after every ending. While the stage
-job is active, adding files by hand is refused (one active job per paper). A
-delete ends a stage that is only waiting (`end_supplement_wait_for_delete`
-cancels it under the paper's lock) and keeps refusing during the seconds the
-stage writes files. If the paper became busy or was deleted the moment it was
-ready, no stage starts.
+job is active, adding files by hand is refused (one active job per paper). The
+stage job is created in stage `waiting_for_supplements`, so a delete ends it
+from its first moment, queued or not (`end_supplement_wait_for_delete` cancels
+it under the paper's lock), and is refused only during the seconds the stage
+writes files. A stage whose job was ended that way writes nothing more and is
+never reported as failed, even when the delete makes its listing fail. If the
+paper became busy or was deleted the moment it was ready, no stage starts; the
+completed import job then carries one `left_out` entry per chosen file with
+`paper_busy_when_ready`.
 
 - **Its own task.** The stage runs as its own in-process task (kept referenced;
   it inherits the import's cost and trace context), so the next paper of the
@@ -330,10 +334,12 @@ ready, no stage starts.
   (default 10) stages run at once in one process. Others queue in arrival order,
   recording activity at the poll interval, so neither the dead-wait cancel nor
   the stale sweep takes them for dead.
-- **Before asking anything.** A stage that reaches its turn after its wait limit
-  or inside its login's reserve asks the provider nothing. The waiting files end
-  as `not_converted_in_time` and the converted ones as `wait_limit_reached`, or
-  every file as `login_expired`.
+- **Before asking anything.** A stage that reaches its turn inside its login's
+  reserve (or past the login) asks the provider nothing: every file ends
+  `login_expired`. A stage that reaches its turn after its wait limit with a
+  valid login makes exactly one read-only listing (no conversion request, no
+  polling) and adds the chosen files the provider has already converted; the
+  others end `wait_limit_reached`.
 - **The wait.** It polls the main phase's own request, only while ABC answers
   `running`, at `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS`, recording activity at
   every poll. It re-lists the paper's files only when ABC reports a chosen file
@@ -346,9 +352,11 @@ ready, no stage starts.
   - the curator's login expiry minus `DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS`
     (default 900 s);
   - an answer whose `job_id` differs from the first: ABC lost the import's job
-    and started a new one, so nothing more is sent (`provider_job_restarted`).
-    That one request may already have started new work at ABC; there is no
-    status-only route to avoid it;
+    and started a new one, so no further conversion request is sent. One
+    read-only listing then keeps the files ABC did convert (including a
+    `converted` answer with no job id, when ABC lost its job file); the rest end
+    `provider_job_restarted`. That one request may already have started new work
+    at ABC; there is no status-only route to avoid it;
   - an answer in a shape the import does not know (`provider_answer_unknown`);
   - ABC refusing the login (`login_expired`; nothing more is asked, the add
     included);

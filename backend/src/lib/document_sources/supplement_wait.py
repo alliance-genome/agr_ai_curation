@@ -162,6 +162,22 @@ def _iso(epoch_seconds: float) -> str:
     return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc).isoformat()
 
 
+def not_started_entries(plan: SupplementPlan, *, now: float | None = None) -> list[dict[str, Any]]:
+    """Per-file outcomes when no supplement stage could start (the paper was busy or gone)."""
+
+    observed = _iso(time.time() if now is None else now)
+    return [
+        _Entry(
+            provider_file_id=chosen.provider_file_id,
+            display_name=chosen.provider_file_id,
+            state=SupplementState.LEFT_OUT,
+            reason_code=FileReason.PAPER_BUSY_WHEN_READY.value,
+            observed_at=observed,
+        ).as_metadata()
+        for chosen in plan.chosen
+    ]
+
+
 class _Stage:
     """One import's supplement stage: its entries, its job writes and its limits."""
 
@@ -195,6 +211,13 @@ class _Stage:
             raise _JobNoLongerActive()
         if job.cancel_requested:
             raise PDFCancellationError("Processing cancelled by user request")
+
+    async def ended_elsewhere(self) -> bool:
+        """Whether the job was made terminal outside this stage (a delete, a dead-wait cancel)."""
+        job = await asyncio.to_thread(
+            pdf_job_service.get_job_by_id, job_id=self.job_id, reconcile_stale=False
+        )
+        return job is None or job.status in TERMINAL_PDF_JOB_STATUSES
 
     async def record(self, stage: str, message: str) -> None:
         await asyncio.to_thread(
@@ -285,14 +308,10 @@ async def run_supplement_stage(
 
     try:
         await stage.checkpoint()
-        if clock() >= stage.wait_ends_at:
-            # Queued past its limit or its login: end at once, asking the provider nothing.
-            if stage.login_ended():
-                stage.end_unfinished(FileReason.LOGIN_EXPIRED)
-            else:
-                for provider_file_id in stage.ids_in(SupplementState.WAITING):
-                    stage.leave_out(provider_file_id, FileReason.NOT_CONVERTED_IN_TIME)
-                stage.end_unfinished(FileReason.WAIT_LIMIT_REACHED)
+        time_used_up = clock() >= stage.wait_ends_at
+        if time_used_up and stage.login_ended():
+            # Inside the login's reserve, or past it: ask the provider nothing.
+            stage.end_unfinished(FileReason.LOGIN_EXPIRED)
             await stage.record(pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE, "Supplements finished")
             await outcomes.completed()
             return
@@ -315,7 +334,25 @@ async def run_supplement_stage(
                 entry.display_name = names.get(entry.provider_file_id) or entry.provider_file_id
         await stage.record(pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE, "Waiting for ABC")
 
-        if stage.ids_in(SupplementState.WAITING):
+        if time_used_up:
+            # The wait time was used up (for example while queued) but the login is
+            # valid: no conversion request and no polling; files the provider has
+            # already converted (by the one read-only listing above) are added, the
+            # rest end ``wait_limit_reached``.
+            if listing is not None:
+                converted = {
+                    item.provider_file_id for item in listing.files if item.converted_text_id is not None
+                }
+                stage.apply(
+                    {key: CONVERTED for key in stage.ids_in(SupplementState.WAITING) if key in converted},
+                    listing,
+                )
+            elif add_allowed:
+                for provider_file_id in stage.ids_in(SupplementState.QUEUED):
+                    stage.leave_out(provider_file_id, FileReason.SOURCE_UNAVAILABLE)
+            for provider_file_id in stage.ids_in(SupplementState.WAITING):
+                stage.leave_out(provider_file_id, FileReason.WAIT_LIMIT_REACHED)
+        elif stage.ids_in(SupplementState.WAITING):
             if not conversion_requested or last_answer is None or listing is None:
                 # Nothing asked the provider to convert them in this import, or the
                 # paper's files cannot be listed: they are not converted.
@@ -406,6 +443,11 @@ async def run_supplement_stage(
         await stage.record(pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE, "Cancelled")
         await outcomes.cancelled()
     except Exception:
+        if await stage.ended_elsewhere():
+            # The curator ended it meanwhile (deleting the paper, which can make a
+            # listing fail): not a failure of the stage, and no report.
+            logger.info("Supplement stage of job %s ended: the job was finalized elsewhere", job_id)
+            return
         # The stage's own failure: every file still open is left out by name, then
         # the task's guard ends the job and reports it.
         stage.end_unfinished(FileReason.SUPPLEMENT_STAGE_FAILED)
@@ -453,8 +495,28 @@ async def _poll_until_done(
             # The first provider error ends the wait (no retries); converted files join.
             break
         if answer.job_id != first_job_id:
-            # The provider lost the job this import started and began a new one
-            # (that request may already have started new work): ask nothing more.
+            # The provider lost the job this import started (that request may already
+            # have started new work): ask it nothing more. One read-only listing
+            # keeps the files it did convert; the rest end ``provider_job_restarted``.
+            try:
+                listing = await list_files(
+                    UUID(document_id), owner_user_id=owner_user_id, provider=provider,
+                    context=stage.plan.request_context,
+                )
+            except DocumentSourceLoginExpired:
+                for provider_file_id in stage.ids_in(SupplementState.WAITING):
+                    stage.leave_out(provider_file_id, FileReason.LOGIN_EXPIRED)
+                return False
+            except DocumentSourceError:
+                pass
+            else:
+                converted = {
+                    item.provider_file_id for item in listing.files if item.converted_text_id is not None
+                }
+                stage.apply(
+                    {key: CONVERTED for key in stage.ids_in(SupplementState.WAITING) if key in converted},
+                    listing,
+                )
             for provider_file_id in stage.ids_in(SupplementState.WAITING):
                 stage.leave_out(provider_file_id, FileReason.PROVIDER_JOB_RESTARTED)
             break

@@ -2177,3 +2177,72 @@ def test_only_a_waiting_supplement_stage_is_ended_by_a_delete():
     assert is_waiting_supplement_stage(_job("parsing", None)) is False
     assert is_waiting_supplement_stage(_job("waiting_for_supplements", "supplement_add")) is False
     assert is_waiting_supplement_stage(None) is False
+
+
+def _stage_job(status, stage="waiting_for_supplements"):
+    from datetime import datetime, timezone
+
+    from src.schemas.pdf_jobs import PdfJobResponse
+
+    now = datetime.now(timezone.utc)
+    return PdfJobResponse(
+        job_id="stage-job-1", document_id="doc-1", user_id=42, status=status, current_stage=stage,
+        metadata={"job_kind": "supplement_wait"}, created_at=now, updated_at=now,
+        completed_at=now if status == "cancelled" else None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_delete_during_a_supplement_wait_ends_the_wait_and_deletes_the_paper(monkeypatch):
+    """KANBAN-1976 / ALL-1460, P7b: the paper stays deletable while its supplements are awaited."""
+
+    doc_id = str(uuid4())
+    verify_session = _FakeSession()
+    snapshot_session = _FakeSession(execute_doc=None)
+    cleanup_session = _FakeSession(execute_doc=None)
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session, cleanup_session])
+    ended = []
+    latest = [_stage_job("running"), _stage_job("cancelled")]
+
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
+    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
+    monkeypatch.setattr(documents, "delete_document", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 3}))
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: latest.pop(0))
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        documents.pdf_job_service, "end_supplement_wait_for_delete",
+        lambda **kwargs: ended.append(kwargs) or True,
+    )
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+
+    result = await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
+
+    assert ended == [{"document_id": doc_id, "user_id": 42}]
+    assert result.success is True
+
+
+@pytest.mark.asyncio
+async def test_a_delete_while_the_stage_writes_files_is_refused(monkeypatch):
+    doc_id = str(uuid4())
+    verify_session = _FakeSession()
+    _patch_session_factory(monkeypatch, [verify_session])
+    ended = []
+
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
+    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
+    monkeypatch.setattr(
+        documents.pdf_job_service, "get_latest_job_for_document",
+        lambda **_kwargs: _stage_job("running", stage="adding_supplements"),
+    )
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        documents.pdf_job_service, "end_supplement_wait_for_delete",
+        lambda **kwargs: ended.append(kwargs) or True,
+    )
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
+
+    assert exc.value.status_code == 409
+    assert ended == []

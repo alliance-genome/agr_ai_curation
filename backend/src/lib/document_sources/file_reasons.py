@@ -72,6 +72,9 @@ class FileReason(str, Enum):
     # The provider started a new conversion job for the paper (its earlier one was lost),
     # so the import stopped asking it.
     PROVIDER_JOB_RESTARTED = "provider_job_restarted"
+    # The paper was being changed or deleted at the moment it became ready, so the
+    # import's supplement stage never started.
+    PAPER_BUSY_WHEN_READY = "paper_busy_when_ready"
 
     # Why adding a chosen file to a paper left it out (P7c1). ``ALREADY_IN_PAPER``,
     # ``TOO_LARGE`` (the download cap is R1's limit) and the check reasons also apply.
@@ -141,6 +144,7 @@ SUPPLEMENT_STAGE_REASONS: frozenset[FileReason] = frozenset({
     FileReason.SUPPLEMENT_STAGE_FAILED,
     FileReason.PROVIDER_ANSWER_UNKNOWN,
     FileReason.PROVIDER_JOB_RESTARTED,
+    FileReason.PAPER_BUSY_WHEN_READY,
 })
 
 

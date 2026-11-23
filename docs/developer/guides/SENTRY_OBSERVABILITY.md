@@ -756,7 +756,9 @@ component `document_sources` and operation `supplement_stage`, with only the tag
 `failure_type` (the exception's type name). The exception is the fixed,
 chain-free "Supplement stage failed"; paper, file names, the reference, the
 curator and any text are omitted. The job then ends failed with a named message;
-the main paper stays usable.
+the main paper stays usable. An error after the stage's job was made terminal
+elsewhere (the curator deleted the paper, which can make a listing fail, or a
+dead-wait cancel) is not a stage failure: no event, nothing more written.
 
 ## Sensitive Database Wrappers
 

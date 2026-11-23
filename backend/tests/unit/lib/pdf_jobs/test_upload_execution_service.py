@@ -3566,12 +3566,17 @@ async def test_no_stage_starts_when_the_paper_became_busy_or_was_deleted_meanwhi
     def _busy(**_kwargs):
         raise service_module.pdf_job_service.ActiveJobExistsError("doc-job-provider")
 
+    recorded = []
     monkeypatch.setattr(
         supplement_wait, "start_supplement_stage",
         lambda *, job_id, run, outcomes: started.append(job_id),
     )
     _quiet_jobs(monkeypatch, completed)
     monkeypatch.setattr(service_module.pdf_job_service, "start_supplement_wait_job", _busy)
+    monkeypatch.setattr(
+        service_module.pdf_job_service, "record_supplement_outcomes_on_finished_job",
+        lambda *, job_id, supplements: recorded.append((job_id, supplements)),
+    )
     service = UploadExecutionService(
         pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: _Provider(),
         provider_markdown_ingestion_fn=_ingest,
@@ -3581,6 +3586,13 @@ async def test_no_stage_starts_when_the_paper_became_busy_or_was_deleted_meanwhi
 
     assert completed == [{"job_id": "job-provider", "message": "Processing completed"}]
     assert started == []
+    # The import's own job says what happened to each chosen file.
+    ((job_id, entries),) = recorded
+    assert job_id == "job-provider"
+    assert [(entry["provider_file_id"], entry["state"], entry["reason_code"]) for entry in entries] == [
+        ("40", "left_out", "paper_busy_when_ready"),
+    ]
+    assert entries[0]["observed_at"]
 
 
 def _late_conversion_request(**overrides):

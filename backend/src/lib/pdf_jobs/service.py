@@ -552,7 +552,7 @@ def create_job(*, document_id: UUID | str, user_id: int, filename: Optional[str]
 
 def create_job_in_session(
     session, *, document_id: UUID | str, user_id: int, filename: Optional[str] = None,
-    metadata: Optional[dict] = None,
+    metadata: Optional[dict] = None, current_stage: str = "pending",
 ) -> PdfJobResponse:
     """Create a paper's job in ``session`` and commit it.
 
@@ -566,7 +566,7 @@ def create_job_in_session(
         user_id=user_id,
         filename=filename,
         status=PdfJobStatus.PENDING.value,
-        current_stage="pending",
+        current_stage=current_stage,
         progress_percentage=0,
         message="Queued for background processing",
         cancel_requested=False,
@@ -686,10 +686,36 @@ def start_supplement_wait_job(*, document_id: UUID | str, user_id: int, filename
         if paper is None:
             session.rollback()
             raise ActiveJobExistsError(document_id)
+        # Born in the waiting stage, so a delete can end it from its first moment
+        # (queued or not), never only after its first poll.
         return create_job_in_session(
             session, document_id=document_id, user_id=user_id, filename=filename,
             metadata={JOB_KIND_KEY: SUPPLEMENT_WAIT_JOB_KIND},
+            current_stage=WAITING_FOR_SUPPLEMENTS_STAGE,
         )
+    finally:
+        session.close()
+
+
+def record_supplement_outcomes_on_finished_job(*, job_id: UUID | str, supplements: list[dict]) -> None:
+    """Write an import's per-file supplement outcomes onto its already-finished job.
+
+    Used when the paper became busy or was deleted at the moment it was ready, so
+    no supplement stage started: the import's result still says what happened to
+    each chosen file. A job that no longer exists (the paper was deleted) is left alone.
+    """
+    session = SessionLocal()
+    try:
+        job = session.execute(
+            select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id)).with_for_update()
+        ).scalar_one_or_none()
+        if job is None:
+            session.rollback()
+            return
+        metadata = dict(job.metadata_json or {})
+        metadata["supplements"] = supplements
+        job.metadata_json = metadata
+        session.commit()
     finally:
         session.close()
 

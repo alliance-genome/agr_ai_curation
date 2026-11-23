@@ -589,19 +589,30 @@ async def _stage(job, *, chosen, paper, main_ready_at, clock, provider, add=None
 
 
 @pytest.mark.asyncio
-async def test_a_stage_queued_past_its_wait_limit_ends_at_once_asking_abc_nothing(job):
+async def test_a_stage_whose_wait_time_is_used_up_adds_only_what_abc_already_converted(job):
+    """Team lead's ruling of 23 Nov: one read-only listing, no conversion request, no
+    polling; converted files are added, the rest end ``wait_limit_reached``."""
+
     clock = _Clock()
-    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), _unconverted(30, "pdf")],
-                   payloads={"21": GOOD_TABLE})
+    # 20 was converted at import; 40 has been converted by ABC since; 30 is still not converted.
+    paper = _Paper(
+        [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), *_pair(40, "WB"), _unconverted(30, "pdf")],
+        payloads={"21": GOOD_TABLE, "41": GOOD_TABLE},
+    )
     client, provider = _plain_provider()
 
     add, outcomes = await _stage(
-        job, chosen=[_chosen("20", converted_md5="md5-21"), _chosen("30")], paper=paper,
+        job, chosen=[_chosen("20", converted_md5="md5-21"), _chosen("30"), _chosen("40")], paper=paper,
         main_ready_at=clock() - 10_801, clock=clock, provider=provider,
+        conversion_requested=True, last_answer=None, login_expires_at=clock() + 86400,
     )
 
-    assert (paper.listings, client.requests, add.calls) == (0, 0, [])
-    assert _final_entries(job) == {"20": ("left_out", "wait_limit_reached"), "30": ("left_out", IN_TIME)}
+    assert client.requests == 0  # no conversion request, no polling
+    assert paper.listings == 1
+    assert sorted(file.provider_file_id for file in add.calls[0]) == ["20", "40"]
+    assert _final_entries(job) == {
+        "20": ("added", None), "30": ("left_out", "wait_limit_reached"), "40": ("added", None),
+    }
     assert outcomes.ended == ["completed"]
 
 
@@ -770,3 +781,81 @@ async def test_queued_stages_are_served_in_the_order_they_arrived(job, monkeypat
     await asyncio.wait_for(asyncio.gather(*tasks), timeout=10)
 
     assert order == ["first", "second", "third", "fourth"]
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restarted_answer", ["new_job_running", "converted_without_job"])
+async def test_a_changed_abc_job_id_still_adds_what_abc_converted(job, restarted_answer):
+    """One read-only listing before leaving files out: ABC may have converted them,
+    as when its job file was lost and it answers converted with no job id."""
+
+    clock = _Clock()
+    first = _answer_payload("running", [_job_entry(30, "supplement", "pending"), _job_entry(50, "supplement", "pending")])
+    if restarted_answer == "new_job_running":
+        restarted = {**first, "job_id": "made-up-new-job", "previous_job_id": "made-up-job"}
+    else:
+        restarted = {**_answer_payload("converted", []), "job_id": None}
+    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "pdf"), _unconverted(50, "pdf")])
+
+    class _ConvertedMeanwhile(_AbcClient):
+        async def request_referencefile_conversion(self, reference, *, wait=False, request_bearer_token=None):
+            # ABC converted 30 (and stored it) before it lost its job.
+            paper.rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(30, "WB"), _unconverted(50, "pdf")]
+            paper.payloads = {"31": GOOD_TABLE}
+            return await super().request_referencefile_conversion(reference, wait=wait)
+
+    from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
+
+    client = _ConvertedMeanwhile([restarted])
+    provider = provider_from_fake(client)
+    add, outcomes = _Add(), _Outcomes()
+    await stage.run_supplement_stage(
+        job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
+        plan=SupplementPlan(chosen=(_chosen("30"), _chosen("50")), request_context=_context(),
+                            login_expires_at=clock() + 86400, owner_user_id=7, reference="AGRKB:101"),
+        conversion_requested=True, last_answer=_map_conversion_result(first, provider="abc_literature"),
+        main_ready_at=clock(), provider=provider, weaviate_client=object(), outcomes=outcomes,
+        list_files=paper.list_files, add_files=add, clock=clock, sleep=clock.sleep,
+    )
+
+    assert client.requests == 1  # the revealing request only
+    assert [file.provider_file_id for file in add.calls[0]] == ["30"]
+    assert _final_entries(job) == {"30": ("added", None), "50": ("left_out", "provider_job_restarted")}
+
+
+@pytest.mark.asyncio
+async def test_a_stage_ended_by_a_delete_mid_listing_is_not_a_stage_failure(job, monkeypatch):
+    """A delete cancels the stage's job; the listing then fails on the missing paper."""
+
+    reported = []
+    monkeypatch.setattr(stage, "report_runtime_exception", lambda exc, **kwargs: reported.append(kwargs))
+    clock = _Clock()
+    client, provider = _plain_provider()
+
+    class _DeletedPaper:
+        listings = 0
+
+        async def list_files(self, document_id, *, owner_user_id, provider, context):
+            job.status = "cancelled"  # the delete ended the stage's job first
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Document not found")
+
+    outcomes = _Outcomes()
+    task = stage.start_supplement_stage(
+        job_id=JOB_ID,
+        run=lambda: stage.run_supplement_stage(
+            job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
+            plan=SupplementPlan(chosen=(_chosen("20", converted_md5="md5-21"),), request_context=_context(),
+                                login_expires_at=None, owner_user_id=7, reference="AGRKB:101"),
+            conversion_requested=False, last_answer=None, main_ready_at=clock(), provider=provider,
+            weaviate_client=object(), outcomes=outcomes, list_files=_DeletedPaper().list_files,
+            add_files=_Add(), clock=clock, sleep=clock.sleep,
+        ),
+        outcomes=outcomes,
+    )
+    await asyncio.wait_for(task, timeout=10)
+
+    assert reported == []
+    assert outcomes.ended == []
