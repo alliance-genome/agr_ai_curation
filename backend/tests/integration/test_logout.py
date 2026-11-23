@@ -138,10 +138,11 @@ def client(test_db, monkeypatch):
     # can reach the instance metadata service (IMDSv2 hop-limit ≥ 2),
     # which causes is_running_on_ec2() → True.  That blocks DEV_MODE even
     # when monkeypatch has set it, because the security check refuses
-    # AUTH_PROVIDER=dev without the AllowDevMode EC2 tag.  Pre-importing
-    # src.config and pinning the cache to False prevents this.
+    # AUTH_PROVIDER=dev without the AllowDevMode EC2 tag.  Pinning the cache to
+    # False prevents this; monkeypatch restores it after the test, so the pin
+    # does not leak into later tests on the same worker.
     import src.config as _test_config
-    _test_config._ec2_detection_cache = False
+    monkeypatch.setattr(_test_config, "_ec2_detection_cache", False)
 
     # Avoid real tenant provisioning/network calls in logout tests.
     with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
