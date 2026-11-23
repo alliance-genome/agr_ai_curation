@@ -177,13 +177,14 @@ def test_the_outline_signal_reads_a_living_wait_and_drops_a_dead_one(owner, monk
     monkeypatch.delenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", raising=False)
     monkeypatch.delenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", raising=False)
+    monkeypatch.delenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", raising=False)
     owner_id, _ = owner
     paper = _ready_paper(owner_id)
     stage = _waiting_stage(paper, owner_id)
 
     with SessionLocal() as db:
         assert job_service.supplement_wait_active(db, paper.id) is True
-    _age(stage.job_id, 130)  # no poll for longer than 3 x (30 s + 10 s)
+    _age(stage.job_id, 220)  # no listing read for longer than 3 x (60 s + 10 s)
     with SessionLocal() as db:
         assert job_service.supplement_wait_active(db, paper.id) is False
     with SessionLocal() as db:
@@ -284,12 +285,13 @@ def test_the_outline_signal_reads_a_queued_stage_until_it_ends(owner, monkeypatc
     monkeypatch.delenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", raising=False)
     monkeypatch.delenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", raising=False)
+    monkeypatch.delenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", raising=False)
     owner_id, _ = owner
     queued = _ready_paper(owner_id)
     stage = job_service.start_supplement_wait_job(document_id=queued.id, user_id=owner_id, filename=queued.filename)
     dead = _ready_paper(owner_id)
     dead_stage = job_service.start_supplement_wait_job(document_id=dead.id, user_id=owner_id, filename=dead.filename)
-    _age(dead_stage.job_id, 130)
+    _age(dead_stage.job_id, 220)
 
     with SessionLocal() as db:
         assert db.get(PdfProcessingJob, UUID(str(stage.job_id))).status == "pending"

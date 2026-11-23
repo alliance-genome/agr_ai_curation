@@ -69,9 +69,6 @@ class FileReason(str, Enum):
     SUPPLEMENT_STAGE_FAILED = "supplement_stage_failed"
     # The provider answered in a shape the import does not know, so waiting stopped.
     PROVIDER_ANSWER_UNKNOWN = "provider_answer_unknown"
-    # The provider started a new conversion job for the paper (its earlier one was lost),
-    # so the import stopped asking it.
-    PROVIDER_JOB_RESTARTED = "provider_job_restarted"
     # The paper was being changed or deleted at the moment it became ready, so the
     # import's supplement stage never started.
     PAPER_BUSY_WHEN_READY = "paper_busy_when_ready"
@@ -143,7 +140,6 @@ SUPPLEMENT_STAGE_REASONS: frozenset[FileReason] = frozenset({
     FileReason.IMPORT_CANCELLED,
     FileReason.SUPPLEMENT_STAGE_FAILED,
     FileReason.PROVIDER_ANSWER_UNKNOWN,
-    FileReason.PROVIDER_JOB_RESTARTED,
     FileReason.PAPER_BUSY_WHEN_READY,
 })
 

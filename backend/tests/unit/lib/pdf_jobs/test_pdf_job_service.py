@@ -679,6 +679,7 @@ def _dead_wait_defaults(monkeypatch):
     monkeypatch.delenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", raising=False)
     monkeypatch.delenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", raising=False)
+    monkeypatch.delenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", raising=False)
 
 
 def test_cancel_of_a_wait_that_stopped_polling_finalizes_at_once(monkeypatch):
@@ -798,7 +799,8 @@ def test_cancel_of_a_supplement_wait_that_stopped_polling_finalizes_and_keeps_th
     _dead_wait_defaults(monkeypatch)
     job = _build_job(status=PdfJobStatus.RUNNING.value)
     job.current_stage = "waiting_for_supplements"
-    job.updated_at = datetime.now(timezone.utc) - timedelta(seconds=130)
+    # Three listing polls (60 s) plus a 10 s request each: 210 s.
+    job.updated_at = datetime.now(timezone.utc) - timedelta(seconds=220)
     document = _build_document(job, status="completed")
     session = _FakeSession([job, document, job])
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
@@ -832,9 +834,12 @@ def test_a_supplement_wait_poll_records_activity_even_when_nothing_changes(monke
         # Queued behind the limit on simultaneous stages, or before its first
         # heartbeat: its supplements are just as much on their way.
         ("pending", "waiting_for_supplements", 10, True),
-        # No poll for longer than 3 x (30 s + 10 s): the process is gone.
-        ("running", "waiting_for_supplements", 130, False),
-        ("pending", "waiting_for_supplements", 130, False),
+        # The wait reads the listing every 60 s, so 150 s without a read is still alive
+        # (the main poll's 3 x (30 s + 10 s) does not apply to it).
+        ("running", "waiting_for_supplements", 150, True),
+        # No read for longer than 3 x (60 s + 10 s): the process is gone.
+        ("running", "waiting_for_supplements", 220, False),
+        ("pending", "waiting_for_supplements", 220, False),
         # The curator asked it to stop; it ends at its next poll.
         ("cancel_requested", "waiting_for_supplements", 10, False),
         # The main paper's own wait, and the add after the wait, are not this signal.

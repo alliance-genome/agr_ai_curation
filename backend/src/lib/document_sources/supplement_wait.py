@@ -8,9 +8,11 @@ never read, so a cause the provider states only in words (its group rule, its
 size limits) is not known here.
 
 ``run_supplement_stage`` is the supplement stage of an import (KANBAN-1976 /
-ALL-1460, P7b; reused by adds and P7d): after the main paper is ready, it waits
-for the provider to convert the chosen supplements, then adds the converted
-ones in one write. ``start_supplement_stage`` runs it as its own in-process
+ALL-1460, P7b): after the main paper is ready, it waits for the provider to
+convert the chosen supplements, then adds the converted ones in one write. The
+wait only reads the provider's file listing: it never sends the conversion
+request (the import's main phase sent it once), so it can never start or
+restart a provider job. ``start_supplement_stage`` runs it as its own in-process
 task, so the next paper of the request starts meanwhile.
 """
 
@@ -38,8 +40,8 @@ from src.lib.document_sources.models import (
 )
 from src.lib.exceptions import PDFCancellationError
 from src.lib.openai_agents.config import (
-    get_document_source_poll_interval_seconds,
     get_document_supplement_add_reserve_seconds,
+    get_document_supplement_listing_poll_seconds,
     get_document_supplement_max_concurrent_waits,
     get_document_supplement_wait_timeout_seconds,
 )
@@ -332,7 +334,8 @@ async def run_supplement_stage(
             names = {item.provider_file_id: item.display_name for item in listing.files}
             for entry in stage.entries.values():
                 entry.display_name = names.get(entry.provider_file_id) or entry.provider_file_id
-        await stage.record(pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE, "Waiting for ABC")
+        if stage.ids_in(SupplementState.WAITING):
+            await stage.record(pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE, _waiting_message(stage))
 
         if time_used_up:
             # The wait time was used up (for example while queued) but the login is
@@ -340,13 +343,7 @@ async def run_supplement_stage(
             # already converted (by the one read-only listing above) are added, the
             # rest end ``wait_limit_reached``.
             if listing is not None:
-                converted = {
-                    item.provider_file_id for item in listing.files if item.converted_text_id is not None
-                }
-                stage.apply(
-                    {key: CONVERTED for key in stage.ids_in(SupplementState.WAITING) if key in converted},
-                    listing,
-                )
+                stage.apply(_converted_in(listing, stage.ids_in(SupplementState.WAITING)), listing)
             elif add_allowed:
                 for provider_file_id in stage.ids_in(SupplementState.QUEUED):
                     stage.leave_out(provider_file_id, FileReason.SOURCE_UNAVAILABLE)
@@ -380,7 +377,7 @@ async def run_supplement_stage(
                 add_allowed = await _poll_until_done(
                     stage=stage, provider=provider, reference=reference,
                     document_id=document_id, owner_user_id=owner_user_id,
-                    listing=listing, first_job_id=last_answer.job_id, sleep=sleep,
+                    listing=listing, sleep=sleep,
                     list_files=list_files,
                 )
 
@@ -463,19 +460,28 @@ async def _poll_until_done(
     document_id: str,
     owner_user_id: int,
     listing: FileListing,
-    first_job_id: str | None,
     sleep: Callable[[float], Awaitable[None]],
     list_files: Callable[..., Awaitable[FileListing]],
 ) -> bool:
-    """Re-send the main phase's request while it answers ``running``; stop at the first end.
+    """Watch the provider's read-only file listing until every chosen file is converted.
+
+    Never sends the conversion request. Each poll is one listing read; a chosen
+    file counts as converted once a listed converted supplement text names it
+    (structural, as the file listing decides it). Only when a new such text
+    appears does it run the full per-paper listing, for that text's id and
+    checks. A file the provider failed stays waiting and ends
+    ``not_converted_in_time`` when the wait ends.
 
     Returns whether the converted files may still be added (False once the
     curator's login was refused).
     """
 
-    poll_seconds = get_document_source_poll_interval_seconds()
+    poll_seconds = get_document_supplement_listing_poll_seconds()
     token = stage.plan.request_context.curator_token
+    stage.apply(_converted_in(listing, stage.ids_in(SupplementState.WAITING)), listing)
+    seen_texts: set[str] = set()
     while stage.ids_in(SupplementState.WAITING):
+        await stage.record(pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE, _waiting_message(stage))
         remaining = stage.wait_ends_at - stage.clock()
         if remaining <= 0:
             break
@@ -484,9 +490,7 @@ async def _poll_until_done(
         if stage.clock() >= stage.wait_ends_at:
             break
         try:
-            answer = await provider.request_conversion(
-                reference, wait=False, request_bearer_token=token,
-            )
+            artifacts = await provider.list_artifacts(reference, request_bearer_token=token)
         except DocumentSourceLoginExpired:
             for provider_file_id in stage.ids_in(SupplementState.WAITING):
                 stage.leave_out(provider_file_id, FileReason.LOGIN_EXPIRED)
@@ -494,65 +498,49 @@ async def _poll_until_done(
         except DocumentSourceError:
             # The first provider error ends the wait (no retries); converted files join.
             break
-        if answer.job_id != first_job_id:
-            # The provider lost the job this import started (that request may already
-            # have started new work): ask it nothing more. One read-only listing
-            # keeps the files it did convert; the rest end ``provider_job_restarted``.
-            try:
-                listing = await list_files(
-                    UUID(document_id), owner_user_id=owner_user_id, provider=provider,
-                    context=stage.plan.request_context,
-                )
-            except DocumentSourceLoginExpired:
-                for provider_file_id in stage.ids_in(SupplementState.WAITING):
-                    stage.leave_out(provider_file_id, FileReason.LOGIN_EXPIRED)
-                return False
-            except DocumentSourceError:
-                pass
-            else:
-                converted = {
-                    item.provider_file_id for item in listing.files if item.converted_text_id is not None
-                }
-                stage.apply(
-                    {key: CONVERTED for key in stage.ids_in(SupplementState.WAITING) if key in converted},
-                    listing,
-                )
-            for provider_file_id in stage.ids_in(SupplementState.WAITING):
-                stage.leave_out(provider_file_id, FileReason.PROVIDER_JOB_RESTARTED)
-            break
+        waiting = set(stage.ids_in(SupplementState.WAITING))
+        new_texts = {
+            artifact.artifact_id
+            for artifact in artifacts
+            if provider.is_listed_converted_supplement_text(artifact)
+            and artifact.parent_artifact_id in waiting
+            and artifact.artifact_id not in seen_texts
+        }
+        if not new_texts:
+            continue
+        seen_texts |= new_texts
         try:
-            statuses = provider.conversion_file_statuses(answer)
-            final = answer.status is not SourceConversionStatus.RUNNING
-            newly_converted = any(
-                statuses.get(provider_file_id) is SourceConversionFileStatus.CONVERTED
-                for provider_file_id in stage.ids_in(SupplementState.WAITING)
+            listing = await list_files(
+                UUID(document_id), owner_user_id=owner_user_id, provider=provider,
+                context=stage.plan.request_context,
             )
-            if final or newly_converted:
-                try:
-                    listing = await list_files(
-                        UUID(document_id), owner_user_id=owner_user_id, provider=provider,
-                        context=stage.plan.request_context,
-                    )
-                except DocumentSourceLoginExpired:
-                    for provider_file_id in stage.ids_in(SupplementState.WAITING):
-                        stage.leave_out(provider_file_id, FileReason.LOGIN_EXPIRED)
-                    return False
-                except DocumentSourceError:
-                    break
-            classified = classify_conversion_answer(
-                answer, statuses, stage.ids_in(SupplementState.WAITING), listing,
-            )
-        except (DocumentSourceError, UnclassifiableConversionAnswer):
+        except DocumentSourceLoginExpired:
             for provider_file_id in stage.ids_in(SupplementState.WAITING):
-                stage.leave_out(provider_file_id, FileReason.PROVIDER_ANSWER_UNKNOWN)
+                stage.leave_out(provider_file_id, FileReason.LOGIN_EXPIRED)
+            return False
+        except DocumentSourceError:
             break
-        stage.apply(classified, listing)
-        await stage.record(pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE, "Waiting for ABC")
-        if final:
-            break
+        stage.apply(_converted_in(listing, stage.ids_in(SupplementState.WAITING)), listing)
     for provider_file_id in stage.ids_in(SupplementState.WAITING):
         stage.leave_out(provider_file_id, FileReason.NOT_CONVERTED_IN_TIME)
     return True
+
+
+def _converted_in(listing: FileListing, provider_file_ids: Iterable[str]) -> dict[str, str]:
+    """The given files the listing shows with readable converted text."""
+
+    converted = {item.provider_file_id for item in listing.files if item.converted_text_id is not None}
+    return {key: CONVERTED for key in provider_file_ids if key in converted}
+
+
+def _waiting_message(stage: _Stage) -> str:
+    # Approved wording (Chris, 23 Nov 2026, card 39; the singular for one file too).
+    count = len(stage.ids_in(SupplementState.WAITING))
+    noun = "supplement" if count == 1 else "supplements"
+    return (
+        f"Main paper ready. Waiting for ABC to convert {count} {noun}; "
+        "you can use the paper and leave this page."
+    )
 
 
 # --- Running the stage as its own task ------------------------------------------
@@ -636,7 +624,7 @@ async def _wait_for_slot(
     One ``acquire`` per waiting stage stays in the semaphore's queue for the
     whole wait, so stages are served in the order they arrived.
     """
-    poll_seconds = get_document_source_poll_interval_seconds()
+    poll_seconds = get_document_supplement_listing_poll_seconds()
     acquiring = asyncio.ensure_future(slots.acquire())
     try:
         while True:

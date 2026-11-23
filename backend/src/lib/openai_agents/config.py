@@ -2061,8 +2061,8 @@ def get_document_source_import_batch_limit() -> int:
 # requests (its gunicorn ``max_requests``), which reports the conversion that
 # worker was running as failed and so ends our import. That count includes
 # every other caller's requests to the same worker, so one wait stays under
-# half of it. It also covers a supplement wait of 3 hours at the 30 s poll
-# (360 polls).
+# half of it. A supplement wait's listing reads count the same way (180 in 3
+# hours at the 60 s listing poll).
 DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT = 400
 DOCUMENT_SOURCE_MIN_POLL_INTERVAL_SECONDS = 5.0
 # At 1 a living iteration (a poll plus two provider requests) can pass the threshold.
@@ -2142,6 +2142,22 @@ def get_document_supplement_add_reserve_seconds() -> float:
     return value
 
 
+def get_document_supplement_listing_poll_seconds() -> float:
+    """Interval between the supplement wait's reads of the provider's file listing.
+
+    The wait only reads the listing (never the conversion request), so a file
+    joins at most this long after the provider has converted it.
+    """
+    name = "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS"
+    value = _finite_seconds(name, 60.0)
+    if value < DOCUMENT_SOURCE_MIN_POLL_INTERVAL_SECONDS:
+        raise ValueError(
+            f"{name} is {value:g}; it must be at least "
+            f"{DOCUMENT_SOURCE_MIN_POLL_INTERVAL_SECONDS:g} seconds"
+        )
+    return value
+
+
 def get_document_supplement_max_concurrent_waits() -> int:
     """Most supplement waits running at once in one backend process; the rest queue."""
     name = "DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS"
@@ -2163,34 +2179,39 @@ def validate_document_source_wait_settings() -> None:
         dead_wait_polls = get_document_source_dead_wait_polls()
         supplement_wait_seconds = get_document_supplement_wait_timeout_seconds()
         add_reserve_seconds = get_document_supplement_add_reserve_seconds()
+        listing_poll_seconds = get_document_supplement_listing_poll_seconds()
         get_document_supplement_max_concurrent_waits()
     except ValueError as error:
         raise DocumentSourceWaitSettingsError(str(error)) from error
-    for wait_name, wait_seconds in (
-        ("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", deadline_seconds),
-        ("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", supplement_wait_seconds),
+    for wait_name, wait_seconds, poll_name, interval_seconds in (
+        ("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", deadline_seconds,
+         "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", poll_seconds),
+        ("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", supplement_wait_seconds,
+         "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", listing_poll_seconds),
     ):
-        polls = wait_seconds / poll_seconds
+        polls = wait_seconds / interval_seconds
         if polls > DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT:
             raise DocumentSourceWaitSettingsError(
-                f"{wait_name} / DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS "
-                f"({wait_seconds:g} / {poll_seconds:g}) allows {polls:.0f} provider polls in "
+                f"{wait_name} / {poll_name} "
+                f"({wait_seconds:g} / {interval_seconds:g}) allows {polls:.0f} provider polls in "
                 f"one wait, more than {DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT}; set "
-                "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS to at least "
+                f"{poll_name} to at least "
                 f"{math.ceil(wait_seconds / DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT):g}, or {wait_name} "
-                f"to at most {DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT * poll_seconds:g}"
+                f"to at most {DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT * interval_seconds:g}"
             )
     # A deadline pinned below the default (an old override) is not unsafe and is
     # not refused; stating the effective values makes it visible.
     logger.info(
         "Document-source wait settings: DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=%g, "
         "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=%g, DOCUMENT_SOURCE_DEAD_WAIT_POLLS=%d, "
-        "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS=%g, DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS=%g",
+        "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS=%g, DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS=%g, "
+        "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS=%g",
         poll_seconds,
         deadline_seconds,
         dead_wait_polls,
         supplement_wait_seconds,
         add_reserve_seconds,
+        listing_poll_seconds,
     )
 
 

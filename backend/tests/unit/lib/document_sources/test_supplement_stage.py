@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
@@ -57,12 +58,24 @@ class _Clock:
 
 
 class _AbcClient(FakeABCLiteratureClient):
-    """Answers the conversion request from a script; the last answer repeats."""
+    """ABC as the stage sees it: ``show_all`` serves the paper's rows as they are now.
 
-    def __init__(self, answers: list[Any]):
+    Counts the conversion requests (the stage must send none) and the
+    ``show_all`` reads. ``on_read`` runs before read N (1-based) to change the
+    paper, as ABC storing a converted file would; ``read_error`` makes every
+    read fail as the client would.
+    """
+
+    def __init__(self, answers: list[Any] | None = None, *, paper: "_Paper | None" = None,
+                 on_read: dict[int, Callable[[], None]] | None = None,
+                 read_error: Exception | None = None):
         super().__init__()
-        self.answers = answers
+        self.answers = answers or [_answer_payload("converted", [])]
         self.requests = 0
+        self.reads = 0
+        self.paper = paper
+        self.on_read = on_read or {}
+        self.read_error = read_error
 
     async def request_referencefile_conversion(self, reference, *, wait=False, request_bearer_token=None):
         self.requests += 1
@@ -70,6 +83,14 @@ class _AbcClient(FakeABCLiteratureClient):
         if isinstance(answer, Exception):
             raise answer
         return answer
+
+    async def show_referencefiles(self, reference, *, request_bearer_token=None):
+        self.reads += 1
+        if self.read_error is not None:
+            raise self.read_error
+        if self.reads in self.on_read:
+            self.on_read[self.reads]()
+        return self.paper.rows if self.paper is not None else []
 
 
 class _Paper:
@@ -137,6 +158,7 @@ def job(monkeypatch):
         "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS",
         "DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS",
         "DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS",
+        "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS",
     ):
         monkeypatch.delenv(name, raising=False)
     return state
@@ -155,11 +177,12 @@ def _chosen(provider_file_id, *, converted_md5=None):
     )
 
 
-async def _run(*, chosen, abc_answers, paper, last_answer_payload, clock, add=None,
-               conversion_requested=True, login_expires_in=24 * 3600):
+async def _run(*, chosen, paper, last_answer_payload, clock, add=None, abc_answers=None,
+               conversion_requested=True, login_expires_in=24 * 3600, on_read=None,
+               read_error=None, sleep=None):
     from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
 
-    client = _AbcClient(abc_answers)
+    client = _AbcClient(abc_answers, paper=paper, on_read=on_read, read_error=read_error)
     provider = provider_from_fake(client)
     # The main phase's last answer, mapped as the adapter maps it; the stage's own
     # polls get the scripted answers.
@@ -179,7 +202,7 @@ async def _run(*, chosen, abc_answers, paper, last_answer_payload, clock, add=No
         conversion_requested=conversion_requested, last_answer=last_answer,
         main_ready_at=clock(), provider=provider, weaviate_client=object(),
         outcomes=outcomes, list_files=paper.list_files, add_files=add,
-        clock=clock, sleep=clock.sleep,
+        clock=clock, sleep=sleep or clock.sleep,
     )
     return client, add, outcomes
 
@@ -191,128 +214,129 @@ def _final_entries(job):
     }
 
 
+RUNNING = _answer_payload("running", [_job_entry(30, "supplement", "pending")])
+
+
 @pytest.mark.asyncio
 async def test_converted_supplements_are_added_without_asking_abc(job):
     clock = _Clock()
     paper = _Paper([_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB")], payloads={"21": GOOD_TABLE})
 
     client, add, outcomes = await _run(
-        chosen=[_chosen("20", converted_md5="md5-21")], abc_answers=[_answer_payload("converted", [])],
-        paper=paper, last_answer_payload=None, conversion_requested=False, clock=clock,
+        chosen=[_chosen("20", converted_md5="md5-21")], paper=paper,
+        last_answer_payload=None, conversion_requested=False, clock=clock,
     )
 
-    assert client.requests == 0
+    assert (client.requests, client.reads) == (0, 0)
     assert [file.provider_file_id for file in add.calls[0]] == ["20"]
     assert outcomes.ended == ["completed"]
     assert _final_entries(job) == {"20": ("added", None)}
 
 
 @pytest.mark.asyncio
-async def test_a_file_abc_converts_during_the_wait_joins_and_abc_is_not_asked_again(job):
+async def test_a_file_abc_converts_during_the_wait_joins_without_any_conversion_request(job):
+    """Chris, 23 Nov 2026 (card 31): the wait only reads ABC's listing."""
+
     clock = _Clock()
-    running = _answer_payload("running", [_job_entry(30, "supplement", "pending")])
-    done = _answer_payload("running", [_job_entry(30, "supplement", "success", converted_id=31)])
     paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "xlsx")])
 
-    class _Converting(_AbcClient):
-        async def request_referencefile_conversion(self, reference, *, wait=False, request_bearer_token=None):
-            # ABC stores the converted file, then answers with its success entry.
-            paper.rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(30, "WB")]
-            paper.payloads = {"31": GOOD_TABLE}
-            return await super().request_referencefile_conversion(reference, wait=wait)
+    def _abc_stores_the_converted_file():
+        paper.rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(30, "WB")]
+        paper.payloads = {"31": GOOD_TABLE}
 
-    client = _Converting([done])
-    provider = provider_from_fake(client)
-    client.conversion_payload = running
-    last_answer = await FakeABCLiteratureClient.request_referencefile_conversion(
-        client, "AGRKB:101"
-    )
-    from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
-
-    last_answer = _map_conversion_result(last_answer, provider="abc_literature")
-    add, outcomes = _Add(), _Outcomes()
-    await stage.run_supplement_stage(
-        job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
-        plan=SupplementPlan(chosen=(_chosen("30"),), request_context=_context(),
-                                  login_expires_at=clock() + 86400, owner_user_id=7, reference="AGRKB:101"),
-        conversion_requested=True, last_answer=last_answer, main_ready_at=clock(),
-        provider=provider, weaviate_client=object(), outcomes=outcomes,
-        list_files=paper.list_files, add_files=add, clock=clock, sleep=clock.sleep,
+    client, add, outcomes = await _run(
+        chosen=[_chosen("30")], paper=paper, last_answer_payload=RUNNING, clock=clock,
+        on_read={3: _abc_stores_the_converted_file},
     )
 
-    assert client.requests == 1
+    assert client.requests == 0  # the stage never sends the conversion request
+    assert client.reads == 3  # one show_all read per poll until the converted row appears
+    assert paper.listings == 2  # the stage's first listing, then one when the new text appeared
+    assert clock.now == 1_000_000.0 + 3 * 60  # DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS default
     assert [(file.provider_file_id, file.converted_md5) for file in add.calls[0]] == [("30", "md5-31")]
     assert outcomes.ended == ["completed"]
     assert _final_entries(job) == {"30": ("added", None)}
 
 
 @pytest.mark.asyncio
+async def test_the_full_listing_runs_only_when_a_chosen_file_gets_a_new_converted_text(job):
+    clock = _Clock()
+    # 40 is converted but not chosen; 30 (chosen) is not converted yet.
+    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), *_pair(40, "WB"), _unconverted(30, "pdf")],
+                   payloads={"41": GOOD_TABLE})
+
+    def _abc_stores_30():
+        paper.rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(40, "WB"), *_pair(30, "WB")]
+        paper.payloads = {"41": GOOD_TABLE, "31": GOOD_TABLE}
+
+    client, add, _outcomes = await _run(
+        chosen=[_chosen("30")], paper=paper, last_answer_payload=RUNNING, clock=clock,
+        on_read={5: _abc_stores_30},
+    )
+
+    assert (client.requests, client.reads, paper.listings) == (0, 5, 2)
+    assert [file.provider_file_id for file in add.calls[0]] == ["30"]
+
+
+@pytest.mark.asyncio
 async def test_a_paper_whose_supplements_abc_does_not_convert_reports_them_at_once(job):
-    """Today outside WB, ZFIN and FB (before ABC #1413): converted at once, no supplement work."""
+    """The main phase already had ABC's final answer: classified once, nothing read again."""
 
     clock = _Clock()
     paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(60, "docx")])
 
     client, add, outcomes = await _run(
-        chosen=[_chosen("60")], abc_answers=[_answer_payload("converted", [])], paper=paper,
+        chosen=[_chosen("60")], paper=paper,
         last_answer_payload=_answer_payload("converted", [_job_entry(10, "main", "success", converted_id=11)]),
         clock=clock,
     )
 
-    assert client.requests == 0
+    assert (client.requests, client.reads) == (0, 0)
     assert add.calls == []
     assert outcomes.ended == ["completed"]
     assert _final_entries(job) == {"60": ("left_out", NOT_CONVERTED)}
 
 
 @pytest.mark.asyncio
-async def test_a_failed_pdf_job_adds_the_converted_files_and_reports_the_failed_one(job):
+async def test_a_failure_in_the_main_phases_final_answer_is_still_reported_at_once(job):
+    """The one exception to card 31's "failed files show as not converted in time":
+    the main phase already holds ABC's final answer, so no request is needed."""
+
     clock = _Clock()
-    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "pdf"), _unconverted(50, "pdf")])
+    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "pdf"), *_pair(50, "WB")],
+                   payloads={"51": GOOD_TABLE})
     failed = _answer_payload("failed", [
         _job_entry(30, "supplement", "failed", error="Supplemental PDF exceeds 5 MB limit"),
         _job_entry(50, "supplement", "success", converted_id=51),
     ], error_message="1 file failed")
 
-    class _Storing(_AbcClient):
-        async def request_referencefile_conversion(self, reference, *, wait=False, request_bearer_token=None):
-            paper.rows = [_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "pdf"), *_pair(50, "WB")]
-            paper.payloads = {"51": GOOD_TABLE}
-            return await super().request_referencefile_conversion(reference, wait=wait)
-
-    client = _Storing([failed])
-    provider = provider_from_fake(client)
-    client.conversion_payload = _answer_payload("running", [_job_entry(30, "supplement", "pending")])
-    last_answer = await provider.request_conversion("AGRKB:101", request_bearer_token="curator-token")
-    add, outcomes = _Add(), _Outcomes()
-    await stage.run_supplement_stage(
-        job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
-        plan=SupplementPlan(chosen=(_chosen("30"), _chosen("50")), request_context=_context(),
-                                  login_expires_at=clock() + 86400, owner_user_id=7, reference="AGRKB:101"),
-        conversion_requested=True, last_answer=last_answer, main_ready_at=clock(),
-        provider=provider, weaviate_client=object(), outcomes=outcomes,
-        list_files=paper.list_files, add_files=add, clock=clock, sleep=clock.sleep,
+    client, add, _outcomes = await _run(
+        chosen=[_chosen("30"), _chosen("50")], paper=paper, last_answer_payload=failed, clock=clock,
     )
 
-    assert client.requests == 1  # the failed answer is final: never asked again
+    assert (client.requests, client.reads) == (0, 0)
     assert [file.provider_file_id for file in add.calls[0]] == ["50"]
     assert _final_entries(job) == {"30": ("left_out", FAILED), "50": ("added", None)}
 
 
 @pytest.mark.asyncio
-async def test_the_wait_limit_ends_the_wait_and_the_converted_files_still_join(job):
+async def test_a_file_abc_fails_during_the_wait_ends_not_converted_in_time_at_the_limit(job):
+    """Card 31: ABC failing a file mid-wait is not visible in its listing, so the file
+    waits until the limit; the converted file still joins."""
+
     clock = _Clock()
-    running = _answer_payload("running", [_job_entry(30, "supplement", "pending")])
     paper = _Paper([_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), _unconverted(30, "pdf")],
                    payloads={"21": GOOD_TABLE})
 
     client, add, outcomes = await _run(
-        chosen=[_chosen("20", converted_md5="md5-21"), _chosen("30")], abc_answers=[running],
-        paper=paper, last_answer_payload=running, clock=clock,
+        chosen=[_chosen("20", converted_md5="md5-21"), _chosen("30")],
+        paper=paper, last_answer_payload=RUNNING, clock=clock,
     )
 
-    # 10,800 s at a 30 s poll: at most 360 requests, then the converted file joins.
-    assert client.requests <= 360
+    assert client.requests == 0
+    # 10,800 s at the 60 s listing poll; the last sleep ends at the limit, with no read.
+    assert client.reads == 179
+    assert clock.now == 1_000_000.0 + 10_800
     assert [file.provider_file_id for file in add.calls[0]] == ["20"]
     assert _final_entries(job) == {"20": ("added", None), "30": ("left_out", IN_TIME)}
     assert outcomes.ended == ["completed"]
@@ -321,57 +345,45 @@ async def test_the_wait_limit_ends_the_wait_and_the_converted_files_still_join(j
 @pytest.mark.asyncio
 async def test_the_login_reserve_ends_the_wait_before_the_limit(job):
     clock = _Clock()
-    running = _answer_payload("running", [_job_entry(30, "supplement", "pending")])
     paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "pdf")])
 
     client, add, outcomes = await _run(
-        chosen=[_chosen("30")], abc_answers=[running], paper=paper, last_answer_payload=running,
+        chosen=[_chosen("30")], paper=paper, last_answer_payload=RUNNING,
         clock=clock, login_expires_in=900 + 600,  # 10 minutes of wait left before the reserve
     )
 
-    assert client.requests <= 20
+    assert (client.requests, client.reads) == (0, 9)  # 600 s at 60 s; none at the limit itself
     assert _final_entries(job) == {"30": ("left_out", IN_TIME)}
     assert job.progress[-1]["metadata"]["supplement_wait_ends_at"] == stage._iso(1_000_000.0 + 600)
 
 
+def _http(status: int):
+    from agr_ai_curation_alliance.literature.client import ABCLiteratureHTTPError
+
+    return ABCLiteratureHTTPError(
+        f"ABC Literature returned HTTP {status}", status_code=status,
+        endpoint="/reference/referencefile/show_all/AGRKB:101",
+    )
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("error", "expected"), [
+@pytest.mark.parametrize(("status", "expected"), [
     # Any other ABC error: the waiting file is not converted in time; the converted one joins.
-    (DocumentSourceUnavailable("ABC Literature or its file storage could not be reached"),
-     {"20": ("added", None), "30": ("left_out", IN_TIME)}),
+    (502, {"20": ("added", None), "30": ("left_out", IN_TIME)}),
     # The login was refused: nothing more can be asked of ABC with it, the add included.
-    (DocumentSourceLoginExpired("ABC Literature conversion request failed"),
-     {"20": ("left_out", "login_expired"), "30": ("left_out", "login_expired")}),
+    (401, {"20": ("left_out", "login_expired"), "30": ("left_out", "login_expired")}),
 ], ids=["abc_502", "login_expired"])
-async def test_the_first_abc_error_ends_the_wait_without_retrying(job, error, expected):
+async def test_the_first_abc_error_ends_the_wait_without_retrying(job, status, expected):
     clock = _Clock()
-    running = _answer_payload("running", [_job_entry(30, "supplement", "pending")])
     paper = _Paper([_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), _unconverted(30, "pdf")],
                    payloads={"21": GOOD_TABLE})
 
-    class _Raising(_AbcClient):
-        async def request_referencefile_conversion(self, reference, *, wait=False, request_bearer_token=None):
-            self.requests += 1
-            raise error
-
-    client = _Raising([running])
-    provider = provider_from_fake(client)
-    provider.request_conversion = client.request_referencefile_conversion  # the adapter's mapped error
-    client.conversion_payload = running
-    add, outcomes = _Add(), _Outcomes()
-    from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
-
-    await stage.run_supplement_stage(
-        job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
-        plan=SupplementPlan(chosen=(_chosen("20", converted_md5="md5-21"), _chosen("30")),
-                                  request_context=_context(), login_expires_at=clock() + 86400,
-                                  owner_user_id=7, reference="AGRKB:101"),
-        conversion_requested=True, last_answer=_map_conversion_result(running, provider="abc_literature"),
-        main_ready_at=clock(), provider=provider, weaviate_client=object(), outcomes=outcomes,
-        list_files=paper.list_files, add_files=add, clock=clock, sleep=clock.sleep,
+    client, _add, outcomes = await _run(
+        chosen=[_chosen("20", converted_md5="md5-21"), _chosen("30")], paper=paper,
+        last_answer_payload=RUNNING, clock=clock, read_error=_http(status),
     )
 
-    assert client.requests == 1
+    assert (client.requests, client.reads) == (0, 1)
     assert _final_entries(job) == expected
     assert outcomes.ended == ["completed"]
 
@@ -379,27 +391,18 @@ async def test_the_first_abc_error_ends_the_wait_without_retrying(job, error, ex
 @pytest.mark.asyncio
 async def test_a_cancel_during_the_wait_ends_the_job_cancelled_and_adds_nothing(job):
     clock = _Clock()
-    running = _answer_payload("running", [_job_entry(30, "supplement", "pending")])
     paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "pdf")])
 
     async def _sleep_then_cancel(seconds):
         await clock.sleep(seconds)
         job.cancel_requested = True
 
-    client = _AbcClient([running])
-    provider = provider_from_fake(client)
-    client.conversion_payload = running
-    last_answer = await provider.request_conversion("AGRKB:101", request_bearer_token="curator-token")
-    add, outcomes = _Add(), _Outcomes()
-    await stage.run_supplement_stage(
-        job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
-        plan=SupplementPlan(chosen=(_chosen("30"),), request_context=_context(),
-                                  login_expires_at=clock() + 86400, owner_user_id=7, reference="AGRKB:101"),
-        conversion_requested=True, last_answer=last_answer, main_ready_at=clock(),
-        provider=provider, weaviate_client=object(), outcomes=outcomes,
-        list_files=paper.list_files, add_files=add, clock=clock, sleep=_sleep_then_cancel,
+    client, add, outcomes = await _run(
+        chosen=[_chosen("30")], paper=paper, last_answer_payload=RUNNING, clock=clock,
+        sleep=_sleep_then_cancel,
     )
 
+    assert (client.requests, client.reads) == (0, 0)
     assert add.calls == []
     assert outcomes.ended == ["cancelled"]
     assert _final_entries(job) == {"30": ("left_out", "import_cancelled")}
@@ -410,48 +413,75 @@ async def test_a_wait_finalized_elsewhere_writes_nothing_more(job):
     """A dead-wait cancel finalized the job while this stage was still sleeping."""
 
     clock = _Clock()
-    running = _answer_payload("running", [_job_entry(30, "supplement", "pending")])
     paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "pdf")])
 
     async def _sleep_then_finalize(seconds):
         await clock.sleep(seconds)
         job.status = "cancelled"
 
-    client = _AbcClient([running])
-    provider = provider_from_fake(client)
-    client.conversion_payload = running
-    last_answer = await provider.request_conversion("AGRKB:101", request_bearer_token="curator-token")
-    client.requests = 0
-    add, outcomes = _Add(), _Outcomes()
-    await stage.run_supplement_stage(
-        job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
-        plan=SupplementPlan(chosen=(_chosen("30"),), request_context=_context(),
-                                  login_expires_at=clock() + 86400, owner_user_id=7, reference="AGRKB:101"),
-        conversion_requested=True, last_answer=last_answer, main_ready_at=clock(),
-        provider=provider, weaviate_client=object(), outcomes=outcomes,
-        list_files=paper.list_files, add_files=add, clock=clock, sleep=_sleep_then_finalize,
+    client, add, outcomes = await _run(
+        chosen=[_chosen("30")], paper=paper, last_answer_payload=RUNNING, clock=clock,
+        sleep=_sleep_then_finalize,
     )
     progress_after_start = len(job.progress)
 
-    assert client.requests == 0
+    assert (client.requests, client.reads) == (0, 0)
     assert add.calls == []
     assert outcomes.ended == []
-    assert progress_after_start == 1  # only the first "waiting" record
+    assert progress_after_start == 2  # the two "waiting" records before the first sleep
 
 
 @pytest.mark.asyncio
 async def test_every_poll_records_activity_in_the_supplement_wait_stage(job):
     clock = _Clock()
-    running = _answer_payload("running", [_job_entry(30, "supplement", "pending")])
     paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "pdf")])
 
     client, _add, _outcomes = await _run(
-        chosen=[_chosen("30")], abc_answers=[running], paper=paper, last_answer_payload=running,
+        chosen=[_chosen("30")], paper=paper, last_answer_payload=RUNNING,
         clock=clock, login_expires_in=900 + 300,
     )
 
     waiting = [p for p in job.progress if p["stage"] == "waiting_for_supplements"]
-    assert len(waiting) >= client.requests + 1
+    assert client.reads == 4  # 300 s at 60 s; none at the limit itself
+    assert len(waiting) >= client.reads + 1
+
+
+@pytest.mark.asyncio
+async def test_the_jobs_panel_says_how_many_supplements_abc_is_converting(job):
+    """Approved wording (Chris, 23 Nov 2026, card 39)."""
+
+    clock = _Clock()
+    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "pdf"), _unconverted(50, "pdf")])
+
+    await _run(
+        chosen=[_chosen("30"), _chosen("50")], paper=paper, last_answer_payload=RUNNING,
+        clock=clock, login_expires_in=900 + 60,
+    )
+
+    messages = [p["message"] for p in job.progress if p["stage"] == "waiting_for_supplements"]
+    assert messages[0] == (
+        "Main paper ready. Waiting for ABC to convert 2 supplements; "
+        "you can use the paper and leave this page."
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_jobs_panel_uses_the_singular_for_one_supplement(job):
+    """Chris approved the singular form for one file (23 Nov 2026)."""
+
+    clock = _Clock()
+    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "pdf")])
+
+    await _run(
+        chosen=[_chosen("30")], paper=paper, last_answer_payload=RUNNING,
+        clock=clock, login_expires_in=900 + 60,
+    )
+
+    messages = [p["message"] for p in job.progress if p["stage"] == "waiting_for_supplements"]
+    assert messages[0] == (
+        "Main paper ready. Waiting for ABC to convert 1 supplement; "
+        "you can use the paper and leave this page."
+    )
 
 
 # --- The stage as its own task
@@ -481,7 +511,7 @@ async def test_a_failing_stage_ends_the_job_by_name_and_is_reported(job, monkeyp
 @pytest.mark.asyncio
 async def test_waits_beyond_the_limit_queue_and_keep_recording_activity(job, monkeypatch):
     monkeypatch.setenv("DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS", "1")
-    monkeypatch.setattr(stage, "get_document_source_poll_interval_seconds", lambda: 0.01)
+    monkeypatch.setattr(stage, "get_document_supplement_listing_poll_seconds", lambda: 0.01)
     release = asyncio.Event()
     order = []
 
@@ -633,37 +663,16 @@ async def test_a_stage_whose_login_is_inside_the_reserve_ends_at_once_asking_abc
 
 
 @pytest.mark.asyncio
-async def test_a_changed_abc_job_id_stops_every_further_request(job):
-    """ABC lost the job this import started and began a new one: ask nothing more."""
-
-    clock = _Clock()
-    first = _answer_payload("running", [_job_entry(30, "supplement", "pending")])
-    restarted = {**first, "job_id": "made-up-new-job", "previous_job_id": "made-up-job"}
-    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "pdf")])
-
-    client, add, outcomes = await _run(
-        chosen=[_chosen("30")], abc_answers=[restarted], paper=paper,
-        last_answer_payload=first, clock=clock,
-    )
-
-    assert client.requests == 1
-    assert _final_entries(job) == {"30": ("left_out", "provider_job_restarted")}
-    assert outcomes.ended == ["completed"]
-
-
-@pytest.mark.asyncio
 async def test_an_answer_abc_does_not_send_today_ends_the_wait_with_its_own_reason(job):
     clock = _Clock()
-    first = _answer_payload("running", [_job_entry(30, "supplement", "pending")])
-    unknown = _answer_payload("running", [{**_job_entry(30, "supplement", "pending"), "status": "skipped"}])
+    unknown = _answer_payload("failed", [{**_job_entry(30, "supplement", "pending"), "status": "skipped"}])
     paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "pdf")])
 
-    client, _add, outcomes = await _run(
-        chosen=[_chosen("30")], abc_answers=[unknown], paper=paper,
-        last_answer_payload=first, clock=clock,
+    client, _add, _outcomes = await _run(
+        chosen=[_chosen("30")], paper=paper, last_answer_payload=unknown, clock=clock,
     )
 
-    assert client.requests == 1
+    assert (client.requests, client.reads) == (0, 0)
     assert _final_entries(job) == {"30": ("left_out", "provider_answer_unknown")}
 
 
@@ -761,7 +770,7 @@ async def test_an_add_refusal_keeps_its_measured_and_limit_values(job):
 @pytest.mark.asyncio
 async def test_queued_stages_are_served_in_the_order_they_arrived(job, monkeypatch):
     monkeypatch.setenv("DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS", "1")
-    monkeypatch.setattr(stage, "get_document_source_poll_interval_seconds", lambda: 0.01)
+    monkeypatch.setattr(stage, "get_document_supplement_listing_poll_seconds", lambda: 0.01)
     release = asyncio.Event()
     order = []
 
@@ -782,46 +791,6 @@ async def test_queued_stages_are_served_in_the_order_they_arrived(job, monkeypat
 
     assert order == ["first", "second", "third", "fourth"]
 
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("restarted_answer", ["new_job_running", "converted_without_job"])
-async def test_a_changed_abc_job_id_still_adds_what_abc_converted(job, restarted_answer):
-    """One read-only listing before leaving files out: ABC may have converted them,
-    as when its job file was lost and it answers converted with no job id."""
-
-    clock = _Clock()
-    first = _answer_payload("running", [_job_entry(30, "supplement", "pending"), _job_entry(50, "supplement", "pending")])
-    if restarted_answer == "new_job_running":
-        restarted = {**first, "job_id": "made-up-new-job", "previous_job_id": "made-up-job"}
-    else:
-        restarted = {**_answer_payload("converted", []), "job_id": None}
-    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "pdf"), _unconverted(50, "pdf")])
-
-    class _ConvertedMeanwhile(_AbcClient):
-        async def request_referencefile_conversion(self, reference, *, wait=False, request_bearer_token=None):
-            # ABC converted 30 (and stored it) before it lost its job.
-            paper.rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(30, "WB"), _unconverted(50, "pdf")]
-            paper.payloads = {"31": GOOD_TABLE}
-            return await super().request_referencefile_conversion(reference, wait=wait)
-
-    from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
-
-    client = _ConvertedMeanwhile([restarted])
-    provider = provider_from_fake(client)
-    add, outcomes = _Add(), _Outcomes()
-    await stage.run_supplement_stage(
-        job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
-        plan=SupplementPlan(chosen=(_chosen("30"), _chosen("50")), request_context=_context(),
-                            login_expires_at=clock() + 86400, owner_user_id=7, reference="AGRKB:101"),
-        conversion_requested=True, last_answer=_map_conversion_result(first, provider="abc_literature"),
-        main_ready_at=clock(), provider=provider, weaviate_client=object(), outcomes=outcomes,
-        list_files=paper.list_files, add_files=add, clock=clock, sleep=clock.sleep,
-    )
-
-    assert client.requests == 1  # the revealing request only
-    assert [file.provider_file_id for file in add.calls[0]] == ["30"]
-    assert _final_entries(job) == {"30": ("added", None), "50": ("left_out", "provider_job_restarted")}
 
 
 @pytest.mark.asyncio

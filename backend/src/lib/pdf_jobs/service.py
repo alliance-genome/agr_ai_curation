@@ -18,6 +18,7 @@ from src.lib.openai_agents.config import (
     get_document_source_dead_wait_polls,
     get_document_source_poll_interval_seconds,
     get_document_source_request_timeout_seconds,
+    get_document_supplement_listing_poll_seconds,
     get_pdf_document_error_message_max_chars,
     get_pdf_job_error_message_max_chars,
     get_pdf_no_job_orphan_batch_size,
@@ -1006,9 +1007,14 @@ def _polling_stopped(job: PdfProcessingJob, *, now: datetime) -> bool:
     """Whether a job in a polling stage has recorded no poll for too long."""
     if job.current_stage not in _POLLING_STAGES:
         return False
+    # Each polling stage records activity at least once per its own interval.
+    interval_seconds = (
+        get_document_supplement_listing_poll_seconds()
+        if job.current_stage == WAITING_FOR_SUPPLEMENTS_STAGE
+        else get_document_source_poll_interval_seconds()
+    )
     dead_after_seconds = get_document_source_dead_wait_polls() * (
-        get_document_source_poll_interval_seconds()
-        + get_document_source_request_timeout_seconds()
+        interval_seconds + get_document_source_request_timeout_seconds()
     )
     return (now - _last_activity_timestamp(job)).total_seconds() > dead_after_seconds
 

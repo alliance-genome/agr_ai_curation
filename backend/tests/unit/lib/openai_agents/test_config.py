@@ -2274,6 +2274,7 @@ def test_startup_logs_the_effective_wait_settings_only(monkeypatch, caplog):
         "DOCUMENT_SOURCE_DEAD_WAIT_POLLS",
         "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS",
         "DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS",
+        "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", "600")
@@ -2285,7 +2286,8 @@ def test_startup_logs_the_effective_wait_settings_only(monkeypatch, caplog):
     assert lines == [
         "Document-source wait settings: DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=30, "
         "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=600, DOCUMENT_SOURCE_DEAD_WAIT_POLLS=3, "
-        "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS=10800, DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS=900"
+        "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS=10800, DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS=900, "
+        "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS=60"
     ]
 
 
@@ -2301,13 +2303,14 @@ def test_startup_accepts_the_default_wait_settings_and_the_limit_itself(monkeypa
         "DOCUMENT_SOURCE_DEAD_WAIT_POLLS",
         "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS",
         "DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS",
+        "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS",
     ):
         monkeypatch.delenv(key, raising=False)
     validate_document_source_wait_settings()  # 3600 / 30 = 120 polls
 
     assert DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT == 400
     monkeypatch.setenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", "9")  # 3600 / 9 = 400
-    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", "3600")  # also 400
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", "27")  # 10,800 / 27 = 400
     validate_document_source_wait_settings()
 
 
@@ -2612,6 +2615,7 @@ def _clear_wait_settings(monkeypatch):
         "DOCUMENT_SOURCE_DEAD_WAIT_POLLS",
         "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS",
         "DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS",
+        "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS",
         "DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -2636,23 +2640,39 @@ def test_supplement_wait_concurrency_default_override_and_minimum(monkeypatch):
 def test_supplement_wait_settings_defaults_and_overrides(monkeypatch):
     from src.lib.openai_agents.config import (
         get_document_supplement_add_reserve_seconds,
+        get_document_supplement_listing_poll_seconds,
         get_document_supplement_wait_timeout_seconds,
     )
 
     _clear_wait_settings(monkeypatch)
     assert get_document_supplement_wait_timeout_seconds() == 10800.0
     assert get_document_supplement_add_reserve_seconds() == 900.0
+    assert get_document_supplement_listing_poll_seconds() == 60.0
     monkeypatch.setenv("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", "7200")
     monkeypatch.setenv("DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS", "600")
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", "90")
     assert get_document_supplement_wait_timeout_seconds() == 7200.0
     assert get_document_supplement_add_reserve_seconds() == 600.0
+    assert get_document_supplement_listing_poll_seconds() == 90.0
+
+
+def test_the_main_poll_no_longer_has_to_cover_the_supplement_wait(monkeypatch):
+    """The supplement wait reads the listing on its own interval (Chris, 23 Nov 2026,
+    card 31), so a 25 s main poll is safe again (3,600 / 25 = 144)."""
+    from src.lib.openai_agents.config import validate_document_source_wait_settings
+
+    _clear_wait_settings(monkeypatch)
+    monkeypatch.setenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", "25")
+    validate_document_source_wait_settings()
 
 
 @pytest.mark.parametrize(
     ("env", "named"),
     [
-        # 10,800 / 25 = 432 polls in one supplement wait: more than 400.
-        ({"DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS": "25"}, "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS"),
+        # 10,800 / 25 = 432 listing reads in one supplement wait: more than 400.
+        ({"DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS": "25"}, "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS"),
+        ({"DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS": "4"}, "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS"),
+        ({"DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS": "nan"}, "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS"),
         ({"DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS": "nan"}, "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS"),
         ({"DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS": "inf"}, "DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS"),
         ({"DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS": "-1"}, "DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS"),

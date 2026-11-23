@@ -219,6 +219,13 @@ Configured knobs:
   half of ABC's roughly 1,000 requests per worker, which other callers share),
   with a named error naming both settings; an `.env` still pinning the old 2
   seconds stops the deploy instead of degrading imports.
+- `DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS`: interval between a supplement
+  wait's reads of ABC's read-only file listing (default 60 seconds, minimum 5).
+  The supplement wait never re-sends the conversion request. Start-up refuses a
+  value whose reads in one wait (`DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS`
+  divided by it) exceed the same 400, since every read still counts toward
+  ABC's worker recycling; at the default it is 180. The dead-wait test for a
+  stage in `waiting_for_supplements` uses this interval.
 - `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS`: deadline for one provider
   conversion/import job of a main paper (default 3,600 seconds), covering the
   wait for ABC's conversion and then downloads, hierarchy and figure
@@ -332,32 +339,37 @@ completed import job then carries one `left_out` entry per chosen file with
   it inherits the import's cost and trace context), so the next paper of the
   same request starts at once. At most `DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS`
   (default 10) stages run at once in one process. Others queue in arrival order,
-  recording activity at the poll interval, so neither the dead-wait cancel nor
-  the stale sweep takes them for dead.
+  recording activity at the listing poll interval, so neither the dead-wait
+  cancel nor the stale sweep takes them for dead.
 - **Before asking anything.** A stage that reaches its turn inside its login's
   reserve (or past the login) asks the provider nothing: every file ends
   `login_expired`. A stage that reaches its turn after its wait limit with a
   valid login makes exactly one read-only listing (no conversion request, no
   polling) and adds the chosen files the provider has already converted; the
   others end `wait_limit_reached`.
-- **The wait.** It polls the main phase's own request, only while ABC answers
-  `running`, at `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS`, recording activity at
-  every poll. It re-lists the paper's files only when ABC reports a chosen file
-  converted, or when ABC's answer is final.
+- **The wait never asks ABC to convert.** The import's main phase sent ABC's
+  on-demand conversion request; the stage never sends it again (Chris, 23 Nov
+  2026), because ABC has no status-only route and repeating that request starts
+  or restarts a conversion job. If the main phase's last answer was already
+  final, the stage classifies the chosen files once from it (so
+  `provider_conversion_failed` and `provider_not_converted` can still appear).
+  Otherwise it watches ABC's read-only file listing (`show_all`, which only
+  reads ABC's database): one read every
+  `DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS` (default 60 s), recording activity
+  at every read. A chosen file counts as converted once a listed converted
+  supplement text names it as its source (`parent_artifact_id`); only when such
+  a new text appears does the stage run the full per-paper listing, for the
+  text's id, MD5 and access checks.
+- **Failed files.** ABC's listing does not show a failed conversion, so a file
+  ABC fails during the wait stays `waiting` and ends `not_converted_in_time`
+  when the wait ends. If ABC loses its job, nothing restarts it and the files
+  wait out the limit the same way.
 - **When it ends.** At the first of:
-  - every chosen file classified;
-  - a final answer (the request is never sent after one);
+  - every chosen file converted;
   - `DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS` (default 10,800 s) after the main
     paper became ready (time spent queued counts);
   - the curator's login expiry minus `DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS`
     (default 900 s);
-  - an answer whose `job_id` differs from the first: ABC lost the import's job
-    and started a new one, so no further conversion request is sent. One
-    read-only listing then keeps the files ABC did convert (including a
-    `converted` answer with no job id, when ABC lost its job file); the rest end
-    `provider_job_restarted`. That one request may already have started new work
-    at ABC; there is no status-only route to avoid it;
-  - an answer in a shape the import does not know (`provider_answer_unknown`);
   - ABC refusing the login (`login_expired`; nothing more is asked, the add
     included);
   - any other provider error (no retries; the converted files still join);
@@ -381,7 +393,7 @@ completed import job then carries one `left_out` entry per chosen file with
   outcome as a restart.
 - **Unexpected failure.** If the stage itself fails, every file still open ends as
   `supplement_stage_failed`, the stage job ends failed with a named message ("The
-  main paper is ready, but its supplements could not be added.", proposed
+  main paper is ready, but its supplements could not be added.", approved
   wording), and one Sentry event is sent (see `SENTRY_OBSERVABILITY.md`).
 
 **An expired curator login.** The auth dependency carries the validated login's
