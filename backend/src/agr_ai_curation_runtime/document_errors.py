@@ -16,6 +16,25 @@ class DocumentReadError(RuntimeError):
         super().__init__("Could not read required PDF content.")
 
 
+class DocumentFilesChanged(Exception):
+    """The paper's readable files changed during one tool call, but nothing the call
+    showed came from a file that stopped being readable.
+
+    Recoverable: the call answers the model with ``FILES_CHANGED_ANSWER`` (its result
+    is withheld and nothing it staged is saved) and the run goes on; the model's next
+    read uses the current files.
+    """
+
+
+# Proposed wording (for Chris's sign-off). Keep in step with the outline's
+# "Files are still being added to this paper; they cannot be read yet."
+FILES_CHANGED_MESSAGE = "This paper's files changed while reading; read again to use the current files."
+
+
+def files_changed_answer() -> dict[str, str]:
+    return {"status": "files_changed", "error_code": "readable_files_changed", "message": FILES_CHANGED_MESSAGE}
+
+
 def document_read_failure(error: BaseException) -> DocumentReadError | None:
     """Find the typed failure through SDK/runner exception wrappers."""
     pending = [error]

@@ -251,14 +251,21 @@ def test_a_file_that_becomes_ready_during_a_call_is_harmless(owner_id):
     refs._verify_source_generation(binding)
 
 
-def test_a_call_whose_readable_file_was_removed_fails(owner_id):
+def test_a_call_whose_readable_file_was_removed_fails_only_if_it_showed_that_file(owner_id):
+    from agr_ai_curation_runtime.document_errors import DocumentFilesChanged
+
     paper = _paper(owner_id)
-    binding = _bind(paper["document_id"])
+    unaffected = _bind(paper["document_id"])
+    unaffected.shown_chunk_indexes.add(0)  # main file text only
+    showing = _bind(paper["document_id"])
+    showing.shown_chunk_indexes.add(3)  # text from the supplement removed below
     with SessionLocal.begin() as db:
         db.delete(db.get(PDFDocumentFile, UUID(paper["sheet"])))
 
+    with pytest.raises(DocumentFilesChanged):
+        refs._verify_source_generation(unaffected)
     with pytest.raises(refs.DocumentReferenceError, match="readable file changed"):
-        refs._verify_source_generation(binding)
+        refs._verify_source_generation(showing)
 
 
 def test_a_file_that_became_ready_during_a_run_is_readable_from_the_next_call(owner_id):
@@ -273,9 +280,10 @@ def test_a_file_that_became_ready_during_a_run_is_readable_from_the_next_call(ow
     assert [file.file_id for file in next_call.readable.files] == [paper["main"], paper["sheet"], paper["adding"]]
 
 
-def test_a_file_made_unready_during_a_call_fails_it_by_name(owner_id):
+def test_a_file_made_unready_during_a_call_that_showed_it_fails_it_by_name(owner_id):
     paper = _paper(owner_id)
     binding = _bind(paper["document_id"])
+    binding.shown_chunk_indexes.add(4)
     with SessionLocal.begin() as db:
         db.get(PDFDocumentFile, UUID(paper["sheet"])).status = "pending"
 

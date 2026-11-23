@@ -362,8 +362,9 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
                 )
             )
 
-        # Every hit's text reaches the model, so its file counts as read (ALL-1460);
-        # snippets are not evidence, so no span is issued.
+        # Every hit's text reaches the model: its file counts as read once the call
+        # succeeds, and the end-of-call check knows the call showed text from it
+        # (ALL-1460). Snippets are not evidence, so no span is issued.
         await record_files_shown([hit.chunk_index for hit in hits])
         logger.debug("Returning %s structured chunks", len(hits))
         return _search_result(hits)
