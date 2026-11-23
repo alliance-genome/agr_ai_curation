@@ -177,6 +177,15 @@ after it failed. Keep the deadline at 3,600 seconds or less: above it, that late
 conversion job (main text and pending supplements) for a paper that failed
 early. Nothing in AI Curation refuses a longer deadline.
 
+**Start-up check (KANBAN-2191 / ALL-1725):** start-up refuses
+`DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS` at or above
+`DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS` minus `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS`,
+naming the settings: the main paper's end request must be answerable before the
+deadline. With the pinned deadline of 600 and a poll of 30, any request timeout
+below 570 passes; the default 10 passes at every deadline the poll check allows.
+The wait's timeout message ("Provider conversion exceeded {n} seconds") gives the
+whole seconds actually waited since the paper's own request.
+
 **Release step (unchanged from KANBAN-1976 P7w):** production's prod-state
 override and dev's `.env` files still pin `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=2`
 and `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=600`. Remove both pins (or set

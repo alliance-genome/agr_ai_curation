@@ -312,7 +312,10 @@ So:
   Its wait ends at that request's time plus `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS`,
   and its end request is sent only while it can be sent and answered before
   then (the current time plus `DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS` is still
-  before the deadline, checked again after the request is recorded). A paper that starts after its
+  before the deadline, checked again after the request is recorded). A read is
+  always made at the start of that window, which is one poll long. Start-up
+  refuses a request timeout at or above the deadline minus one poll. The
+  timeout message gives the whole seconds actually waited since the request. A paper that starts after its
   deadline is read once (a paper ABC converted meanwhile is imported); if its
   text is not listed it fails with the existing timeout message ("Provider
   conversion exceeded {n} seconds") without asking ABC.

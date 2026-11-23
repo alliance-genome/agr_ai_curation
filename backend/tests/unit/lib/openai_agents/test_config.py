@@ -2716,3 +2716,26 @@ def test_listing_failed_reads_default_override_and_minimum(monkeypatch):
     monkeypatch.setenv("DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS", "0")
     with pytest.raises(ValueError, match="DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS"):
         get_document_source_listing_max_failed_reads()
+
+
+
+@pytest.mark.parametrize(("timeout", "refused"), [("5", False), ("565", False), ("570", True), ("700", True)])
+def test_startup_refuses_a_request_timeout_that_leaves_no_room_for_the_end_request(monkeypatch, timeout, refused):
+    """KANBAN-2191 / ALL-1725: the main wait's end request needs a request timeout shorter
+    than the deadline minus one poll (here 600 - 30 = 570 s)."""
+    from src.lib.openai_agents.config import (
+        DocumentSourceWaitSettingsError,
+        validate_document_source_wait_settings,
+    )
+
+    _clear_wait_settings(monkeypatch)
+    monkeypatch.delenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", "600")
+    monkeypatch.setenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", timeout)
+    if refused:
+        with pytest.raises(DocumentSourceWaitSettingsError) as error:
+            validate_document_source_wait_settings()
+        assert "DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS" in str(error.value)
+        assert "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS" in str(error.value)
+    else:
+        validate_document_source_wait_settings()

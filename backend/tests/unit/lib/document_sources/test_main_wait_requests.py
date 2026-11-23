@@ -58,7 +58,8 @@ class _Abc:
     is the ``show_all`` read from which the converted main text is listed."""
 
     def __init__(self, *, answers=(), main_after: int | None = None,
-                 failing_reads: set[int] | None = None, read_status: int = 502):
+                 failing_reads: set[int] | None = None, read_status: int = 502, read_seconds: float = 0.0):
+        self.read_seconds = read_seconds
         self.answers = list(answers)
         self.main_after = main_after
         self.failing_reads = failing_reads or set()
@@ -73,6 +74,10 @@ class _Abc:
         if path == CONVERSION_PATH:
             return httpx.Response(202, json=self.answers.pop(0) if len(self.answers) > 1 else self.answers[0])
         if path == SHOW_ALL_PATH:
+            if self.read_seconds:
+                import time
+
+                time.sleep(self.read_seconds)  # ABC's listing takes this long to answer
             if self.show_all_reads in self.failing_reads:
                 return httpx.Response(self.read_status, json={"detail": "made-up failure"})
             rows = [self.main]
@@ -411,7 +416,8 @@ async def test_a_wait_that_starts_after_its_deadline_reads_once_and_never_asks_a
     await _service(abc, []).execute_provider_conversion(_request())
 
     assert (abc.conversion_requests, abc.show_all_reads) == (0, 1)
-    assert job.ended == [("failed", "Provider conversion exceeded 3 seconds")]
+    # The time actually waited since the paper's own request.
+    assert job.ended == [("failed", "Provider conversion exceeded 4 seconds")]
 
 
 @pytest.mark.asyncio
@@ -546,4 +552,23 @@ async def test_the_end_request_is_sent_only_while_it_can_be_answered_before_the_
     await _service(abc, []).execute_provider_conversion(_request())
 
     assert abc.conversion_requests == 0
-    assert job.ended == [("failed", "Provider conversion exceeded 3 seconds")]
+    # The whole seconds actually waited since the request (2.7 s and up, depending on the case).
+    assert [status for status, _ in job.ended] == ["failed"]
+    assert job.ended[0][1] in {"Provider conversion exceeded 2 seconds", "Provider conversion exceeded 3 seconds"}
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", [0.0, 0.04, 0.08, 0.12, 0.16, 0.2])
+async def test_every_start_phase_sends_exactly_one_end_request_when_abc_never_converts(monkeypatch, quiet, phase):
+    """The end request's window is one poll long while reads come one poll plus the
+    read's own time apart: a read is made to land at its start, whatever the phase
+    (a slow listing, 0.15 s against a 0.2 s poll, makes a skipped window likely)."""
+
+    abc = _Abc(answers=[RUNNING], read_seconds=0.15)
+    job = _Job(metadata=_sent_at_import(seconds_ago=phase)).install(monkeypatch)
+
+    await _service(abc, []).execute_provider_conversion(_request())
+
+    assert abc.conversion_requests == 1
+    assert [status for status, _ in job.ended] == ["failed"]

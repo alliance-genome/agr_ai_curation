@@ -3195,10 +3195,13 @@ async def test_main_import_still_waiting_after_an_hour_fails_and_the_paper_is_fa
     assert outcomes["status"] == [("doc-conversion", "failed")]
     assert outcomes["sql_failures"] == ["Provider conversion exceeded 3600 seconds"]
     # KANBAN-2191 / ALL-1725: the on-demand request, then only listing reads, then one
-    # request once another read would not fit (3600 - (30 + 10) s): at 3570 s.
-    assert [request["at"] for request in provider.conversion_requests] == [0.0, 3570.0]
-    # A read every 30 s (121 in the hour), plus one straight after the end request.
-    assert len(provider.list_artifact_calls) == 122
+    # request at the start of the end window (3600 - (30 + 10) s = 3560 s; a read is
+    # made to land there).
+    assert [request["at"] for request in provider.conversion_requests] == [0.0, 3560.0]
+    # Reads every 30 s to 3540 s (119), at 3560 s, straight after the end request,
+    # then at 3590 s and at the deadline.
+    assert [read["at"] for read in provider.list_artifact_calls][-5:] == [3540.0, 3560.0, 3560.0, 3590.0, 3600.0]
+    assert len(provider.list_artifact_calls) == 123
     assert provider.closed is True
 
 
@@ -3254,7 +3257,7 @@ async def test_abc_is_never_asked_again_after_a_final_answer(monkeypatch, final_
 
     await service.execute_provider_conversion(_wait_request())
 
-    assert [request["at"] for request in provider.conversion_requests] == [0.0, 3570.0]
+    assert [request["at"] for request in provider.conversion_requests] == [0.0, 3560.0]
     assert len(outcomes["failed"]) == 1
     assert outcomes["completed"] == []
 

@@ -2207,6 +2207,16 @@ def validate_document_source_wait_settings() -> None:
         get_document_supplement_max_concurrent_waits()
     except ValueError as error:
         raise DocumentSourceWaitSettingsError(str(error)) from error
+    request_timeout_seconds = get_document_source_request_timeout_seconds()
+    if request_timeout_seconds >= deadline_seconds - poll_seconds:
+        # The main paper's wait asks the provider once more near its deadline, only
+        # while that request can be answered before it (KANBAN-2191 / ALL-1725).
+        raise DocumentSourceWaitSettingsError(
+            f"DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS ({request_timeout_seconds:g}) leaves no room "
+            f"for the main paper's end request before DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS "
+            f"({deadline_seconds:g}) minus DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS ({poll_seconds:g}); "
+            f"set DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS below {deadline_seconds - poll_seconds:g}"
+        )
     for wait_name, wait_seconds, poll_name, interval_seconds in (
         ("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", deadline_seconds,
          "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", poll_seconds),

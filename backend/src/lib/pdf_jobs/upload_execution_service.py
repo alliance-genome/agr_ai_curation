@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import math
 import weakref
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
@@ -227,6 +228,11 @@ class ProviderConversionExecutionRequest:
 
 class _JobFinalizedElsewhere(Exception):
     """The job was made terminal outside this task (a cancel of a wait taken for dead)."""
+
+
+def _conversion_exceeded_message(requested_at: float) -> str:
+    """The existing timeout message, with the whole seconds actually waited since the request."""
+    return f"Provider conversion exceeded {math.floor(time.time() - requested_at):g} seconds"
 
 
 def _raise_if_conversion_ended(
@@ -690,9 +696,7 @@ class UploadExecutionService:
                     if failed_reads >= max_failed_reads:
                         raise
                     if time.time() >= wait_ends_at:
-                        raise RuntimeError(
-                            f"Provider conversion exceeded {deadline_seconds:g} seconds"
-                        ) from None
+                        raise RuntimeError(_conversion_exceeded_message(requested_at)) from None
                     if _job_was_finalized_elsewhere(request.job_id):
                         raise _JobFinalizedElsewhere()
                     pdf_job_service.update_progress(
@@ -773,12 +777,12 @@ class UploadExecutionService:
                 if now >= wait_ends_at:
                     # Includes a paper queued behind others past its own deadline:
                     # it was read once above, and nothing is asked outside the hold.
-                    raise RuntimeError(f"Provider conversion exceeded {deadline_seconds:g} seconds")
+                    raise RuntimeError(_conversion_exceeded_message(requested_at))
                 if not sent.get("end_sent_at") and now >= end_request_at:
                     if now + request_timeout_seconds >= wait_ends_at:
                         # No room left to send and be answered before the deadline:
                         # end as a paper past its deadline does, asking nothing.
-                        raise RuntimeError(f"Provider conversion exceeded {deadline_seconds:g} seconds")
+                        raise RuntimeError(_conversion_exceeded_message(requested_at))
                     # Nothing appeared in time: ask the provider once more, only to
                     # learn why. Sent within the deadline of the paper's own request,
                     # so at a deadline of at most an hour it falls inside ABC's
@@ -791,7 +795,7 @@ class UploadExecutionService:
                     sent["end_sent_at"] = "sent"
                     if time.time() + request_timeout_seconds >= wait_ends_at:
                         # The record write took the room: recorded, never sent.
-                        raise RuntimeError(f"Provider conversion exceeded {deadline_seconds:g} seconds")
+                        raise RuntimeError(_conversion_exceeded_message(requested_at))
                     last_result = await provider.request_conversion(
                         request.reference, wait=False, request_bearer_token=curator_token,
                     )
@@ -799,7 +803,11 @@ class UploadExecutionService:
                     _raise_if_conversion_ended(provider, last_result)
                     continue
 
-                await asyncio.sleep(min(poll_interval_seconds, max(wait_ends_at - now, 0.0)))
+                # Never sleep past the start of the end request's window (it is one
+                # poll long, while reads come one poll plus the read's own time
+                # apart), nor past the wait's end.
+                next_stop = wait_ends_at if sent.get("end_sent_at") or now >= end_request_at else end_request_at
+                await asyncio.sleep(min(poll_interval_seconds, max(next_stop - now, 0.0)))
         except _ProviderMainMarkdownAccessDenied:
             raise
         except _JobFinalizedElsewhere:
