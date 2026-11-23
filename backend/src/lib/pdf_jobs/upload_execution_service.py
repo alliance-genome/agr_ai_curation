@@ -26,6 +26,7 @@ from src.lib.document_sources.ingestion import (
 from src.lib.document_sources.main_text import select_preferred_main_text_artifact
 from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
+    DocumentSourceError,
     DocumentSourceLoginExpired,
     DocumentSourceProvider,
     ProviderBearerKind,
@@ -41,6 +42,7 @@ from src.lib.observability.background_tasks import (
 )
 from src.lib.openai_agents.config import (
     get_document_source_import_timeout_seconds,
+    get_document_source_listing_max_failed_reads,
     get_document_source_poll_interval_seconds,
     get_document_source_request_timeout_seconds,
 )
@@ -621,6 +623,8 @@ class UploadExecutionService:
             poll_interval_seconds + get_document_source_request_timeout_seconds()
         )
         sent = pdf_job_service.conversion_requests_sent(existing_job)
+        max_failed_reads = get_document_source_listing_max_failed_reads()
+        failed_reads = 0
         last_result: SourceConversionResult | None = request.conversion_answer
         try:
             curator_token = (request.curator_token or "").strip()
@@ -646,14 +650,33 @@ class UploadExecutionService:
 
                 # Watch the provider's read-only listing for the main text; never
                 # re-send the conversion request, which can start or restart a job.
-                (
-                    selected_artifact,
-                    selected_figure_metadata_artifact_ids,
-                ) = await self._select_converted_main_artifact(
-                    provider=provider,
-                    request=request,
-                    curator_token=curator_token,
-                )
+                try:
+                    (
+                        selected_artifact,
+                        selected_figure_metadata_artifact_ids,
+                    ) = await self._select_converted_main_artifact(
+                        provider=provider,
+                        request=request,
+                        curator_token=curator_token,
+                    )
+                except DocumentSourceLoginExpired:
+                    raise
+                except DocumentSourceError:
+                    # A pure read: tried again at the next interval, up to the
+                    # tolerated number of failed reads in a row.
+                    failed_reads += 1
+                    if failed_reads >= max_failed_reads:
+                        raise
+                    if _job_was_finalized_elsewhere(request.job_id):
+                        raise _JobFinalizedElsewhere()
+                    pdf_job_service.update_progress(
+                        job_id=request.job_id,
+                        stage=pdf_job_service.PROVIDER_CONVERSION_STAGE,
+                        status=PdfJobStatus.RUNNING.value,
+                    )
+                    await asyncio.sleep(poll_interval_seconds)
+                    continue
+                failed_reads = 0
                 # The read above can take a while; a cancel may have finalized
                 # the job meanwhile (a wait taken for dead). Write nothing then.
                 if _job_was_finalized_elsewhere(request.job_id):

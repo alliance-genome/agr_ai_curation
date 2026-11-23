@@ -2164,6 +2164,21 @@ def get_document_supplement_listing_poll_seconds() -> float:
     return value
 
 
+def get_document_source_listing_max_failed_reads() -> int:
+    """Failed reads of the provider's file listing, in a row, after which a wait ends.
+
+    Both waits (the main paper's and the supplements') only read the listing, so
+    one failed read is tried again at the next interval; a good read resets the
+    count, and a refused login still ends the wait at once. 1 ends a wait at the
+    first failed read.
+    """
+    name = "DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS"
+    value = _get_env_int_with_fallback(name, 3)
+    if value < 1:
+        raise ValueError(f"{name} is {value}; it must be at least 1")
+    return value
+
+
 def get_document_supplement_max_concurrent_waits() -> int:
     """Most supplement waits running at once in one backend process; the rest queue."""
     name = "DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS"
@@ -2186,6 +2201,7 @@ def validate_document_source_wait_settings() -> None:
         supplement_wait_seconds = get_document_supplement_wait_timeout_seconds()
         add_reserve_seconds = get_document_supplement_add_reserve_seconds()
         listing_poll_seconds = get_document_supplement_listing_poll_seconds()
+        max_failed_reads = get_document_source_listing_max_failed_reads()
         get_document_supplement_max_concurrent_waits()
     except ValueError as error:
         raise DocumentSourceWaitSettingsError(str(error)) from error
@@ -2211,13 +2227,14 @@ def validate_document_source_wait_settings() -> None:
         "Document-source wait settings: DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=%g, "
         "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=%g, DOCUMENT_SOURCE_DEAD_WAIT_POLLS=%d, "
         "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS=%g, DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS=%g, "
-        "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS=%g",
+        "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS=%g, DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS=%d",
         poll_seconds,
         deadline_seconds,
         dead_wait_polls,
         supplement_wait_seconds,
         add_reserve_seconds,
         listing_poll_seconds,
+        max_failed_reads,
     )
 
 

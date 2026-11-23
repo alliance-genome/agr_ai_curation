@@ -2275,6 +2275,7 @@ def test_startup_logs_the_effective_wait_settings_only(monkeypatch, caplog):
         "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS",
         "DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS",
         "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS",
+        "DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", "600")
@@ -2287,7 +2288,7 @@ def test_startup_logs_the_effective_wait_settings_only(monkeypatch, caplog):
         "Document-source wait settings: DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=30, "
         "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=600, DOCUMENT_SOURCE_DEAD_WAIT_POLLS=3, "
         "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS=10800, DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS=900, "
-        "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS=60"
+        "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS=60, DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS=3"
     ]
 
 
@@ -2304,6 +2305,7 @@ def test_startup_accepts_the_default_wait_settings_and_the_limit_itself(monkeypa
         "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS",
         "DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS",
         "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS",
+        "DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS",
     ):
         monkeypatch.delenv(key, raising=False)
     validate_document_source_wait_settings()  # 3600 / 30 = 120 polls
@@ -2616,6 +2618,7 @@ def _clear_wait_settings(monkeypatch):
         "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS",
         "DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS",
         "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS",
+        "DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS",
         "DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -2673,6 +2676,7 @@ def test_the_main_poll_no_longer_has_to_cover_the_supplement_wait(monkeypatch):
         ({"DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS": "25"}, "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS"),
         ({"DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS": "4"}, "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS"),
         ({"DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS": "nan"}, "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS"),
+        ({"DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS": "0"}, "DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS"),
         ({"DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS": "nan"}, "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS"),
         ({"DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS": "inf"}, "DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS"),
         ({"DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS": "-1"}, "DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS"),
@@ -2698,3 +2702,17 @@ def test_startup_accepts_the_default_supplement_wait(monkeypatch):
 
     _clear_wait_settings(monkeypatch)
     validate_document_source_wait_settings()  # 10,800 / 30 = 360 polls
+
+
+
+def test_listing_failed_reads_default_override_and_minimum(monkeypatch):
+    """KANBAN-2191 / ALL-1725: one setting for both waits (owner, 23 Nov 2026)."""
+    from src.lib.openai_agents.config import get_document_source_listing_max_failed_reads
+
+    monkeypatch.delenv("DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS", raising=False)
+    assert get_document_source_listing_max_failed_reads() == 3
+    monkeypatch.setenv("DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS", "5")
+    assert get_document_source_listing_max_failed_reads() == 5
+    monkeypatch.setenv("DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS", "0")
+    with pytest.raises(ValueError, match="DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS"):
+        get_document_source_listing_max_failed_reads()

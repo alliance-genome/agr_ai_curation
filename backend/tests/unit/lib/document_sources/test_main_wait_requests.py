@@ -55,9 +55,12 @@ class _Abc:
     """ABC over HTTP. ``answers`` are its conversion answers in order; ``main_after``
     is the ``show_all`` read from which the converted main text is listed."""
 
-    def __init__(self, *, answers=(), main_after: int | None = None):
+    def __init__(self, *, answers=(), main_after: int | None = None,
+                 failing_reads: set[int] | None = None, read_status: int = 502):
         self.answers = list(answers)
         self.main_after = main_after
+        self.failing_reads = failing_reads or set()
+        self.read_status = read_status
         self.requests: list[str] = []
         self.main = _abc_show_all_main_pdf(10, "WB")
         self.main.update({"reference_id": 101, "source": None})
@@ -68,6 +71,8 @@ class _Abc:
         if path == CONVERSION_PATH:
             return httpx.Response(202, json=self.answers.pop(0) if len(self.answers) > 1 else self.answers[0])
         if path == SHOW_ALL_PATH:
+            if self.show_all_reads in self.failing_reads:
+                return httpx.Response(self.read_status, json={"detail": "made-up failure"})
             rows = [self.main]
             if self.main_after is not None and self.show_all_reads >= self.main_after:
                 rows.append(_abc_show_all_row(
@@ -311,3 +316,43 @@ async def test_a_wait_run_again_after_a_restart_never_repeats_a_stored_request(m
     job.status = "pending"
     await service.execute_provider_conversion(_request(import_answer=None))
     assert abc.conversion_requests == 1
+
+
+
+@pytest.mark.asyncio
+async def test_failed_listing_reads_are_tried_again_and_the_paper_still_imports(monkeypatch, quiet):
+    """Owner, 23 Nov 2026: up to two failed reads in a row are tolerated
+    (DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS, default 3), with no request to ABC."""
+
+    abc = _Abc(answers=[RUNNING], main_after=3, failing_reads={1, 2})
+    job = _Job(metadata=_sent_at_import()).install(monkeypatch)
+    ingested: list = []
+
+    await _service(abc, ingested).execute_provider_conversion(_request())
+
+    assert abc.conversion_requests == 0
+    assert ingested == ["doc-1"]
+    assert job.ended == [("completed", "Processing completed")]
+
+
+@pytest.mark.asyncio
+async def test_three_failed_listing_reads_in_a_row_end_the_import(monkeypatch, quiet):
+    abc = _Abc(answers=[RUNNING], main_after=10, failing_reads={1, 2, 3})
+    job = _Job(metadata=_sent_at_import()).install(monkeypatch)
+
+    await _service(abc, []).execute_provider_conversion(_request())
+
+    assert abc.conversion_requests == 0
+    assert abc.show_all_reads == 3
+    assert job.ended == [("failed", "ABC Literature artifact listing failed")]
+
+
+@pytest.mark.asyncio
+async def test_a_refused_login_on_a_listing_read_ends_the_import_at_once(monkeypatch, quiet):
+    abc = _Abc(answers=[RUNNING], main_after=10, failing_reads={1}, read_status=401)
+    job = _Job(metadata=_sent_at_import()).install(monkeypatch)
+
+    await _service(abc, []).execute_provider_conversion(_request())
+
+    assert (abc.conversion_requests, abc.show_all_reads) == (0, 1)
+    assert [status for status, _ in job.ended] == ["failed"]

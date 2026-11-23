@@ -494,6 +494,7 @@ def test_compose_forwards_document_file_converted_text_cap():
         # The supplement wait (KANBAN-1976 / ALL-1460, P7b).
         ("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", "10800"),
         ("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", "60"),
+        ("DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS", "3"),
         ("DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS", "900"),
         ("DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS", "10"),
     ],

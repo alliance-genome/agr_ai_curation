@@ -1167,9 +1167,8 @@ async def test_tei_derived_progress_row_is_not_reported_as_main_text() -> None:
 
     assert provider.conversion_exposes_main_text(result) is False
     assert provider.conversion_progress_percentage(result) == 20
-    assert provider.conversion_progress_message(result) == (
-        "ABC Literature conversion running (1 file pending)"
-    )
+    # No file count (KANBAN-2191 / ALL-1725): the wait does not refresh this answer.
+    assert provider.conversion_progress_message(result) == "ABC Literature conversion running"
 
 
 @pytest.mark.asyncio

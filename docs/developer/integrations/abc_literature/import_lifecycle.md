@@ -145,7 +145,7 @@ ABC conversion response fields are stored under PDF job
 
 | ABC status/signal | Local mapping |
 | --- | --- |
-| `running` without main text | Job `running`, stage `provider_conversion`, progress around 20%, message `ABC Literature conversion running` or pending-file count. |
+| `running` without main text | Job `running`, stage `provider_conversion`, progress around 20%, message `ABC Literature conversion running` (no file count, since KANBAN-2191). |
 | `running` with a normalized `converted_merged_main` class or `per_file_progress[].converted.file_class=converted_merged_main` | Re-list artifacts with `show_all`; if one canonical non-TEI Markdown artifact is available, continue to provider-Markdown ingestion. The ABC adapter folds its private per-MOD readiness payload into the normalized class signal. |
 | `converted` with one canonical non-TEI Markdown artifact | Continue to provider-Markdown ingestion. |
 | `converted` but no canonical non-TEI Markdown artifact | Mark failed: `Provider conversion completed without canonical converted Markdown`. |
@@ -243,6 +243,10 @@ Configured knobs:
   its main text and pending supplements again. AI Curation does not check this:
   it is ABC's rule, so an operator raising the deadline must know it.
 - `DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS`: individual provider HTTP timeout.
+- `DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS`: failed reads of ABC's listing in
+  a row after which a wait ends, for both the main paper's wait and the
+  supplement wait (default 3, minimum 1; owner, 23 Nov 2026). A good read resets
+  the count; a refused login still ends the wait at once.
 - `DOCUMENT_SOURCE_DEAD_WAIT_POLLS`: missed polls after which a cancel
   finalizes a provider wait that no task is polling (default 3, minimum 2,
   checked at start-up; see Cancellation).
@@ -270,7 +274,8 @@ import batches: one request's identifiers run one after another.
 While a main paper waits, it stays in progress in the Library and cannot be
 deleted, imported again or given files (one active job per paper); the jobs
 panel shows ABC's progress message from its last answer (the import's own
-request, or the one at the end), which the listing reads do not refresh.
+request, or the one at the end), which the listing reads do not refresh; it
+therefore carries no file count.
 
 ### The main paper's wait (KANBAN-2191 / ALL-1725)
 
@@ -287,7 +292,9 @@ So:
   converted), the wait sends it once at its start and records it first.
 - **Then only reads.** The wait reads `show_all` every
   `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS` and ingests the main text as soon as
-  it is listed.
+  it is listed. A failed read is tried again at the next interval; after
+  `DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS` (default 3) failed reads in a row
+  the import fails, and a refused login fails it at once.
 - **At most one more request, at the end.** When another read would no longer
   fit before the deadline (`DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS` minus one
   poll interval and one request timeout), the wait asks ABC once more, recorded
@@ -417,7 +424,9 @@ completed import job then carries one `left_out` entry per chosen file with
     (default 900 s);
   - ABC refusing the login (`login_expired`; nothing more is asked, the add
     included);
-  - any other provider error (no retries; the converted files still join);
+  - `DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS` (default 3) failed listing reads
+    in a row; a failed read is tried again at the next interval and a good one
+    resets the count (the converted files still join);
   - a cancel (`import_cancelled`);
   - the job made terminal elsewhere (a dead-wait cancel or a delete): nothing more
     is written then.
@@ -489,7 +498,7 @@ carries the progress of ABC's most recent job), so such a file is
 | Ambiguous match | `Multiple accessible source documents matched this PDF.` |
 | No source artifact | `The document source match did not include an importable source PDF.` |
 | No converted Markdown | `The source document does not have converted Markdown available.` |
-| Conversion running | `ABC Literature conversion running` with pending-file count when available. |
+| Conversion running | `ABC Literature conversion running` (no file count: the wait does not refresh ABC's answer). |
 | Conversion completed, locating text | `ABC Literature conversion completed; locating converted Markdown`. |
 | Main text ready | `ABC Literature main text is ready; importing converted Markdown`. |
 | No convertible sources | `Provider conversion found no convertible source files`. |
