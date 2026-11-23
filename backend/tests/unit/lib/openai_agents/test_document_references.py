@@ -1331,9 +1331,11 @@ async def test_evidence_from_a_piece_with_no_page_stores_no_page_and_names_its_f
 @pytest.mark.parametrize("converted, shown", [((), 3), (("paper.pdf",), None)],
                          ids=["upload read by the extraction service", "main paper imported from ABC's text"])
 async def test_a_stored_page_counts_only_for_a_file_with_real_pages(store, scope, monkeypatch, converted, shown):
-    # ALL-1460: pieces indexed before the no-marker rule still carry page 1 (or a marker
-    # page) in the index; a file whose pieces came from provider-converted text never
-    # yields a page, in what the model reads or what evidence records.
+    # ALL-1460: a file whose pieces came from provider-converted text never yields a page,
+    # in what the model reads or what evidence records, whatever page its stored pieces
+    # carry: page 1 indexed before the no-marker rule, a page from a marker in the text,
+    # or a figure caption's page from the provider's figure metadata. The stored page 3
+    # here stands for any of them.
     from src.lib.openai_agents.evidence_summary import build_record_evidence_summary_record
     from agr_ai_curation_alliance.tools import weaviate_search
 
