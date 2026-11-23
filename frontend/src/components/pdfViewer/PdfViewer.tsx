@@ -1698,12 +1698,16 @@ export function PdfViewer({
   /** The text pane located (or did not locate) the quote of the current text navigation. */
   const handleTextNavigationResult = useCallback((
     request: TextNavigationRequest,
-    result: PdfViewerNavigationResult,
+    result: PdfViewerNavigationResult | null,
   ) => {
     if (request.requestId !== textNavigationRequestIdRef.current) {
       return
     }
-    commitNavigationResult(result)
+    // A hover changes nothing in the header: it neither writes nor clears. The last
+    // click's header stays until the next click or tab change.
+    if (result !== null) {
+      commitNavigationResult(result)
+    }
     if (pendingNavigation === null && eventPendingNavigation === request.command) {
       setEventPendingNavigation(null)
     }

@@ -203,6 +203,121 @@ describe('P9b review fixes', () => {
     expect(await screen.findByRole('row', { current: true })).toHaveTextContent('XS0401')
   })
 
+  describe('P9c: large tables and the converted-text note', () => {
+    function longSheet(dataRows: number): DisplayBlock {
+      const header = { line: '| Strain | Temp |', cells: ['Strain', 'Temp'], is_header: true }
+      const rows = [header, ...Array.from({ length: dataRows }, (_, index) => ({
+        line: `| XS${index + 1} | 25 C |`, cells: [`XS${index + 1}`, '25 C'], is_header: false,
+      }))]
+      return {
+        ...TEXT_SUPPLEMENT_BLOCKS.blocks[1]!,
+        text: [header.line, '|---|---|', ...rows.slice(1).map((row) => row.line)].join('\n'),
+        rows,
+      }
+    }
+
+    it('evidence on rows 7,000 to 7,001 of a 9,000-row sheet reveals their part and highlights them without drawing every row', async () => {
+      stubViewerFetch({ textBlocks: [TEXT_SUPPLEMENT_BLOCKS.blocks[0]!, longSheet(8999)] })
+      await showFourFilePaper()
+      act(() => {
+        dispatchPDFViewerNavigateEvidence(twoRowRecord(['| XS7000 | 25 C |', '| XS7001 | 25 C |']))
+      })
+
+      await waitFor(() => expect(document.querySelectorAll('tr[aria-current="true"]')).toHaveLength(2), { timeout: 8000 })
+      expect(document.querySelectorAll('tbody tr')).toHaveLength(7500)
+      expect(screen.getByText(/^Showing rows 1 to 7,500 of 9,000\./)).toBeInTheDocument()
+      // Every shown row is page text the browser's find can reach; rows not yet shown are not in the page.
+      const pageText = document.body.textContent ?? ''
+      expect(pageText).toContain('XS7499')
+      expect(pageText).not.toContain('XS7500')
+    }, 20000)
+
+    it('a hover over evidence on a hidden row reveals nothing; a click then does', async () => {
+      stubViewerFetch({ textBlocks: [TEXT_SUPPLEMENT_BLOCKS.blocks[0]!, longSheet(8999)] })
+      await showFourFilePaper()
+      fireEvent.click(screen.getByRole('tab', { name: 'Table_S1.xlsx, file 2 of 3, converted text' }))
+      await screen.findByText(/^Showing rows 1 to 500 of 9,000\./)
+      const click = twoRowRecord(['| XS7000 | 25 C |', '| XS7001 | 25 C |'])
+
+      act(() => { dispatchPDFViewerNavigateEvidence({ ...click, mode: 'hover' }) })
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(document.querySelectorAll('tbody tr')).toHaveLength(500)
+      // Nothing is marked, so the header says nothing either.
+      expect(screen.queryByText('Exact quote')).not.toBeInTheDocument()
+      expect(screen.queryByText('The quote was found exactly in this text file.')).not.toBeInTheDocument()
+
+      act(() => { dispatchPDFViewerNavigateEvidence(click) })
+      await waitFor(() => expect(document.querySelectorAll('tr[aria-current="true"]')).toHaveLength(2), { timeout: 8000 })
+      expect(document.querySelectorAll('tbody tr')).toHaveLength(7500)
+    }, 20000)
+
+    it('a hover changes nothing in the header: the last click\'s message stays', async () => {
+      stubViewerFetch({ textBlocks: [TEXT_SUPPLEMENT_BLOCKS.blocks[0]!, longSheet(8999)] })
+      await showFourFilePaper()
+      const notFound = chatCommand({
+        verified_quote: 'A sentence that is not in this file.',
+        section: null,
+        file_id: TEXT_SUPPLEMENT_FILE_ID,
+        file_name: 'Table_S1.xlsx',
+      })
+      act(() => { dispatchPDFViewerNavigateEvidence(notFound) })
+      const header = (await screen.findByRole('alert')).textContent
+      expect(header).toBeTruthy()
+
+      const shownRow = twoRowRecord(['| XS10 | 25 C |', '| XS11 | 25 C |'])
+      const hiddenRow = twoRowRecord(['| XS7000 | 25 C |', '| XS7001 | 25 C |'])
+      for (const hover of [shownRow, hiddenRow]) {
+        act(() => { dispatchPDFViewerNavigateEvidence({ ...hover, mode: 'hover' }) })
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        expect(screen.getByRole('alert').textContent).toBe(header)
+        expect(screen.queryByText('Exact quote')).not.toBeInTheDocument()
+      }
+      // The hover ends: the curation workspace sends the click again; the chat sends nothing.
+      act(() => { dispatchPDFViewerNavigateEvidence(notFound) })
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(screen.getByRole('alert').textContent).toBe(header)
+      expect(document.querySelectorAll('tbody tr')).toHaveLength(500)
+    }, 20000)
+
+    it('a section mark on a block after a long table, in a later section, is shown', async () => {
+      stubViewerFetch({
+        textBlocks: [
+          TEXT_SUPPLEMENT_BLOCKS.blocks[0]!,
+          longSheet(1999),
+          {
+            ...TEXT_SUPPLEMENT_BLOCKS.blocks[2]!,
+            text: 'Second sheet note.',
+            section_title: 'Sheet 2',
+            section_path: ['Sheet 2'],
+          },
+        ],
+      })
+      await showFourFilePaper()
+      act(() => {
+        dispatchPDFViewerNavigateEvidence(chatCommand({
+          verified_quote: 'A sentence that is not in this file.',
+          section: 'Sheet 2',
+          file_id: TEXT_SUPPLEMENT_FILE_ID,
+          file_name: 'Table_S1.xlsx',
+        }))
+      })
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Its section is shown instead.')
+      expect(document.querySelector('[data-highlight-kind="section"]')).toHaveTextContent('Second sheet note.')
+      expect(document.querySelectorAll('tbody tr')).toHaveLength(500)
+    })
+
+    it('a text tab says what conversion does not keep; a PDF tab does not', async () => {
+      stubViewerFetch()
+      await showFourFilePaper()
+      expect(screen.queryByText('This is text converted from the original file. Formatting, images and some table layout are not kept.')).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Table_S1.xlsx, file 2 of 3, converted text' }))
+
+      expect(await screen.findByText('This is text converted from the original file. Formatting, images and some table layout are not kept.')).toBeInTheDocument()
+    })
+  })
+
   describe('F2: the same paper sent again', () => {
     it('R3: equal files keep the text highlight and do not fetch the text again', async () => {
       stubViewerFetch()
@@ -303,7 +418,7 @@ describe('P9b review fixes', () => {
       bump = () => setCount((value) => value + 1)
       return (
         <div data-count={count}>
-          <TextFileBlocks blocks={blocks} highlightedBlocks={null} sectionBlockIndex={null} firstHighlightRef={ref} />
+          <TextFileBlocks blocks={blocks} highlightedBlocks={null} highlightMode="select" sectionBlockIndex={null} firstHighlightRef={ref} />
         </div>
       )
     }

@@ -19,6 +19,9 @@ export const VIEWER_FILE_PANEL_ID = 'viewer-file-panel'
 const LOADING_TEXT = 'Loading the file\'s text...'
 const LOAD_ERROR_TEXT = 'Could not load this file\'s text.'
 
+/** Proposal, awaiting sign-off (P9c): what conversion does not keep, at the top of every text tab. */
+export const CONVERTED_TEXT_NOTE = 'This is text converted from the original file. Formatting, images and some table layout are not kept.'
+
 export function viewerFileTabId(fileId: string): string {
   return `viewer-file-tab-${fileId}`
 }
@@ -27,7 +30,8 @@ interface TextFileViewProps {
   documentId: string
   file: ViewerFile
   navigation: TextNavigationRequest | null
-  onNavigationResult: (request: TextNavigationRequest, result: PdfViewerNavigationResult) => void
+  /** Null for a hover: nothing is said in the header (a hovered row may not be shown at all). */
+  onNavigationResult: (request: TextNavigationRequest, result: PdfViewerNavigationResult | null) => void
 }
 
 type TextLoadState =
@@ -51,6 +55,7 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
   const [loadState, setLoadState] = useState<TextLoadState>({ kind: 'loading' })
   const [reloadKey, setReloadKey] = useState(0)
   const [highlight, setHighlight] = useState<TextQuoteBlockSpan[] | null>(null)
+  const [highlightMode, setHighlightMode] = useState<'hover' | 'select'>('select')
   // The evidence's section, shown when its quote is not found.
   const [sectionBlockIndex, setSectionBlockIndex] = useState<number | null>(null)
   const highlightedRef = useRef<HTMLElement | null>(null)
@@ -94,8 +99,12 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
     const location = locateEvidenceInBlocks(loadState.blocks, textEvidence, commandQuote(navigation.command))
     const sectionIndex = location.found > 0 ? null : locateSectionInBlocks(loadState.blocks, textEvidence)
     setHighlight(location.found > 0 ? location.blocks : null)
+    setHighlightMode(navigation.command.mode)
     setSectionBlockIndex(sectionIndex)
-    onNavigationResult(navigation, buildTextNavigationResult(navigation, documentId, location, sectionIndex))
+    onNavigationResult(
+      navigation,
+      navigation.command.mode === 'hover' ? null : buildTextNavigationResult(navigation, documentId, location, sectionIndex),
+    )
   }, [documentId, fileId, loadState, navigation, onNavigationResult])
 
   useEffect(() => {
@@ -135,12 +144,18 @@ export function TextFileView({ documentId, file, navigation, onNavigationResult 
     )
   } else {
     content = (
-      <TextFileBlocks
-        blocks={loadState.blocks}
-        highlightedBlocks={highlight}
-        sectionBlockIndex={sectionBlockIndex}
-        firstHighlightRef={setHighlightedElement}
-      />
+      <>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          {CONVERTED_TEXT_NOTE}
+        </Typography>
+        <TextFileBlocks
+          blocks={loadState.blocks}
+          highlightedBlocks={highlight}
+          highlightMode={highlightMode}
+          sectionBlockIndex={sectionBlockIndex}
+          firstHighlightRef={setHighlightedElement}
+        />
+      </>
     )
   }
 

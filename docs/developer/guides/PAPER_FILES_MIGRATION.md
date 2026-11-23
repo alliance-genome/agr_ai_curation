@@ -96,6 +96,10 @@ Evidence opens its own file first (`EvidenceNavigationCommand.fileId`):
   quote was not found. The one known miss: a quote across a sentence cut inside an
   element over 1,500 characters (the piece has one space where the block keeps the
   original whitespace) takes this "not found" path.
+- a text tab starts with a one-line note on what conversion does not keep; a
+  table longer than 500 rows shows its rows in parts ("Show the next 500 rows",
+  "Show all {n} rows"), and evidence on a later row reveals the parts up to it
+  (`TextFileBlocks.tsx`, `TABLE_ROWS_PER_PART`);
 - evidence naming a file of the paper that is not ready yet says so (not
   "removed");
 - evidence the viewer cannot show changes nothing but its banner (an alert that
