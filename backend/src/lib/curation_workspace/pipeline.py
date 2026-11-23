@@ -273,6 +273,7 @@ async def run_post_curation_pipeline(
             db=db,
         )
 
+    _precheck_quoted_files_ready(request)
     task_name = _task_name_for_request(request)
     scheduled_task_name = dependencies.task_scheduler.schedule(
         lambda: execute_post_curation_pipeline(
@@ -329,6 +330,7 @@ def _execute_pipeline_steps(
 ) -> tuple[PreparedSessionUpsertResult, str]:
     prep_extraction_result = _resolve_prep_extraction_result(db, request)
     adapter_key = _resolve_pipeline_adapter_key(request)
+    _require_quoted_files_ready(db, request)
 
     validated_at = request.prepared_at or datetime.now(timezone.utc)
     prepared_candidates, validation_outcome = _prepared_candidates_from_envelope_refs(
@@ -372,6 +374,31 @@ def _execute_pipeline_steps(
     )
     _enqueue_workspace_bootstrap(db, request, persistence_result)
     return persistence_result, str(prep_extraction_result.id)
+
+
+def _precheck_quoted_files_ready(request: PostCurationPipelineRequest) -> None:
+    """Before a background run: it cannot answer its caller, so the refusal is checked first.
+
+    The steps check it again under the row locks; a removal landing in between makes the
+    background run fail and be reported like any other background failure.
+    """
+
+    with SessionLocal() as precheck_db, precheck_db.begin():
+        _require_quoted_files_ready(precheck_db, request)
+
+
+def _require_quoted_files_ready(db: Session, request: PostCurationPipelineRequest) -> None:
+    """A result whose evidence quotes a file removed from the paper is not prepared (ALL-1460, Q2)."""
+
+    from src.lib.curation_workspace.removed_file_gate import require_quoted_files_ready
+
+    envelopes = []
+    for envelope_ref in request.prep_output.envelope_refs:
+        envelope_row = db.get(DomainEnvelopeModel, envelope_ref.envelope_id)
+        if envelope_row is None:
+            raise ValueError(f"Domain envelope {envelope_ref.envelope_id} was not found")
+        envelopes.append(envelope_row.envelope_json)
+    require_quoted_files_ready(db, document_id=request.document_id, envelope_jsons=envelopes)
 
 
 def _enqueue_workspace_bootstrap(db, request, persistence_result):

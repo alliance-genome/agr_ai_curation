@@ -1323,8 +1323,11 @@ async def test_run_post_curation_pipeline_runs_sync_for_small_sets(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_post_curation_pipeline_schedules_async_for_large_sets():
+async def test_run_post_curation_pipeline_schedules_async_for_large_sets(monkeypatch):
     prep_output = _make_prep_output(candidate_count=2)
+    prechecked = []
+    # The removed-file refusal is checked before scheduling (a database test covers the check).
+    monkeypatch.setattr(module, "_precheck_quoted_files_ready", prechecked.append)
 
     class _FakeScheduler:
         def __init__(self):
@@ -1352,6 +1355,7 @@ async def test_run_post_curation_pipeline_schedules_async_for_large_sets():
     assert result.execution_mode is module.PipelineExecutionMode.ASYNC
     assert result.task_name is not None
     assert scheduler.calls[0]["task_name"].startswith("curation-post-agent-pipeline:")
+    assert len(prechecked) == 1
 
 
 @pytest.mark.parametrize(

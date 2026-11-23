@@ -28,6 +28,7 @@ from src.api.curation_workspace_access import (
     visible_envelope_in_path,
     require_current_user_id as _require_current_user_id,
 )
+from src.lib.curation_workspace.removed_file_gate import ResultQuotesRemovedFile
 from src.lib.curation_workspace.bootstrap_service import (
     bootstrap_document_session,
     create_manual_session,
@@ -887,13 +888,17 @@ async def post_document_bootstrap(
 ) -> CurationDocumentBootstrapResponse:
     await provision_user_async(principal_from_claims(user))
     user_id = _require_current_user_id(user)
-    return await bootstrap_document_session(
-        document_id,
-        request,
-        current_user_id=user_id,
-        active_groups=tuple(_authenticated_active_groups(user)),
-        db=db,
-    )
+    try:
+        return await bootstrap_document_session(
+            document_id,
+            request,
+            current_user_id=user_id,
+            active_groups=tuple(_authenticated_active_groups(user)),
+            db=db,
+        )
+    except ResultQuotesRemovedFile as refused:
+        # Review & Curate replays the paper's newest result; it quotes a file removed since.
+        raise HTTPException(status_code=409, detail={"error": refused.code}) from None
 
 
 @router.get(
@@ -952,6 +957,7 @@ async def trigger_chat_prep(
     await provision_user_async(principal_from_claims(user))
     user_id = _require_current_user_id(user)
 
+
     try:
         return await prepare_chat_curation_sessions(
             request,
@@ -959,6 +965,9 @@ async def trigger_chat_prep(
             active_groups=tuple(_authenticated_active_groups(user)),
             db=db,
         )
+    except ResultQuotesRemovedFile as refused:
+        # The result quotes a file removed from the paper (ALL-1460 P10b, Q2): a typed code.
+        raise HTTPException(status_code=409, detail={"error": refused.code}) from None
     except ValueError as exc:
         raise_sanitized_http_exception(
             logger,

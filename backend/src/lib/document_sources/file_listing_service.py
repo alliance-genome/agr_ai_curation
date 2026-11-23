@@ -30,7 +30,7 @@ from src.lib.document_sources.file_reasons import (
 )
 from src.lib.document_sources.models import DocumentSourceProvider
 from src.models.sql.database import SessionLocal
-from src.models.sql.pdf_document import PDFDocument
+from src.models.sql.pdf_document import FILE_STATUS_REMOVED, PDFDocument
 from src.models.sql.pdf_processing_job import PdfProcessingJob
 
 
@@ -229,9 +229,12 @@ def _paper_lookup(document_id: UUID, owner_user_id: int) -> _PaperSource:
 
     with SessionLocal() as session:
         paper: PDFDocument = require_owned_document(session, document_id, owner_user_id)
+        # A file being removed is no longer in the paper; adding it again answers
+        # ``file_removal_unfinished`` until its row is gone (``start_supplement_add``).
         file_ids = tuple(
             identifier
             for file_row in paper.files
+            if file_row.status != FILE_STATUS_REMOVED
             for identifier in (file_row.source_provider_source_file_id, file_row.source_provider_pdf_artifact_id)
             if identifier
         )

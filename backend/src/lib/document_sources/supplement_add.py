@@ -28,7 +28,6 @@ import hashlib
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -52,6 +51,7 @@ from src.models.sql.pdf_document import (
     FILE_STATUS_FAILED,
     FILE_STATUS_PENDING,
     FILE_STATUS_READY,
+    FILE_STATUS_REMOVED,
     PDFDocument,
     PDFDocumentFile,
 )
@@ -491,7 +491,8 @@ def _paper_state(document_id: UUID, owner_user_id: int) -> _PaperState:
         subject = session.scalar(select(User.auth_sub).where(User.id == owner_user_id))
         if not subject:
             raise SupplementAddError("owner_without_subject")
-        live = [row for row in paper.files if row.status != FILE_STATUS_FAILED]
+        # Failed leftovers and files being removed never count against the paper's limits.
+        live = [row for row in paper.files if row.status not in _NOT_LIVE]
         ready_bytes = 0
         for row in live:
             if row.status == FILE_STATUS_READY:
@@ -553,12 +554,10 @@ def _ranges(document_id: UUID, file_ids: Sequence[UUID]) -> list[tuple[int, int]
     return [(start, end) for start, end in rows if start is not None and end is not None]
 
 
-def _remove_stored_files(paths: Sequence[str]) -> None:
-    from src.config import get_pdf_storage_path
+def _remove_stored_files(paths: Sequence[str], subject: str) -> None:
+    from src.lib.document_files.service import remove_stored_files
 
-    root = Path(get_pdf_storage_path())
-    for relative in paths:
-        (root / relative).unlink(missing_ok=True)
+    remove_stored_files(paths, owner_subject=subject)
 
 
 async def _delete_pieces(document_id: UUID, subject: str, ranges: Sequence[tuple[int, int]]) -> None:
@@ -579,11 +578,11 @@ async def _undo(document_id: UUID, subject: str, file_ids: list[UUID], paths: li
     if await asyncio.to_thread(_paper_exists, document_id):
         ranges = await asyncio.to_thread(_ranges, document_id, file_ids)
         await _delete_pieces(document_id, subject, ranges)
-        await asyncio.to_thread(_remove_stored_files, paths)
+        await asyncio.to_thread(_remove_stored_files, paths, subject)
         await asyncio.to_thread(_delete_rows, document_id, file_ids)
         return
     await _delete_pieces_of_deleted_paper(document_id, subject)
-    await asyncio.to_thread(_remove_stored_files, paths)
+    await asyncio.to_thread(_remove_stored_files, paths, subject)
 
 
 def _paper_exists(document_id: UUID) -> bool:
@@ -606,7 +605,9 @@ async def _remove_leftovers(document_id: UUID, subject: str, leftovers: Sequence
         if item.chunk_index_start is not None and item.chunk_index_end is not None
     ]
     await _delete_pieces(document_id, subject, ranges)
-    await asyncio.to_thread(_remove_stored_files, [path for item in leftovers for path in item.paths])
+    await asyncio.to_thread(
+        _remove_stored_files, [path for item in leftovers for path in item.paths], subject,
+    )
     await asyncio.to_thread(_delete_rows, document_id, [item.file_id for item in leftovers])
 
 
@@ -636,6 +637,7 @@ async def _after_add(document_id: UUID, subject: str, weaviate_client: Any) -> N
 # ---------------------------------------------------------------------------
 
 # Job messages the jobs panel shows. Proposals awaiting Chris's sign-off (P7c1 PR).
+_NOT_LIVE = (FILE_STATUS_FAILED, FILE_STATUS_REMOVED)
 _MESSAGE_ADDED = "Added {added} of {chosen} files."
 _MESSAGE_NONE_ADDED = "None of the chosen files could be added."
 _MESSAGE_FAILED = "Adding files failed."
@@ -652,6 +654,12 @@ class SupplementAddJobRequest:
     owner_user_id: int
     context: DocumentSourceRequestContext
     files: tuple[ChosenFile, ...]
+
+
+class FileRemovalUnfinished(RuntimeError):
+    """A chosen file's earlier removal has not finished; the add is refused (409)."""
+
+    code = "file_removal_unfinished"
 
 
 class SupplementAddRequestError(ValueError):
@@ -695,10 +703,18 @@ def start_supplement_add(document_id: UUID, owner_user_id: int, files: Sequence[
             session.rollback()
             raise ActiveJobExistsError(document_id)
         paper = require_owned_document(session, document_id, owner_user_id, for_update=True)
-        live = sum(1 for row in paper.files if row.status != FILE_STATUS_FAILED)
+        live = sum(1 for row in paper.files if row.status not in _NOT_LIVE)
         if live + len(files) > max_files:
             session.rollback()
             raise SupplementAddRequestError("paper_file_limit", limit_value=max_files)
+        # A removal of the same provider file has not finished clearing its row; adding the
+        # file again succeeds once that row is gone (removing it again finishes the removal).
+        if any(
+            row.status == FILE_STATUS_REMOVED and row.source_provider_source_file_id in ids
+            for row in paper.files
+        ):
+            session.rollback()
+            raise FileRemovalUnfinished(document_id)
         # The paper's name, never its id, names the job; its kind keeps it out of the paper's status.
         return create_job_in_session(
             session, document_id=document_id, user_id=owner_user_id, filename=paper.filename,

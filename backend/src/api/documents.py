@@ -432,18 +432,12 @@ def validate_user_file_path(
         Path("/runtime/state/pdf_storage/00u1abc2/doc.pdf")
     """
     try:
-        # Resolve to absolute path (eliminates ../, symlinks, etc.)
-        resolved_path = file_path.resolve()
-        storage_root_resolved = storage_root.resolve()
+        # One rule for every stored path (document_files/storage_paths.py).
+        from src.lib.document_files.storage_paths import StoredPathOutsideOwnerStorage, owner_storage_path
 
-        # User's storage must be under: storage_root / user_id /
-        user_storage_root = (storage_root_resolved / user_id).resolve()
-
-        # Check if resolved path is within user's storage directory
-        # Using relative_to() - raises ValueError if path is outside
         try:
-            resolved_path.relative_to(user_storage_root)
-        except ValueError as exc:
+            resolved_path = owner_storage_path(file_path, storage_root, user_id)
+        except StoredPathOutsideOwnerStorage as exc:
             logger.warning(
                 'Path traversal attempt detected: %s resolves outside user storage for %s', file_path, user_id)
             raise HTTPException(
@@ -1335,6 +1329,8 @@ async def get_document_endpoint(
         - FR-014: Verify document ownership, return 403 for cross-user access
         - T031: Return the flat DocumentResponse canonicalized by ALL-789
     """
+    from ..lib.document_files.service import ready_file_count
+
     # T031: Verify ownership from PostgreSQL FIRST (FR-014)
     # Returns 404 if not found, 403 if not owned by user
     session = SessionLocal()
@@ -1389,6 +1385,7 @@ async def get_document_endpoint(
             ),
             weaviate_tenant=tenant_name,
             chunk_count=doc_data.get("chunk_count"),
+            ready_file_count=ready_file_count(pg_doc),
             error_message=(
                 latest_job.error_message
                 if latest_job and latest_job.error_message
@@ -1484,7 +1481,7 @@ async def delete_document_endpoint(
     # pooled connection never blocks the event loop; a pool timeout is a 503.
     from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
-    from ..lib.document_files.paper_lock import PaperOperationInProgress, paper_delete_lock
+    from ..lib.document_files.paper_lock import PaperOperationInProgress, paper_operation_lock
 
     try:
         # T031: Verify ownership from PostgreSQL FIRST (FR-014)
@@ -1500,7 +1497,7 @@ async def delete_document_endpoint(
 
         pg_doc = await asyncio.to_thread(owned_paper)
 
-        async with paper_delete_lock(document_id):
+        async with paper_operation_lock(document_id):
             # Only proceed with Weaviate query if ownership verified
             try:
                 latest_job = await asyncio.to_thread(
@@ -1969,6 +1966,7 @@ async def add_files_to_paper_endpoint(
     """
     from ..lib.document_sources.supplement_add import (
         ChosenFile,
+        FileRemovalUnfinished,
         SupplementAddJobRequest,
         SupplementAddRequestError,
         run_supplement_add_job,
@@ -1996,6 +1994,8 @@ async def add_files_to_paper_endpoint(
         ) from None
     except ActiveJobExistsError:
         raise HTTPException(status_code=409, detail={"error": "import_in_progress"}) from None
+    except FileRemovalUnfinished as refused:
+        raise HTTPException(status_code=409, detail={"error": refused.code}) from None
     add_observed_background_task(
         background_tasks,
         run_supplement_add_job,
@@ -2007,6 +2007,85 @@ async def add_files_to_paper_endpoint(
         tags={"document_id": str(document_uuid), "job_id": job.job_id},
     )
     return job
+
+
+@router.get("/documents/{document_id}/files/{file_id}/removal-check")
+async def removal_check_endpoint(
+    document_id: str = Path(..., description="Document ID"),
+    file_id: str = Path(..., description="The paper file the curator may remove (pdf_document_files id)"),
+    user: dict[str, Any] = get_auth_dependency(),
+):
+    """Read-only: what removing this file would do now, for the removal confirmation (codes only).
+
+    ``removable`` and ``error`` (plus ``session_ids``) are the removal's own checks, made
+    without locks; ``newest_result_quotes_file`` says whether the result the Library's
+    Review & Curate would replay quotes the file, so after the removal that button would
+    answer ``result_quotes_removed_file`` until the extraction is run again. Owner only.
+    """
+    from ..lib.document_files.file_removal import removal_check
+
+    document_uuid = _parse_document_uuid(document_id)
+    try:
+        file_uuid = uuid.UUID(file_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail={"error": "file_not_in_paper"}) from None
+    db_user = await provision_user_async(principal_from_claims(user))
+    return await asyncio.to_thread(removal_check, document_uuid, db_user.id, file_uuid)
+
+
+@router.delete("/documents/{document_id}/files/{file_id}")
+async def remove_paper_file_endpoint(
+    document_id: str = Path(..., description="Document ID"),
+    file_id: str = Path(..., description="The paper file to remove (pdf_document_files id)"),
+    user: dict[str, Any] = get_auth_dependency(),
+):
+    """Remove one supplement from a finished paper (codes only). Owner only; never the main file.
+
+    Held under the paper's operation lock, never waited for: while an add, a paper
+    delete or another removal holds it, this answers 409 at once. Every database
+    call runs in a worker thread; a pool timeout is a 503.
+    """
+    from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+
+    from ..lib.document_files.file_removal import FileRemovalRefused, PaperRowsBusy, remove_paper_file
+    from ..lib.document_files.paper_lock import PaperOperationInProgress, paper_operation_lock
+    from ..lib.weaviate_client.connection import get_connection
+
+    document_uuid = _parse_document_uuid(document_id)
+    try:
+        file_uuid = uuid.UUID(file_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail={"error": "file_not_in_paper"}) from None
+    try:
+        db_user = await provision_user_async(principal_from_claims(user))
+        async with paper_operation_lock(document_uuid):
+            removed = await remove_paper_file(
+                document_uuid, db_user.id, file_uuid, weaviate_client=get_connection(),
+            )
+    except (PaperOperationInProgress, PaperRowsBusy):
+        raise HTTPException(
+            status_code=409,
+            detail="Another operation on this paper is in progress; try again in a moment.",
+        ) from None
+    except PoolTimeoutError:
+        logger.warning("File removal refused: no database connection free", extra={"document_id": document_id})
+        raise HTTPException(
+            status_code=503,
+            detail="The server is busy right now; try removing the file again in a moment.",
+        ) from None
+    except FileRemovalRefused as refused:
+        raise HTTPException(
+            status_code=refused.status_code, detail={"error": refused.code, **refused.details},
+        ) from None
+    return {
+        "document_id": str(removed.document_id),
+        "file_id": str(removed.file_id),
+        "removed": True,
+        # False when part of the clean-up failed: the file is gone for every reader, and
+        # removing it again (or deleting the paper) finishes the clean-up.
+        "cleanup_finished": removed.cleanup_finished,
+        "ready_file_count": removed.ready_file_count,
+    }
 
 
 @router.get("/documents/{document_id}/status")

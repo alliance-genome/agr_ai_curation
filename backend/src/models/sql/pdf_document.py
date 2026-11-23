@@ -32,7 +32,10 @@ FILE_ROLES = (FILE_ROLE_MAIN, FILE_ROLE_SUPPLEMENT)
 FILE_STATUS_PENDING = "pending"
 FILE_STATUS_READY = "ready"
 FILE_STATUS_FAILED = "failed"
-FILE_STATUSES = (FILE_STATUS_PENDING, FILE_STATUS_READY, FILE_STATUS_FAILED)
+# A supplement being removed (P10b): no reader sees it; the row keeps its piece range and
+# stored paths until they are cleared, then the row is deleted (``document_files/file_removal.py``).
+FILE_STATUS_REMOVED = "removed"
+FILE_STATUSES = (FILE_STATUS_PENDING, FILE_STATUS_READY, FILE_STATUS_FAILED, FILE_STATUS_REMOVED)
 
 DISPLAY_MODE_LOCAL_PDF = "local_pdf"
 DISPLAY_MODE_PROVIDER_PDF_PROXY = "provider_pdf_proxy"

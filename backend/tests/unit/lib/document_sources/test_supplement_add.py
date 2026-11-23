@@ -127,7 +127,7 @@ def storage(monkeypatch):
 
     monkeypatch.setattr(supplement_add, "_delete_pieces_of_deleted_paper", delete_all)
     monkeypatch.setattr(supplement_add, "_delete_rows", lambda _doc, ids: record.deleted_rows.extend(ids))
-    monkeypatch.setattr(supplement_add, "_remove_stored_files", lambda paths: record.removed_paths.extend(paths))
+    monkeypatch.setattr(supplement_add, "_remove_stored_files", lambda paths, subject: record.removed_paths.extend(paths))
 
     async def after_add(*_):
         if record.after_add_fails:

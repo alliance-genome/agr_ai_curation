@@ -83,14 +83,14 @@ _PAPER_PROVENANCE_FIELDS = (
 )
 
 
-def _doc(*, display_mode="local_pdf", document_kind="library", **values):
+def _doc(*, display_mode="local_pdf", document_kind="library", file_status="ready", **values):
     """A paper record whose per-file values live on its main file."""
     file_values = {field: values.pop(field, None) for field in _FILE_FIELDS}
     file_values["display_mode"] = display_mode
     if display_mode == "text":
         file_values["page_count"] = None
     paper_values = {field: values.pop(field, None) for field in _PAPER_PROVENANCE_FIELDS}
-    main_file = SimpleNamespace(id="main-file", role="main", **file_values)
+    main_file = SimpleNamespace(id="main-file", role="main", status=file_status, **file_values)
     return SimpleNamespace(
         document_kind=document_kind, main_file=main_file, main_file_or_none=main_file, files=[main_file],
         **paper_values, **values,
@@ -330,6 +330,7 @@ async def test_get_document_endpoint_returns_document_response(monkeypatch):
     assert response.user_id == 5
     assert response.status == "PENDING"
     assert response.chunk_count == 7
+    assert response.ready_file_count == 1
     assert response.processing_started_at == processing_started_at
     assert response.processing_completed_at == processing_completed_at
 
