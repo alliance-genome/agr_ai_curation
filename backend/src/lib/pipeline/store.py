@@ -194,11 +194,45 @@ async def store_to_weaviate(
         StorageError: If storage fails
         ValueError: If user_id is None (required for tenant scoping)
     """
+    return await _store_owned(
+        chunks, document_id, weaviate_client, user_id, chunk_range=chunk_range, write_paper_status=True,
+    )
+
+
+async def store_added_file_pieces(
+    chunks: Sequence[Union[DocumentChunk, Dict[str, Any]]],
+    document_id: str,
+    weaviate_client: Optional[Any],
+    user_id: str,
+    *,
+    chunk_range: tuple[int, int],
+) -> Dict[str, Any]:
+    """Store the pieces of a file added to a finished paper, never touching the paper's own object.
+
+    The paper is and stays completed while files are added to it (KANBAN-1976 /
+    ALL-1460, P7c1): its search-index object's processing and embedding status are
+    not written, before, during or after, whatever happens to the add. Pieces,
+    range verification and cancellation draining are the same as ``store_to_weaviate``.
+    """
+    return await _store_owned(
+        chunks, document_id, weaviate_client, user_id, chunk_range=chunk_range, write_paper_status=False,
+    )
+
+
+async def _store_owned(
+    chunks: Sequence[Union[DocumentChunk, Dict[str, Any]]],
+    document_id: str,
+    weaviate_client: Optional[Any],
+    user_id: str,
+    *,
+    chunk_range: tuple[int, int],
+    write_paper_status: bool,
+) -> Dict[str, Any]:
     # Executor writes cannot be stopped by cancelling their awaiting coroutine.
     # Keep ownership through chunk verification and metadata finalization so the
     # caller cannot expose a terminal job (and permit retry/delete) too early.
     storage = asyncio.create_task(
-        _store_to_weaviate(chunks, document_id, weaviate_client, user_id, chunk_range)
+        _store_to_weaviate(chunks, document_id, weaviate_client, user_id, chunk_range, write_paper_status)
     )
     try:
         return await asyncio.shield(storage)
@@ -212,11 +246,13 @@ async def store_to_weaviate(
                 logger.warning("Storage failed while draining cancelled document %s", document_id)
             # Do not advertise a cancelled import as completed. The paper's
             # summed chunk count is written only when a new paper finishes;
-            # the caller owns SQL/job terminal status.
-            await update_document_status_detailed(
-                document_id, user_id,
-                processing_status="failed", embedding_status="failed",
-            )
+            # the caller owns SQL/job terminal status. A file added to a finished
+            # paper never changes the paper's status.
+            if write_paper_status:
+                await update_document_status_detailed(
+                    document_id, user_id,
+                    processing_status="failed", embedding_status="failed",
+                )
 
         finalizer = asyncio.create_task(finish_cancelled_storage())
         while not finalizer.done():
@@ -235,6 +271,7 @@ async def _store_to_weaviate(
     weaviate_client: Optional[Any],
     user_id: str,
     chunk_range: tuple[int, int],
+    write_paper_status: bool,
 ) -> Dict[str, Any]:
     """Own the complete chunk write for one file, including failure handling."""
     if not chunks:
@@ -291,7 +328,8 @@ async def _store_to_weaviate(
             raise StorageError(f"Unsupported chunk payload type: {type(chunk)!r}")
 
     # Update document status to indicate embeddings are in progress within Weaviate
-    await update_document_status_detailed(document_id, user_id, embedding_status="processing")
+    if write_paper_status:
+        await update_document_status_detailed(document_id, user_id, embedding_status="processing")
 
     try:
         # Store chunks using actual Weaviate client
@@ -321,7 +359,8 @@ async def _store_to_weaviate(
 
     except Exception as e:
         try:
-            await update_document_status_detailed(document_id, user_id, embedding_status="failed")
+            if write_paper_status:
+                await update_document_status_detailed(document_id, user_id, embedding_status="failed")
         except Exception as status_err:  # pragma: no cover - best-effort status update
             logger.warning("Failed to mark document %s embedding status as failed: %s", document_id, status_err)
         error_msg = f"Weaviate storage failed: {str(e)}"
@@ -668,6 +707,28 @@ async def update_document_metadata(
 
     # Run synchronous update in async context
     await asyncio.get_event_loop().run_in_executor(None, sync_update)
+
+
+async def update_document_piece_count(
+    document_id: str, piece_count: int, weaviate_client: Any, user_id: str,
+) -> None:
+    """Write only the paper object's piece counts (after files are added to a finished paper).
+
+    The object's processing and embedding status are left as they are. Failures raise.
+    """
+    if not user_id:
+        raise ValueError("user_id is required for tenant-scoped metadata updates")
+
+    def sync_update() -> None:
+        from ..weaviate_helpers import get_user_collections
+
+        with weaviate_client.session() as client:
+            _, pdf_collection = get_user_collections(client, user_id)
+            pdf_collection.data.update(
+                uuid=document_id, properties={"chunkCount": piece_count, "vectorCount": piece_count},
+            )
+
+    await asyncio.to_thread(sync_update)
 
 
 async def update_processing_status(

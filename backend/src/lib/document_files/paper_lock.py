@@ -19,8 +19,10 @@ worker thread, never on the event loop.
   connection stays checked out of the pool for the delete's few seconds: a
   session-level advisory lock lives exactly as long as its session, so it has to.
   It is released when the delete ends, succeeds, fails or is cancelled; if the
-  release itself fails, the connection is invalidated, which ends its database
-  session and so the lock. A dropped connection ends it too.
+  release itself fails (or the lock's connection dropped), the connection is
+  invalidated, which ends its database session and so the lock, and the delete's
+  own outcome is answered (logged and reported to Sentry). A dropped connection ends
+  the lock too.
 - ``try_lock_paper_for_add`` takes it inside the add's job-creating transaction, so
   it is released when that transaction commits or rolls back.
 """
@@ -110,4 +112,32 @@ async def paper_delete_lock(document_id: UUID | str) -> AsyncIterator[None]:
         yield
     finally:
         # Shielded so a cancelled request still finishes releasing in its thread.
-        await asyncio.shield(asyncio.to_thread(_release, connection, key))
+        try:
+            await asyncio.shield(asyncio.to_thread(_release, connection, key))
+        except Exception as exc:
+            # ``_release`` invalidated the connection, which ends its database session
+            # and so the lock. The delete's own outcome stands: a delete that finished
+            # is answered as finished. Logged and reported, never raised.
+            _report_release_failure(exc)
+
+
+def _report_release_failure(exc: Exception) -> None:
+    import logging
+
+    from src.lib.observability.runtime import report_runtime_exception
+
+    logging.getLogger(__name__).warning(
+        "Releasing a paper's delete lock failed (%s); its connection was ended", type(exc).__name__,
+        extra={"sentry_skip_event": True},
+    )
+
+    class PaperLockReleaseFailed(RuntimeError):
+        pass
+
+    report_runtime_exception(
+        PaperLockReleaseFailed(f"Releasing a paper's delete lock failed ({type(exc).__name__})"),
+        component="document_files",
+        operation="paper_lock_release_failed",
+        level="warning",
+        fingerprint=["paper_lock_release_failed"],
+    )

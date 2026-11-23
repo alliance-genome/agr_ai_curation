@@ -341,26 +341,28 @@ async def store_file_pieces(
     file_id: UUID,
     user_id: str,
     weaviate_client: Any,
-    resolve_figures: bool,
+    added_to_finished_paper: bool,
     provider_figure_metadata: tuple[Mapping[str, Any], ...] = (),
     stage_checkpoint: Callable[[str], Awaitable[None]] | None = None,
 ) -> tuple[int, int]:
     """Reserve the file's piece range and store its pieces there; returns the range.
 
-    Figure locators run only for text that came from a paper's PDF
-    (``resolve_figures``); a supplement's tables are never figure candidates.
-    The file is not marked ready here.
+    A paper's main file: figure locators run (its text came from the paper's PDF)
+    and storing marks the paper's own search-index object as embedding. A file
+    added to a finished paper (``added_to_finished_paper``): no figure locators (a
+    supplement's tables are never figure candidates) and the paper's own object is
+    never written. The file is not marked ready here.
     """
 
     from src.lib.document_files.service import reserve_file_chunk_range
     from src.lib.pipeline.chunk import offset_chunk_indices
-    from src.lib.pipeline.store import store_to_weaviate
+    from src.lib.pipeline.store import store_added_file_pieces, store_to_weaviate
 
     range_start = await asyncio.to_thread(
         reserve_file_chunk_range, document_id, file_id, len(prepared.chunks)
     )
     chunks = offset_chunk_indices(prepared.chunks, range_start)
-    if resolve_figures:
+    if not added_to_finished_paper:
         from src.lib.pipeline.figure_locator_resolution import resolve_figure_locators
 
         if stage_checkpoint is not None:
@@ -369,7 +371,8 @@ async def store_file_pieces(
     if stage_checkpoint is not None:
         await stage_checkpoint("vector_storage")
     range_end = range_start + len(chunks) - 1
-    await store_to_weaviate(chunks, document_id, weaviate_client, user_id, chunk_range=(range_start, range_end))
+    store = store_added_file_pieces if added_to_finished_paper else store_to_weaviate
+    await store(chunks, document_id, weaviate_client, user_id, chunk_range=(range_start, range_end))
     return range_start, range_end
 
 
@@ -410,7 +413,7 @@ async def index_owned_document_elements(
             _report_hierarchy_failure(exc, document_id)
     await store_file_pieces(
         prepared, document_id=document_id, file_id=file_id, user_id=user_id,
-        weaviate_client=weaviate_client, resolve_figures=True,
+        weaviate_client=weaviate_client, added_to_finished_paper=False,
         provider_figure_metadata=provider_figure_metadata, stage_checkpoint=stage_checkpoint,
     )
     await asyncio.to_thread(mark_file_ready, file_id, text_bytes=prepared.text_bytes)

@@ -1477,28 +1477,38 @@ async def delete_document_endpoint(
     Requirements:
         - FR-014: Verify document ownership, return 403 for cross-user access
     """
-    # T031: Verify ownership from PostgreSQL FIRST (FR-014)
-    # Returns 404 if not found, 403 if not owned by user
-    session = SessionLocal()
-    try:
-        db_user = await provision_user_async(principal_from_claims(user))
-        pg_doc = verify_document_ownership(session, document_id, user, provisioned_user_id=db_user.id)
-    finally:
-        session.close()
-
     # One lock per paper orders this delete against an add to it: no add can create its job
     # between the active-job check below and the row delete (see document_files/paper_lock.py).
     # Nobody waits for it: when another delete or add holds it, this answers 409 at once.
+    # Every database session of this delete is opened in a worker thread, so waiting for a
+    # pooled connection never blocks the event loop; a pool timeout is a 503.
+    from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+
     from ..lib.document_files.paper_lock import PaperOperationInProgress, paper_delete_lock
 
     try:
+        # T031: Verify ownership from PostgreSQL FIRST (FR-014)
+        # Returns 404 if not found, 403 if not owned by user
+        db_user = await provision_user_async(principal_from_claims(user))
+
+        def owned_paper():
+            session = SessionLocal()
+            try:
+                return verify_document_ownership(session, document_id, user, provisioned_user_id=db_user.id)
+            finally:
+                session.close()
+
+        pg_doc = await asyncio.to_thread(owned_paper)
+
         async with paper_delete_lock(document_id):
             # Only proceed with Weaviate query if ownership verified
             try:
-                latest_job = pdf_job_service.get_latest_job_for_document(
-                    document_id=document_id,
-                    user_id=pg_doc.user_id,
-                    reconcile_stale=True,
+                latest_job = await asyncio.to_thread(
+                    lambda: pdf_job_service.get_latest_job_for_document(
+                        document_id=document_id,
+                        user_id=pg_doc.user_id,
+                        reconcile_stale=True,
+                    )
                 )
                 pipeline_status = await pipeline_tracker.get_pipeline_status(document_id)
                 active_job_status = latest_job.status if latest_job else None
@@ -1571,16 +1581,17 @@ async def delete_document_endpoint(
                         document_id,
                     )
 
-                cleanup_snapshot: dict[str, Any] | None = None
-                cleanup_session = SessionLocal()
-                try:
-                    doc_to_cleanup = cleanup_session.execute(
-                        select(ViewerPDFDocument).where(ViewerPDFDocument.id == uuid.UUID(document_id))
-                    ).scalars().first()
-                    if doc_to_cleanup:
-                        cleanup_snapshot = _document_cleanup_snapshot(doc_to_cleanup)
-                finally:
-                    cleanup_session.close()
+                def snapshot_for_cleanup() -> dict[str, Any] | None:
+                    snapshot_session = SessionLocal()
+                    try:
+                        doc_to_cleanup = snapshot_session.execute(
+                            select(ViewerPDFDocument).where(ViewerPDFDocument.id == uuid.UUID(document_id))
+                        ).scalars().first()
+                        return _document_cleanup_snapshot(doc_to_cleanup) if doc_to_cleanup else None
+                    finally:
+                        snapshot_session.close()
+
+                cleanup_snapshot = await asyncio.to_thread(snapshot_for_cleanup)
 
                 result = {"success": True, "chunks_deleted": 0}
                 if not document_missing_in_weaviate:
@@ -1596,80 +1607,83 @@ async def delete_document_endpoint(
                 # surface to the caller so smoke/release checks cannot report a clean
                 # delete while leaving private artifacts behind. The Weaviate helper may
                 # also delete the SQL row, so file paths are snapshotted before it runs.
-                cleanup_session = SessionLocal()
-                try:
-                    doc_to_delete = cleanup_session.execute(
-                        select(ViewerPDFDocument).where(ViewerPDFDocument.id == uuid.UUID(document_id))
-                    ).scalars().first()
-                    cleanup_values = cleanup_snapshot
-                    if doc_to_delete:
-                        cleanup_values = _document_cleanup_snapshot(doc_to_delete)
+                def finish_delete() -> None:
+                    cleanup_session = SessionLocal()
+                    try:
+                        doc_to_delete = cleanup_session.execute(
+                            select(ViewerPDFDocument).where(ViewerPDFDocument.id == uuid.UUID(document_id))
+                        ).scalars().first()
+                        cleanup_values = cleanup_snapshot
+                        if doc_to_delete:
+                            cleanup_values = _document_cleanup_snapshot(doc_to_delete)
 
-                    if cleanup_values:
-                        cleanup_document_curation_dependencies(cleanup_session, cleanup_values["id"])
-                        # Delete physical files
-                        base_storage = FilePath(get_pdf_storage_path())
-                        user_sub = str(user["sub"])
+                        if cleanup_values:
+                            cleanup_document_curation_dependencies(cleanup_session, cleanup_values["id"])
+                            # Delete physical files
+                            base_storage = FilePath(get_pdf_storage_path())
+                            user_sub = str(user["sub"])
 
-                        for file_values in cleanup_values["files"]:
-                            # 1. Delete original PDF directory/file for normal uploads.
-                            # Text files use file_path as a provider placeholder and
-                            # store the downloaded artifact separately.
-                            if file_values["display_mode"] != DISPLAY_MODE_TEXT:
-                                _delete_user_document_directory_or_file_if_present(
+                            for file_values in cleanup_values["files"]:
+                                # 1. Delete original PDF directory/file for normal uploads.
+                                # Text files use file_path as a provider placeholder and
+                                # store the downloaded artifact separately.
+                                if file_values["display_mode"] != DISPLAY_MODE_TEXT:
+                                    _delete_user_document_directory_or_file_if_present(
+                                        base_storage=base_storage,
+                                        relative_path=file_values["file_path"],
+                                        user_sub=user_sub,
+                                        document_id=document_id,
+                                    )
+
+                                # 2. Delete PDFX JSON: {user_id}/pdfx_json/{doc_id}.json
+                                _unlink_user_storage_file_if_present(
                                     base_storage=base_storage,
-                                    relative_path=file_values["file_path"],
+                                    relative_path=file_values["pdfx_json_path"],
                                     user_sub=user_sub,
                                     document_id=document_id,
+                                    label="PDFX JSON",
                                 )
 
-                            # 2. Delete PDFX JSON: {user_id}/pdfx_json/{doc_id}.json
-                            _unlink_user_storage_file_if_present(
-                                base_storage=base_storage,
-                                relative_path=file_values["pdfx_json_path"],
-                                user_sub=user_sub,
-                                document_id=document_id,
-                                label="PDFX JSON",
-                            )
+                                # 3. Delete Processed JSON: the file's stored processed_json_path
+                                _unlink_user_storage_file_if_present(
+                                    base_storage=base_storage,
+                                    relative_path=file_values["processed_json_path"],
+                                    user_sub=user_sub,
+                                    document_id=document_id,
+                                    label="Processed JSON",
+                                )
 
-                            # 3. Delete Processed JSON: the file's stored processed_json_path
-                            _unlink_user_storage_file_if_present(
-                                base_storage=base_storage,
-                                relative_path=file_values["processed_json_path"],
-                                user_sub=user_sub,
-                                document_id=document_id,
-                                label="Processed JSON",
-                            )
+                                # 4. Delete provider/source Markdown: the file's stored source_markdown_path
+                                _unlink_user_storage_file_if_present(
+                                    base_storage=base_storage,
+                                    relative_path=file_values["source_markdown_path"],
+                                    user_sub=user_sub,
+                                    document_id=document_id,
+                                    label="Source Markdown",
+                                )
 
-                            # 4. Delete provider/source Markdown: the file's stored source_markdown_path
-                            _unlink_user_storage_file_if_present(
-                                base_storage=base_storage,
-                                relative_path=file_values["source_markdown_path"],
-                                user_sub=user_sub,
-                                document_id=document_id,
-                                label="Source Markdown",
-                            )
+                            # Delete DB record
+                            if doc_to_delete:
+                                cleanup_session.delete(doc_to_delete)
+                                cleanup_session.commit()
+                                logger.info('Deleted PostgreSQL record for %s', document_id)
+                            else:
+                                cleanup_session.commit()
 
-                        # Delete DB record
-                        if doc_to_delete:
-                            cleanup_session.delete(doc_to_delete)
-                            cleanup_session.commit()
-                            logger.info('Deleted PostgreSQL record for %s', document_id)
-                        else:
-                            cleanup_session.commit()
+                            # Invalidate document metadata cache to prevent stale cache hits
+                            from src.lib.document_cache import invalidate_cache
+                            invalidate_cache(user["sub"], document_id)
+                    except HTTPException:
+                        cleanup_session.rollback()
+                        raise
+                    except Exception as db_error:
+                        logger.error('Failed to cleanup PostgreSQL for %s: %s', document_id, db_error)
+                        cleanup_session.rollback()
+                        raise
+                    finally:
+                        cleanup_session.close()
 
-                        # Invalidate document metadata cache to prevent stale cache hits
-                        from src.lib.document_cache import invalidate_cache
-                        invalidate_cache(user["sub"], document_id)
-                except HTTPException:
-                    cleanup_session.rollback()
-                    raise
-                except Exception as db_error:
-                    logger.error('Failed to cleanup PostgreSQL for %s: %s', document_id, db_error)
-                    cleanup_session.rollback()
-                    raise
-                finally:
-                    cleanup_session.close()
+                await asyncio.to_thread(finish_delete)
 
                 return OperationResult(
                     success=True,
@@ -1678,7 +1692,7 @@ async def delete_document_endpoint(
                     document_id=document_id
                 )
 
-            except HTTPException:
+            except (HTTPException, PoolTimeoutError):
                 raise
             except Exception as e:
                 raise_sanitized_http_exception(
@@ -1692,6 +1706,12 @@ async def delete_document_endpoint(
         raise HTTPException(
             status_code=409,
             detail="Another operation on this paper is in progress; try again in a moment.",
+        ) from None
+    except PoolTimeoutError:
+        logger.warning("Paper delete refused: no database connection free", extra={"document_id": document_id})
+        raise HTTPException(
+            status_code=503,
+            detail="The server is busy right now; try deleting the paper again in a moment.",
         ) from None
 
 

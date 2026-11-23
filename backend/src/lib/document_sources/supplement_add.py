@@ -402,12 +402,12 @@ async def _write(
             await stage_checkpoint("vector_storage")
             await store_file_pieces(
                 item.prepared, document_id=str(document_id), file_id=item.file_id, user_id=subject,
-                weaviate_client=weaviate_client, resolve_figures=False,
+                weaviate_client=weaviate_client, added_to_finished_paper=True,
             )
         await stage_checkpoint("finishing")
         await asyncio.to_thread(mark_files_ready, {item.file_id: item.prepared.text_bytes for item in accepted})
     except BaseException:
-        await _undo(document_id, subject, [item.file_id for item in accepted], written_paths, weaviate_client)
+        await _undo(document_id, subject, [item.file_id for item in accepted], written_paths)
         raise
     try:
         await _after_add(document_id, subject, weaviate_client)
@@ -563,9 +563,7 @@ async def _delete_pieces(document_id: UUID, subject: str, ranges: Sequence[tuple
         await asyncio.to_thread(delete_chunk_range, str(document_id), subject, start=start, end=end)
 
 
-async def _undo(
-    document_id: UUID, subject: str, file_ids: list[UUID], paths: list[str], weaviate_client: Any,
-) -> None:
+async def _undo(document_id: UUID, subject: str, file_ids: list[UUID], paths: list[str]) -> None:
     """Remove what this add wrote: pieces in its ranges, its stored files, its rows.
 
     When the paper itself was deleted while the add ran, its rows (and so the ranges)
@@ -578,9 +576,6 @@ async def _undo(
         await _delete_pieces(document_id, subject, ranges)
         await asyncio.to_thread(_remove_stored_files, paths)
         await asyncio.to_thread(_delete_rows, document_id, file_ids)
-        # Storing marks the paper's own search-index object as embedding (and failed on an
-        # error or cancel); put back what its ready files say, as before the add.
-        await _sync_paper_index_object(document_id, subject, weaviate_client)
         return
     await _delete_pieces_of_deleted_paper(document_id, subject)
     await asyncio.to_thread(_remove_stored_files, paths)
@@ -611,19 +606,15 @@ async def _remove_leftovers(document_id: UUID, subject: str, leftovers: Sequence
 
 
 async def _after_add(document_id: UUID, subject: str, weaviate_client: Any) -> None:
-    """The paper's search-index object and the document-context cache; never the paper's SQL status."""
+    """The paper's piece count on its search-index object, and the document cache.
+
+    Only the two counts are written (the Library's chunk column and vector-count filter
+    read them); the object's processing and embedding status are never touched by an add.
+    """
 
     from src.lib.document_cache import invalidate_cache
-
-    await _sync_paper_index_object(document_id, subject, weaviate_client)
-    invalidate_cache(subject, str(document_id))
-
-
-async def _sync_paper_index_object(document_id: UUID, subject: str, weaviate_client: Any) -> None:
-    """The paper's search-index object as its ready files say: their piece count, completed."""
-
     from src.lib.document_files.service import ready_piece_total
-    from src.lib.pipeline.store import update_document_metadata
+    from src.lib.pipeline.store import update_document_piece_count
     from src.models.sql.database import SessionLocal
 
     def total() -> int:
@@ -631,7 +622,8 @@ async def _sync_paper_index_object(document_id: UUID, subject: str, weaviate_cli
             return ready_piece_total(session, document_id)
 
     stored = await asyncio.to_thread(total)
-    await update_document_metadata(str(document_id), {"stored_chunks": stored, "failed_chunks": 0}, weaviate_client, subject)
+    await update_document_piece_count(str(document_id), stored, weaviate_client, subject)
+    invalidate_cache(subject, str(document_id))
 
 
 # ---------------------------------------------------------------------------

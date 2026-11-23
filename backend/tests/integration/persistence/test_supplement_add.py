@@ -106,9 +106,9 @@ class _Index:
             self.deleted.append((start, end))
             return end - start + 1
 
-        monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", store)
+        monkeypatch.setattr("src.lib.pipeline.store.store_added_file_pieces", store)
         monkeypatch.setattr("src.lib.weaviate_client.chunks.delete_chunk_range", delete_range)
-        monkeypatch.setattr("src.lib.pipeline.store.update_document_metadata", AsyncMock())
+        monkeypatch.setattr("src.lib.pipeline.store.update_document_piece_count", AsyncMock())
         monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_: None)
         return self
 

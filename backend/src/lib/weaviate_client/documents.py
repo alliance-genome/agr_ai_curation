@@ -665,9 +665,10 @@ async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
                 lambda: pdf_collection.data.delete_by_id(document_id)
             )
 
-            # T031: Also delete from PostgreSQL if it exists there (with ownership verification)
-            postgres_deleted = False
-            try:
+            # T031: Also delete from PostgreSQL if it exists there (with ownership verification).
+            # In a worker thread, so waiting for a pooled connection never blocks the event loop.
+            def delete_sql_row() -> bool:
+                postgres_deleted = False
                 from src.models.sql.user import User
                 from sqlalchemy import select
 
@@ -709,6 +710,11 @@ async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
                             logger.info("Document %s not found in PostgreSQL, skipping", document_id)
                 finally:
                     db.close()
+                return postgres_deleted
+
+            postgres_deleted = False
+            try:
+                postgres_deleted = await asyncio.to_thread(delete_sql_row)
             except Exception as e:
                 logger.warning("Failed to delete from PostgreSQL: %s", e)
                 # Don't fail the whole operation if PostgreSQL deletion fails

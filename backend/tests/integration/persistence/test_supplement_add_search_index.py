@@ -741,30 +741,64 @@ async def test_the_papers_status_stays_completed_during_and_after_an_add_that_ad
 
 
 @pytest.mark.asyncio
-async def test_a_failed_add_leaves_the_papers_index_object_as_it_was(owner_id, index):
+@pytest.mark.parametrize("outcome", ["succeeds", "fails_while_storing", "cancelled", "killed"])
+async def test_an_add_never_changes_the_papers_own_index_object(owner_id, index, monkeypatch, outcome):
+    """Byte for byte: before, at every checkpoint of the add, and after it, whatever its end.
+
+    Nothing is mocked on the index side: the real store, the real status writer.
+    A successful add then writes only the object's two piece counts.
+    """
+
+    from src.lib.exceptions import PDFCancellationError
+
     paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
-    job = await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20)])
+    before = _paper_object(index, paper)
+    job = await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20), _chosen(40)])
+    seen: list[tuple[str, dict]] = []
 
-    async def fail_after_storing(stage):
-        if stage == "finishing":
-            raise RuntimeError("made-up failure after storing")
+    class ProcessGone(BaseException):
+        pass
 
-    with pytest.raises(RuntimeError):
-        await _add(paper, owner_id, index, [_chosen(20)], job_id=UUID(job.job_id), checkpoint=fail_after_storing)
+    async def checkpoint(stage):
+        seen.append((stage, _paper_object(index, paper)))
+        if outcome == "cancelled" and stage == "finishing":
+            raise PDFCancellationError("made-up cancel")
+        if outcome == "killed" and stage == "finishing":
+            raise ProcessGone()
 
-    stored = _paper_object(index, paper)
-    assert (stored["processingStatus"], stored["embeddingStatus"], stored["chunkCount"]) == ("completed", "completed", 3)
+    if outcome == "fails_while_storing":
+        calls = {"n": 0}
+        real_store = store_chunks_to_weaviate
 
+        async def fail_second_file(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("made-up index failure")
+            return await real_store(*args, **kwargs)
 
-@pytest.mark.asyncio
-async def test_a_successful_add_counts_its_pieces_on_the_papers_index_object(owner_id, index):
-    paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
-    job = await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20)])
-    await _add(paper, owner_id, index, [_chosen(20)], job_id=UUID(job.job_id))
-    (_, added) = _rows(paper)
-    stored = _paper_object(index, paper)
-    assert (stored["processingStatus"], stored["embeddingStatus"]) == ("completed", "completed")
-    assert stored["chunkCount"] == added.chunk_index_end + 1
+        monkeypatch.setattr("src.lib.pipeline.store.store_chunks_to_weaviate", fail_second_file)
+    if outcome == "killed":
+        monkeypatch.setattr(supplement_add, "_undo", AsyncMock())
+
+    run = _add(paper, owner_id, index, [_chosen(20), _chosen(40)], job_id=UUID(job.job_id), checkpoint=checkpoint)
+    if outcome == "succeeds":
+        await run
+    else:
+        with pytest.raises(BaseException):
+            await run
+
+    stages = [stage for stage, _ in seen]
+    assert "vector_storage" in stages and stages.count("vector_storage") == 2  # one checkpoint between the files
+    assert all(state == before for _, state in seen), [stage for stage, state in seen if state != before]
+    after = _paper_object(index, paper)
+    if outcome == "succeeds":
+        (_, first, second) = _rows(paper)
+        assert {key: value for key, value in after.items() if key not in ("chunkCount", "vectorCount")} == {
+            key: value for key, value in before.items() if key not in ("chunkCount", "vectorCount")
+        }
+        assert after["chunkCount"] == after["vectorCount"] == second.chunk_index_end + 1
+    else:
+        assert after == before
 
 
 # --- a process that dies mid-add leaves nothing private behind ---------------------------------
@@ -882,3 +916,86 @@ async def test_pieces_saved_json_and_viewer_blocks_carry_the_same_sections_for_a
     for sheet in ("a", "("):
         notes = await chunk_reads.get_chunks_by_subsection(str(paper), sheet, "Notes", TEST_USER_ID, readable=readable)
         assert len(notes) == 1, sheet
+
+
+# --- the delete with a small pool, and a lock lost after the delete finished --------------------
+
+
+@pytest.mark.asyncio
+async def test_with_a_pool_of_two_deletes_never_block_the_loop_and_a_pool_timeout_is_a_503(
+    owner_id, index, monkeypatch,
+):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from src.models.sql import database
+
+    small = create_engine(database.engine.url, pool_size=2, max_overflow=0, pool_timeout=1)
+    monkeypatch.setattr(database, "engine", small)
+    monkeypatch.setattr(documents_api, "SessionLocal", sessionmaker(bind=small))
+    papers = [await asyncio.to_thread(_paper, owner_id, index, main_end=1) for _ in range(3)]
+    _wire_delete(monkeypatch, owner_id, wipe_seconds=2.0)
+    ticks = 0
+
+    async def unrelated_work():
+        nonlocal ticks
+        for _ in range(60):
+            await asyncio.sleep(0.05)
+            ticks += 1
+
+    try:
+        outcomes = await asyncio.wait_for(
+            asyncio.gather(*(_delete(paper) for paper in papers), unrelated_work(), return_exceptions=True),
+            timeout=60,
+        )
+    finally:
+        small.dispose()
+
+    results = outcomes[:3]
+    busy = [item for item in results if isinstance(item, HTTPException)]
+    assert all(isinstance(item, HTTPException) or item.success for item in results), results
+    assert busy and all(item.status_code == 503 for item in busy)  # the pool ran out, answered clearly
+    assert ticks == 60  # the loop kept serving while deletes waited for connections
+
+
+@pytest.mark.asyncio
+async def test_a_delete_that_finished_says_so_even_if_its_lock_connection_was_lost(owner_id, index, monkeypatch):
+    """The lock's database session is killed after the whole delete has finished, just before the release."""
+
+    from sqlalchemy import text as sql_text
+
+    from src.lib.document_files import paper_lock
+    from src.models.sql.database import engine
+
+    paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    _wire_delete(monkeypatch, owner_id)
+    reports = []
+    monkeypatch.setattr(
+        "src.lib.observability.runtime.report_runtime_exception", lambda exc, **kwargs: reports.append(kwargs),
+    )
+    real_release = paper_lock._release
+    state = {}
+
+    def release_after_losing_the_connection(connection, key):
+        # Everything the delete does is done by now: the paper's rows are gone.
+        state["rows_left_at_release"] = len(_rows(paper))
+        pid = connection.execute(sql_text("SELECT pg_backend_pid()")).scalar_one()
+        with engine.connect() as other:
+            other.execute(sql_text("SELECT pg_terminate_backend(:pid)"), {"pid": pid})
+            other.commit()
+        real_release(connection, key)
+
+    monkeypatch.setattr(paper_lock, "_release", release_after_losing_the_connection)
+
+    result = await _delete(paper)
+
+    assert state["rows_left_at_release"] == 0
+    assert result.success is True and _rows(paper) == [] and _indexes(index, str(paper)) == []
+    assert [report["operation"] for report in reports] == ["paper_lock_release_failed"]
+    # The lock died with its session: the paper id is free again.
+    with engine.connect() as connection:
+        assert connection.execute(
+            sql_text("SELECT pg_try_advisory_lock(:key)"), {"key": paper_lock.paper_lock_key(paper)},
+        ).scalar_one() is True
+        connection.execute(sql_text("SELECT pg_advisory_unlock(:key)"), {"key": paper_lock.paper_lock_key(paper)})
+        connection.commit()

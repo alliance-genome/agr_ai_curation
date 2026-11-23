@@ -61,7 +61,6 @@ class _Storage:
     paper_exists: bool = True
     deleted_whole_paper: int = 0
     after_add_fails: bool = False
-    index_object_synced: int = 0
 
 
 def _paper(**overrides) -> supplement_add._PaperState:
@@ -109,7 +108,7 @@ def storage(monkeypatch):
         record.stored.append((chunk_range, chunks))
 
     monkeypatch.setattr("src.lib.document_files.service.reserve_file_chunk_range", reserve)
-    monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", store_to_weaviate)
+    monkeypatch.setattr("src.lib.pipeline.store.store_added_file_pieces", store_to_weaviate)
     monkeypatch.setattr(
         "src.lib.document_files.service.mark_files_ready", lambda items: record.ready.update(items),
     )
@@ -135,11 +134,7 @@ def storage(monkeypatch):
             raise RuntimeError("made-up failure updating the paper's index object")
         record.after_add += 1
 
-    async def sync_index_object(*_):
-        record.index_object_synced += 1
-
     monkeypatch.setattr(supplement_add, "_after_add", after_add)
-    monkeypatch.setattr(supplement_add, "_sync_paper_index_object", sync_index_object)
     hierarchy = AsyncMock(side_effect=AssertionError("the hierarchy model is never called for a supplement"))
     figures = AsyncMock(side_effect=AssertionError("no supplement piece reaches the figure locators"))
     monkeypatch.setattr("src.lib.pipeline.hierarchy_resolution.resolve_document_hierarchy", hierarchy)
@@ -521,13 +516,35 @@ async def test_a_failure_after_the_files_are_ready_still_counts_the_add_as_done(
 
 
 @pytest.mark.asyncio
-async def test_a_write_failure_puts_back_the_papers_index_object(monkeypatch, storage):
-    storage.fail_store_on = 0
+async def test_supplement_pieces_are_stored_without_writing_the_papers_own_object(monkeypatch, storage):
+    """The add stores through ``store_added_file_pieces``; ``store_to_weaviate`` (paper status) is never used."""
+
+    used = []
+
+    async def paper_store(*_args, **_kwargs):
+        used.append("store_to_weaviate")
+
+    monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", paper_store)
+    from src.lib.pipeline import store as store_module
+
+    async def real_added(chunks, document_id, client, user_id, *, chunk_range):
+        # The real added-file store (the fixture replaced the module attribute with a recorder).
+        return await store_module._store_owned(
+            chunks, document_id, client, user_id, chunk_range=chunk_range, write_paper_status=False,
+        )
+
+    monkeypatch.setattr("src.lib.pipeline.store.store_added_file_pieces", real_added)
     _, provider = _provider(ROWS, GOOD)
     _paper_lookup(monkeypatch)
-    with pytest.raises(RuntimeError):
+    statuses = []
+    monkeypatch.setattr(
+        "src.lib.pipeline.store.update_document_status_detailed",
+        AsyncMock(side_effect=lambda *a, **k: statuses.append(k)),
+    )
+    monkeypatch.setattr("src.lib.pipeline.store.store_chunks_to_weaviate", AsyncMock(side_effect=RuntimeError("made-up")))
+    with pytest.raises(Exception):
         await _add(provider, [_chosen(20)])
-    assert storage.index_object_synced == 1
+    assert used == [] and statuses == []
 
 
 @pytest.mark.asyncio
