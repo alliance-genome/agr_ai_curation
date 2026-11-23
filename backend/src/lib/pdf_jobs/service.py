@@ -13,6 +13,7 @@ from uuid import UUID
 from sqlalchemy import exists, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 
+from src.lib.document_sources.file_reasons import FileReason
 from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from src.lib.openai_agents.config import (
     get_document_source_dead_wait_polls,
@@ -290,6 +291,28 @@ def _reconcile_terminal_document(session, job: PdfProcessingJob) -> bool:
     return True
 
 
+_FINAL_SUPPLEMENT_STATES = frozenset({"added", "left_out"})
+
+
+def _close_open_supplement_entries(job: PdfProcessingJob, *, reason: str, now: datetime) -> None:
+    """A supplement wait finalized from outside its stage (its task is gone) leaves no
+    file open: each entry not yet ended becomes ``left_out`` with ``reason``.
+
+    Called inside the transaction that finalizes the job, under its row lock.
+    """
+    metadata = dict(job.metadata_json or {})
+    if metadata.get(JOB_KIND_KEY) != SUPPLEMENT_WAIT_JOB_KIND or not metadata.get("supplements"):
+        return
+    observed_at = now.isoformat()
+    entries = []
+    for entry in metadata["supplements"]:
+        if entry.get("state") not in _FINAL_SUPPLEMENT_STATES:
+            entry = {**entry, "state": "left_out", "reason_code": reason, "observed_at": observed_at}
+        entries.append(entry)
+    metadata["supplements"] = entries
+    job.metadata_json = metadata
+
+
 def _reconcile_stale_job(
     session,
     job: PdfProcessingJob,
@@ -328,6 +351,15 @@ def _reconcile_stale_job(
         job.error_message = stale_message
         job.message = stale_message
 
+    _close_open_supplement_entries(
+        job,
+        reason=(
+            FileReason.IMPORT_CANCELLED.value
+            if job.status == PdfJobStatus.CANCELLED.value
+            else FileReason.SUPPLEMENT_STAGE_FAILED.value
+        ),
+        now=now,
+    )
     _store_terminal_metadata(
         job,
         metadata=None,
@@ -1050,6 +1082,7 @@ def _finalize_cancelled(session, job: PdfProcessingJob, *, now: datetime) -> Non
     job.completed_at = now
     job.error_message = None
     job.message = "Processing cancelled by user request"
+    _close_open_supplement_entries(job, reason=FileReason.IMPORT_CANCELLED.value, now=now)
     _store_terminal_metadata(job, metadata=None, outcome="cancelled", completed_at=now)
     _reconcile_terminal_document(session, job)
 
