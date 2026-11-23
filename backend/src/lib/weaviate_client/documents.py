@@ -16,6 +16,7 @@ from ..document_sources.provenance import (
     build_document_source_provenance,
     sanitize_document_source_provenance,
 )
+from ..observability import runtime
 from src.models.sql.database import get_db
 from src.models.sql.pdf_document import DOCUMENT_KIND_LIBRARY, PDFDocument as PdfDocumentModel
 
@@ -625,6 +626,9 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
 async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
     """Delete a document and all its chunks.
 
+    An incomplete chunk wipe returns failure with the bulk-delete counts.
+    The paper and its SQL records are retained so the caller can retry.
+
     Args:
         user_id: User identifier for tenant scoping (required, FR-011, FR-014)
         document_id: Document UUID
@@ -656,12 +660,31 @@ async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
                 )
             )
 
-            chunks_deleted = 0
-            if delete_result is not None:
+            chunks_deleted = int(delete_result.successful)
+            chunks_matched = int(delete_result.matches)
+            chunks_failed = int(delete_result.failed)
+            if chunks_failed or chunks_deleted != chunks_matched:
+                counts = {
+                    "chunks_deleted": chunks_deleted,
+                    "chunks_matched": chunks_matched,
+                    "chunks_failed": chunks_failed,
+                }
                 try:
-                    chunks_deleted = int(getattr(delete_result, "successful", 0))
+                    runtime.report_runtime_exception(
+                        runtime.sanitized_runtime_error("Paper chunk deletion was incomplete"),
+                        component="weaviate_client",
+                        operation="paper_delete_chunk_wipe_incomplete",
+                        context=counts,
+                    )
                 except Exception:
-                    chunks_deleted = 0
+                    logger.warning("Failed to report incomplete chunk deletion", extra={"sentry_skip_event": True})
+                return {
+                    "success": False,
+                    "message": "Document deletion reported as unsuccessful",
+                    "documentId": document_id,
+                    **counts,
+                    "postgres_deleted": False,
+                }
 
             # Then delete the document itself
             doc_deleted = await asyncio.get_event_loop().run_in_executor(
@@ -734,7 +757,7 @@ async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
                 "message": "Document and chunks deleted successfully" if doc_deleted else "Document deletion reported as unsuccessful",
                 "documentId": document_id,
                 "chunks_deleted": chunks_deleted,
-                "chunks_matched": getattr(delete_result, "matches", None) if delete_result is not None else None,
+                "chunks_matched": chunks_matched,
                 "postgres_deleted": postgres_deleted
             }
 
