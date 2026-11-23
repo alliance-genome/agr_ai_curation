@@ -71,6 +71,7 @@ async def test_cancel_during_acquire(monkeypatch, caplog, failure, capture_fails
             "component": "document_files", "operation": operation, "level": "warning", "fingerprint": [operation],
         }
         assert type(db_error).__name__ in str(error)
+        assert error.__traceback__ is not None
         assert error.__cause__ is error.__context__ is None
         warnings = [record for record in caplog.records if record.name == paper_lock.__name__]
         assert any(type(db_error).__name__ in record.getMessage() for record in warnings)

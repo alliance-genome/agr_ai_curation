@@ -40,6 +40,8 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from src.lib.observability import runtime
+
 
 logger = logging.getLogger(__name__)
 _detached_releases: set[asyncio.Task[None]] = set()
@@ -113,7 +115,9 @@ async def paper_operation_lock(document_id: UUID | str) -> AsyncIterator[None]:
                 acquired = task.result()
             except Exception as exc:
                 message = f"Acquiring a paper's lock after cancellation failed ({type(exc).__name__})"
-                _report_lock_failure(RuntimeError(message), "paper_lock_acquire_failed_after_cancel", message)
+                _report_lock_failure(
+                    runtime.sanitized_runtime_error(message), "paper_lock_acquire_failed_after_cancel", message,
+                )
                 return
             if acquired is not None:
                 releasing = asyncio.create_task(asyncio.to_thread(_release, acquired, key))
@@ -134,7 +138,7 @@ async def paper_operation_lock(document_id: UUID | str) -> AsyncIterator[None]:
             # ``_release`` invalidated the connection, which ends its database session
             # and so the lock. The delete's own outcome stands: a delete that finished
             # is answered as finished. Logged and reported, never raised.
-            _report_release_failure(exc)
+            _report_release_failure(type(exc).__name__)
 
 
 def _observe_detached_release(task: asyncio.Task[None]) -> None:
@@ -144,23 +148,25 @@ def _observe_detached_release(task: asyncio.Task[None]) -> None:
     try:
         task.result()
     except Exception as exc:
-        _report_release_failure(exc)
+        _report_release_failure(type(exc).__name__)
 
 
-def _report_release_failure(exc: Exception) -> None:
+def _report_release_failure(error_type: str) -> None:
     class PaperLockReleaseFailed(RuntimeError):
         pass
 
-    error = PaperLockReleaseFailed(f"Releasing a paper's delete lock failed ({type(exc).__name__})")
-    _report_lock_failure(error, "paper_lock_release_failed", f"{error}; its connection was ended")
+    try:
+        raise PaperLockReleaseFailed(f"Releasing a paper's delete lock failed ({error_type})") from None
+    except PaperLockReleaseFailed as error:
+        error.__context__ = None
+        error.__cause__ = None
+        _report_lock_failure(error, "paper_lock_release_failed", f"{error}; its connection was ended")
 
 
 def _report_lock_failure(error: RuntimeError, operation: str, log_message: str) -> None:
     logger.warning(log_message, extra={"sentry_skip_event": True})
     try:
-        from src.lib.observability.runtime import report_runtime_exception
-
-        report_runtime_exception(
+        runtime.report_runtime_exception(
             error, component="document_files", operation=operation, level="warning", fingerprint=[operation],
         )
     except Exception:
