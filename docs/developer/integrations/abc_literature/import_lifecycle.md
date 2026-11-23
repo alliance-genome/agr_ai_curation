@@ -164,11 +164,27 @@ main-paper imports do not pass a limit; file listing and supplement import
 
 Configured knobs:
 
-- `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS`: provider-conversion poll interval.
+- `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS`: provider-conversion poll interval
+  (default 30 seconds). Every poll re-sends ABC's conversion request, which
+  answers with the current state; ABC recycles a worker, restarting its running
+  conversion, after about 1,000 requests, so the interval bounds how many
+  requests one wait sends (at most 121 in an hour at 30 seconds). Minimum 5
+  seconds. Start-up refuses settings whose deadline divided by this interval
+  exceeds 400 polls in one wait (`DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT`: under
+  half of ABC's roughly 1,000 requests per worker, which other callers share),
+  with a named error naming both settings; an `.env` still pinning the old 2
+  seconds stops the deploy instead of degrading imports.
 - `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS`: deadline for one provider
-  conversion/import job (default 600 seconds), including downloads, hierarchy
-  and figure classification, and vector storage.
+  conversion/import job of a main paper (default 3,600 seconds), covering the
+  wait for ABC's conversion and then downloads, hierarchy and figure
+  classification, and vector storage. ABC needs about 5 minutes to start its
+  extraction machine and allows itself 30 minutes per file; a median main
+  conversion from a cold machine takes about 12 minutes. KANBAN-1976 /
+  ALL-1460 (P7w) raised it from 600 seconds, which failed such imports.
 - `DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS`: individual provider HTTP timeout.
+- `DOCUMENT_SOURCE_DEAD_WAIT_POLLS`: missed polls after which a cancel
+  finalizes a provider wait that no task is polling (default 3, minimum 2,
+  checked at start-up; see Cancellation).
 - `DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES`: largest converted text, in
   downloaded bytes, read for one provider file (default 1,000,000).
 - `PDF_JOB_STALE_TIMEOUT_SECONDS`: stale durable-job reconciliation timeout
@@ -183,9 +199,16 @@ failed. The job remains active while writes drain, so the normal active-job guar
 continue to block deletion and re-embedding. This drain can extend elapsed time past
 the configured deadline; it does not convert a timeout into a successful import.
 
-Existing deployment overrides remain authoritative: a deployment explicitly set to
-300 seconds must update its environment to use the proposed 600-second budget.
-Longer deadlines also delay subsequent papers in sequential import batches.
+Existing deployment overrides remain authoritative: a deployment whose `.env`
+still sets `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=600` or
+`DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=2` (both were written uncommented in
+`.env.example` before KANBAN-1976) keeps the old values until the release
+changes them. Longer deadlines also delay subsequent papers in sequential
+import batches: one request's identifiers run one after another.
+
+While a main paper waits, it stays in progress in the Library and cannot be
+deleted, imported again or given files (one active job per paper); the jobs
+panel shows ABC's progress messages, refreshed at each poll.
 
 Retry policy:
 
@@ -207,15 +230,60 @@ Stale-job recovery:
 - Active stale jobs are reconciled by the existing PDF job service.
 - Stale `cancel_requested` becomes `cancelled`.
 - Other stale active jobs become `failed` with a stale-inactivity message.
+- Every `update_progress` call records activity (`updated_at`), even when the
+  provider's answer is unchanged, so a living wait polls itself fresh and is
+  never stale.
+- One request's imports run one after another, so the jobs behind a long one
+  wait `pending`. While a job runs, the execution service records activity on
+  the jobs queued behind it in the same request (`touch_pending_jobs`, at the
+  poll interval), so the sweep does not fail them before they start.
+- A backend restart or deploy ends a wait (the in-process task dies); the job
+  stays active until the curator cancels it or the stale sweep fails it. The
+  wait is not resumed.
 
 ## Cancellation
 
 Cancellation is local to AI Curation. It stops local polling/download/ingestion
-when observed and marks the local job cancelled.
+when observed (at the next poll, at most one poll interval later) and marks the
+local job cancelled.
+
+A job in the polling stage `provider_conversion` whose last recorded activity
+is older than `DOCUMENT_SOURCE_DEAD_WAIT_POLLS` (default 3) times the poll
+interval plus the provider request timeout (120 seconds at the defaults) has no
+task polling it, typically after a backend restart. Cancelling it finalizes it at once: the
+job becomes `cancelled`, its paper is reconciled as after any cancelled import
+(a new paper becomes failed and can be deleted or imported again; a paper that
+was already usable stays usable). Jobs in other stages only get the cancel flag.
+If that task was in fact still finishing a poll, it checks before writing and
+stops without touching the paper (under the job-row lock for the source-field
+write), so nothing lands on a paper imported again meanwhile.
+
+Only the polling stage records activity on every poll; other stages (a local
+PDF's extraction, ingestion) record it only when something changes, as before.
 
 AI Curation does not attempt to cancel ABC Literature conversion work. Even when
 AI Curation initiated `conversion_request`, the ABC endpoint does not provide a
 cancel contract for this flow.
+
+## Classifying An Answer For Chosen Supplements
+
+`classify_conversion_answer` (`backend/src/lib/document_sources/supplement_wait.py`)
+says where each chosen supplement stands after one conversion answer and a
+fresh file listing. The supplement stage of an import (KANBAN-1976 P7b) uses it.
+
+- `converted`: the listing has converted text for the file.
+- `provider_conversion_failed`: ABC's `per_file_progress` has a `failed` entry
+  for the file (matched by `source.referencefile_id`, through the adapter's
+  `conversion_file_statuses`), even while the job still runs.
+- `waiting`: ABC still answers `running`.
+- `provider_not_converted`: ABC's answer is final and the file has neither.
+
+Entries ABC merges in from converted rows without a source id are skipped; the
+listing decides those files. ABC's free-text `error` and `error_message` are
+never read, so causes ABC states only in words (its group rule, its size limits)
+are not known. On ABC's inline Office path a failure names no file (the answer
+carries the progress of ABC's most recent job), so such a file is
+`provider_not_converted`, not `provider_conversion_failed`.
 
 ## Curator-Facing Messages
 

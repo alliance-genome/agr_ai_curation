@@ -158,6 +158,7 @@ Document-source operational limits are env-configurable in `.env.example`:
 - `DOCUMENT_SOURCE_DEV_READER_REFRESH_SKEW_SECONDS`
 - `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS`
 - `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS`
+- `DOCUMENT_SOURCE_DEAD_WAIT_POLLS`
 - `DOCUMENT_SOURCE_IMPORT_BATCH_LIMIT`
 - ABC Literature live-smoke timeout/evidence knobs
 - READY upload and identifier-import smoke timeout/evidence knobs

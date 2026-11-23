@@ -486,6 +486,27 @@ def test_compose_forwards_document_file_converted_text_cap():
 @pytest.mark.parametrize(
     ("name", "default"),
     [
+        # The main paper's import deadline and ABC's poll interval
+        # (KANBAN-1976 / ALL-1460, P7w).
+        ("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", "3600"),
+        ("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", "30"),
+        ("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", "3"),
+    ],
+)
+def test_compose_forwards_provider_import_wait_settings(name, default):
+    dev_env = _list_environment(_load_dev_compose()["services"]["backend"]["environment"])
+    production_env = _load_compose()["services"]["backend"]["environment"]
+    documented_default = _load_env_assignments(ENV_EXAMPLE_PATH)[name]
+
+    assert documented_default == default
+    expected = f"${{{name}:-{default}}}"
+    assert dev_env[name] == expected
+    assert production_env[name] == expected
+
+
+@pytest.mark.parametrize(
+    ("name", "default"),
+    [
         ("DOCUMENT_FILE_DOWNLOAD_CONCURRENCY", "4"),
         ("DOCUMENT_FILE_LISTING_CHECK_LIMIT", "20"),
         ("DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW", "200"),

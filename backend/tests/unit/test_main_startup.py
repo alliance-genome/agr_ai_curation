@@ -105,6 +105,19 @@ async def test_startup_stops_on_invalid_quick_check_setting(monkeypatch, key, va
             pass
 
 
+@pytest.mark.parametrize("key,value", [
+    # An .env that still pins the old 2 s poll fails the deploy (KANBAN-1976 / ALL-1460, P7w).
+    ("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", "2"),
+    ("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", "1"),
+])
+async def test_startup_stops_on_unsafe_document_source_wait_setting(monkeypatch, key, value):
+    main = _main_module()
+    monkeypatch.setenv(key, value)
+    with pytest.raises(RuntimeError, match=key):
+        async with main.lifespan(FastAPI()):
+            pass
+
+
 class TestPdfExtractionTimeoutValidation:
     def test_low_timeout_recommends_canonical_default(self, monkeypatch):
         monkeypatch.setenv("PDF_EXTRACTION_TIMEOUT", "299")

@@ -172,8 +172,12 @@ async def cancel_pdf_job(
     if not updated:
         raise HTTPException(status_code=404, detail=f"PDF job {job_id} not found")
 
-    if updated.status in {PdfJobStatus.COMPLETED.value, PdfJobStatus.FAILED.value, PdfJobStatus.CANCELLED.value}:
+    terminal = {PdfJobStatus.COMPLETED.value, PdfJobStatus.FAILED.value, PdfJobStatus.CANCELLED.value}
+    if existing.status in terminal:
         message = f"Job already terminal ({updated.status}); no cancellation needed"
+    elif updated.status == PdfJobStatus.CANCELLED.value:
+        # A wait no task was polling any more: this cancel ended it at once.
+        message = "Import cancelled. It had already stopped running, so it was ended now."
     else:
         message = "Cancellation requested; background processing termination is best-effort"
 

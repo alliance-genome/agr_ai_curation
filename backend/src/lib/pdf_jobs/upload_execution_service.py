@@ -8,7 +8,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+import weakref
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -46,7 +48,7 @@ from src.lib.weaviate_client.documents import update_document_status
 from src.lib.weaviate_helpers import get_connection
 from src.models.document import ProcessingStatus
 from src.models.pipeline import ProcessingStage
-from src.models.sql.pdf_processing_job import PdfJobStatus
+from src.models.sql.pdf_processing_job import PdfJobStatus, PdfProcessingJob
 from src.services.processing_status_policy import TERMINAL_PDF_JOB_STATUSES
 
 from . import service as pdf_job_service
@@ -202,6 +204,30 @@ class ProviderConversionExecutionRequest:
     figure_metadata_artifact_ids: tuple[str, ...] = ()
 
 
+class _JobFinalizedElsewhere(Exception):
+    """The job was made terminal outside this task (a cancel of a wait taken for dead)."""
+
+
+def _job_was_finalized_elsewhere(job_id: str) -> bool:
+    """Whether the durable job is already terminal, so this task must write nothing more."""
+    job = pdf_job_service.get_job_by_id(job_id=job_id, reconcile_stale=False)
+    return job is not None and job.status in TERMINAL_PDF_JOB_STATUSES
+
+
+@dataclass
+class _RequestJobQueue:
+    """The job ids of one request's background tasks, in the order they run.
+
+    FastAPI runs one request's background tasks one after another, so a job
+    waits ``pending`` until every job before it has finished.
+    """
+
+    job_ids: list[str] = field(default_factory=list)
+
+    def queued_after(self, job_id: str) -> tuple[str, ...]:
+        return tuple(self.job_ids[self.job_ids.index(job_id) + 1:])
+
+
 class UploadExecutionService:
     """Dispatch and execute the upload processing pipeline lifecycle."""
 
@@ -217,6 +243,61 @@ class UploadExecutionService:
         self._orchestrator_factory = orchestrator_factory or self._default_orchestrator_factory
         self._document_source_provider_factory = document_source_provider_factory
         self._provider_markdown_ingestion = provider_markdown_ingestion_fn
+        self._queues_by_request: weakref.WeakKeyDictionary[BackgroundTasks, _RequestJobQueue] = (
+            weakref.WeakKeyDictionary()
+        )
+        # Weak values: when the request's BackgroundTasks goes away (its tasks
+        # ran, raised, were cancelled or never started), so do its entries.
+        self._queues_by_job: weakref.WeakValueDictionary[str, _RequestJobQueue] = (
+            weakref.WeakValueDictionary()
+        )
+
+    def _record_queued_job(self, background_tasks: BackgroundTasks, job_id: str) -> None:
+        queue = self._queues_by_request.setdefault(background_tasks, _RequestJobQueue())
+        queue.job_ids.append(str(job_id))
+        self._queues_by_job[str(job_id)] = queue
+
+    @asynccontextmanager
+    async def _keep_queued_jobs_fresh(self, job_id: str) -> AsyncIterator[None]:
+        """While this job runs, record activity on the jobs queued behind it.
+
+        A queued job has no task of its own yet, so without this a long import
+        (up to the import deadline) would leave the jobs behind it looking
+        stale to the stale-job sweep, which would fail them before they start.
+        """
+        queue = self._queues_by_job.pop(str(job_id), None)
+        queued = queue.queued_after(str(job_id)) if queue is not None else ()
+        if not queued:
+            yield
+            return
+        keeper = asyncio.create_task(self._touch_queued_jobs(queued))
+        try:
+            yield
+        except BaseException:
+            # This task raised or was cancelled, so FastAPI runs none of the
+            # tasks queued behind it: their entries are dropped now.
+            for queued_job_id in queued:
+                self._queues_by_job.pop(queued_job_id, None)
+            raise
+        finally:
+            keeper.cancel()
+            await asyncio.gather(keeper, return_exceptions=True)
+
+    async def _touch_queued_jobs(self, job_ids: tuple[str, ...]) -> None:
+        interval_seconds = get_document_source_poll_interval_seconds()
+        while True:
+            try:
+                await asyncio.to_thread(pdf_job_service.touch_pending_jobs, job_ids=job_ids)
+            except Exception as exc:
+                # The running import is unaffected; the queued jobs may then be
+                # failed by the stale sweep, with its own message.
+                logger.warning(
+                    "Could not record activity on queued PDF jobs: %s",
+                    type(exc).__name__,
+                    extra={"sentry_skip_event": True},
+                )
+                return
+            await asyncio.sleep(interval_seconds)
 
     async def dispatch_upload_execution(
         self,
@@ -226,6 +307,7 @@ class UploadExecutionService:
     ) -> None:
         """Prime tracking and queue upload execution on FastAPI background tasks."""
         await self.pipeline_tracker.track_pipeline_progress(request.document_id, ProcessingStage.UPLOAD)
+        self._record_queued_job(background_tasks, request.job_id)
         add_observed_background_task(
             background_tasks,
             self.execute_upload,
@@ -246,6 +328,7 @@ class UploadExecutionService:
     ) -> None:
         """Prime tracking and queue provider Markdown ingestion on background tasks."""
         await self.pipeline_tracker.track_pipeline_progress(request.document_id, ProcessingStage.UPLOAD)
+        self._record_queued_job(background_tasks, request.job_id)
         add_observed_background_task(
             background_tasks,
             self.execute_provider_markdown,
@@ -266,6 +349,7 @@ class UploadExecutionService:
     ) -> None:
         """Prime tracking and queue provider conversion polling."""
         await self.pipeline_tracker.track_pipeline_progress(request.document_id, ProcessingStage.UPLOAD)
+        self._record_queued_job(background_tasks, request.job_id)
         add_observed_background_task(
             background_tasks,
             self.execute_provider_conversion,
@@ -281,7 +365,8 @@ class UploadExecutionService:
     @costed_document_processing
     async def execute_upload(self, request: UploadExecutionRequest) -> None:
         """Run upload orchestration and persist durable job transitions."""
-        await self._execute_upload_unbounded(request)
+        async with self._keep_queued_jobs_fresh(request.job_id):
+            await self._execute_upload_unbounded(request)
 
     async def _execute_upload_unbounded(
         self,
@@ -380,6 +465,10 @@ class UploadExecutionService:
     @costed_document_processing
     async def execute_provider_markdown(self, request: ProviderMarkdownExecutionRequest) -> None:
         """Run provider Markdown ingestion with the configured wall-clock bound."""
+        async with self._keep_queued_jobs_fresh(request.job_id):
+            await self._execute_provider_markdown_bounded(request)
+
+    async def _execute_provider_markdown_bounded(self, request: ProviderMarkdownExecutionRequest) -> None:
         timeout_seconds = get_document_source_import_timeout_seconds()
         try:
             await asyncio.wait_for(
@@ -430,6 +519,10 @@ class UploadExecutionService:
     @costed_document_processing
     async def execute_provider_conversion(self, request: ProviderConversionExecutionRequest) -> None:
         """Poll provider conversion until main Markdown can be ingested."""
+        async with self._keep_queued_jobs_fresh(request.job_id):
+            await self._execute_provider_conversion_bounded(request)
+
+    async def _execute_provider_conversion_bounded(self, request: ProviderConversionExecutionRequest) -> None:
         timeout_seconds = get_document_source_import_timeout_seconds()
         try:
             await asyncio.wait_for(
@@ -443,6 +536,12 @@ class UploadExecutionService:
                 task_name="pdf_jobs.execute_provider_conversion",
             )
         except asyncio.TimeoutError:
+            if _job_was_finalized_elsewhere(request.job_id):
+                logger.info(
+                    "Provider conversion job %s was finalized elsewhere; nothing written at its deadline",
+                    request.job_id,
+                )
+                return
             timeout_error = RuntimeError(
                 f"Provider conversion exceeded {timeout_seconds:g} seconds"
             )
@@ -496,7 +595,7 @@ class UploadExecutionService:
             return
 
         provider: DocumentSourceProvider | None = None
-        poll_interval_seconds = max(0.1, get_document_source_poll_interval_seconds())
+        poll_interval_seconds = get_document_source_poll_interval_seconds()
         last_result: SourceConversionResult | None = None
         try:
             curator_token = (request.curator_token or "").strip()
@@ -522,6 +621,10 @@ class UploadExecutionService:
                     conversion_result=last_result,
                     curator_token=curator_token,
                 )
+                # The poll above can take a while; a cancel may have finalized
+                # the job meanwhile (a wait taken for dead). Write nothing then.
+                if _job_was_finalized_elsewhere(request.job_id):
+                    raise _JobFinalizedElsewhere()
                 progress_metadata = _conversion_job_metadata(last_result)
                 progress_percentage = (
                     35
@@ -531,7 +634,7 @@ class UploadExecutionService:
                 message = provider.conversion_progress_message(last_result)
                 pdf_job_service.update_progress(
                     job_id=request.job_id,
-                    stage="provider_conversion",
+                    stage=pdf_job_service.PROVIDER_CONVERSION_STAGE,
                     progress_percentage=progress_percentage,
                     message=message,
                     status=PdfJobStatus.RUNNING.value,
@@ -581,7 +684,18 @@ class UploadExecutionService:
                 await asyncio.sleep(poll_interval_seconds)
         except _ProviderMainMarkdownAccessDenied:
             raise
+        except _JobFinalizedElsewhere:
+            logger.info(
+                "Provider conversion job %s was finalized elsewhere; this task stops without writing",
+                request.job_id,
+            )
         except Exception as exc:
+            if _job_was_finalized_elsewhere(request.job_id):
+                logger.info(
+                    "Provider conversion job %s was finalized elsewhere; its late failure is not written",
+                    request.job_id,
+                )
+                return
             logger.exception(
                 "Error waiting for provider conversion document %s",
                 request.document_id,
@@ -619,7 +733,7 @@ class UploadExecutionService:
                 )
                 pdf_job_service.update_progress(
                     job_id=request.job_id,
-                    stage="provider_conversion",
+                    stage=pdf_job_service.PROVIDER_CONVERSION_STAGE,
                     status=PdfJobStatus.RUNNING.value,
                     metadata=failure_metadata,
                 )
@@ -1189,6 +1303,15 @@ class UploadExecutionService:
             )
             session = SessionLocal()
             try:
+                # The same row lock a cancel takes: a cancel that finalized the
+                # job first is seen here, and one that comes later waits.
+                job = session.execute(
+                    select(PdfProcessingJob)
+                    .where(PdfProcessingJob.id == UUID(str(request.job_id)))
+                    .with_for_update()
+                ).scalar_one_or_none()
+                if job is not None and job.status in TERMINAL_PDF_JOB_STATUSES:
+                    raise _JobFinalizedElsewhere()
                 document = session.execute(
                     select(ViewerPDFDocument).where(
                         ViewerPDFDocument.id == UUID(str(request.document_id)),
@@ -1213,6 +1336,8 @@ class UploadExecutionService:
                 raise
             finally:
                 session.close()
+        except _JobFinalizedElsewhere:
+            raise
         except Exception as sync_err:
             logger.warning(
                 "Failed to sync SQL provider conversion selection for document=%s: %s",

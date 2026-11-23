@@ -42,9 +42,6 @@ async def test_cache_reuse_refresh_and_concurrent_callers(monkeypatch) -> None:
     monkeypatch.setattr(
         auth, "get_document_source_dev_reader_refresh_skew_seconds", lambda: 600
     )
-    monkeypatch.setattr(
-        auth, "get_document_source_import_timeout_seconds", lambda: 300.0
-    )
     now = {"value": 1000.0}
     monkeypatch.setattr(auth.time, "time", lambda: now["value"])
     calls = 0
@@ -72,6 +69,39 @@ async def test_cache_reuse_refresh_and_concurrent_callers(monkeypatch) -> None:
     refreshed = await service.get_credentials()
     assert refreshed.token == "token-2"
     assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_a_one_hour_reader_token_is_reused_whatever_the_import_deadline(monkeypatch) -> None:
+    """The machine reader never waits on a provider conversion (it sends no
+    conversion request), so its token only has to outlive the refresh skew,
+    not the one-hour import deadline (KANBAN-1976 / ALL-1460, P7w)."""
+
+    service = auth.DevelopmentReaderService()
+    monkeypatch.setattr(auth, "development_reader_required", lambda: True)
+    monkeypatch.delenv("DOCUMENT_SOURCE_DEV_READER_REFRESH_SKEW_SECONDS", raising=False)
+    monkeypatch.delenv("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", raising=False)
+    now = {"value": 1000.0}
+    monkeypatch.setattr(auth.time, "time", lambda: now["value"])
+    calls = 0
+
+    async def authenticate():
+        nonlocal calls
+        calls += 1
+        return _credentials(token=f"token-{calls}", expires_at=now["value"] + 3600)
+
+    monkeypatch.setattr(
+        auth,
+        "get_document_source_development_reader_resolver",
+        lambda _: authenticate,
+    )
+
+    await service.get_credentials()
+    now["value"] += 60
+    reused = await service.get_credentials()
+
+    assert reused.token == "token-1"
+    assert calls == 1
 
 
 @pytest.mark.asyncio
