@@ -47,6 +47,7 @@ from .test_supplement_add_search_index import (  # noqa: F401 - fixtures used by
     _paper,
     _paper_object,
     _rows,
+    _wire_delete,
     index,
     migrated_database,
     owner_id,
@@ -320,6 +321,43 @@ async def test_a_piece_delete_failing_after_the_row_is_gone_still_removes_the_fi
     assert [r["operation"] for r in reports] == ["file_removal_cleanup_failed"]
     readable = resolve_readable_files(str(paper), TEST_USER_ID)
     assert [(f.chunk_index_start, f.chunk_index_end) for f in readable.files] == [(0, 2)]  # orphans unreadable
+
+
+@pytest.mark.asyncio
+async def test_a_leftover_range_never_meets_a_later_add_and_the_paper_delete_clears_it(owner_id, index, monkeypatch):
+    paper = await _paper_with_supplements(owner_id, index, 20)
+    (_, supplement) = _rows(paper)
+    leftover = list(range(supplement.chunk_index_start, supplement.chunk_index_end + 1))
+    _wire(monkeypatch, owner_id)
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", lambda exc, **kwargs: None)
+
+    def failing_delete(*_args, **_kwargs):
+        raise RuntimeError("made-up index failure")
+
+    real_delete = chunk_reads.delete_chunk_range
+    monkeypatch.setattr(chunk_reads, "delete_chunk_range", failing_delete)
+    await _remove(paper, supplement.id)
+    monkeypatch.setattr(chunk_reads, "delete_chunk_range", real_delete)
+    assert _indexes(index, str(paper)) == [0, 1, 2, *leftover]  # the range was left behind
+
+    # The same provider file added again gets a fresh range above every number ever used.
+    job = await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20)])
+    await _add(paper, owner_id, index, [_chosen(20)], job_id=UUID(job.job_id))
+    (_, again) = _rows(paper)
+    assert again.chunk_index_start > max(leftover)
+    readable = resolve_readable_files(str(paper), TEST_USER_ID)
+    assert [(f.chunk_index_start, f.chunk_index_end) for f in readable.files] == [
+        (0, 2), (again.chunk_index_start, again.chunk_index_end),
+    ]
+    from src.lib.pdf_jobs import service as pdf_job_service
+
+    pdf_job_service.mark_completed(job_id=job.job_id, message="made-up")
+
+    # Deleting the paper removes every piece by document id, the leftover range included.
+    _wire_delete(monkeypatch, owner_id)
+    result = await documents_api.delete_document_endpoint(document_id=str(paper), user={"sub": TEST_USER_ID})
+    assert result.success is True
+    assert _indexes(index, str(paper)) == []
 
 
 @pytest.mark.asyncio
