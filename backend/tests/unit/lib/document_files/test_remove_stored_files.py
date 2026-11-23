@@ -63,3 +63,28 @@ def test_an_owner_subject_that_cannot_name_a_folder_refuses(storage):
     for subject in ("", ".", "..", "a/b"):
         with pytest.raises(StoredPathOutsideOwnerStorage):
             remove_stored_files([f"{OWNER}/source_markdown/a.md"], owner_subject=subject)
+
+
+def test_a_link_is_deleted_as_a_link_and_its_target_is_kept(storage):
+    # Review P2-1: a stored path that is a link to another file of the same curator.
+    target = storage / OWNER / "source_markdown/b.md"
+    link = storage / OWNER / "source_markdown/link.md"
+    link.symlink_to(target)
+    remove_stored_files([f"{OWNER}/source_markdown/link.md"], owner_subject=OWNER)
+    assert not link.is_symlink() and not link.exists()
+    assert target.is_file()
+
+
+def test_a_link_to_a_directory_is_deleted_as_a_link(storage):
+    link = storage / OWNER / "folder_link"
+    link.symlink_to(storage / OWNER / "source_markdown", target_is_directory=True)
+    remove_stored_files([f"{OWNER}/folder_link"], owner_subject=OWNER)
+    assert not link.is_symlink()
+    assert (storage / OWNER / "source_markdown/a.md").is_file()
+
+
+def test_a_folder_link_that_leaves_the_owners_folder_refuses(storage):
+    (storage / OWNER / "escape").symlink_to(storage / "other-subject", target_is_directory=True)
+    with pytest.raises(StoredPathOutsideOwnerStorage):
+        remove_stored_files([f"{OWNER}/escape/source_markdown/victim.md"], owner_subject=OWNER)
+    assert (storage / "other-subject/source_markdown/victim.md").is_file()

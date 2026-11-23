@@ -94,6 +94,7 @@ def _session_quoting(paper: UUID, *, anchor_file: UUID | None = None, envelope_f
             document_id=paper, session_version=1, tags=[], total_candidates=1, reviewed_candidates=0,
             pending_candidates=1, accepted_candidates=0, rejected_candidates=0, manual_candidates=0,
             warnings=[], prepared_at=NOW, created_at=NOW, updated_at=NOW,
+            created_by_id=TEST_USER_ID,  # a real session belongs to the curator who prepared it
         )
         db.add(session_row)
         db.flush()
@@ -754,8 +755,8 @@ async def _list_rows() -> dict[str, dict]:
 @pytest.mark.asyncio
 async def test_ready_file_count_on_the_list_and_the_details(owner_id, index, monkeypatch):
     monkeypatch.setattr("src.lib.weaviate_client.documents.get_connection", lambda: index)
-    with_files = await _paper_with_supplements(owner_id, index, 20, 40)
-    main_only = await asyncio.to_thread(_paper, owner_id, index, main_end=1)
+    with_files = _dated(index, await _paper_with_supplements(owner_id, index, 20, 40), 0)
+    main_only = _dated(index, await asyncio.to_thread(_paper, owner_id, index, main_end=1), 1)
     (_, first, second) = _rows(with_files)
     with SessionLocal.begin() as db:
         db.get(PDFDocumentFile, second.id).status = "failed"  # a failed leftover is not counted
@@ -770,8 +771,27 @@ async def test_ready_file_count_on_the_list_and_the_details(owner_id, index, mon
     assert detail.ready_file_count == 1
 
 
+def _dated(connection, paper: UUID, minute: int) -> UUID:
+    """Give the paper's search object the creationDate every real paper has (create_document sets it).
+
+    The shared fixture leaves it out, and Weaviate's sorted fetch (the Library sorts by
+    creationDate) then drops undated objects once they near the page size: review P2-2,
+    an artefact of that fixture shape, never of a real paper.
+    """
+
+    from datetime import timedelta
+
+    from .conftest import TEST_TENANT_NAME
+
+    with connection.session() as client:
+        client.collections.get("PDFDocument").with_tenant(TEST_TENANT_NAME).data.update(
+            uuid=paper, properties={"creationDate": (NOW + timedelta(minutes=minute)).isoformat()},
+        )
+    return paper
+
+
 @pytest.mark.asyncio
-async def test_the_list_adds_no_query_per_row(owner_id, index, monkeypatch):
+async def test_the_list_lists_every_paper_with_no_query_per_row(owner_id, index, monkeypatch):
     from sqlalchemy import event
 
     from src.models.sql.database import engine
@@ -782,23 +802,21 @@ async def test_the_list_adds_no_query_per_row(owner_id, index, monkeypatch):
     def count(_conn, _cursor, statement, *_args):
         statements.append(statement)
 
-    await asyncio.to_thread(_paper, owner_id, index, main_end=1)
-    await _list_rows()  # warm: a first call loads things once (a cache), not per row
+    first = _dated(index, await asyncio.to_thread(_paper, owner_id, index, main_end=1), 0)
+    await _list_rows()  # warm: a first listing loads things once, not per row
     event.listen(engine, "before_cursor_execute", count)
     try:
-        await _list_rows()
+        assert str(first) in await _list_rows()
         few = len(statements)
+        more = [_dated(index, await _paper_with_supplements(owner_id, index, 20), minute) for minute in range(1, 5)]
         statements.clear()
-        for _ in range(4):
-            await _paper_with_supplements(owner_id, index, 20)
-        statements.clear()
-        await _list_rows()
+        listed = await _list_rows()
         many = len(statements)
     finally:
         event.remove(engine, "before_cursor_execute", count)
-    # Four more papers add no query (a query per row would add four). The total itself can
-    # differ by one between listings for reasons unrelated to rows, so it is not pinned.
-    assert many <= few, (few, many)
+    assert {str(paper) for paper in (first, *more)} <= set(listed)  # every created paper is listed
+    # Exactly four statements for one paper or five (the files load in one query for all rows).
+    assert few == many == 4, (few, many)
 
 
 # --- the read-only pre-check for the removal confirmation ---------------------------------------
@@ -844,11 +862,14 @@ async def test_the_pre_check_says_whether_review_and_curate_would_refuse_after_t
     assert await _check(paper, first.id) == {
         "document_id": str(paper), "file_id": str(first.id), "removable": True, "error": None,
         "newest_result_quotes_file": False,  # nothing prepared yet
+        "has_review_session": False, "review_and_curate_would_refuse": False,
     }
     envelope_id = await asyncio.to_thread(_envelope_quoting, paper, first.id)
     await asyncio.to_thread(_prepared_result_quoting, paper, envelope_id)
-    assert (await _check(paper, first.id))["newest_result_quotes_file"] is True
-    assert (await _check(paper, second.id))["newest_result_quotes_file"] is False
+    checked = await _check(paper, first.id)
+    # No session to open: Review & Curate replays the newest result, which quotes the file.
+    assert (checked["newest_result_quotes_file"], checked["review_and_curate_would_refuse"]) == (True, True)
+    assert (await _check(paper, second.id))["review_and_curate_would_refuse"] is False
     checked = await _check(paper, main.id)
     assert (checked["removable"], checked["error"]) == (False, "main_file_not_removable")
 
@@ -857,6 +878,11 @@ async def test_the_pre_check_says_whether_review_and_curate_would_refuse_after_t
     assert (checked["removable"], checked["error"], checked["session_ids"]) == (
         False, "file_quoted_in_review", [str(session_id)],
     )
+    # Now the paper has a session, which Review & Curate opens: removing the first file
+    # (quoted only by the newest result) would not make that button refuse.
+    checked = await _check(paper, first.id)
+    assert (checked["newest_result_quotes_file"], checked["has_review_session"]) == (True, True)
+    assert checked["review_and_curate_would_refuse"] is False
     # The pre-check changes nothing: both files are still ready.
     assert [row.status for row in _rows(paper)] == ["ready", "ready", "ready"]
 

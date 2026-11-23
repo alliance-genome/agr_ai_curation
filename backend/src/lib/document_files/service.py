@@ -238,8 +238,8 @@ class StoredFilesNotRemoved(RuntimeError):
 def remove_stored_files(paths: Iterable[str], *, owner_subject: str) -> None:
     """Delete stored files, one file at a time; the one helper for removals, adds and paper deletes.
 
-    Every path (relative to the storage root) must stay inside the owner's storage
-    folder (``storage_paths.owner_storage_path``): if any does not, nothing is deleted
+    Every path (relative to the storage root) must have its folder inside the owner's
+    storage folder (``storage_paths.owner_storage_entry``): if any does not, nothing is deleted
     and ``StoredPathOutsideOwnerStorage`` is raised. Each path is then unlinked on its
     own: a missing one is fine, a directory is never removed (it fails like any other
     path), and one failing path does not stop the others. ``StoredFilesNotRemoved``
@@ -249,14 +249,16 @@ def remove_stored_files(paths: Iterable[str], *, owner_subject: str) -> None:
     from pathlib import Path
 
     from src.config import get_pdf_storage_path
-    from src.lib.document_files.storage_paths import owner_storage_path
+    from src.lib.document_files.storage_paths import owner_storage_entry
 
     root = Path(get_pdf_storage_path())
-    targets = [owner_storage_path(root / relative, root, owner_subject) for relative in dict.fromkeys(paths)]
+    # The folder is resolved and checked; the name is not followed, so a link is deleted
+    # as a link and its target is never touched.
+    targets = [owner_storage_entry(root / relative, root, owner_subject) for relative in dict.fromkeys(paths)]
     failures: list[str] = []
     for target in targets:
         try:
-            if target.is_dir():
+            if target.is_dir() and not target.is_symlink():
                 raise IsADirectoryError("a stored path names a directory")
             target.unlink(missing_ok=True)
         except OSError as exc:

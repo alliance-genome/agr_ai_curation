@@ -187,6 +187,25 @@ def newest_result_quotes_file(session: Any, *, document_id: UUID, owner_subject:
     return False
 
 
+def has_review_session(session: Any, *, document_id: UUID, owner_subject: str) -> bool:
+    """Whether the Library's Review & Curate would open an existing session for the paper.
+
+    The Library first lists the curator's sessions of the paper (newest prepared first)
+    and opens the newest; only with none does it replay the newest result. The same list
+    query, so the answer is what that button does.
+    """
+
+    from src.lib.curation_workspace.session_queries import list_sessions
+    from src.schemas.curation_workspace import CurationSessionListRequest
+
+    listed = list_sessions(
+        session,
+        CurationSessionListRequest.model_validate({"filters": {"document_id": str(document_id)}, "page_size": 1}),
+        current_user_id=owner_subject,
+    )
+    return bool(listed.sessions)
+
+
 def removal_check(document_id: UUID, owner_user_id: int, file_id: UUID) -> dict[str, Any]:
     """Read-only: what removing the file would do now, for the screen's confirmation (codes only)."""
 
@@ -208,12 +227,17 @@ def removal_check(document_id: UUID, owner_user_id: int, file_id: UUID) -> dict[
             refusal = refused
         subject = session.scalar(select(User.auth_sub).where(User.id == owner_user_id))
         quotes = newest_result_quotes_file(session, document_id=document_id, owner_subject=subject, file_id=file_id)
+        opens_session = has_review_session(session, document_id=document_id, owner_subject=subject)
     answer: dict[str, Any] = {
         "document_id": str(document_id),
         "file_id": str(file_id),
         "removable": refusal is None,
         "error": refusal.code if refusal else None,
         "newest_result_quotes_file": quotes,
+        "has_review_session": opens_session,
+        # After the removal, Review & Curate would answer result_quotes_removed_file: it
+        # replays the newest result only when the paper has no session to open.
+        "review_and_curate_would_refuse": quotes and not opens_session,
     }
     if refusal is not None:
         answer.update(refusal.details)
