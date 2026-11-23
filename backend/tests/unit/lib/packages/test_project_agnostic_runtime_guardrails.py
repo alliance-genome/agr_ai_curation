@@ -334,6 +334,8 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     # Classifies ABC conversion answers over ABC show_all rows through the Alliance adapter.
     Path("backend/tests/unit/lib/document_sources/test_supplement_wait.py"),
     Path("backend/tests/unit/lib/document_sources/test_supplement_add.py"),
+    # The main paper's wait over ABC's recorded HTTP shapes through the Alliance adapter.
+    Path("backend/tests/unit/lib/document_sources/test_main_wait_requests.py"),
     # The supplement stage over ABC answers and show_all rows through the Alliance adapter.
     Path("backend/tests/unit/lib/document_sources/test_supplement_stage.py"),
     # An import with a chosen supplement through the real route, over ABC's recorded

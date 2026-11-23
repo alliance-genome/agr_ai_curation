@@ -117,9 +117,16 @@ def _answer(progress):
 
 
 class _Abc:
-    """ABC over HTTP: one paper whose files ABC converts while the import runs."""
+    """ABC over HTTP: one paper whose files ABC converts while the import runs.
 
-    def __init__(self, main_name: str):
+    After the import's request, ABC stores the main text before the main wait's
+    second listing read, unless ``fails_main``: then it never does, and any later
+    conversion request answers ``failed``."""
+
+    def __init__(self, main_name: str, *, fails_main: bool = False, never_converts: bool = False):
+        self.fails_main = fails_main
+        self.never_converts = never_converts
+        self.main_reads = 0
         self.main = _row(10, file_class="main", extension="pdf", display_name=main_name, pdf_type="pdf")
         self.supplement = _row(30, file_class="supplement", extension="xlsx", display_name="Made_up_S30")
         self.rows = [self.main, self.supplement]
@@ -145,6 +152,10 @@ class _Abc:
                 "copyright_license_name": None, "copyright_license_open_access": None,
             })
         if path == f"/reference/referencefile/show_all/{REFERENCE}":
+            if self.conversion_requests and not self.main_ready:
+                self.main_reads += 1
+                if self.main_reads == 2 and not (self.fails_main or self.never_converts):
+                    self.abc_stores_the_main_text()
             if self.main_ready:
                 self.stage_reads += 1
                 if self.stage_reads == 3:  # ABC stores the converted supplement between two reads
@@ -153,10 +164,15 @@ class _Abc:
         if path == f"/reference/referencefile/conversion_request/{REFERENCE}":
             self.conversion_requests.append("stage" if self.main_ready else "main")
             if len(self.conversion_requests) == 1:
-                return httpx.Response(200, json=_answer([_entry(10, "main", "pending"), _entry(30, "supplement", "pending")]))
-            if not any(row["referencefile_id"] == 11 for row in self.rows):
-                self.abc_stores_the_main_text()
-            return httpx.Response(200, json=_answer(
+                return httpx.Response(202, json=_answer([_entry(10, "main", "pending"), _entry(30, "supplement", "pending")]))
+            if self.never_converts:
+                return httpx.Response(202, json=_answer([_entry(10, "main", "pending"), _entry(30, "supplement", "pending")]))
+            if self.fails_main:
+                failed = {**_answer([{**_entry(10, "main", "failed"), "error": "Made-up PDF could not be parsed"}]),
+                          "status": "failed", "error_message": "Made-up PDF could not be parsed",
+                          "completed_at": "2026-11-23T10:20:00"}
+                return httpx.Response(200, json=failed)
+            return httpx.Response(202, json=_answer(
                 [_entry(10, "main", "success", converted_id=11), _entry(30, "supplement", "pending")]
             ))
         if path.startswith("/reference/referencefile/download_file/"):
@@ -229,12 +245,9 @@ async def _main_ingestion(request, *, weaviate_client):
     return SimpleNamespace(validation_warnings=[])
 
 
-@pytest.mark.asyncio
-async def test_an_imported_supplement_joins_once_abc_lists_it_with_no_conversion_request_from_the_wait(
-    owner, monkeypatch, tmp_path,
-):
-    owner_id, subject = owner
-    abc = _Abc(main_name=f"{PREFIX}{uuid4().hex}")
+async def _import_with_a_chosen_supplement(abc: _Abc, subject: str, monkeypatch, tmp_path) -> UUID:
+    """POST the import through the real route and run its background work to the end."""
+
     _search_index(monkeypatch)
     monkeypatch.setattr(documents, "external_document_source_import_enabled", lambda: True)
     monkeypatch.setattr(
@@ -278,11 +291,35 @@ async def test_an_imported_supplement_joins_once_abc_lists_it_with_no_conversion
 
     await asyncio.wait_for(background_tasks(), timeout=60)
     await asyncio.wait_for(asyncio.gather(*list(supplement_wait._stage_tasks)), timeout=60)
-
     assert abc.unknown == []
-    # The import's main phase asked ABC (once at import, once more until the main text
-    # was listed); the supplement wait never did.
-    assert abc.conversion_requests == ["main", "main"]
+    return document_id
+
+
+def _main_job(document_id: UUID) -> PdfProcessingJob:
+    with SessionLocal() as db:
+        jobs = db.execute(
+            select(PdfProcessingJob).where(PdfProcessingJob.document_id == document_id)
+        ).scalars().all()
+    return next(job for job in jobs if not (job.metadata_json or {}).get("job_kind"))
+
+
+@pytest.mark.asyncio
+async def test_an_imported_supplement_joins_once_abc_lists_it_with_no_conversion_request_from_the_wait(
+    owner, monkeypatch, tmp_path,
+):
+    owner_id, subject = owner
+    abc = _Abc(main_name=f"{PREFIX}{uuid4().hex}")
+    document_id = await _import_with_a_chosen_supplement(abc, subject, monkeypatch, tmp_path)
+
+    # KANBAN-2191 / ALL-1725: the import's one on-demand request; the main wait then
+    # only read the listing until the main text appeared; the supplement wait never asked.
+    assert abc.conversion_requests == ["main"]
+    # Two reads by the wait (the second listed the main text), one by the main ingestion's
+    # figure lookup.
+    assert abc.main_reads == 3
+    main_job = _main_job(document_id)
+    assert main_job.status == "completed"
+    assert set(main_job.metadata_json["provider_conversion_requests"]) == {"on_demand_sent_at"}
     # After the main paper was ready: the stage's first full listing, two show_all
     # reads (the second found the converted row), the full listing for that text,
     # then the add's own listing before it writes. All reads; none asks ABC to convert.
@@ -302,3 +339,43 @@ async def test_an_imported_supplement_joins_once_abc_lists_it_with_no_conversion
     ]
     latest = job_service.get_latest_paper_job_for_document(document_id=document_id, user_id=owner_id)
     assert latest.status == "completed"
+
+
+
+@pytest.mark.asyncio
+async def test_a_paper_abc_fails_is_reported_at_the_end_with_abcs_reason_after_one_more_request(
+    owner, monkeypatch, tmp_path,
+):
+    """A 12-second main wait read every 5 s; the one late request goes out once another
+    read would not fit (12 - (5 + 1) s), inside ABC's failure hold."""
+
+    owner_id, subject = owner
+    monkeypatch.setenv("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", "12")
+    monkeypatch.setenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", "1")
+    abc = _Abc(main_name=f"{PREFIX}{uuid4().hex}", fails_main=True)
+    document_id = await _import_with_a_chosen_supplement(abc, subject, monkeypatch, tmp_path)
+
+    assert abc.conversion_requests == ["main", "main"]  # the import's, and the one at the end
+    main_job = _main_job(document_id)
+    assert (main_job.status, main_job.error_message) == ("failed", "Made-up PDF could not be parsed")
+    assert set(main_job.metadata_json["provider_conversion_requests"]) == {"on_demand_sent_at", "end_sent_at"}
+    with SessionLocal() as db:
+        assert db.get(PDFDocument, document_id).status == "failed"
+
+
+
+@pytest.mark.asyncio
+async def test_a_paper_abc_never_converts_gets_exactly_one_request_at_the_end(owner, monkeypatch, tmp_path):
+    """The end request is sent once, and the wait then times out at the deadline of the
+    import's own request (a 12-second deadline here)."""
+
+    owner_id, subject = owner
+    monkeypatch.setenv("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", "12")
+    monkeypatch.setenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", "1")
+    abc = _Abc(main_name=f"{PREFIX}{uuid4().hex}", never_converts=True)
+    document_id = await _import_with_a_chosen_supplement(abc, subject, monkeypatch, tmp_path)
+
+    assert abc.conversion_requests == ["main", "main"]  # the import's, and the one at the end
+    main_job = _main_job(document_id)
+    assert (main_job.status, main_job.error_message) == ("failed", "Provider conversion exceeded 12 seconds")
+    assert set(main_job.metadata_json["provider_conversion_requests"]) == {"on_demand_sent_at", "end_sent_at"}

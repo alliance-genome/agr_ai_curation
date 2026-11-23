@@ -68,7 +68,7 @@ class _AbcClient(FakeABCLiteratureClient):
 
     def __init__(self, answers: list[Any] | None = None, *, paper: "_Paper | None" = None,
                  on_read: dict[int, Callable[[], None]] | None = None,
-                 read_error: Exception | None = None):
+                 read_error: Exception | None = None, failing_reads: set[int] | None = None):
         super().__init__()
         self.answers = answers or [_answer_payload("converted", [])]
         self.requests = 0
@@ -76,6 +76,7 @@ class _AbcClient(FakeABCLiteratureClient):
         self.paper = paper
         self.on_read = on_read or {}
         self.read_error = read_error
+        self.failing_reads = failing_reads  # None: every read fails when read_error is set
 
     async def request_referencefile_conversion(self, reference, *, wait=False, request_bearer_token=None):
         self.requests += 1
@@ -86,7 +87,7 @@ class _AbcClient(FakeABCLiteratureClient):
 
     async def show_referencefiles(self, reference, *, request_bearer_token=None):
         self.reads += 1
-        if self.read_error is not None:
+        if self.read_error is not None and (self.failing_reads is None or self.reads in self.failing_reads):
             raise self.read_error
         if self.reads in self.on_read:
             self.on_read[self.reads]()
@@ -179,10 +180,11 @@ def _chosen(provider_file_id, *, converted_md5=None):
 
 async def _run(*, chosen, paper, last_answer_payload, clock, add=None, abc_answers=None,
                conversion_requested=True, login_expires_in=24 * 3600, on_read=None,
-               read_error=None, sleep=None):
+               read_error=None, failing_reads=None, sleep=None):
     from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
 
-    client = _AbcClient(abc_answers, paper=paper, on_read=on_read, read_error=read_error)
+    client = _AbcClient(abc_answers, paper=paper, on_read=on_read, read_error=read_error,
+                        failing_reads=failing_reads)
     provider = provider_from_fake(client)
     # The main phase's last answer, mapped as the adapter maps it; the stage's own
     # polls get the scripted answers.
@@ -367,13 +369,16 @@ def _http(status: int):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("status", "expected"), [
-    # Any other ABC error: the waiting file is not converted in time; the converted one joins.
-    (502, {"20": ("added", None), "30": ("left_out", IN_TIME)}),
+@pytest.mark.parametrize(("status", "reads", "expected"), [
+    # Any other ABC error: three failed reads in a row (DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS)
+    # end the wait; the waiting file is not converted in time; the converted one joins.
+    (502, 3, {"20": ("added", None), "30": ("left_out", IN_TIME)}),
     # The login was refused: nothing more can be asked of ABC with it, the add included.
-    (401, {"20": ("left_out", "login_expired"), "30": ("left_out", "login_expired")}),
+    (401, 1, {"20": ("left_out", "login_expired"), "30": ("left_out", "login_expired")}),
 ], ids=["abc_502", "login_expired"])
-async def test_the_first_abc_error_ends_the_wait_without_retrying(job, status, expected):
+async def test_failed_reads_end_the_wait_after_the_tolerated_count_a_refused_login_at_once(
+    job, status, reads, expected,
+):
     clock = _Clock()
     paper = _Paper([_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), _unconverted(30, "pdf")],
                    payloads={"21": GOOD_TABLE})
@@ -383,7 +388,7 @@ async def test_the_first_abc_error_ends_the_wait_without_retrying(job, status, e
         last_answer_payload=RUNNING, clock=clock, read_error=_http(status),
     )
 
-    assert (client.requests, client.reads) == (0, 1)
+    assert (client.requests, client.reads) == (0, reads)
     assert _final_entries(job) == expected
     assert outcomes.ended == ["completed"]
 
@@ -828,3 +833,44 @@ async def test_a_stage_ended_by_a_delete_mid_listing_is_not_a_stage_failure(job,
 
     assert reported == []
     assert outcomes.ended == []
+
+
+
+@pytest.mark.asyncio
+async def test_a_failed_read_is_tried_again_at_the_next_interval(job):
+    """Owner, 23 Nov 2026: the listing is a pure read, so up to two failed reads in a
+    row are tolerated; the file ABC converts meanwhile still joins."""
+
+    clock = _Clock()
+    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "pdf")])
+
+    def _abc_stores_30():
+        paper.rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(30, "WB")]
+        paper.payloads = {"31": GOOD_TABLE}
+
+    client, add, _outcomes = await _run(
+        chosen=[_chosen("30")], paper=paper, last_answer_payload=RUNNING, clock=clock,
+        read_error=_http(502), failing_reads={1, 2}, on_read={3: _abc_stores_30},
+    )
+
+    assert (client.requests, client.reads) == (0, 3)
+    assert [file.provider_file_id for file in add.calls[0]] == ["30"]
+    assert _final_entries(job) == {"30": ("added", None)}
+
+
+@pytest.mark.asyncio
+async def test_a_good_read_resets_the_count_of_failed_reads(job):
+    clock = _Clock()
+    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "pdf")])
+
+    def _abc_stores_30():
+        paper.rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(30, "WB")]
+        paper.payloads = {"31": GOOD_TABLE}
+
+    client, add, _outcomes = await _run(
+        chosen=[_chosen("30")], paper=paper, last_answer_payload=RUNNING, clock=clock,
+        read_error=_http(502), failing_reads={1, 2, 4, 5, 7, 8}, on_read={9: _abc_stores_30},
+    )
+
+    assert client.reads == 9  # never three failed reads in a row
+    assert _final_entries(job) == {"30": ("added", None)}

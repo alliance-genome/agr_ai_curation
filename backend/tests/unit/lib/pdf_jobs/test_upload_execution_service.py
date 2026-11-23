@@ -43,6 +43,19 @@ from src.models.sql.pdf_processing_job import PdfJobStatus
 from src.lib.document_sources.models import ProviderBearerKind
 
 
+@pytest.fixture(autouse=True)
+def _conversion_requests_recorded(monkeypatch):
+    """The job's record of the conversion requests it sent is a database write;
+    here it is kept in memory (KANBAN-2191 / ALL-1725)."""
+
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        service_module.pdf_job_service, "record_provider_conversion_request",
+        lambda **kwargs: recorded.append(kwargs),
+    )
+    return recorded
+
+
 class _Tracker:
     def __init__(self):
         self.calls = []
@@ -1008,14 +1021,14 @@ async def test_execute_provider_conversion_polls_then_ingests_main_markdown(monk
     monkeypatch.setattr(service_module, "get_document_source_import_timeout_seconds", lambda: 5)
     monkeypatch.setattr(service_module, "get_document_source_poll_interval_seconds", lambda: 0.01)
     job_statuses = [
-        SimpleNamespace(status=PdfJobStatus.PENDING.value),
-        SimpleNamespace(status=PdfJobStatus.RUNNING.value),
+        SimpleNamespace(status=PdfJobStatus.PENDING.value, metadata=None),
+        SimpleNamespace(status=PdfJobStatus.RUNNING.value, metadata=None),
     ]
 
     def _get_job_by_id(**_kwargs):
         if job_statuses:
             return job_statuses.pop(0)
-        return SimpleNamespace(status=PdfJobStatus.RUNNING.value)
+        return SimpleNamespace(status=PdfJobStatus.RUNNING.value, metadata=None)
 
     monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", _get_job_by_id)
     monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
@@ -1414,11 +1427,6 @@ async def test_upload_selection_accepts_provider_mapped_readiness():
             curator_token="token",
             source_provenance={"provider": "abc_literature"},
         ),
-        conversion_result=SourceConversionResult(
-            provider="abc_literature",
-            status=SourceConversionStatus.RUNNING,
-            converted_classes=("converted_merged_main",),
-        ),
         curator_token="token",
     )
 
@@ -1486,11 +1494,6 @@ async def test_conversion_polling_binds_text_to_the_source_pdf_for_service_beare
     selected, _ = await service._select_converted_main_artifact(
         provider=provider,
         request=_conversion_request(bearer_kind),
-        conversion_result=SourceConversionResult(
-            provider="abc_literature",
-            status=SourceConversionStatus.CONVERTED,
-            converted_classes=("converted_merged_main",),
-        ),
         curator_token="token",
     )
 
@@ -1537,10 +1540,6 @@ async def test_upload_selection_uses_non_abc_provider_declared_main_markdown():
             source_artifact_id="pdf-1",
             curator_token="token",
             source_provenance={"provider": "other_provider"},
-        ),
-        conversion_result=SourceConversionResult(
-            provider="other_provider",
-            status=SourceConversionStatus.CONVERTED,
         ),
         curator_token="token",
     )
@@ -2302,13 +2301,13 @@ async def test_execute_provider_markdown_falls_back_to_local_pdf_on_access_denie
         service_module.pdf_job_service,
         "mark_completed",
         lambda **kwargs: completed_events.append(kwargs)
-        or SimpleNamespace(status=PdfJobStatus.COMPLETED.value, message=kwargs["message"]),
+        or SimpleNamespace(status=PdfJobStatus.COMPLETED.value, message=kwargs["message"], metadata=None),
     )
     monkeypatch.setattr(
         service_module.pdf_job_service,
         "mark_failed",
         lambda **kwargs: failed_events.append(kwargs)
-        or SimpleNamespace(status=PdfJobStatus.FAILED.value, message=kwargs["message"]),
+        or SimpleNamespace(status=PdfJobStatus.FAILED.value, message=kwargs["message"], metadata=None),
     )
     monkeypatch.setattr(
         UploadExecutionService,
@@ -3013,6 +3012,15 @@ class _VirtualClock:
             raise asyncio.CancelledError()
         await _real_sleep(0)
 
+    def get_running_loop(self):
+        return self  # the loop's clock is the virtual one
+
+    def time(self):
+        return self.now
+
+    async def to_thread(self, function, /, *args, **kwargs):
+        return function(*args, **kwargs)
+
     async def wait_for(self, awaitable, timeout):
         self.deadline = self.now + timeout
         try:
@@ -3029,7 +3037,8 @@ _real_sleep = asyncio.sleep
 
 
 class _ProviderReadyAt(_Provider):
-    """ABC answers ``running`` until the virtual clock reaches ``ready_at``."""
+    """ABC answers ``running``; its listing shows the main text once the virtual
+    clock reaches ``ready_at``."""
 
     def __init__(self, clock, ready_at):
         super().__init__()
@@ -3048,6 +3057,10 @@ class _ProviderReadyAt(_Provider):
                 metadata={"file_class": "converted_merged_main", "file_extension": "md"},
             )
         ]
+
+    async def list_artifacts(self, reference, *, request_bearer_token=None):
+        self.list_artifact_calls.append({"reference": reference, "at": self.clock.now})
+        return list(self.artifacts) if self.clock.now >= self.ready_at else []
 
     async def request_conversion(self, reference, *, wait=False, request_bearer_token=None):
         self.conversion_requests.append(
@@ -3136,6 +3149,7 @@ async def test_main_import_that_abc_converts_in_eleven_minutes_completes(monkeyp
         ingested.append(request.document_id)
 
     monkeypatch.setattr(service_module, "asyncio", clock)
+    monkeypatch.setattr(service_module, "time", SimpleNamespace(time=lambda: clock.now))
     service = UploadExecutionService(
         pipeline_tracker=_Tracker(),
         document_source_provider_factory=lambda: provider,
@@ -3149,11 +3163,11 @@ async def test_main_import_that_abc_converts_in_eleven_minutes_completes(monkeyp
         {"job_id": "job-conversion", "message": "Processing completed"}
     ]
     assert ingested == ["doc-conversion"]
-    # ABC is asked every 30 s: 23 requests over 11 minutes (at 2 s it was 331).
+    # KANBAN-2191 / ALL-1725: one on-demand request (this import had not sent one),
+    # then a listing read every 30 s until the main text is listed at 11 minutes.
     assert set(clock.sleeps) == {30.0}
-    assert [request["at"] for request in provider.conversion_requests] == [
-        30.0 * poll for poll in range(23)
-    ]
+    assert [request["at"] for request in provider.conversion_requests] == [0.0]
+    assert [read["at"] for read in provider.list_artifact_calls] == [30.0 * poll for poll in range(23)]
 
 
 @pytest.mark.asyncio
@@ -3162,6 +3176,7 @@ async def test_main_import_still_waiting_after_an_hour_fails_and_the_paper_is_fa
     provider = _ProviderReadyAt(clock, ready_at=61 * 60)
     outcomes = _record_job_outcomes(monkeypatch)
     monkeypatch.setattr(service_module, "asyncio", clock)
+    monkeypatch.setattr(service_module, "time", SimpleNamespace(time=lambda: clock.now))
     service = UploadExecutionService(
         pipeline_tracker=_Tracker(),
         document_source_provider_factory=lambda: provider,
@@ -3179,8 +3194,14 @@ async def test_main_import_still_waiting_after_an_hour_fails_and_the_paper_is_fa
     ]
     assert outcomes["status"] == [("doc-conversion", "failed")]
     assert outcomes["sql_failures"] == ["Provider conversion exceeded 3600 seconds"]
-    # At most 121 requests in the hour (one every 30 s, plus the first).
-    assert len(provider.conversion_requests) == 121
+    # KANBAN-2191 / ALL-1725: the on-demand request, then only listing reads, then one
+    # request at the start of the end window (3600 - (30 + 10) s = 3560 s; a read is
+    # made to land there).
+    assert [request["at"] for request in provider.conversion_requests] == [0.0, 3560.0]
+    # Reads every 30 s to 3540 s (119), at 3560 s, straight after the end request,
+    # then at 3590 s and at the deadline.
+    assert [read["at"] for read in provider.list_artifact_calls][-5:] == [3540.0, 3560.0, 3560.0, 3590.0, 3600.0]
+    assert len(provider.list_artifact_calls) == 123
     assert provider.closed is True
 
 
@@ -3208,9 +3229,9 @@ async def test_main_import_still_waiting_after_an_hour_fails_and_the_paper_is_fa
     ids=["converted", "failed", "no_sources"],
 )
 async def test_abc_is_never_asked_again_after_a_final_answer(monkeypatch, final_answer):
-    """After ABC's hour (or at once after an inline Office failure) a second
-    request would start a new conversion in ABC, so the first final answer
-    ends the wait."""
+    """KANBAN-2191 / ALL-1725: the wait's own request, then listing reads, then the
+    one request at the end; its final answer ends the wait at once, and nothing
+    is asked after it."""
 
     clock = _VirtualClock()
     provider = _ProviderReadyAt(clock, ready_at=float("inf"))
@@ -3219,7 +3240,7 @@ async def test_abc_is_never_asked_again_after_a_final_answer(monkeypatch, final_
         status=SourceConversionStatus.RUNNING,
         reference_curie="AGRKB:101",
     )
-    answers = [running, running, final_answer]
+    answers = [running, final_answer]
 
     async def _answer(reference, *, wait=False, request_bearer_token=None):
         provider.conversion_requests.append({"reference": reference, "at": clock.now})
@@ -3228,6 +3249,7 @@ async def test_abc_is_never_asked_again_after_a_final_answer(monkeypatch, final_
     provider.request_conversion = _answer
     outcomes = _record_job_outcomes(monkeypatch)
     monkeypatch.setattr(service_module, "asyncio", clock)
+    monkeypatch.setattr(service_module, "time", SimpleNamespace(time=lambda: clock.now))
     service = UploadExecutionService(
         pipeline_tracker=_Tracker(),
         document_source_provider_factory=lambda: provider,
@@ -3235,7 +3257,7 @@ async def test_abc_is_never_asked_again_after_a_final_answer(monkeypatch, final_
 
     await service.execute_provider_conversion(_wait_request())
 
-    assert len(provider.conversion_requests) == 3
+    assert [request["at"] for request in provider.conversion_requests] == [0.0, 3560.0]
     assert len(outcomes["failed"]) == 1
     assert outcomes["completed"] == []
 
@@ -3347,21 +3369,17 @@ async def test_an_iteration_in_flight_when_its_job_was_finalized_writes_nothing(
     selections = []
     ingested = []
 
-    async def _answer(reference, *, wait=False, request_bearer_token=None):
-        provider.conversion_requests.append({"reference": reference, "at": clock.now})
-        if len(provider.conversion_requests) == 1:
-            return SourceConversionResult(
-                provider="abc_literature", status=SourceConversionStatus.RUNNING,
-                reference_curie="AGRKB:101",
-            )
+    reads = []
+
+    async def _read(reference, *, request_bearer_token=None):
+        reads.append(clock.now)
+        if len(reads) == 1:
+            return []
         # Meanwhile the dead-wait cancel finalized the job.
         job["status"] = PdfJobStatus.CANCELLED.value
         if late_answer == "provider_error":
-            raise DocumentSourceError("ABC Literature conversion request failed")
-        return SourceConversionResult(
-            provider="abc_literature", status=SourceConversionStatus.RUNNING,
-            reference_curie="AGRKB:101", converted_classes=("converted_merged_main",),
-        )
+            raise DocumentSourceError("ABC Literature artifact listing failed")
+        return list(_ProviderReadyAt(clock, ready_at=0).artifacts)  # the main text is listed
 
     async def _select(self, request, converted_artifact):
         selections.append(converted_artifact.artifact_id)
@@ -3369,14 +3387,15 @@ async def test_an_iteration_in_flight_when_its_job_was_finalized_writes_nothing(
     async def _ingest(request, *, weaviate_client):
         ingested.append(request.document_id)
 
-    provider.request_conversion = _answer
+    provider.list_artifacts = _read
     monkeypatch.setattr(
         service_module.pdf_job_service,
         "get_job_by_id",
-        lambda **_kwargs: SimpleNamespace(status=job["status"]),
+        lambda **_kwargs: SimpleNamespace(status=job["status"], metadata=None),
     )
     monkeypatch.setattr(UploadExecutionService, "_sync_provider_conversion_sql_selection", _select)
     monkeypatch.setattr(service_module, "asyncio", clock)
+    monkeypatch.setattr(service_module, "time", SimpleNamespace(time=lambda: clock.now))
     service = UploadExecutionService(
         pipeline_tracker=_Tracker(),
         document_source_provider_factory=lambda: provider,
@@ -3385,7 +3404,8 @@ async def test_an_iteration_in_flight_when_its_job_was_finalized_writes_nothing(
 
     await service.execute_provider_conversion(_wait_request())
 
-    assert len(provider.conversion_requests) == 2
+    assert len(provider.conversion_requests) == 1  # the wait's own on-demand request
+    assert len(reads) == 2
     assert selections == []
     assert ingested == []
     assert outcomes["status"] == []
@@ -3641,6 +3661,7 @@ async def test_an_ordinary_import_is_never_refused_for_its_login(monkeypatch):
     provider = _ProviderReadyAt(clock, ready_at=0)
     outcomes = _record_job_outcomes(monkeypatch)
     monkeypatch.setattr(service_module, "asyncio", clock)
+    monkeypatch.setattr(service_module, "time", SimpleNamespace(time=lambda: clock.now))
     service = UploadExecutionService(
         pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: provider,
         provider_markdown_ingestion_fn=AsyncMock(return_value=None),

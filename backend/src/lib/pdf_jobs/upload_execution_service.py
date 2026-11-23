@@ -8,12 +8,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import math
 import weakref
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 import time
+from datetime import datetime
 from typing import Any, Protocol
 
 from fastapi import BackgroundTasks
@@ -26,6 +28,7 @@ from src.lib.document_sources.ingestion import (
 from src.lib.document_sources.main_text import select_preferred_main_text_artifact
 from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
+    DocumentSourceError,
     DocumentSourceLoginExpired,
     DocumentSourceProvider,
     ProviderBearerKind,
@@ -41,7 +44,9 @@ from src.lib.observability.background_tasks import (
 )
 from src.lib.openai_agents.config import (
     get_document_source_import_timeout_seconds,
+    get_document_source_listing_max_failed_reads,
     get_document_source_poll_interval_seconds,
+    get_document_source_request_timeout_seconds,
 )
 from src.lib.pipeline.orchestrator import DocumentPipelineOrchestrator, ProcessingResult
 from src.lib.pipeline.processing_receipt import PDF_PROCESSING_RECEIPT_KEY
@@ -217,10 +222,29 @@ class ProviderConversionExecutionRequest:
     figure_metadata_artifact_ids: tuple[str, ...] = ()
     supplements: SupplementPlan | None = None
     login_expires_at: float | None = None
+    # The provider's answer to the import's own on-demand request, when it sent one.
+    conversion_answer: SourceConversionResult | None = None
 
 
 class _JobFinalizedElsewhere(Exception):
     """The job was made terminal outside this task (a cancel of a wait taken for dead)."""
+
+
+def _conversion_exceeded_message(requested_at: float) -> str:
+    """The existing timeout message, with the whole seconds actually waited since the request."""
+    return f"Provider conversion exceeded {math.floor(time.time() - requested_at):g} seconds"
+
+
+def _raise_if_conversion_ended(
+    provider: DocumentSourceProvider, answer: SourceConversionResult | None,
+) -> None:
+    """The provider's answer is final with nothing to import: end the wait with its reason."""
+    if answer is None:
+        return
+    if answer.status is SourceConversionStatus.FAILED:
+        raise RuntimeError(provider.conversion_failure_message(answer))
+    if answer.status is SourceConversionStatus.NO_SOURCES:
+        raise RuntimeError("Provider conversion found no convertible source files")
 
 
 def _job_was_finalized_elsewhere(job_id: str) -> bool:
@@ -611,7 +635,20 @@ class UploadExecutionService:
 
         provider: DocumentSourceProvider | None = None
         poll_interval_seconds = get_document_source_poll_interval_seconds()
-        last_result: SourceConversionResult | None = None
+        deadline_seconds = get_document_source_import_timeout_seconds()
+        sent = pdf_job_service.conversion_requests_sent(existing_job)
+        # The wait is timed from the paper's own on-demand request, not from when
+        # this execution starts: a request's papers run one after another, and the
+        # end request must come within the deadline of that request (inside ABC's
+        # failure hold; KANBAN-2191 / ALL-1725).
+        requested_at = (
+            datetime.fromisoformat(sent["on_demand_sent_at"]).timestamp()
+            if sent.get("on_demand_sent_at")
+            else None
+        )
+        max_failed_reads = get_document_source_listing_max_failed_reads()
+        failed_reads = 0
+        last_result: SourceConversionResult | None = request.conversion_answer
         try:
             curator_token = (request.curator_token or "").strip()
             if not curator_token:
@@ -619,43 +656,81 @@ class UploadExecutionService:
             _refuse_if_login_expired(request)
 
             provider = self._document_source_provider_factory()
+            # The provider's on-demand request is sent once per import: by the import
+            # itself (recorded on the job), or here when the import did not need to.
+            # Each request is recorded before it is sent, so it is never repeated.
+            if requested_at is None:
+                await asyncio.to_thread(
+                    pdf_job_service.record_provider_conversion_request,
+                    job_id=request.job_id, which="on_demand_sent_at",
+                )
+                requested_at = time.time()
+                last_result = await provider.request_conversion(
+                    request.reference, wait=False, request_bearer_token=curator_token,
+                )
+            wait_ends_at = requested_at + deadline_seconds
+            request_timeout_seconds = get_document_source_request_timeout_seconds()
+            # The end request goes out when another read would no longer fit.
+            end_request_at = wait_ends_at - (poll_interval_seconds + request_timeout_seconds)
             while True:
                 if pdf_job_service.is_cancel_requested(job_id=request.job_id):
                     raise PDFCancellationError("Processing cancelled by user request")
 
-                last_result = await provider.request_conversion(
-                    request.reference,
-                    wait=False,
-                    request_bearer_token=curator_token,
-                )
-                (
-                    selected_artifact,
-                    selected_figure_metadata_artifact_ids,
-                ) = await self._select_converted_main_artifact(
-                    provider=provider,
-                    request=request,
-                    conversion_result=last_result,
-                    curator_token=curator_token,
-                )
-                # The poll above can take a while; a cancel may have finalized
+                # Watch the provider's read-only listing for the main text; never
+                # re-send the conversion request, which can start or restart a job.
+                try:
+                    (
+                        selected_artifact,
+                        selected_figure_metadata_artifact_ids,
+                    ) = await self._select_converted_main_artifact(
+                        provider=provider,
+                        request=request,
+                        curator_token=curator_token,
+                    )
+                except DocumentSourceLoginExpired:
+                    raise
+                except DocumentSourceError:
+                    # A pure read: tried again at the next interval, up to the
+                    # tolerated number of failed reads in a row.
+                    failed_reads += 1
+                    if failed_reads >= max_failed_reads:
+                        raise
+                    if time.time() >= wait_ends_at:
+                        raise RuntimeError(_conversion_exceeded_message(requested_at)) from None
+                    if _job_was_finalized_elsewhere(request.job_id):
+                        raise _JobFinalizedElsewhere()
+                    pdf_job_service.update_progress(
+                        job_id=request.job_id,
+                        stage=pdf_job_service.PROVIDER_CONVERSION_STAGE,
+                        status=PdfJobStatus.RUNNING.value,
+                    )
+                    await asyncio.sleep(poll_interval_seconds)
+                    continue
+                failed_reads = 0
+                # The read above can take a while; a cancel may have finalized
                 # the job meanwhile (a wait taken for dead). Write nothing then.
                 if _job_was_finalized_elsewhere(request.job_id):
                     raise _JobFinalizedElsewhere()
-                progress_metadata = _conversion_job_metadata(last_result)
+                progress_metadata = (
+                    _conversion_job_metadata(last_result) if last_result is not None else None
+                )
                 progress_percentage = (
                     35
                     if selected_artifact is not None
                     else provider.conversion_progress_percentage(last_result)
+                    if last_result is not None
+                    else 20
                 )
-                message = provider.conversion_progress_message(last_result)
-                pdf_job_service.update_progress(
-                    job_id=request.job_id,
-                    stage=pdf_job_service.PROVIDER_CONVERSION_STAGE,
-                    progress_percentage=progress_percentage,
-                    message=message,
-                    status=PdfJobStatus.RUNNING.value,
-                    metadata=progress_metadata,
-                )
+                progress = {
+                    "job_id": request.job_id,
+                    "stage": pdf_job_service.PROVIDER_CONVERSION_STAGE,
+                    "progress_percentage": progress_percentage,
+                    "status": PdfJobStatus.RUNNING.value,
+                    "metadata": progress_metadata,
+                }
+                if last_result is not None:
+                    progress["message"] = provider.conversion_progress_message(last_result)
+                pdf_job_service.update_progress(**progress)
 
                 if selected_artifact is not None:
                     source_provenance = _source_provenance_with_converted_artifact(
@@ -694,14 +769,45 @@ class UploadExecutionService:
                     )
                     return
 
-                if last_result.status is SourceConversionStatus.FAILED:
-                    raise RuntimeError(provider.conversion_failure_message(last_result))
-                if last_result.status is SourceConversionStatus.NO_SOURCES:
-                    raise RuntimeError("Provider conversion found no convertible source files")
-                if last_result.status is SourceConversionStatus.CONVERTED:
+                _raise_if_conversion_ended(provider, last_result)
+                if last_result is not None and last_result.status is SourceConversionStatus.CONVERTED:
                     raise RuntimeError("Provider conversion completed without canonical converted Markdown")
 
-                await asyncio.sleep(poll_interval_seconds)
+                now = time.time()
+                if now >= wait_ends_at:
+                    # Includes a paper queued behind others past its own deadline:
+                    # it was read once above, and nothing is asked outside the hold.
+                    raise RuntimeError(_conversion_exceeded_message(requested_at))
+                if not sent.get("end_sent_at") and now >= end_request_at:
+                    if now + request_timeout_seconds >= wait_ends_at:
+                        # No room left to send and be answered before the deadline:
+                        # end as a paper past its deadline does, asking nothing.
+                        raise RuntimeError(_conversion_exceeded_message(requested_at))
+                    # Nothing appeared in time: ask the provider once more, only to
+                    # learn why. Sent within the deadline of the paper's own request,
+                    # so at a deadline of at most an hour it falls inside ABC's
+                    # one-hour failure hold and reports a failure rather than
+                    # starting a new job (see DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS).
+                    await asyncio.to_thread(
+                        pdf_job_service.record_provider_conversion_request,
+                        job_id=request.job_id, which="end_sent_at",
+                    )
+                    sent["end_sent_at"] = "sent"
+                    if time.time() + request_timeout_seconds >= wait_ends_at:
+                        # The record write took the room: recorded, never sent.
+                        raise RuntimeError(_conversion_exceeded_message(requested_at))
+                    last_result = await provider.request_conversion(
+                        request.reference, wait=False, request_bearer_token=curator_token,
+                    )
+                    # ABC's reason is kept even if the next read fails.
+                    _raise_if_conversion_ended(provider, last_result)
+                    continue
+
+                # Never sleep past the start of the end request's window (it is one
+                # poll long, while reads come one poll plus the read's own time
+                # apart), nor past the wait's end.
+                next_stop = wait_ends_at if sent.get("end_sent_at") or now >= end_request_at else end_request_at
+                await asyncio.sleep(min(poll_interval_seconds, max(next_stop - now, 0.0)))
         except _ProviderMainMarkdownAccessDenied:
             raise
         except _JobFinalizedElsewhere:
@@ -778,11 +884,8 @@ class UploadExecutionService:
         *,
         provider: DocumentSourceProvider,
         request: ProviderConversionExecutionRequest,
-        conversion_result: SourceConversionResult,
         curator_token: str,
     ) -> tuple[SourceArtifact | None, tuple[str, ...]]:
-        if not provider.conversion_exposes_main_text(conversion_result):
-            return None, ()
         artifacts = await provider.list_artifacts(
             request.reference,
             request_bearer_token=curator_token,

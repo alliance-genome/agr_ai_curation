@@ -570,7 +570,10 @@ class ActiveJobExistsError(RuntimeError):
         self.document_id = document_id
 
 
-def create_job(*, document_id: UUID | str, user_id: int, filename: Optional[str] = None) -> PdfJobResponse:
+def create_job(
+    *, document_id: UUID | str, user_id: int, filename: Optional[str] = None,
+    metadata: Optional[dict] = None,
+) -> PdfJobResponse:
     """Create a new pending job for a paper.
 
     A paper has at most one active job (``ONE_ACTIVE_JOB_PER_PAPER_INDEX``);
@@ -578,7 +581,9 @@ def create_job(*, document_id: UUID | str, user_id: int, filename: Optional[str]
     """
     session = SessionLocal()
     try:
-        return create_job_in_session(session, document_id=document_id, user_id=user_id, filename=filename)
+        return create_job_in_session(
+            session, document_id=document_id, user_id=user_id, filename=filename, metadata=metadata,
+        )
     finally:
         session.close()
 
@@ -747,6 +752,40 @@ def record_supplement_outcomes_on_finished_job(*, job_id: UUID | str, supplement
             return
         metadata = dict(job.metadata_json or {})
         metadata["supplements"] = supplements
+        job.metadata_json = metadata
+        session.commit()
+    finally:
+        session.close()
+
+
+# The job's record of the provider's on-demand conversion requests it sent
+# (KANBAN-2191 / ALL-1725): ``on_demand_sent_at`` (the import's one request) and
+# ``end_sent_at`` (the one request at the end of the main paper's wait). Each is
+# written before its request is sent, so a request is never sent twice for a job.
+CONVERSION_REQUESTS_KEY = "provider_conversion_requests"
+CONVERSION_REQUEST_KINDS = frozenset({"on_demand_sent_at", "end_sent_at"})
+
+
+def conversion_requests_sent(job: PdfJobResponse | None) -> dict[str, str]:
+    """What the job records as sent: ``{kind: ISO time}``."""
+    if job is None:
+        return {}
+    return dict((job.metadata or {}).get(CONVERSION_REQUESTS_KEY) or {})
+
+
+def record_provider_conversion_request(*, job_id: UUID | str, which: str) -> None:
+    """Record, before sending it, that the job sends this conversion request."""
+    if which not in CONVERSION_REQUEST_KINDS:
+        raise ValueError(f"Unknown conversion request kind: {which}")
+    session = SessionLocal()
+    try:
+        job = session.execute(
+            select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id)).with_for_update()
+        ).scalar_one()
+        metadata = dict(job.metadata_json or {})
+        requests = dict(metadata.get(CONVERSION_REQUESTS_KEY) or {})
+        requests[which] = datetime.now(timezone.utc).isoformat()
+        metadata[CONVERSION_REQUESTS_KEY] = requests
         job.metadata_json = metadata
         session.commit()
     finally:

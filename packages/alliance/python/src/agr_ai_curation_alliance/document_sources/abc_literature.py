@@ -395,10 +395,8 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         if self.conversion_exposes_main_text(result):
             return "ABC Literature main text is ready; importing converted Markdown"
         if result.status is SourceConversionStatus.RUNNING:
-            pending_count = _count_progress_status(result, "pending")
-            if pending_count:
-                noun = "file" if pending_count == 1 else "files"
-                return f"ABC Literature conversion running ({pending_count} {noun} pending)"
+            # No file count: the main paper's wait reads ABC's listing and does not
+            # refresh this answer, so a count would go stale (owner, 23 Nov 2026).
             return "ABC Literature conversion running"
         if result.status is SourceConversionStatus.CONVERTED:
             return "ABC Literature conversion completed; locating converted Markdown"
@@ -900,14 +898,6 @@ def _map_conversion_status(status: str | None) -> SourceConversionStatus:
     if normalized == "no_sources":
         return SourceConversionStatus.NO_SOURCES
     return SourceConversionStatus.UNKNOWN
-
-
-def _count_progress_status(result: SourceConversionResult, status: str) -> int:
-    return sum(
-        1
-        for progress in result.per_file_progress
-        if str(progress.get("status") or "").strip().lower() == status
-    )
 
 
 def _string_tuple(value: object) -> tuple[str, ...]:

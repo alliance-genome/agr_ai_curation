@@ -161,11 +161,39 @@ Document-source operational limits are env-configurable in `.env.example`:
 - `DOCUMENT_SOURCE_DEAD_WAIT_POLLS`
 - `DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS`
 - `DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS`
+- `DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS`
 - `DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS`
 - `DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS`
 - `DOCUMENT_SOURCE_IMPORT_BATCH_LIMIT`
 - ABC Literature live-smoke timeout/evidence knobs
 - READY upload and identifier-import smoke timeout/evidence knobs
+
+**Operators: `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS` depends on an ABC rule.**
+Before the deadline of a main paper's own on-demand request (the wait is timed
+from that request, also for later papers of a batch), AI Curation asks ABC once
+more why the main text has not appeared, and never after it. ABC answers a
+failed conversion with that failure, without converting again, for one hour
+after it failed. Keep the deadline at 3,600 seconds or less: above it, that late request can make ABC start a new
+conversion job (main text and pending supplements) for a paper that failed
+early. Nothing in AI Curation refuses a longer deadline.
+
+**Start-up check (KANBAN-2191 / ALL-1725):** start-up refuses
+`DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS` at or above
+`DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS` minus `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS`,
+naming the settings: the main paper's end request must be answerable before the
+deadline. With the pinned deadline of 600 and a poll of 30, any request timeout
+below 570 passes; the default 10 passes at every deadline the poll check allows.
+The wait's timeout message ("Provider conversion exceeded {n} seconds") gives the
+whole seconds actually waited since the paper's own request.
+
+**Release step (unchanged from KANBAN-1976 P7w):** production's prod-state
+override and dev's `.env` files still pin `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=2`
+and `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=600`. Remove both pins (or set
+30 / 3600) in `.env` and every private override before pulling or starting the
+release image, render the config with each environment's exact Compose
+invocation, and check the start-up line "Document-source wait settings: ..."
+shows 30 and 3600. A pinned poll of 2 makes start-up refuse; a pinned deadline of
+600 silently keeps the old 10-minute wait.
 
 General provider limits are passed through both Compose files. The development
 reader renewal skew is intentionally passed through development Compose only;

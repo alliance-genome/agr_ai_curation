@@ -946,6 +946,7 @@ async def test_select_checksum_import_candidate_reports_running_conversion():
     assert decision.selected is not None
     assert decision.selected.converted_artifact is None
     assert decision.selected.provider_metadata_artifacts == (metadata,)
+    assert decision.conversion_answer is None  # no request was sent
 
 
 @pytest.mark.asyncio
@@ -998,6 +999,9 @@ async def test_select_checksum_import_candidate_requests_conversion_when_support
         "conversion_status": "running",
         "conversion_job_id": "job-1",
     }
+    # KANBAN-2191 / ALL-1725: the answer travels with the decision, so the upload
+    # records that the request was sent and the wait never sends it again.
+    assert decision.conversion_answer is provider.conversion_result
     assert provider.calls == [
         {"checksum": "abc123", "request_bearer_token": "curator-token"},
         {

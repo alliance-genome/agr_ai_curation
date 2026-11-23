@@ -2106,6 +2106,14 @@ def get_document_source_import_timeout_seconds() -> float:
     """Main-paper import deadline, covering the provider's conversion and the ingestion.
 
     In-flight storage drains before terminal failure.
+
+    ABC fact (KANBAN-2191 / ALL-1725): the main paper's wait is timed from the
+    paper's own on-demand request, and only before that request's deadline does
+    it ask ABC once more why the main text has not appeared. ABC reports a
+    failure without converting again for one hour after it failed (and it cannot
+    fail before the request), so at 3,600 s or less that late request falls
+    inside the hour; above it, the late request can start a new ABC conversion
+    job. Not checked here: it is ABC's rule.
     """
     name = "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS"
     value = _get_env_float_with_fallback(name, 3600.0)
@@ -2158,6 +2166,21 @@ def get_document_supplement_listing_poll_seconds() -> float:
     return value
 
 
+def get_document_source_listing_max_failed_reads() -> int:
+    """Failed reads of the provider's file listing, in a row, after which a wait ends.
+
+    Both waits (the main paper's and the supplements') only read the listing, so
+    one failed read is tried again at the next interval; a good read resets the
+    count, and a refused login still ends the wait at once. 1 ends a wait at the
+    first failed read.
+    """
+    name = "DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS"
+    value = _get_env_int_with_fallback(name, 3)
+    if value < 1:
+        raise ValueError(f"{name} is {value}; it must be at least 1")
+    return value
+
+
 def get_document_supplement_max_concurrent_waits() -> int:
     """Most supplement waits running at once in one backend process; the rest queue."""
     name = "DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS"
@@ -2180,9 +2203,20 @@ def validate_document_source_wait_settings() -> None:
         supplement_wait_seconds = get_document_supplement_wait_timeout_seconds()
         add_reserve_seconds = get_document_supplement_add_reserve_seconds()
         listing_poll_seconds = get_document_supplement_listing_poll_seconds()
+        max_failed_reads = get_document_source_listing_max_failed_reads()
         get_document_supplement_max_concurrent_waits()
     except ValueError as error:
         raise DocumentSourceWaitSettingsError(str(error)) from error
+    request_timeout_seconds = get_document_source_request_timeout_seconds()
+    if request_timeout_seconds >= deadline_seconds - poll_seconds:
+        # The main paper's wait asks the provider once more near its deadline, only
+        # while that request can be answered before it (KANBAN-2191 / ALL-1725).
+        raise DocumentSourceWaitSettingsError(
+            f"DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS ({request_timeout_seconds:g}) leaves no room "
+            f"for the main paper's end request before DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS "
+            f"({deadline_seconds:g}) minus DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS ({poll_seconds:g}); "
+            f"set DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS below {deadline_seconds - poll_seconds:g}"
+        )
     for wait_name, wait_seconds, poll_name, interval_seconds in (
         ("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", deadline_seconds,
          "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", poll_seconds),
@@ -2205,13 +2239,14 @@ def validate_document_source_wait_settings() -> None:
         "Document-source wait settings: DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=%g, "
         "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=%g, DOCUMENT_SOURCE_DEAD_WAIT_POLLS=%d, "
         "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS=%g, DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS=%g, "
-        "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS=%g",
+        "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS=%g, DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS=%d",
         poll_seconds,
         deadline_seconds,
         dead_wait_polls,
         supplement_wait_seconds,
         add_reserve_seconds,
         listing_poll_seconds,
+        max_failed_reads,
     )
 
 

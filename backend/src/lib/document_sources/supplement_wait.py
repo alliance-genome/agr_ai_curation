@@ -40,6 +40,7 @@ from src.lib.document_sources.models import (
 )
 from src.lib.exceptions import PDFCancellationError
 from src.lib.openai_agents.config import (
+    get_document_source_listing_max_failed_reads,
     get_document_supplement_add_reserve_seconds,
     get_document_supplement_listing_poll_seconds,
     get_document_supplement_max_concurrent_waits,
@@ -472,13 +473,17 @@ async def _poll_until_done(
     (structural, as the file listing decides it). Only when a new such text
     appears does it run the full per-paper listing, for that text's id and
     checks. A file the provider failed stays waiting and ends
-    ``not_converted_in_time`` when the wait ends.
+    ``not_converted_in_time`` when the wait ends. A failed read is tried again at
+    the next interval, up to ``DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS`` in a row
+    (a good read resets the count); a refused login ends the wait at once.
 
     Returns whether the converted files may still be added (False once the
     curator's login was refused).
     """
 
     poll_seconds = get_document_supplement_listing_poll_seconds()
+    max_failed_reads = get_document_source_listing_max_failed_reads()
+    failed_reads = 0
     token = stage.plan.request_context.curator_token
     stage.apply(_converted_in(listing, stage.ids_in(SupplementState.WAITING)), listing)
     seen_texts: set[str] = set()
@@ -498,8 +503,13 @@ async def _poll_until_done(
                 stage.leave_out(provider_file_id, FileReason.LOGIN_EXPIRED)
             return False
         except DocumentSourceError:
-            # The first provider error ends the wait (no retries); converted files join.
-            break
+            # A pure read: tried again at the next interval, up to the tolerated
+            # number in a row; then the wait ends and converted files still join.
+            failed_reads += 1
+            if failed_reads >= max_failed_reads:
+                break
+            continue
+        failed_reads = 0
         waiting = set(stage.ids_in(SupplementState.WAITING))
         new_texts = {
             artifact.artifact_id
@@ -510,7 +520,6 @@ async def _poll_until_done(
         }
         if not new_texts:
             continue
-        seen_texts |= new_texts
         try:
             listing = await list_files(
                 UUID(document_id), owner_user_id=owner_user_id, provider=provider,
@@ -521,7 +530,12 @@ async def _poll_until_done(
                 stage.leave_out(provider_file_id, FileReason.LOGIN_EXPIRED)
             return False
         except DocumentSourceError:
-            break
+            # Counted as a failed read; the new texts are looked at again next time.
+            failed_reads += 1
+            if failed_reads >= max_failed_reads:
+                break
+            continue
+        seen_texts |= new_texts
         stage.apply(_converted_in(listing, stage.ids_in(SupplementState.WAITING)), listing)
     for provider_file_id in stage.ids_in(SupplementState.WAITING):
         stage.leave_out(provider_file_id, FileReason.NOT_CONVERTED_IN_TIME)
