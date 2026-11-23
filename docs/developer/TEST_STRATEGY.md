@@ -67,8 +67,7 @@ The `Unit Tests` workflow runs every backend test that can run in CI:
 - **Backend Persistence Tests:** `tests/integration/persistence/`.
 
 The contract, integration and persistence jobs run with PostgreSQL, Redis and
-Weaviate. The agent PR gate waits for all four backend jobs and both frontend
-jobs.
+Weaviate.
 
 The same workflow also runs the tooling tests:
 
@@ -77,12 +76,17 @@ The same workflow also runs the tooling tests:
   type check, offline unit tests and scenario YAML validation; the live smoke run
   stays manual);
 - **Docker Test Compose Regression**, which also runs the stub-based tests of the
-  local test and preflight scripts in `scripts/tests/`;
-- the installer and publish shell suites.
+  local test, preflight and agent helper scripts in `scripts/tests/`;
+- **Benchmark Replacement Canary** (see below);
+- the **Installer**, **Publish Artifact** and **OpenAI Agents Upgrade Gate** shell
+  regression suites.
 
-The agent PR gate runs its own script tests when their target files change.
-`scripts/tests/test_agent_pr_gate_standalone_suites.sh` is not in CI yet: it
-copies the repository into a sandbox and runs the gate's suites there.
+Every job in the workflow is unconditional, and the agent PR gate waits for all
+of them: a red job fails the gate. (`main` has no branch protection, so the gate
+blocks a merge only because whoever merges reads the checks first.) The gate also
+runs its own script tests when their target files change; the slowest of them,
+`scripts/tests/test_agent_pr_gate_standalone_suites.sh`, copies the repository
+into a sandbox and runs the gate there, so it runs only when the gate changes.
 
 Tests that need something CI cannot give skip themselves and name what they
 need:

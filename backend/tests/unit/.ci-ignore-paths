@@ -7,7 +7,7 @@
 # CI jobs. They sit outside tests/unit/, so these entries only guard against a
 # widened test path.
 #   tests/contract     -> "Backend Contract Core Tests"
-#   tests/integration  -> "Backend Contract Core Tests" (outside persistence/)
+#   tests/integration  -> "Backend Integration Tests" (outside persistence/)
 #                         and "Backend Persistence Tests" (persistence/)
 tests/integration
 tests/contract
