@@ -48,6 +48,7 @@ class DocumentHierarchyAnalyzer:
                 "sections": [],
                 "files": [],
                 "files_being_added": False,
+                "supplements_converting": False,
                 "raw_hierarchy_text": None,
                 "error": "No PDF specialist found in trace"
             }
@@ -66,6 +67,7 @@ class DocumentHierarchyAnalyzer:
             "sections": hierarchy_info.get("sections", []),
             "files": hierarchy_info.get("files", []),
             "files_being_added": hierarchy_info.get("files_being_added", False),
+            "supplements_converting": hierarchy_info.get("supplements_converting", False),
             "raw_hierarchy_text": hierarchy_info.get("raw_text"),
             "chunk_count_total": hierarchy_info.get("chunk_count_total", 0)
         }
@@ -127,6 +129,7 @@ class DocumentHierarchyAnalyzer:
             "sections": [],
             "files": [],
             "files_being_added": False,
+            "supplements_converting": False,
             "raw_text": None,
             "chunk_count_total": 0
         }
@@ -163,6 +166,8 @@ class DocumentHierarchyAnalyzer:
             result["files"] = cls._parse_files(raw_text)
             # The outline says so while files of the paper were being added (0.12.0).
             result["files_being_added"] = cls._FILES_BEING_ADDED in raw_text
+            # ... and while an import waited for ABC to convert its supplements.
+            result["supplements_converting"] = cls._SUPPLEMENTS_CONVERTING in raw_text
             result["sections"] = [section for file in result["files"] for section in file["sections"]]
 
             # Check for hierarchy resolution failure (only "Unknown" section)
@@ -213,6 +218,8 @@ class DocumentHierarchyAnalyzer:
         return result
 
     _FILES_BEING_ADDED = "Files are still being added to this paper; they cannot be read yet."
+    # Keep in step with SUPPLEMENTS_CONVERTING_LINE in backend prompt_utils.
+    _SUPPLEMENTS_CONVERTING = "ABC has not finished converting this paper's supplements; they cannot be read yet."
 
     _FILE_LINE = re.compile(
         r'^File (\d+) of (\d+): (.+) \((main paper|supplement), ([^,]+), (\d+) chunks, chunks (\d+) to (\d+)\)$'

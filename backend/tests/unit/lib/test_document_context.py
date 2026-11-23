@@ -281,3 +281,18 @@ async def test_files_being_added_reach_each_run_and_are_never_cached(retrieval, 
     assert done.hierarchy["files_being_added"] == 0
     retrieval.assert_awaited_once()  # same readable files: the cached outline is reused
     assert "files_being_added" not in document_cache._cache[("user", "doc")].hierarchy
+
+
+@pytest.mark.asyncio
+async def test_an_abc_wait_reaches_each_run_and_is_never_cached(retrieval, readable):
+    from dataclasses import replace
+
+    readable[("doc", "user")] = replace(single_file("doc"), supplements_converting=True)
+    waiting = await DocumentContext.fetch("doc", "user")
+    readable[("doc", "user")] = single_file("doc")
+    done = await DocumentContext.fetch("doc", "user")
+
+    assert waiting.hierarchy["supplements_converting"] is True
+    assert done.hierarchy["supplements_converting"] is False
+    retrieval.assert_awaited_once()  # same readable files: the cached outline is reused
+    assert "supplements_converting" not in document_cache._cache[("user", "doc")].hierarchy
