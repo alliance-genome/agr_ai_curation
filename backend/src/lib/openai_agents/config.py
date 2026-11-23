@@ -432,6 +432,10 @@ def get_model_for_agent(
     Returns:
         Model name string for native OpenAI, or a direct SDK model otherwise.
     """
+    from src.lib.config.models_loader import resolve_model_id
+
+    # A replaced model id is requested as the catalog entry replacing it (ALL-1708).
+    model_name = resolve_model_id(str(model_name or "").strip())
     provider_id = resolve_model_provider(model_name, provider_override)
     require_provider_enabled(provider_id)
     provider = _get_provider_definition(provider_id)
@@ -604,16 +608,40 @@ def unsupported_reasoning_effort(model_def: object, value: object) -> Optional[R
     """Return the effort that would be sent but the catalog model does not accept.
 
     Values that normalize to "no reasoning" are never sent, so they are not
-    reported here; only a real effort outside the model's options is.
+    reported here; only a real effort outside the model's options, with no
+    reviewed ``reasoning_map`` entry, is.
     """
     effort = normalize_reasoning_effort(value)
     if effort is None:
         return None
-    if getattr(model_def, "supports_reasoning", False) and effort in tuple(
-        getattr(model_def, "reasoning_options", ()) or ()
+    if getattr(model_def, "supports_reasoning", False) and (
+        effort in tuple(getattr(model_def, "reasoning_options", ()) or ())
+        or effort in (getattr(model_def, "reasoning_map", None) or {})
     ):
         return None
     return effort
+
+
+class UnsupportedReasoningEffortError(ValueError):
+    """A saved reasoning level the model does not offer and the catalog does not map."""
+
+
+def requested_reasoning_effort(model_def: object, value: object) -> Optional[ReasoningEffort]:
+    """The effort actually requested: the saved level when the model offers it, else
+    the catalog entry's reviewed ``reasoning_map`` level; with neither, refused."""
+    effort = normalize_reasoning_effort(value)
+    if effort is None or not getattr(model_def, "supports_reasoning", False):
+        return effort
+    if effort in tuple(getattr(model_def, "reasoning_options", ()) or ()):
+        return effort
+    mapped = (getattr(model_def, "reasoning_map", None) or {}).get(effort)
+    if mapped is None:
+        raise UnsupportedReasoningEffortError(
+            f"Reasoning effort '{effort}' is not offered by model "
+            f"'{getattr(model_def, 'model_id', '')}' and the model catalog has no reviewed "
+            "mapping for it"
+        )
+    return mapped  # type: ignore[return-value]
 
 
 ReasoningSummaryStatus = Literal["present", "not_requested", "not_supported", "unavailable"]
@@ -1276,6 +1304,10 @@ def build_model_settings(
     # Import here to avoid circular dependency
     from agents import ModelSettings
     from openai.types.shared import Reasoning
+    from src.lib.config.models_loader import resolve_model_id
+
+    # Settings (prompt-cache key included) describe the model actually requested.
+    model = resolve_model_id(str(model or "").strip())
 
     # Build reasoning config for models that support it. Normalize first so an
     # invalid value (e.g. "disabled" from the flow builder) becomes "no reasoning"
@@ -1283,6 +1315,8 @@ def build_model_settings(
     reasoning = None
     reasoning_effort = normalize_reasoning_effort(reasoning_effort)
     if reasoning_effort and supports_reasoning(model):
+        reasoning_effort = requested_reasoning_effort(
+            _get_model_definition(model), reasoning_effort)
         summary_settings = reasoning_summary_request_settings(
             model=model,
             reasoning_effort=reasoning_effort,

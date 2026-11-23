@@ -311,6 +311,7 @@ describe('PromptWorkshop', () => {
       reasoning_descriptions: { low: 'Fastest', medium: 'Balanced', high: 'Deep' },
       recommended_for: ['Validation and lightweight work'],
       avoid_for: ['Deep multi-step adjudication'],
+      replaces: [],
     },
     {
       model_id: 'gpt-6-astra',
@@ -326,6 +327,7 @@ describe('PromptWorkshop', () => {
       reasoning_descriptions: { low: 'Fast', medium: 'Balanced', high: 'Slow', xhigh: 'Slowest' },
       recommended_for: ['Complex work'],
       avoid_for: ['Simple lookups'],
+      replaces: [],
     },
   ]
 

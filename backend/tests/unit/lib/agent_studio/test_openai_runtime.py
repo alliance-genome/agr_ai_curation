@@ -405,7 +405,7 @@ def test_stream_translates_sdk_events_and_records_response_usage(monkeypatch, su
     ]
     assert translated[-1]["result"] == {"success": True}
     assert translated[-2]["tool_name"] == "save_flow"
-    assert captured["agent"].model == "gpt-6-astra"
+    assert captured["agent"].model == "gpt-6.2-astra"
     assert captured["max_turns"] == 5
     assert captured["run_config"].model_provider is provider
     assert captured["run_config"].workflow_name == (
@@ -662,7 +662,7 @@ def test_streamed_invalid_then_valid_proposal_finishes_on_last_turn(monkeypatch,
             self.calls += 1
             assert self.calls <= 2
             response = Response.model_construct(
-                id=f"response-{self.calls}", created_at=0, model="gpt-6-astra",
+                id=f"response-{self.calls}", created_at=0, model="gpt-6.2-astra",
                 object="response", status="completed", usage=None,
                 output=[ResponseFunctionToolCall(
                     id=f"fc_{self.calls}", call_id=f"call_{self.calls}",

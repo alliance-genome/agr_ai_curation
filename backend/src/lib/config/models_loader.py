@@ -1,4 +1,13 @@
-"""Model catalog loader with package-default and runtime-override merging."""
+"""Model catalog loader with package-default and runtime-override merging.
+
+Model versions: a catalog entry may list the ids it ``replaces``. Each replaced id
+resolves to that entry everywhere (``get_model``, ``resolve_model_id``), so moving
+to a new model version is one catalog edit and nothing saved is changed: saved
+agents, pinned revisions and environment values keep the id they name and run on
+the entry that replaces it. The owner's decision is recorded in ALL-1708. The
+mapping is flat (a replaced id maps directly to a current entry) and an id the
+catalog does not know is still refused.
+"""
 
 import logging
 import threading
@@ -40,6 +49,10 @@ class ModelDefinition:
     context_window_tokens: Optional[int] = None
     max_input_tokens: Optional[int] = None
     max_output_tokens: Optional[int] = None
+    # Model ids this entry replaces; each resolves to this entry (ALL-1708).
+    replaces: List[str] = field(default_factory=list)
+    # Reviewed mapping for saved reasoning levels this entry does not offer.
+    reasoning_map: Dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_yaml(
@@ -81,6 +94,29 @@ class ModelDefinition:
             source_label=source_label,
             normalize_key_lower=True,
         )
+        replaces = _parse_string_list(
+            data.get("replaces"),
+            field_name=f"{model_id}.replaces",
+            source_label=source_label,
+        )
+        if model_id in replaces:
+            raise ValueError(f"Model entry '{model_id}' in {source_label} replaces itself")
+        reasoning_map = {
+            key: value.lower()
+            for key, value in _parse_string_map(
+                data.get("reasoning_map"),
+                field_name=f"{model_id}.reasoning_map",
+                source_label=source_label,
+                normalize_key_lower=True,
+            ).items()
+        }
+        for saved_level, level in reasoning_map.items():
+            if saved_level in reasoning_options or level not in reasoning_options:
+                raise ValueError(
+                    f"Model entry '{model_id}' in {source_label} reasoning_map "
+                    f"'{saved_level}: {level}' must map a level this model does not offer "
+                    "to one it offers"
+                )
 
         return cls(
             model_id=model_id,
@@ -107,6 +143,8 @@ class ModelDefinition:
                 source_label=source_label,
             ),
             source_label=source_label,
+            replaces=replaces,
+            reasoning_map=reasoning_map,
             **{key: _capacity_value(data.get(key), key, model_id) for key in
                 ("context_window_tokens", "max_input_tokens", "max_output_tokens")},
         )
@@ -223,17 +261,76 @@ def load_models(
                 model = ModelDefinition.from_yaml(raw, source_label=source.describe())
                 registry[model.model_id] = model
 
+        _check_replacements(registry)
         _model_registry = registry
         _initialized = True
         logger.info("Loaded %s model definitions", len(_model_registry))
         return _model_registry
 
 
+class ModelCatalogError(ValueError):
+    """The merged model catalog is inconsistent; startup stops."""
+
+
+def _check_replacements(registry: Dict[str, ModelDefinition]) -> None:
+    owners: Dict[str, str] = {}
+    for model in registry.values():
+        for replaced in model.replaces:
+            if replaced in registry:
+                raise ModelCatalogError(
+                    f"Model id '{replaced}' is both a catalog entry and replaced by "
+                    f"'{model.model_id}'"
+                )
+            if replaced in owners:
+                raise ModelCatalogError(
+                    f"Model id '{replaced}' is replaced by both '{owners[replaced]}' and "
+                    f"'{model.model_id}'"
+                )
+            owners[replaced] = model.model_id
+
+
+def _replacing_entry(model_id: str) -> Optional[ModelDefinition]:
+    for model in _model_registry.values():
+        if model_id in model.replaces:
+            return model
+    return None
+
+
 def get_model(model_id: str) -> Optional[ModelDefinition]:
-    """Get one model definition by ID."""
+    """Get the catalog entry for an id; a replaced id gets the entry replacing it."""
     if not _initialized:
         load_models()
-    return _model_registry.get(model_id)
+    return _model_registry.get(model_id) or _replacing_entry(model_id)
+
+
+def resolve_model_id(model_id: str) -> str:
+    """The catalog id actually requested for a configured id (ALL-1708).
+
+    A replaced id becomes the id of the entry replacing it; any other id is returned
+    unchanged, so an id the catalog does not know is refused where it is checked."""
+    model = get_model(model_id)
+    return model.model_id if model is not None else model_id
+
+
+def is_replaced_model_id(model_id: str) -> bool:
+    """True when the catalog lists ``model_id`` in some entry's ``replaces``."""
+    if not _initialized:
+        load_models()
+    return model_id not in _model_registry and _replacing_entry(model_id) is not None
+
+
+def index_models(models: List[ModelDefinition]) -> Dict[str, Any]:
+    """``{id: entry}`` for these entries and every id they replace (ALL-1708)."""
+    index: Dict[str, Any] = {model.model_id: model for model in models}
+    for model in models:
+        for replaced in getattr(model, "replaces", ()):
+            index[replaced] = model
+    return index
+
+
+def model_index() -> Dict[str, ModelDefinition]:
+    """Every id the catalog resolves (entries and replaced ids) to its entry."""
+    return index_models(list_models())
 
 
 def get_default_model() -> Optional[ModelDefinition]:

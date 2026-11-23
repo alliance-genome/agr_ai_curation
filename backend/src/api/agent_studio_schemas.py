@@ -153,6 +153,8 @@ class ModelOption(BaseModel):
     reasoning_descriptions: Dict[str, str] = Field(default_factory=dict)
     recommended_for: List[str] = Field(default_factory=list)
     avoid_for: List[str] = Field(default_factory=list)
+    # Model ids this option replaces; a saved agent naming one shows and saves this option.
+    replaces: List[str] = Field(default_factory=list)
 
 
 class ModelsResponse(BaseModel):
