@@ -7886,7 +7886,8 @@ def test_flow_chat_step_takes_rendered_output_from_delivery_scope_not_tool_resul
     def _chat_tool(*, tool_name, tool_description, **_kwargs):
         @function_tool(name_override=tool_name, description_override=tool_description)
         async def _tool(query: str) -> str:
-            receipt = await deliver_projected_chat_output(table, {"status": "ok", "delivered": True})
+            receipt = await deliver_projected_chat_output(table, {"status": "ok", "delivered": True,
+                "set_aside": {"included": 1, "left_out": 0}})
             return json.dumps(receipt)
 
         return _tool
@@ -7916,6 +7917,9 @@ def test_flow_chat_step_takes_rendered_output_from_delivery_scope_not_tool_resul
 
     completed_step = execution_state["completed_steps"][1]
     assert completed_step["agent_id"] == "chat_output_formatter"
+    assert completed_step["projected_chat_set_aside"] == {
+        "included": 1, "left_out": 0, "output_id": json.loads(completed_step["output"])["chat_output_id"],
+    }
     assert completed_step["projected_chat_output"] == table
     assert "unc-54" not in result
     assert "unc-54" not in completed_step["output"]

@@ -46,6 +46,7 @@ import {
 export interface SetAsidePaper {
   documentId: string
   flowRunId: string
+  outputId?: string
   /** The paper's title; null where the page shows only one paper and has no title for it. */
   title: string | null
   /** Records the run set aside for this paper (or this file). */
@@ -66,7 +67,7 @@ type PaperLoad =
   | { state: 'error'; message: string }
   | { state: 'loaded'; data: FlowRunSetAsideRecordsResponse }
 
-const paperKey = (paper: SetAsidePaper) => `${paper.flowRunId}:${paper.documentId}`
+const paperKey = (paper: SetAsidePaper) => JSON.stringify([paper.flowRunId, paper.documentId, paper.outputId])
 
 function renderValue(value: unknown): string {
   if (value === null) return '—'
@@ -233,7 +234,7 @@ export default function SetAsideRecordsDialog({
   const loadPaper = React.useCallback((paper: SetAsidePaper, signal: AbortSignal) => {
     const key = paperKey(paper)
     setLoads((current) => ({ ...current, [key]: { state: 'loading' } }))
-    fetchFlowRunSetAsideRecords(paper.flowRunId, paper.documentId, { signal })
+    fetchFlowRunSetAsideRecords(paper.flowRunId, paper.documentId, { signal, outputId: paper.outputId })
       .then((data) => {
         if (signal.aborted) return
         setLoads((current) => ({ ...current, [key]: { state: 'loaded', data } }))
@@ -257,7 +258,10 @@ export default function SetAsideRecordsDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, papersKey, loadPaper])
 
-  const totalCount = papers.reduce((sum, paper) => sum + paper.count, 0)
+  const totalCount = papers.reduce((sum, paper) => {
+    const load = loads[paperKey(paper)]
+    return sum + (paper.outputId && load?.state === 'loaded' ? load.data.set_aside_count : paper.count)
+  }, 0)
   const title = papers.length > 1
     ? `${recordCountText(totalCount)} set aside in ${papers.length} papers`
     : `${recordCountText(totalCount)} set aside`

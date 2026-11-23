@@ -347,7 +347,7 @@ async def test_chat_content_ceiling_and_delivery_failure_are_reported(monkeypatc
     monkeypatch.setenv("FLOW_OUTPUT_CHAT_MAX_CHARS", "1000")
     delivered: list[str] = []
 
-    async def deliver(content, receipt):
+    async def deliver(content, receipt, membership):
         delivered.append(content)
         return receipt
 
@@ -359,7 +359,7 @@ async def test_chat_content_ceiling_and_delivery_failure_are_reported(monkeypatc
 
     monkeypatch.delenv("FLOW_OUTPUT_CHAT_MAX_CHARS")
 
-    async def broken(content, receipt):
+    async def broken(content, receipt, membership):
         raise RuntimeError("stream closed")
 
     finalize = _tool(_chat_tools(_rows_bundle(2), deliver=broken), "finalize_chat_output")

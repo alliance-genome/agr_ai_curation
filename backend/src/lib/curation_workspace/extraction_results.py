@@ -604,6 +604,7 @@ def list_extraction_results(
     user_id: str | None = None,
     source_kind: Any | None = None,
     exclude_agent_keys: Sequence[str] | None = None,
+    extraction_result_ids: set[UUID] | None = None,
 ) -> list[CurationExtractionResultRecord]:
     """List persisted extraction-result records using the shared schema contract."""
     owns_session = db is None
@@ -637,6 +638,8 @@ def list_extraction_results(
             statement = statement.where(CurationExtractionResultRecordModel.user_id == user_id)
         if source_kind is not None:
             statement = statement.where(CurationExtractionResultRecordModel.source_kind == source_kind)
+        if extraction_result_ids is not None:
+            statement = statement.where(CurationExtractionResultRecordModel.id.in_(extraction_result_ids))
         if exclude_agent_keys:
             statement = statement.where(
                 CurationExtractionResultRecordModel.agent_key.notin_(

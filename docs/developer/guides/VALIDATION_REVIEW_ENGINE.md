@@ -953,9 +953,13 @@ JSON and chat tables. When every record is set aside the empty output is intenti
 (`executor._build_set_aside_summary`), which batch stores in
 `BatchDocument.review_details["set_aside"]` and preferred chat flows repeat on
 RUN_FINISHED. `GET /api/curation-workspace/flow-runs/{flow_run_id}/set-aside-records?document_id=`
-lists them read only (`flows.set_aside_records`). Benchmarks score such a run as
-completed from its saved extraction, set-aside records included. Runs saved before
-this change have no set-aside fact and stay as they stopped.
+lists the paper’s currently pending set-aside records (`flows.set_aside_records`).
+File cards pass `file_id` and chat table notices pass `details.set_aside.output_id`
+as the optional `output_id` query parameter. The endpoint intersects current records with the included projection
+keys saved for that owner, run, document and output. A scoped request requires a
+saved membership. Historical aggregate counts cannot reconstruct the included rows.
+Benchmarks score such a run as completed from its saved extraction, set-aside
+records included. Runs saved before set-aside facts were introduced stay as they stopped.
 
 ### Work ownership and cancellation
 

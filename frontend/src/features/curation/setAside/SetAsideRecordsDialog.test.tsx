@@ -101,6 +101,26 @@ describe('SetAsideRecordsDialog', () => {
     expect(within(dialog).queryByRole('textbox')).not.toBeInTheDocument()
   })
 
+  it('reloads the records when switching outputs for the same run and document', async () => {
+    mockFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const outputId = new URL(String(input), 'http://localhost').searchParams.get('output_id')
+      if (outputId === 'first') return jsonResponse(response('doc-1', {}, 'First source record'))
+      if (outputId === 'second') return jsonResponse(response('doc-1', {}, 'Second source record'))
+      throw new Error('Expected an output-specific request')
+    })
+    const viewer = (outputId: string) => (
+      <SetAsideRecordsDialog open onClose={vi.fn()} flowName={null}
+        papers={[paper({ outputId, placement: 'included', count: 2 })]} />
+    )
+    const { rerender } = render(viewer('first'))
+    expect(await screen.findByText('First source record', { selector: 'span' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: '1 record set aside' })).toHaveTextContent('In the file')
+    rerender(viewer('second'))
+    expect(screen.queryByText('First source record', { selector: 'span' })).not.toBeInTheDocument()
+    expect(await screen.findByText('Second source record', { selector: 'span' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Record 1' })).toHaveTextContent('In the file')
+  })
+
   it('shows the load error and fetches again on request', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ detail: 'Flow run run-1 not found' }, 404))
 

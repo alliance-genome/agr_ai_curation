@@ -268,9 +268,9 @@ describe('FileDownloadCard - records set aside by the review (ALL-1561)', () => 
     mockFetch.mockReset()
   })
 
-  it('says when set-aside records were left out of the file and opens the viewer', async () => {
+  it('shows only the included record in a file that left other records out', async () => {
     mockFetch.mockResolvedValue(new Response(JSON.stringify({
-      flow_run_id: 'run-1', document_id: 'doc-1', set_aside_count: 2,
+      flow_run_id: 'run-1', document_id: 'doc-1', set_aside_count: 1,
       results: [{
         extraction_result_id: 'r-1', node_id: 'extract', step: 1, agent_name: 'Gene extractor',
         review_fields_available: true, held_by_curator: false,
@@ -283,17 +283,18 @@ describe('FileDownloadCard - records set aside by the review (ALL-1561)', () => 
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
 
     render(<FileDownloadCard file={createTestFileInfo({
-      flow_run_id: 'run-1', document_id: 'doc-1', set_aside: { included: 0, left_out: 2 },
+      flow_run_id: 'run-1', document_id: 'doc-1', set_aside: { included: 1, left_out: 2 },
     })} />)
 
     expect(screen.getByText('2 records set aside by review, not in this file')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'View set-aside records for genes_20250107T123456Z.csv' }))
 
-    const dialog = await screen.findByRole('dialog', { name: '2 records set aside' })
+    const dialog = await screen.findByRole('dialog', { name: '1 record set aside' })
     expect(dialog).toHaveTextContent('genes_20250107T123456Z.csv')
     expect(await screen.findByText(/Accepted earlier: named in Table 1 \| Set aside later/)).toBeInTheDocument()
+    expect(dialog).toHaveTextContent('In the file')
     expect(mockFetch).toHaveBeenCalledWith(
-      '/api/curation-workspace/flow-runs/run-1/set-aside-records?document_id=doc-1',
+      '/api/curation-workspace/flow-runs/run-1/set-aside-records?document_id=doc-1&output_id=test-file-123',
       expect.objectContaining({ credentials: 'include' }),
     )
   })

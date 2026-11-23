@@ -344,7 +344,7 @@ def test_literal_only_projection_counts_synthetic_row_without_inventing_source()
 async def test_multisection_chat_all_filtered_is_intentional_empty():
     delivered = []
 
-    async def deliver(content, receipt):
+    async def deliver(content, receipt, membership):
         delivered.append(content)
         return receipt
 
@@ -374,7 +374,7 @@ async def test_multisection_chat_all_filtered_is_intentional_empty():
 async def test_empty_report_requires_each_section_to_be_intentionally_filtered():
     delivered = []
 
-    async def deliver(content, receipt):
+    async def deliver(content, receipt, membership):
         delivered.append(content)
         return receipt
 

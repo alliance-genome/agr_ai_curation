@@ -8,6 +8,7 @@ import json
 import math
 import re
 from typing import Any, Callable, Literal, Mapping, Protocol, Sequence
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 from src.lib.export_accounting import ExportAccounting
@@ -2150,6 +2151,8 @@ def _step_from_extraction_result(
     )
     return {
         "step": step_number,
+        # Reviewed flow results store the original projection node in flow_step_key.
+        "node_id": metadata["flow_step_key"] if metadata.get("flow_review") else None,
         "extraction_result_id": extraction_result.extraction_result_id,
         "agent_id": extraction_result.agent_key,
         "agent_name": extraction_result.agent_key.replace("_", " ").title(),
@@ -3496,7 +3499,12 @@ def _shows_review_status(plan: FlowOutputProjectionPlan, artifact: FlowOutputArt
 def _set_aside_record_key(artifact: FlowOutputArtifact, record: Sequence[str]) -> str:
     """A set-aside record's identity across projections of one bundle: its source step and result, and its object keys."""
 
-    return "|".join([artifact.node_id, artifact.extraction_result_id or "", *sorted(record)])
+    return json.dumps([artifact.node_id, artifact.extraction_result_id, sorted(record)], separators=(",", ":"))
+
+
+def set_aside_extraction_result_ids(record_keys: set[str]) -> set[UUID]:
+    """The persisted source results named by an output's projection keys."""
+    return {UUID(result_id) for _, result_id, _ in map(json.loads, record_keys)}
 
 
 def _set_aside_rows(
@@ -3810,7 +3818,9 @@ def apply_projection_plan(
     )
 
 
-def set_aside_record_views(bundle: FlowOutputArtifactBundle) -> list[dict[str, Any]]:
+def set_aside_record_views(
+    bundle: FlowOutputArtifactBundle, *, included_keys: set[str] | None = None,
+) -> list[dict[str, Any]]:
     """Each set-aside record of a bundle, read only, with the curator's own fields.
 
     One entry per record the review set aside (``FlowOutputArtifact.set_aside_records``):
@@ -3833,7 +3843,11 @@ def set_aside_record_views(bundle: FlowOutputArtifactBundle) -> list[dict[str, A
     ]
     views = []
     for artifact in bundle.artifacts:
-        keys = {key for record in artifact.set_aside_records for key in record}
+        keys = {
+            key for record in artifact.set_aside_records
+            if included_keys is None or _set_aside_record_key(artifact, record) in included_keys
+            for key in record
+        }
         refs = [field["ref"] for field in artifact.source_fields]
         for row in artifact.rows_by_source.get("object") or []:
             if not keys.intersection(_object_keys(row)):

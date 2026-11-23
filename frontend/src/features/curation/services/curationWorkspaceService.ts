@@ -131,8 +131,9 @@ export async function fetchCurationWorkspaceEnvelopeReviewRows(
   return Promise.all(requests.map((request) => fetchDomainEnvelopeReviewRows(request)))
 }
 
-export function buildFlowRunSetAsideRecordsPath(flowRunId: string, documentId: string): string {
+export function buildFlowRunSetAsideRecordsPath(flowRunId: string, documentId: string, outputId?: string): string {
   const query = new URLSearchParams({ document_id: documentId })
+  if (outputId !== undefined) query.set('output_id', outputId)
   return `/api/curation-workspace/flow-runs/${encodeURIComponent(flowRunId)}/set-aside-records?${query.toString()}`
 }
 
@@ -140,10 +141,10 @@ export function buildFlowRunSetAsideRecordsPath(flowRunId: string, documentId: s
 export async function fetchFlowRunSetAsideRecords(
   flowRunId: string,
   documentId: string,
-  options: CurationWorkspaceRequestOptions = {},
+  options: CurationWorkspaceRequestOptions & { outputId?: string } = {},
 ): Promise<FlowRunSetAsideRecordsResponse> {
   return fetchCurationWorkspaceJson<FlowRunSetAsideRecordsResponse>(
-    buildFlowRunSetAsideRecordsPath(flowRunId, documentId),
+    buildFlowRunSetAsideRecordsPath(flowRunId, documentId, options.outputId),
     { signal: options.signal },
   )
 }

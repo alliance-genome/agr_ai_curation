@@ -269,6 +269,7 @@ function FileDownloadCard({
               counts={file.set_aside}
               noun="file"
               outputName={file.filename}
+              outputId={file.file_id}
               flowRunId={file.flow_run_id ?? null}
               documentId={file.document_id ?? null}
             />

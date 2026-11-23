@@ -107,7 +107,7 @@ def test_a_file_without_review_status_leaves_set_aside_records_out(reviewed, out
                   output_format) == [["statement"], ["in the gut"]]
     assert (plain.set_aside_left_out, plain.set_aside_included) == (1, 0)
     assert plain.export_accounting.candidate_row_count == 1
-    assert _set_aside_summary([plain]) == {"included": 0, "left_out": 1}
+    assert _set_aside_summary([plain]).counts == {"included": 0, "left_out": 1}
 
     marked = apply_projection_plan(bundle, _object_plan(output_format, [("statement", STATEMENT),
                                                                          ("Review status", STATUS)]))
@@ -181,7 +181,7 @@ def test_a_source_without_review_status_never_contributes_set_aside_records(revi
     assert [row["status"] for row in result.rows if row["statement"]] == ["accepted", "set aside"]
     assert [row["label"] for row in result.rows if row["statement"] is None] == ["VT1"]
     assert (result.set_aside_included, result.set_aside_left_out) == (1, 1)
-    assert _set_aside_summary([result]) == {"included": 1, "left_out": 1}
+    assert _set_aside_summary([result]).counts == {"included": 1, "left_out": 1}
 
 
 def test_review_status_is_blank_for_a_pending_record_no_finished_run_set_aside(reviewed):
@@ -439,7 +439,7 @@ def test_a_chat_report_counts_each_set_aside_record_once_across_its_sections(rev
     one = apply_projection_plan(bundle, _object_plan("chat", [("statement", STATEMENT)]))
     two = apply_projection_plan(bundle, _object_plan("chat", [("statement", STATEMENT)]))
     assert (one.set_aside_left_out, two.set_aside_left_out) == (1, 1)
-    assert _set_aside_summary([one, two]) == {"included": 0, "left_out": 1}
+    assert _set_aside_summary([one, two]).counts == {"included": 0, "left_out": 1}
 
 
 def test_a_chat_report_counts_a_record_one_section_shows_as_in_the_report(reviewed):
@@ -448,5 +448,39 @@ def test_a_chat_report_counts_a_record_one_section_shows_as_in_the_report(review
     bundle = _bundle(reviewed, [_object("kept", "in the gut"), _object("aside", "near the gut")], aside={"aside"})
     plain = apply_projection_plan(bundle, _object_plan("chat", [("statement", STATEMENT)]))
     marked = apply_projection_plan(bundle, _object_plan("chat", [("statement", STATEMENT), ("status", STATUS)]))
-    assert _set_aside_summary([plain, marked]) == {"included": 1, "left_out": 0}
-    assert _set_aside_summary([marked, plain]) == {"included": 1, "left_out": 0}
+    assert _set_aside_summary([plain, marked]).counts == {"included": 1, "left_out": 0}
+    assert _set_aside_summary([marked, plain]).counts == {"included": 1, "left_out": 0}
+
+
+def test_set_aside_details_follow_each_outputs_source_and_row_limit(reviewed):
+    # The record identifier repeats across sources. Only the full projection key distinguishes them.
+    other_source = _reviewed_step([_object("shared", "second source")], node_id="node_2")
+    other_source["step"] = 2
+    bundle = _bundle(reviewed, [_object("shared", "first source"), _object("extra", "left out")],
+                     aside={"shared", "extra"}, extra_steps=[other_source])
+    plan = _object_plan("csv", [("statement", STATEMENT), ("status", STATUS)])
+
+    def statements(keys=None):
+        views = set_aside_record_views(bundle, included_keys=keys)
+        return [next(cell["value"] for cell in view["fields"] if cell["field_ref"] == STATEMENT)
+                for view in views]
+
+    for source, expected in zip(bundle.artifacts, ["first source", "second source"], strict=True):
+        projection = apply_projection_plan(bundle, plan.model_copy(update={
+            "source_keys": [source.source_key], "max_rows": 1,
+        }))
+        assert statements(set(projection.set_aside_included_keys)) == [expected]
+    assert statements(set()) == []
+    assert statements() == ["first source", "left out", "second source"]
+
+
+def test_set_aside_membership_write_errors_keep_private_keys_out_of_delivery_errors():
+    from unittest.mock import Mock
+    from sqlalchemy.exc import StatementError
+    from src.models.sql.flow_output_set_aside import FlowOutputSetAside
+
+    db = Mock()
+    db.flush.side_effect = StatementError("write failed", "INSERT ...", ["private-record-key"], ValueError())
+    with pytest.raises(RuntimeError, match="^StatementError$") as error:
+        FlowOutputSetAside(included_keys=["private-record-key"]).persist(db)
+    assert error.value.__context__ is None and error.value.__cause__ is None

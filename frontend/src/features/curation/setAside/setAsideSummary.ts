@@ -90,6 +90,8 @@ export function setAsidePlacement(summary: FlowSetAsideSummary): SetAsidePlaceme
 
 /** One output's own counts (FILE_READY / CHAT_OUTPUT_READY `details.set_aside`). */
 export interface OutputSetAsideCounts {
+  /** A delivered chat table's ID. Files carry their ID on the file card. */
+  output_id?: string
   included: number
   left_out: number
 }
@@ -97,7 +99,8 @@ export interface OutputSetAsideCounts {
 export function isOutputSetAsideCounts(value: unknown): value is OutputSetAsideCounts {
   if (typeof value !== 'object' || value === null) return false
   const candidate = value as Record<string, unknown>
-  return isCount(candidate.included) && isCount(candidate.left_out)
+  return (candidate.output_id === undefined || typeof candidate.output_id === 'string')
+    && isCount(candidate.included) && isCount(candidate.left_out)
     && candidate.included + candidate.left_out > 0
 }
 
@@ -123,10 +126,6 @@ export interface OutputSetAsideNotice {
   counts: OutputSetAsideCounts
   flowRunId: string | null
   documentId: string | null
-}
-
-export function outputSetAsidePlacement(counts: OutputSetAsideCounts): SetAsidePlacement {
-  return placementFromCounts(counts.left_out, counts.included)
 }
 
 /** What the output is called in its one-line notice. */

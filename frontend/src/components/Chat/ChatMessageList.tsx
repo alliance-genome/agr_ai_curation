@@ -129,6 +129,7 @@ function ChatMessageList({
                       counts={notice.counts}
                       noun="table"
                       outputName="this table"
+                      outputId={notice.counts.output_id ?? null}
                       flowRunId={notice.flowRunId}
                       documentId={notice.documentId}
                     />

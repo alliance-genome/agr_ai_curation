@@ -17,7 +17,7 @@ import json
 import re
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import Any, cast, get_args
+from typing import Any, NamedTuple, cast, get_args
 
 from agr_ai_curation_runtime.function_tools import function_tool
 from agents.agent import ToolsToFinalOutputResult
@@ -71,12 +71,14 @@ from src.lib.openai_agents.config import (
     get_output_tool_catalog_page_size,
 )
 
+from src.models.sql.flow_output_set_aside import FlowOutputSetAside
+
 
 FormatterSaveCallback = Callable[
     [str, FlowOutputProjectionResult, str, str],
     Awaitable[Mapping[str, Any]],
 ]
-ChatDeliveryCallback = Callable[[str, Mapping[str, Any]], Awaitable[Mapping[str, Any]]]
+ChatDeliveryCallback = Callable[[str, Mapping[str, Any], FlowOutputSetAside | None], Awaitable[Mapping[str, Any]]]
 
 _SUPPORTED_FILE_FORMATS = {"csv", "tsv", "json"}
 _CHAT_FORMAT = "chat"
@@ -633,16 +635,21 @@ def _projection_plan_from_tool_payload(
     return plan.model_copy(update={"format": output_format})
 
 
-def _set_aside_summary(projections: Sequence[FlowOutputProjectionResult]) -> dict[str, int] | None:
+class _OutputSetAside(NamedTuple):
+    counts: dict[str, int] | None
+    included_keys: list[str]
+
+
+def _set_aside_summary(projections: Sequence[FlowOutputProjectionResult]) -> _OutputSetAside:
     """Records the review set aside in one output's sources: in the output, or left out (ALL-1561).
 
     An output made of several projections (a chat report's sections) counts each
     record once: it is in the output when any projection shows it.
     """
     records = {key for projection in projections for key in projection.set_aside_record_keys}
-    included = len({key for projection in projections for key in projection.set_aside_included_keys})
-    left_out = len(records) - included
-    return {"included": included, "left_out": left_out} if included or left_out else None
+    included = sorted({key for projection in projections for key in projection.set_aside_included_keys})
+    counts = {"included": len(included), "left_out": len(records) - len(included)} if records else None
+    return _OutputSetAside(counts, included)
 
 
 def _is_intentional_empty_projection(projection: FlowOutputProjectionResult) -> bool:
@@ -1474,7 +1481,7 @@ def build_output_formatter_tools(
             )
         return errors, warnings
 
-    def render_chat_report(report_json: str) -> tuple[str, dict[str, Any], dict[str, int] | None]:
+    def render_chat_report(report_json: str) -> tuple[str, dict[str, Any], _OutputSetAside]:
         """Validate/render all sections without delivering any partial report."""
         if not is_chat:
             raise ValueError("Reports are supported only for chat output.")
@@ -2212,7 +2219,7 @@ def build_output_formatter_tools(
             file_info["projection_summary"] = _projection_summary(projection)
             file_info["export_accounting"] = compact_accounting(projection)
             file_info["export_details"] = export_details_reference(file_info["file_id"], projection)
-            file_info["set_aside"] = _set_aside_summary([projection])
+            file_info["set_aside"] = _set_aside_summary([projection]).counts
             finalized_file_info = {
                 key: _jsonable(value)
                 for key, value in file_info.items()
@@ -2380,11 +2387,18 @@ def build_output_formatter_tools(
                 "notes_included": bool(note_text),
                 **receipt_summary,
                 # Only when the sources hold records the review set aside (ALL-1561).
-                **({"set_aside": set_aside} if set_aside else {}),
+                **({"set_aside": set_aside.counts} if set_aside.counts else {}),
             }
             try:
+                membership = None
+                if set_aside.counts and bundle.flow_run_id and bundle.document_id:
+                    membership = FlowOutputSetAside(
+                        owner_id=bundle.authorization_user_id, flow_run_id=bundle.flow_run_id,
+                        document_id=bundle.document_id,
+                        included_keys=set_aside.included_keys,
+                    )
                 delivered = dict(
-                    await cast(ChatDeliveryCallback, deliver_chat_output)(content, receipt)
+                    await cast(ChatDeliveryCallback, deliver_chat_output)(content, receipt, membership)
                 )
             except Exception as exc:
                 diagnostic = _report_delivery_failure(

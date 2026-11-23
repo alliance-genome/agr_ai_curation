@@ -36,6 +36,7 @@ from .curation_flow_agent_revision import CurationFlowAgentRevision
 from .database import Base, SessionLocal, engine, get_db
 from .document_file_assessment import DocumentFileAssessment
 from .file_output import FileOutput, FileType
+from .flow_output_set_aside import FlowOutputSetAside
 from .ontology import Ontology
 from .ontology_term import OntologyTerm
 from .pdf_document import DocumentReferenceLink, PDFDocument, PDFDocumentFile
@@ -95,6 +96,7 @@ __all__ = [
     "CurationFlow",
     "CurationFlowAgentRevision",
     "FileOutput",
+    "FlowOutputSetAside",
     "FileType",
     "SessionLocal",
     "engine",

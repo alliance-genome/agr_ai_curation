@@ -2349,7 +2349,7 @@ def get_all_agent_tools(
             internal_event_cursor = _capture_internal_extraction_event_cursor()
             specialist_started_at = time.monotonic()
             projected_chat_output: str | None = None
-            projected_chat_set_aside: dict[str, int] | None = None
+            projected_chat_set_aside: dict[str, Any] | None = None
             selection_token = set_flow_validator_selections(
                 effective_validation_groups
             )
@@ -2440,7 +2440,8 @@ def get_all_agent_tools(
                     if chat_delivery is not None and chat_delivery.delivered:
                         projected_chat_output = chat_delivery.output
                         # Present only when the output's sources hold set-aside records.
-                        projected_chat_set_aside = chat_delivery.receipt.get("set_aside")
+                        if counts := chat_delivery.receipt.get("set_aside"):
+                            projected_chat_set_aside = {**counts, "output_id": chat_delivery.receipt["chat_output_id"]}
                 else:
                     result = await tool_callable(query=resolved_query)
             finally:

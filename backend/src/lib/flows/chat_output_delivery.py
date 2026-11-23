@@ -9,12 +9,16 @@ receipt that never contains the table.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
+
+from src.models.sql.database import SessionLocal
+from src.models.sql.flow_output_set_aside import FlowOutputSetAside
 
 
 @dataclass
@@ -23,6 +27,7 @@ class ChatOutputDelivery:
 
     output: str | None = None
     receipt: dict[str, Any] = field(default_factory=dict)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     cannot_complete: dict[str, Any] | None = None
     # A finalization failure already reported through the payload contract.
     failure: dict[str, Any] | None = None
@@ -57,6 +62,7 @@ def current_chat_output_delivery() -> ChatOutputDelivery | None:
 async def deliver_projected_chat_output(
     content: str,
     receipt: Mapping[str, Any],
+    membership: FlowOutputSetAside | None = None,
 ) -> Mapping[str, Any]:
     """Hold rendered chat content for the executor; return the compact receipt."""
 
@@ -65,11 +71,21 @@ async def deliver_projected_chat_output(
         raise RuntimeError(
             "Chat output delivery is only available inside a bound flow chat-output step."
         )
-    if delivery.delivered:
-        raise RuntimeError("This flow chat-output step has already delivered its output.")
-    delivery.output = content
-    delivery.receipt = {"chat_output_id": str(uuid4()), **dict(receipt)}
-    return delivery.receipt
+    async with delivery.lock:
+        if delivery.delivered:
+            raise RuntimeError("This flow chat-output step has already delivered its output.")
+        output_id = uuid4()
+        if membership is not None:
+            membership.output_id = output_id
+
+            def save_membership() -> None:
+                with SessionLocal.begin() as db:
+                    membership.persist(db)
+
+            await asyncio.to_thread(save_membership)
+        delivery.output = content
+        delivery.receipt = {**receipt, "chat_output_id": str(output_id)}
+        return delivery.receipt
 
 
 def record_chat_output_cannot_complete(payload: Mapping[str, Any]) -> None:

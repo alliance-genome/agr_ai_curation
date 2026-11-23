@@ -7,7 +7,7 @@ still does, and readiness relaxes nowhere except a finished run's exports.
 """
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import csv
 import io
@@ -31,7 +31,8 @@ ACCEPTED_REASON = "The legend names this code."
 
 
 async def _finished(item, monkeypatch, action, *, outcome=None, aside=("aside",),
-                    codes=(("kept", "eco:1"), ("aside", "eco:2")), accepted_first=False):
+                    codes=(("kept", "eco:1"), ("aside", "eco:2")), accepted_first=False,
+                    run_id=None, node_id="extract"):
     """Run one configured flow step whose review accepts the other records and decides ``aside`` with ``action``.
 
     The review outcome is the real continuation view of the saved decisions
@@ -48,17 +49,17 @@ async def _finished(item, monkeypatch, action, *, outcome=None, aside=("aside",)
     from src.lib.observability.cost_context import attach_agent_cost_identity
     from tests.unit.lib.domain_packs.test_validator_dispatch import _result_payload
 
-    run_id = uuid4().hex
+    run_id = run_id or uuid4().hex
     supervisor = Agent(name="Configured Flow Supervisor", model="test", instructions="Policy")
     attach_agent_cost_identity(supervisor, {"agent_id": "supervisor", "agent_role": "supervisor"})
-    step = flow_steps.claim(item.scope, run_id=run_id, node_id="extract", contract={"extractor": "saved"})
+    step = flow_steps.claim(item.scope, run_id=run_id, node_id=node_id, contract={"extractor": "saved"})
     groups = [{"state": "automatic", "binding_id": match.binding.binding_id} for match in item.plan.matches[:1]]
     parent_scope = admission.create_scope(item.scope, operation_id="batch:" + run_id,
         kind="discovered_batch", targets=0, episodes=0)
     flow = FlowReview(owner_id=item.scope.owner_id, document_id=item.scope.document_id,
         session_id=item.scope.session_id, turn_id=run_id, supervisor=supervisor,
         authenticated_groups=(), user_request="Extract evidence", flow_run_id=run_id,
-        step_id=step["step_id"], node_id="extract", validation_groups=groups, parent_scope_id=parent_scope,
+        step_id=step["step_id"], node_id=node_id, validation_groups=groups, parent_scope_id=parent_scope,
         configured_nodes={},
         step_provenance={"flow_id": "fixture", "flow_name": "Fixture flow", "step": 1,
                          "agent_name": "Fixture extractor", "tool_name": "extract"},
@@ -136,8 +137,8 @@ def _bundle(flow, item, monkeypatch):
     monkeypatch.setattr("src.lib.flows.export_fields.packaged_domain_pack", lambda *args, **kwargs: item.pack)
     envelope = flow.checkpoint(flow.record).envelope
     return build_flow_output_artifact_bundle(
-        user_id=item.scope.owner_id, document_id=item.scope.document_id,
-        completed_steps=[{"step": 1, "node_id": "extract", "agent_id": "fixture", "agent_name": "Fixture",
+        user_id=item.scope.owner_id, document_id=item.scope.document_id, flow_run_id=flow.flow_run_id,
+        completed_steps=[{"step": 1, "node_id": flow.node_id, "extraction_result_id": str(flow.record.extraction_result_id), "agent_id": "fixture", "agent_name": "Fixture",
             "validated_candidate": SimpleNamespace(payload_json=envelope.model_dump(mode="json"), agent_key="fixture",
                 adapter_key="fixture", candidate_count=2, conversation_summary="x")}],
         flow_name="Set aside", output_format="tsv")
@@ -557,3 +558,78 @@ async def test_a_curator_holding_a_set_aside_record_is_shown_not_dropped(planned
         finalize_output_projection(_bundle(flow, item, monkeypatch),
                                    _plan("tsv", [("record", "object.pending_ref_id")]))
     assert CURATOR_HOLDS_SET_ASIDE.startswith("This run's files cannot be made again yet.")
+
+
+@pytest.mark.asyncio
+async def test_set_aside_details_for_file_and_chat_use_their_saved_membership(planned, monkeypatch, tmp_path):
+    from src.lib.context import agent_request_scope
+    from src.lib.flows.chat_output_delivery import chat_output_delivery_scope, deliver_projected_chat_output
+    from src.lib.flows.output_projection import FlowOutputFilterSpec, finalize_output_projection
+    from src.lib.flows.set_aside_records import FlowRunResultsNotFound, list_set_aside_records
+    from src.lib.openai_agents.tools.file_output_tools import save_projected_file_output
+    from src.lib.openai_agents.tools.output_formatter_tools import build_output_formatter_tools
+
+    item = planned
+    first, _, _ = await _finished(item, monkeypatch, "defer", aside=("aside", "extra"),
+                                  codes=(("kept", "eco:1"), ("aside", "eco:2"), ("extra", "eco:3")))
+    await first.finish_review()
+    second, _, _ = await _finished(item, monkeypatch, "defer", run_id=first.flow_run_id, node_id="second")
+    await second.finish_review()
+    scope = dict(user_id=item.scope.owner_id, document_id=item.scope.document_id, flow_run_id=first.flow_run_id)
+    first_bundle = _bundle(first, item, monkeypatch)
+    second_bundle = _bundle(second, item, monkeypatch)
+    assert list_set_aside_records(**scope).set_aside_count == 3
+
+    columns = [("record", "object.pending_ref_id"), ("status", STATUS)]
+    plan = _plan("csv", [("status", STATUS)]).model_copy(update={
+        "filters": [FlowOutputFilterSpec(field_ref="object.pending_ref_id", op="eq", value="aside")],
+    })
+    projected = finalize_output_projection(first_bundle, plan)
+    assert projected.rows == [{"status": "set aside"}]
+    monkeypatch.setattr("src.lib.file_outputs.storage.get_file_output_storage_path", lambda: tmp_path)
+    monkeypatch.setattr("src.lib.context.get_current_flow_output_attachment", lambda: {
+        "formatter_node_id": "file", "flow_run_id": first.flow_run_id, "document_id": item.scope.document_id,
+    })
+    with agent_request_scope(user_id=item.scope.owner_id, session_id=item.scope.session_id, trace_id=uuid4().hex):
+        file = await save_projected_file_output("csv", projected, "filtered", "fixture_formatter")
+        # Saving identical bytes and membership reuses the file and its original membership.
+        repeated = await save_projected_file_output("csv", projected, "filtered", "fixture_formatter")
+        assert repeated["file_id"] == file["file_id"]
+        # A different record with the same exported cell value needs its own membership.
+        other = finalize_output_projection(first_bundle, plan.model_copy(update={
+            "filters": [FlowOutputFilterSpec(field_ref="object.pending_ref_id", op="eq", value="extra")],
+        }))
+        other_file = await save_projected_file_output("csv", other, "filtered", "fixture_formatter")
+        assert other.rows == projected.rows and other_file["file_id"] != file["file_id"]
+
+        plain = finalize_output_projection(first_bundle, _plan("csv", columns[:1]))
+        plain_file = await save_projected_file_output("csv", plain, "plain", "fixture_formatter")
+        empty = list_set_aside_records(**scope, output_id=UUID(plain_file["file_id"]))
+        assert empty.results == [] and empty.set_aside_count == 0
+
+    with chat_output_delivery_scope():
+        tools = build_output_formatter_tools(bundle=second_bundle, output_format="chat",
+            formatter_agent_id="chat_output_formatter", deliver_chat_output=deliver_projected_chat_output)
+        finalizer = next(tool for tool in tools if tool.name == "finalize_chat_output")
+        report = {"sections": [
+            {"heading": "Plain", "plan": _plan("chat", columns[:1]).model_dump(mode="json")},
+            {"heading": "Reviewed", "plan": _plan("chat", columns).model_dump(mode="json")},
+        ]}
+        args = json.dumps({"report_json": json.dumps(report)})
+        receipt = json.loads(await finalizer.on_invoke_tool(tool_context(finalizer.name, args), args))
+    assert receipt["set_aside"] == {"included": 1, "left_out": 0}
+
+    for output_id, source, expected_code in [
+        (file["file_id"], first, "eco:2"), (other_file["file_id"], first, "eco:3"),
+        (receipt["chat_output_id"], second, "eco:2"),
+    ]:
+        details = list_set_aside_records(**scope, output_id=UUID(output_id))
+        assert details.set_aside_count == 1
+        [result] = details.results
+        assert result.extraction_result_id == str(source.record.extraction_result_id)
+        [record] = result.records
+        assert record.review_status == "set aside"
+        assert any(expected_code in str(field.value).lower() for field in record.fields)
+    for different_scope in [{"user_id": "other"}, {"document_id": str(uuid4())}, {"flow_run_id": "other"}]:
+        with pytest.raises(FlowRunResultsNotFound):
+            list_set_aside_records(**(scope | different_scope), output_id=UUID(file["file_id"]))

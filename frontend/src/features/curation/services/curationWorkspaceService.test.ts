@@ -574,5 +574,8 @@ describe('curationWorkspaceService submission requests', () => {
     expect(buildFlowRunSetAsideRecordsPath('run/1', 'doc-1')).toBe(
       '/api/curation-workspace/flow-runs/run%2F1/set-aside-records?document_id=doc-1',
     )
+    expect(buildFlowRunSetAsideRecordsPath('run/1', 'doc-1', 'file-2')).toBe(
+      '/api/curation-workspace/flow-runs/run%2F1/set-aside-records?document_id=doc-1&output_id=file-2',
+    )
   })
 })

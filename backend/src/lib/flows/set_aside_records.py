@@ -9,12 +9,20 @@ a curator decides them.
 
 from __future__ import annotations
 
+from uuid import UUID
+
+from sqlalchemy import select
 
 from src.lib.curation_workspace.execution_contracts import load_receipt_profile
 from src.lib.curation_workspace.extraction_results import list_extraction_results
 from src.lib.flows.export_fields import REVIEW_STATUS_REF
-from src.lib.flows.output_projection import build_extraction_result_artifact_bundle, set_aside_record_views
+from src.lib.flows.output_projection import (
+    build_extraction_result_artifact_bundle,
+    set_aside_extraction_result_ids,
+    set_aside_record_views,
+)
 from src.lib.validation_history import selections, store
+from src.models.sql.flow_output_set_aside import FlowOutputSetAside
 from src.schemas.curation_workspace import CurationExtractionSourceKind
 from src.schemas.set_aside_records import FlowRunSetAsideRecordsResponse
 
@@ -48,34 +56,51 @@ def _set_aside_state(user_id: str, document_id: str, reference: dict) -> str | N
         return "covered" if selections.set_aside_in_transaction(db, artifact_id, manifest) else "held"
 
 
-def list_set_aside_records(*, user_id: str, flow_run_id: str, document_id: str) -> FlowRunSetAsideRecordsResponse:
+def list_set_aside_records(
+    *, user_id: str, flow_run_id: str, document_id: str, output_id: UUID | None = None,
+) -> FlowRunSetAsideRecordsResponse:
     """The owner's set-aside records of one run and document, grouped by saved result.
 
     Only the owner's own results are read (owner, document and run identity
     on every saved row, then the history scope of each result). A record a
     curator has since accepted or removed is no longer listed. A result whose
     set-aside records a curator holds (deferred, rejected) is returned with
-    ``held_by_curator: true`` and no records; its exports wait for the curator.
+    ``held_by_curator: true`` and no records in the run-wide view. Output-specific
+    views list only current records included in the saved output.
     """
+    included_keys = None
+    if output_id is not None:
+        with store.SessionLocal() as db:
+            keys = db.scalar(select(FlowOutputSetAside.included_keys).where(
+                FlowOutputSetAside.output_id == output_id, FlowOutputSetAside.owner_id == user_id,
+                FlowOutputSetAside.flow_run_id == flow_run_id, FlowOutputSetAside.document_id == UUID(document_id),
+            ))
+        if keys is None:
+            raise FlowRunResultsNotFound("No saved membership for this output")
+        included_keys = set(keys)
+
     records = list_extraction_results(
         document_id=document_id, flow_run_id=flow_run_id, user_id=user_id,
         source_kind=CurationExtractionSourceKind.FLOW,
+        extraction_result_ids=set_aside_extraction_result_ids(included_keys) if included_keys is not None else None,
     )
-    if not records:
+    if not records and output_id is None:
         raise FlowRunResultsNotFound(f"Flow run {flow_run_id} has no saved results for this document")
     results = []
     for record in records:
         # Results of steps without a configured review carry no review reference.
         reference = record.metadata.get("flow_review")
         state = None if reference is None else _set_aside_state(user_id, document_id, reference)
-        if state is None or state == "done":
+        if state is None or state == "done" or (included_keys is not None and state == "held"):
             continue
         bundle = build_extraction_result_artifact_bundle(
             user_id=user_id, extraction_results=[record], document_id=document_id,
             profile_resolver=load_receipt_profile,
         )
         artifact, = bundle.artifacts
-        views = set_aside_record_views(bundle) if state == "covered" else []
+        views = set_aside_record_views(bundle, included_keys=included_keys) if state == "covered" else []
+        if included_keys is not None and not views:
+            continue
         results.append({
             "extraction_result_id": str(record.extraction_result_id),
             "node_id": record.metadata.get("flow_step_key"),

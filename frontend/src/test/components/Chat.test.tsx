@@ -539,14 +539,14 @@ describe('Chat persistence', () => {
           type: 'CHAT_OUTPUT_READY', session_id: 'session-1', turn_id: 'set-aside-turn',
           details: {
             formatter_node_id: 'reagent-chat', output: table, flow_run_id: 'run-1', document_id: 'doc-1',
-            set_aside: { included: 0, left_out: 2 },
+            set_aside: { output_id: 'table-1', included: 0, left_out: 2 },
           },
         },
         {
           type: 'CHAT_OUTPUT_READY', session_id: 'session-1', turn_id: 'set-aside-turn',
           details: {
             formatter_node_id: 'stock-chat', output: 'Stock table', flow_run_id: 'run-1', document_id: null,
-            set_aside: { included: 1, left_out: 0 },
+            set_aside: { output_id: 'table-2', included: 1, left_out: 0 },
           },
         },
       ],
@@ -558,7 +558,16 @@ describe('Chat persistence', () => {
     view.unmount()
 
     renderChat({ sessionId: 'session-1' })
-    expect(await screen.findByText('2 records set aside by review, not in this table')).toBeInTheDocument()
+    const button = await screen.findByRole('button', { name: 'View set-aside records for this table' })
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
+      flow_run_id: 'run-1', document_id: 'doc-1', set_aside_count: 0, results: [],
+    })))
+    fireEvent.click(button)
+    expect(await screen.findByText(/No set-aside records are waiting for this paper/)).toBeInTheDocument()
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/curation-workspace/flow-runs/run-1/set-aside-records?document_id=doc-1&output_id=table-1',
+      expect.objectContaining({ credentials: 'include' }),
+    )
   })
 
   it('does not delete stored messages when session id mismatches', () => {

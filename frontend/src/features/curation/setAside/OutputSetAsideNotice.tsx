@@ -7,7 +7,6 @@ import {
   type OutputSetAsideCounts,
   type SetAsideOutputNoun,
   outputSetAsideLabel,
-  outputSetAsidePlacement,
 } from './setAsideSummary'
 
 interface OutputSetAsideNoticeProps {
@@ -15,6 +14,7 @@ interface OutputSetAsideNoticeProps {
   noun: SetAsideOutputNoun
   /** Names the output for the button's accessible name and the viewer subtitle. */
   outputName: string
+  outputId: string | null
   flowRunId: string | null
   documentId: string | null
 }
@@ -28,12 +28,13 @@ export default function OutputSetAsideNotice({
   counts,
   noun,
   outputName,
+  outputId,
   flowRunId,
   documentId,
 }: OutputSetAsideNoticeProps) {
   const [viewerOpen, setViewerOpen] = useState(false)
   const leftOut = counts.left_out > 0
-  const canView = Boolean(flowRunId && documentId)
+  const canView = Boolean(flowRunId && documentId && outputId)
 
   return (
     <>
@@ -66,7 +67,7 @@ export default function OutputSetAsideNotice({
           </Button>
         )}
       </Box>
-      {canView && flowRunId && documentId && (
+      {flowRunId && documentId && outputId && (
         <SetAsideRecordsDialog
           open={viewerOpen}
           onClose={() => setViewerOpen(false)}
@@ -74,9 +75,10 @@ export default function OutputSetAsideNotice({
           papers={[{
             flowRunId,
             documentId,
+            outputId,
             title: outputName,
-            count: counts.left_out + counts.included,
-            placement: outputSetAsidePlacement(counts),
+            count: counts.included,
+            placement: 'included',
           }]}
         />
       )}

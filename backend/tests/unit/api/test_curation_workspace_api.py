@@ -1673,7 +1673,8 @@ async def test_a_restore_stopped_by_a_system_error_reads_as_plain_words(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_set_aside_records_are_read_for_the_caller_only(monkeypatch):
+@pytest.mark.parametrize("output_id", [None, uuid4()])
+async def test_set_aside_records_are_read_for_the_caller_only(monkeypatch, output_id):
     """ALL-1561: the read-only viewer lists the caller's own set-aside records of one run and paper."""
     from src.schemas.set_aside_records import FlowRunSetAsideRecordsResponse
 
@@ -1689,9 +1690,10 @@ async def test_set_aside_records_are_read_for_the_caller_only(monkeypatch):
 
     monkeypatch.setattr(module, "list_set_aside_records", _list)
     response = await module.get_flow_run_set_aside_records(
-        flow_run_id="flow-alpha", document_id=document_id, user={"sub": "user-1"})
+        flow_run_id="flow-alpha", document_id=document_id, output_id=output_id, user={"sub": "user-1"})
     assert response is expected
-    assert captured == {"user_id": "user-1", "flow_run_id": "flow-alpha", "document_id": str(document_id)}
+    assert captured == {"user_id": "user-1", "flow_run_id": "flow-alpha", "document_id": str(document_id),
+                        "output_id": output_id}
 
 
 @pytest.mark.asyncio

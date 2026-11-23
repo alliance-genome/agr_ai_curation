@@ -25,6 +25,7 @@ from src.lib.openai_agents.config import (
 )
 from src.models.sql.database import SessionLocal
 from src.models.sql.file_output import FileOutput
+from src.models.sql.flow_output_set_aside import FlowOutputSetAside
 from ..models import FileInfo
 
 logger = logging.getLogger(__name__)
@@ -248,11 +249,14 @@ async def save_projected_file_output(
 
     # A later selection or export layout creates another immutable file identity.
     # Repeating the exact same content and manifest remains idempotent.
-    import json
+    # Distinct source rows can render identical bytes even with the same review manifest.
+    membership = (
+        {"set_aside_included_keys": projection.set_aside_included_keys} if projection.set_aside_record_keys else {}
+    )
     export_version = hashlib.sha256(json.dumps({
         "content": content, "selection_manifests": projection.selection_manifests,
         "descriptor": descriptor, "branch_identity": branch_identity,
-        "output_format": normalized_format,
+        "output_format": normalized_format, **membership,
     }, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")).hexdigest()
     storage = FileOutputStorageService()
     file_path, file_hash, file_size, warnings = storage.save_output(
@@ -327,6 +331,13 @@ async def save_projected_file_output(
                 },
             )
             db.add(file_output)
+            if membership and flow_run_id and flow_output_attachment.get("document_id"):
+                db.flush()
+                FlowOutputSetAside(
+                    output_id=file_output.id, owner_id=effective_curator_id,
+                    flow_run_id=flow_run_id, document_id=flow_output_attachment["document_id"],
+                    included_keys=projection.set_aside_included_keys,
+                ).persist(db)
         else:
             previous_file_path = str(file_output.file_path or "")
             file_output.filename = full_filename
@@ -373,7 +384,10 @@ async def save_projected_file_output(
         )
     except Exception as exc:
         db.rollback()
-        logger.error('[%s Tool] Failed to register projected file: %s', normalized_format.upper(), exc)
+        logger.error(
+            '[%s Tool] Failed to register projected file (%s)', normalized_format.upper(), type(exc).__name__,
+            extra={"sentry_skip_event": True},  # The formatter reports this save failure.
+        )
         raise
     finally:
         db.close()
