@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from agents import Model
+    from agents.models.openai_responses import ResponsesWebSocketError
 
 # =============================================================================
 # LLM Provider Configuration
@@ -712,35 +713,162 @@ def is_tool_namespace_refusal(error: object) -> bool:
     return param is not None and _INDEXED_TOOLS_PARAM.fullmatch(param) is not None
 
 
+# Set by the websocket observation below on an exception raised while reading a
+# Responses websocket request: True when any event other than the SDK's own
+# retry-safe set (``response.created``, ``response.in_progress``) had arrived.
+RESPONSES_WS_OUTPUT_STARTED_ATTR = "_agr_ws_output_started"
+
+
+def install_responses_websocket_output_observation() -> None:
+    """Record, on a failed websocket request, whether output had started (ALL-1704, idempotent).
+
+    The pinned SDK (0.25.0) marks every failure after the first received event
+    replay-unsafe, without telling ``response.created``/``response.in_progress``
+    apart from output. Both transport modes read events through
+    ``OpenAIResponsesWSModel._iter_websocket_response_events``; this wraps it to
+    note whether any yielded event type is outside the SDK's own
+    ``_RETRY_SAFE_STREAM_EVENT_TYPES`` and sets ``RESPONSES_WS_OUTPUT_STARTED_ATTR``
+    on the raised exception. Both private names are pinned by tests.
+    """
+
+    from contextlib import aclosing
+    from functools import wraps
+
+    from agents.models.openai_responses import OpenAIResponsesWSModel
+    from agents.run_internal.model_retry import _RETRY_SAFE_STREAM_EVENT_TYPES
+
+    iterate = OpenAIResponsesWSModel._iter_websocket_response_events
+    if getattr(iterate, "_agr_output_observation", False):
+        return
+
+    @wraps(iterate)
+    async def observed(self, create_kwargs):
+        output_started = False
+        # Closing the SDK generator releases its request lock and aborts an
+        # unfinished socket, exactly as when the SDK closes it itself.
+        async with aclosing(iterate(self, create_kwargs)) as events:
+            while True:
+                try:
+                    event = await anext(events)
+                except StopAsyncIteration:
+                    return
+                except Exception as exc:
+                    setattr(exc, RESPONSES_WS_OUTPUT_STARTED_ATTR, output_started)
+                    raise
+                if getattr(event, "type", None) not in _RETRY_SAFE_STREAM_EVENT_TYPES:
+                    output_started = True
+                yield event
+
+    observed._agr_output_observation = True
+    OpenAIResponsesWSModel._iter_websocket_response_events = observed
+
+
+def is_responses_websocket_overload(error: object) -> bool:
+    """Whether ``error`` is OpenAI's typed websocket overload frame (structured fields only)."""
+
+    from agents.models.openai_responses import ResponsesWebSocketError
+
+    return (
+        isinstance(error, ResponsesWebSocketError)
+        and error.event_type == "error"
+        and error.error_type == "service_unavailable_error"
+        and error.code == "server_is_overloaded"
+    )
+
+
+def responses_websocket_retry_after(error: "ResponsesWebSocketError") -> Optional[float]:
+    """Seconds from the frame's ``error.headers`` (``retry-after-ms``, then ``retry-after``).
+
+    The pinned SDK reads retry-after only from HTTP response headers, so a
+    websocket frame's own headers are otherwise ignored. None when absent.
+    """
+
+    details = error.payload.get("error")
+    headers = details.get("headers") if isinstance(details, dict) else None
+    if not isinstance(headers, dict):
+        return None
+    for key, scale in (("retry-after-ms", 1000.0), ("retry-after", 1.0)):
+        value = headers.get(key)
+        if not isinstance(value, str):
+            continue
+        try:
+            seconds = float(value) / scale
+        except ValueError:
+            continue
+        if math.isfinite(seconds) and seconds >= 0:
+            return seconds
+    return None
+
+
 def build_default_model_retry():
     """Opt-in runner-managed retry for transient model-call failures.
 
     The Agents SDK retries model calls when ``ModelSettings.retry`` is set,
     classifying HTTP 5xx (e.g. a Responses WebSocket handshake ``503``),
-    never-sent WebSocket errors, and typed pre-response overload frames as safe
-    to retry, with exponential backoff and ``Retry-After`` support. Disable by
-    setting ``OPENAI_MODEL_MAX_RETRIES=0``.
+    never-sent WebSocket errors, and typed overload frames that arrive before
+    any output as safe to retry, with exponential backoff and ``Retry-After``
+    support. Disable by setting ``OPENAI_MODEL_MAX_RETRIES=0``.
     """
     # Import here to avoid circular dependency at module load.
     from agents import retry_policies
     from agents.retry import ModelRetrySettings, ModelRetryBackoffSettings
 
+    install_responses_websocket_output_observation()
+
     def retry_responses_websocket_overload(context):
-        """Retry a typed pre-response overload frame without logging frame content."""
-        from agents.models.openai_responses import ResponsesWebSocketError
+        """Retry OpenAI's typed overload frame without logging frame content."""
         from agents.retry import RetryDecision
 
         error = context.error
-        if not (
-            isinstance(error, ResponsesWebSocketError)
-            and error.event_type == "error"
-            and error.error_type == "service_unavailable_error"
-            and error.code == "server_is_overloaded"
-        ):
+        if not is_responses_websocket_overload(error):
             return False
 
         retry_budget_exhausted = context.attempt == context.max_retries
         log = logger.warning if retry_budget_exhausted else logger.info
+        delay = responses_websocket_retry_after(error)
+
+        if context.response_started:
+            # The frame arrived after response.created/in_progress (ALL-1704). The
+            # SDK marks that replay-unsafe without knowing whether output began.
+            # Resending is safe when OpenAI declared the request failed for
+            # overload (with a retry-after) before any output item, text delta or
+            # tool call: nothing of it was returned, so no output or tool call
+            # can be duplicated. The websocket observation records whether such
+            # an event arrived; an unobserved request is not resent. A stateful
+            # request (previous_response_id or conversation) is not resent.
+            output_started = getattr(error, RESPONSES_WS_OUTPUT_STARTED_ATTR, None)
+            if context.stateful_request:
+                refusal = "stateful_request"
+            elif output_started is None:
+                refusal = "output_not_observed"
+            elif output_started:
+                refusal = "output_started"
+            else:
+                refusal = None
+            if refusal is not None:
+                logger.warning(
+                    "Not resending Responses WebSocket overload frame after the response "
+                    "started (reason=%s; attempt %s/%s)",
+                    refusal,
+                    context.attempt,
+                    context.max_retries,
+                )
+                return False
+            log(
+                "Resending Responses WebSocket overload frame after the response started "
+                "and before any output (retry %s/%s; retry_budget_exhausted=%s; delay=%s)",
+                context.attempt,
+                context.max_retries,
+                retry_budget_exhausted,
+                delay,
+            )
+            return RetryDecision(
+                retry=True,
+                delay=delay,
+                reason="responses_websocket_server_overloaded_after_start",
+                approve_unsafe_replay=True,
+            )
+
         log(
             "Retrying transient Responses WebSocket overload frame "
             "(retry %s/%s; retry_budget_exhausted=%s)",
@@ -751,10 +879,12 @@ def build_default_model_retry():
 
         decision = RetryDecision(
             retry=True,
+            delay=delay,
             reason="responses_websocket_server_overloaded",
         )
-        # The typed `error` frame is raised by the pinned SDK before it yields a
-        # model event. Marking this decision replay-safe permits stateful model
+        # Here the typed `error` frame arrived before any model event (the
+        # provider did not report a started response). Marking this decision
+        # replay-safe permits stateful model
         # calls to use the shared runner loop; the runner still vetoes retries
         # after any response/tool-bearing stream event.
         setattr(decision, "_approves_replay", True)  # noqa: B010
@@ -879,13 +1009,18 @@ def build_default_model_retry():
             retry_policies.http_status(list(_DEFAULT_RETRY_HTTP_STATUSES)),
         ),
         {
-            "id": "agr.default_model_retry", "revision": 3,
+            "id": "agr.default_model_retry", "revision": 4,
             "sdk_version": version("openai-agents"),
             "any": [
                 "provider_suggested",
-                {"id": "responses_websocket_overload", "revision": 1,
+                {"id": "responses_websocket_overload", "revision": 2,
                  "event_type": "error", "error_type": "service_unavailable_error",
-                 "code": "server_is_overloaded", "approves_replay": True},
+                 "code": "server_is_overloaded", "approves_replay": True,
+                 "delay": "frame retry-after-ms, then retry-after",
+                 "after_response_start": {
+                     "approve_unsafe_replay": True,
+                     "requires": "no event outside response.created/response.in_progress",
+                     "stateful_request": "refused"}},
                 {"id": "responses_input_item_ids_refused", "revision": 1,
                  "event_type": "error", "error_type": "invalid_request_error",
                  "code": "unsupported_parameter", "param": "input",
