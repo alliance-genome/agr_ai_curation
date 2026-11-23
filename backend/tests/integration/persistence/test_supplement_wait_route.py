@@ -311,7 +311,9 @@ async def test_an_imported_supplement_joins_once_abc_lists_it_with_no_conversion
     # KANBAN-2191 / ALL-1725: the import's one on-demand request; the main wait then
     # only read the listing until the main text appeared; the supplement wait never asked.
     assert abc.conversion_requests == ["main"]
-    assert abc.main_reads == 2
+    # Two reads by the wait (the second listed the main text), one by the main ingestion's
+    # figure lookup.
+    assert abc.main_reads == 3
     main_job = _main_job(document_id)
     assert main_job.status == "completed"
     assert set(main_job.metadata_json["provider_conversion_requests"]) == {"on_demand_sent_at"}
