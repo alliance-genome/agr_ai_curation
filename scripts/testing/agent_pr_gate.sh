@@ -292,6 +292,14 @@ run_path_scoped_check \
   "scripts/utilities/agent_lsp.py, scripts/tests/test_agent_lsp_diagnostics.sh, scripts/tests/test_agent_lsp_typescript_prep.sh" \
   scripts/utilities/agent_lsp.py scripts/tests/test_agent_lsp_diagnostics.sh scripts/tests/test_agent_lsp_typescript_prep.sh
 
+# The gate's own regression test runs the gate in a sandbox copy of the repository
+# (installer and publish scenarios included), so it runs only when the gate changes.
+run_path_scoped_check \
+  "agent-pr-gate-standalone-suites-regression" \
+  "bash scripts/tests/test_agent_pr_gate_standalone_suites.sh" \
+  "scripts/testing/agent_pr_gate.sh, scripts/tests/test_agent_pr_gate_standalone_suites.sh" \
+  scripts/testing/agent_pr_gate.sh scripts/tests/test_agent_pr_gate_standalone_suites.sh
+
 run_path_scoped_check \
   "installer-shell-regression-suite" \
   "bash scripts/install/tests/run.sh" \

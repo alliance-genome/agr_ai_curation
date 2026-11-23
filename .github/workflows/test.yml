@@ -482,11 +482,18 @@ jobs:
         run: bash scripts/tests/test_agent_pr_gate_backend_smoke.sh
       - name: Check installed package freshness across builds and workspaces
         run: python3 scripts/tests/test_docker_test_compose_freshness.py
-      # Stub-based tests of the local test and preflight scripts (docker is only
-      # stubbed or asked for `compose config`); nothing else ran them.
-      - name: Check local test and preflight scripts
+      # Stub-based tests of the local test, preflight and agent helper scripts
+      # (docker is only stubbed or asked for `compose config`). The last five also
+      # run in the agent PR gate when their targets change; running them on every
+      # pull request catches drift in what they call (about 3 s).
+      - name: Check local test, preflight and agent helper scripts
         run: |
           for test_script in \
+            test_abc_literature_ready_upload_smoke_docker.sh \
+            test_agent_lsp_diagnostics.sh \
+            test_agent_lsp_typescript_prep.sh \
+            test_collect_agent_evidence.sh \
+            test_llm_provider_smoke_local.sh \
             test_ensure_local_langfuse_env.sh \
             test_file_output_storage_preflight.sh \
             test_frontend_typecheck_changed.sh \
