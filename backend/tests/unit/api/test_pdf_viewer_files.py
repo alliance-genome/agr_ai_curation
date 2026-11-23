@@ -7,20 +7,26 @@ Rows are real ``PDFDocument`` / ``PDFDocumentFile`` objects in the shapes writer
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import Mock
 from uuid import UUID
 
 import pytest
+import sentry_sdk
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.starlette import StarletteIntegration
+from sentry_sdk.transport import Transport
 
 from src.api import pdf_viewer
 from src.api.auth import _get_user_from_cookie_impl
+from src.lib.observability import runtime, sentry
 from src.lib.pipeline.pdfx_parser import markdown_to_pipeline_elements
 from src.models.sql.database import get_db
 from src.models.sql.pdf_document import PDFDocument, PDFDocumentFile
 
 
-OWNER_SUB = "owner"
+OWNER_SUB = "private-viewer-owner"
 OWNER_ID = 7
 DOCUMENT_ID = UUID("22222222-2222-2222-2222-222222222222")
 OTHER_DOCUMENT_ID = UUID("44444444-4444-4444-4444-444444444444")
@@ -166,6 +172,89 @@ def _text_url(file_id, document_id=DOCUMENT_ID):
     return f"/api/pdf-viewer/documents/{document_id}/files/{file_id}/text"
 
 
+@pytest.fixture
+def reporter(monkeypatch):
+    capture = Mock()
+    monkeypatch.setattr(runtime, "report_runtime_exception", capture)
+    return capture
+
+
+@pytest.fixture(params=[False, True], ids=["reported", "reporter-raises"])
+def assert_artifact_report(reporter, request, caplog, storage):
+    if request.param:
+        reporter.side_effect = RuntimeError("private reporter error")
+
+    def check(operation, exception_type=None):
+        reporter.assert_called_once()
+        (error,) = reporter.call_args.args
+        assert isinstance(error, RuntimeError)
+        assert error.__context__ is None and error.__cause__ is None
+        assert error.__traceback__ is not None
+        assert reporter.call_args.kwargs == {
+            "component": "pdf_viewer",
+            "operation": operation,
+            "include_request": False,
+            "context": {"exception_type": exception_type} if exception_type else {},
+        }
+        records = [r for r in caplog.records if r.name == pdf_viewer.__name__]
+        assert records
+        assert all(r.sentry_skip_event and r.exc_info is None for r in records)
+        diagnostics = repr((reporter.call_args, [vars(r) for r in records]))
+        for private in (
+            str(storage), OWNER_SUB, str(DOCUMENT_ID), str(PDF_SUPPLEMENT_ID), str(TEXT_ID),
+            "Table_S1.xlsx", "Figure_S2.pdf", "private document text", "private element type",
+            "private reporter error", "Stored hierarchy metadata holds a section of an unknown shape",
+        ):
+            assert private not in diagnostics
+
+    return check
+
+
+def test_ready_artifact_event_redacts_request(storage):
+    files = _four_files()
+    files[1].hierarchy_metadata = {"sections": [{"header": "private document text"}]}
+    (storage / files[2].file_path).unlink()
+    events = []
+
+    class MemoryTransport(Transport):
+        def capture_envelope(self, envelope):
+            for item in envelope.items:
+                if item.headers["type"] == "event":
+                    events.append(item.get_event())
+
+    with sentry_sdk.Client(
+        dsn="https://public@example.invalid/1",
+        transport=MemoryTransport,
+        before_send=sentry.before_send,
+        include_local_variables=False,
+        default_integrations=False,
+        integrations=[
+            StarletteIntegration(failed_request_status_codes=set()),
+            FastApiIntegration(failed_request_status_codes=set()),
+        ],
+    ) as sdk, sentry_sdk.isolation_scope() as scope:
+        scope.set_client(sdk)
+        with _client(_paper(files=files)) as client:
+            assert client.get(_content_url(PDF_SUPPLEMENT_ID)).status_code == 404
+            assert client.get(_text_url(TEXT_ID)).status_code == 500
+            (storage / files[1].processed_json_path).unlink()
+            assert client.get(_text_url(TEXT_ID)).status_code == 404
+        sdk.flush()
+
+    assert [event["tags"]["operation"] for event in events] == [
+        "pdf_viewer_ready_file_bytes_missing",
+        "pdf_viewer_stored_display_data_invalid",
+        "pdf_viewer_ready_file_elements_missing",
+    ]
+    serialized = json.dumps(events)
+    assert all("request" not in event for event in events)
+    for private in (
+        str(DOCUMENT_ID), str(PDF_SUPPLEMENT_ID), str(TEXT_ID),
+        OWNER_SUB, str(storage), "private document text",
+    ):
+        assert private not in serialized
+
+
 # --- the files list ---------------------------------------------------------------
 
 
@@ -291,7 +380,7 @@ def test_an_unknown_paper_is_not_found_on_every_file_route(storage, path):
 @pytest.mark.parametrize("other_owner_id", [OWNER_ID, 8])
 @pytest.mark.parametrize("route", [_content_url, _text_url])
 def test_a_file_of_another_paper_is_refused_under_a_paper_the_curator_owns(
-    storage, other_owner_id, route
+    storage, other_owner_id, route, reporter
 ):
     """A file id from another paper (own or another curator's) never resolves under this one."""
 
@@ -303,7 +392,10 @@ def test_a_file_of_another_paper_is_refused_under_a_paper_the_curator_owns(
 
     client = _client(_paper(), other_paper)
 
-    assert client.get(route(FOREIGN_FILE_ID)).status_code == 404
+    response = client.get(route(FOREIGN_FILE_ID))
+    assert response.status_code == 404
+    assert response.json()["detail"] == f"File {FOREIGN_FILE_ID} not found in document {DOCUMENT_ID}"
+    reporter.assert_not_called()
     if other_owner_id == OWNER_ID and route is _content_url:
         # The same file id resolves under its own paper, so the refusal above is the pairing.
         assert client.get(route(FOREIGN_FILE_ID, OTHER_DOCUMENT_ID)).status_code == 200
@@ -349,27 +441,36 @@ def test_content_answers_head_without_a_body(storage):
     assert response.headers["content-type"] == "application/pdf"
 
 
-def test_content_of_a_text_file_is_not_found(storage):
+def test_content_of_a_text_file_is_not_found(storage, reporter):
     response = _client(_paper()).get(_content_url(TEXT_ID))
 
     assert response.status_code == 404
+    reporter.assert_not_called()
 
 
-def test_content_of_a_file_that_is_not_ready_is_not_found(storage):
+@pytest.mark.parametrize("status", ["pending", "failed", "removed"])
+def test_content_of_a_file_that_is_not_ready_is_not_found(storage, status, reporter):
     files = _four_files()
-    files[2].status = "pending"
+    files[2].status = status
 
     response = _client(_paper(files=files)).get(_content_url(PDF_SUPPLEMENT_ID))
 
     assert response.status_code == 404
+    assert response.json()["detail"] == (
+        f"File {PDF_SUPPLEMENT_ID} not found in document {DOCUMENT_ID}" if status == "removed"
+        else f"PDF not available for file {PDF_SUPPLEMENT_ID}"
+    )
+    reporter.assert_not_called()
 
 
-def test_content_with_missing_bytes_is_not_found(storage):
+def test_content_with_missing_bytes_is_not_found(storage, assert_artifact_report):
     (storage / OWNER_SUB / "supplement_pdf" / f"{PDF_SUPPLEMENT_ID}.pdf").unlink()
 
     response = _client(_paper()).get(_content_url(PDF_SUPPLEMENT_ID))
 
     assert response.status_code == 404
+    assert response.json()["detail"] == f"PDF not available for file {PDF_SUPPLEMENT_ID}"
+    assert_artifact_report("pdf_viewer_ready_file_bytes_missing")
 
 
 def test_content_outside_the_owners_folder_is_forbidden(storage):
@@ -449,44 +550,71 @@ def test_text_applies_the_files_stored_section_map(storage):
     ) == ("Table S1 > Sheet 1", "Table S1", "Sheet 1", ["Table S1", "Sheet 1"])
 
 
-def test_text_with_a_stored_section_map_of_an_unknown_shape_is_a_named_error(storage):
+def test_text_with_a_stored_section_map_of_an_unknown_shape_is_a_named_error(storage, assert_artifact_report):
     files = _four_files()
-    files[1].hierarchy_metadata = {"sections": [{"header": "Sheet 1"}]}
+    files[1].hierarchy_metadata = {"sections": [{"header": "private document text"}]}
 
     response = _client(_paper(files=files)).get(_text_url(TEXT_ID))
 
     assert response.status_code == 500
     assert response.json()["detail"] == f"File text could not be shown for file {TEXT_ID}"
+    assert_artifact_report("pdf_viewer_stored_display_data_invalid", "StoredSectionMapError")
+
+
+def test_text_with_an_unsupported_element_is_a_named_error(storage, assert_artifact_report):
+    processed = storage / OWNER_SUB / "processed_json" / f"{TEXT_ID}.json"
+    processed.write_text(json.dumps([{
+        "type": "private element type", "text": "private document text", "metadata": {"section_path": []},
+    }]), encoding="utf-8")
+
+    response = _client(_paper()).get(_text_url(TEXT_ID))
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == f"File text could not be shown for file {TEXT_ID}"
+    assert_artifact_report("pdf_viewer_stored_display_data_invalid", "UnsupportedDisplayElementError")
 
 
 @pytest.mark.parametrize("file_id", [MAIN_ID, PDF_SUPPLEMENT_ID])
-def test_text_of_a_pdf_file_is_not_found(storage, file_id):
+def test_text_of_a_pdf_file_is_not_found(storage, file_id, reporter):
     response = _client(_paper()).get(_text_url(file_id))
 
     assert response.status_code == 404
+    reporter.assert_not_called()
 
 
-def test_text_of_a_file_that_is_not_ready_is_not_found(storage):
-    response = _client(_paper()).get(_text_url(PENDING_ID))
+@pytest.mark.parametrize("status", ["pending", "failed", "removed"])
+def test_text_of_a_file_that_is_not_ready_is_not_found(storage, status, reporter):
+    files = _four_files()
+    files[3].status = status
+    response = _client(_paper(files=files)).get(_text_url(PENDING_ID))
 
     assert response.status_code == 404
+    assert response.json()["detail"] == (
+        f"File {PENDING_ID} not found in document {DOCUMENT_ID}" if status == "removed"
+        else f"Text not available for file {PENDING_ID}"
+    )
+    reporter.assert_not_called()
 
 
-def test_text_with_missing_processed_elements_is_not_found(storage):
+def test_text_with_missing_processed_elements_is_not_found(storage, assert_artifact_report):
     (storage / OWNER_SUB / "processed_json" / f"{TEXT_ID}.json").unlink()
 
     response = _client(_paper()).get(_text_url(TEXT_ID))
 
     assert response.status_code == 404
+    assert response.json()["detail"] == f"Text not available for file {TEXT_ID}"
+    assert_artifact_report("pdf_viewer_ready_file_elements_missing")
 
 
-def test_text_of_a_ready_file_without_processed_elements_is_not_found(storage):
+def test_text_of_a_ready_file_without_processed_elements_is_not_found(storage, assert_artifact_report):
     files = _four_files()
     files[1].processed_json_path = None
 
     response = _client(_paper(files=files)).get(_text_url(TEXT_ID))
 
     assert response.status_code == 404
+    assert response.json()["detail"] == f"Text not available for file {TEXT_ID}"
+    assert_artifact_report("pdf_viewer_ready_file_elements_missing")
 
 
 def test_text_outside_the_owners_folder_is_forbidden(storage):
