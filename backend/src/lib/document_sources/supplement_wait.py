@@ -284,14 +284,16 @@ async def run_supplement_stage(
     """Wait for the provider to convert the chosen supplements, then add the converted ones.
 
     Runs under its own job (the paper is already ``completed``; its status never
-    depends on this). The wait polls the request the main phase sent, only while
-    that request's answer is ``running``, and ends at the first of: every file
-    classified; a final answer; the wait limit (from ``main_ready_at``); the
-    login's expiry minus the add reserve; the provider starting a new job for the
-    paper (its ``job_id`` changes: nothing more is sent); the first provider
-    error; a cancel; or the job made terminal elsewhere (then nothing more is
-    written). The request is never sent after a final answer. Every entry ends
-    ``added`` or ``left_out`` with a reason.
+    depends on this). It never sends the provider's conversion request (Chris,
+    23 Nov 2026): if the main phase's last answer was already final, it classifies
+    the chosen files once from it; otherwise it reads the provider's read-only
+    file listing every ``DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS`` and ends at the
+    first of: every chosen file converted; the wait limit (from
+    ``main_ready_at``); the login's expiry minus the add reserve; the first
+    provider error; a cancel; or the job made terminal elsewhere (then nothing
+    more is written). A file the provider fails during the wait ends
+    ``not_converted_in_time``. Every entry ends ``added`` or ``left_out`` with a
+    reason.
     """
 
     stage = _Stage(job_id=job_id, plan=plan, main_ready_at=main_ready_at, clock=clock)
