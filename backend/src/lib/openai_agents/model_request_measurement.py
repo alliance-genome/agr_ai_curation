@@ -1166,6 +1166,8 @@ class MeasuredModel(Model):
         self._agent = agent
         self._provider_hint = provider_hint
         self._attempts = 0
+        # Retry settings of the latest request, read by get_retry_advice for its budget.
+        self._retry_settings = None
 
     def __getattr__(self, name: str) -> Any:
         if name == "_inner":
@@ -1190,7 +1192,14 @@ class MeasuredModel(Model):
                 replay_safety="unsafe",
                 reason="blocked_before_send",
             )
-        return self._inner.get_retry_advice(request)
+        advice = self._inner.get_retry_advice(request)
+        from .config import is_responses_websocket_overload, responses_websocket_overload_advice
+
+        if is_responses_websocket_overload(request.error):
+            return responses_websocket_overload_advice(
+                request, advice, retry_settings=self._retry_settings
+            )
+        return advice
 
     def _measure(
         self,
@@ -1326,6 +1335,7 @@ class MeasuredModel(Model):
         model_settings, prompt_cache_tool_surface = bind_prompt_cache_tool_surface(
             model_settings, tools, handoffs
         )
+        self._retry_settings = model_settings.retry
         from src.lib.validation_review.provider import admit_model, guarded_await
         measurement = self._measure(
             system_instructions,
@@ -1409,6 +1419,7 @@ class MeasuredModel(Model):
         model_settings, prompt_cache_tool_surface = bind_prompt_cache_tool_surface(
             model_settings, tools, handoffs
         )
+        self._retry_settings = model_settings.retry
         from src.lib.validation_review.provider import admit_model, guarded_await
         measurement = self._measure(
             system_instructions,

@@ -10,6 +10,7 @@ import asyncio
 import json
 import re
 import time
+from types import SimpleNamespace
 
 import pytest
 from agents import Agent, FunctionTool, ModelSettings, RunConfig
@@ -1544,3 +1545,129 @@ async def test_writer_updates_its_own_new_evidence_record_by_id(harness):
     records = {record["evidence_record_id"]: record for record in summary["liveEvidenceRecords"]}
     assert len(records) == 7
     assert records["ev-reagent 1"]["verified_quote"] == "updated quote for reagent 1"
+
+
+# ---------------------------------------------------------------------------
+# OpenAI overload frame after response start, over the real websocket (ALL-1704)
+# ---------------------------------------------------------------------------
+
+
+class _ScriptSocket:
+    """Answers each request frame with the scripted reply, or once with the overload frame."""
+
+    state = SimpleNamespace(name="OPEN")
+
+    def __init__(self, model):
+        self.model = model
+        self.frames = []
+
+    async def send(self, frame):
+        wire = json.loads(frame)
+        self.model.sent.append(wire)
+        items = wire["input"]
+        writer = ScriptedFanoutModel._writer_index(items)
+        key = (writer, ScriptedFanoutModel._turn(items, developer=writer is not None))
+        response_id = f"resp-{len(self.model.sent)}"
+        started = [
+            {"type": "response.created", "sequence_number": 0, "response": self.model.response(response_id)},
+            {"type": "response.in_progress", "sequence_number": 1, "response": self.model.response(response_id)},
+        ]
+        if key in self.model.overload and key not in self.model.overloaded:
+            self.model.overloaded.append(key)
+            self.model.failed.append(wire)
+            self.frames = [*started, {"type": "error", "sequence_number": 2, "response_id": response_id, "error": {
+                "type": "service_unavailable_error", "code": "server_is_overloaded",
+                "headers": {"retry-after": "6", "retry-after-ms": "6000"},
+                "message": "Our servers are currently overloaded. Please try again later.", "param": None}}]
+            return
+        reply = self.model.script._next({
+            "input": items, "tools": [],
+            "model_settings": SimpleNamespace(parallel_tool_calls=wire.get("parallel_tool_calls"),
+                                              store=wire.get("store")),
+        })
+        output = [item.model_dump(exclude_none=True) for item in reply.output]
+        completed = {**self.model.response(response_id, "completed", output), "usage": {
+            "input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
+            "input_tokens_details": {"cached_tokens": 0}, "output_tokens_details": {"reasoning_tokens": 0}}}
+        self.frames = [*started, {"type": "response.completed", "sequence_number": 2, "response": completed}]
+
+    async def recv(self):
+        return json.dumps(self.frames.pop(0))
+
+    async def close(self, **kwargs):
+        pass
+
+
+def _scripted_fanout_ws_model(scenario, overload):
+    """The scripted fan-out replies behind the real ``OpenAIResponsesWSModel`` transport."""
+    from unittest.mock import AsyncMock
+    from agents.models.openai_responses import OpenAIResponsesWSModel
+    from openai import AsyncOpenAI
+
+    model = OpenAIResponsesWSModel(model="gpt-test", openai_client=AsyncOpenAI(api_key="test-key", max_retries=0))
+    model._agr_provider_id = "openai"
+    model.script = ScriptedFanoutModel(scenario)
+    model.overload, model.overloaded, model.failed, model.sent = set(overload), [], [], []
+    model.response = lambda response_id, status="in_progress", output=(): {
+        "id": response_id, "object": "response", "created_at": 0, "model": "gpt-test", "status": status,
+        "output": list(output), "parallel_tool_calls": True, "tools": [], "tool_choice": "auto"}
+    model._open_websocket_connection = AsyncMock(side_effect=lambda *a, **k: _ScriptSocket(model))
+    return model
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("overload", [
+    set(),
+    {(1, 0)},
+    {(2, 2), (3, 2)},
+    {(1, 0), (2, 2), (3, 2), (None, 2)},
+], ids=["none", "writer-first-request", "writers-after-earlier-tools", "planner-and-writers"])
+async def test_overload_after_response_start_in_fanout_is_resent_without_double_staging(
+        harness, monkeypatch, overload):
+    """The frame on a writer's first request, and on a later request after tools ran in
+    earlier requests (the extractor case of 23 Nov 2026): each request is resent once,
+    no tool runs twice and no record is staged twice."""
+    from agents.run_internal import model_retry
+    from src.lib.openai_agents import model_request_measurement as measurement
+    from src.lib.openai_agents.config import build_default_model_retry
+
+    measurement.install_model_request_measurement()
+    monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "3")
+    delays = []
+
+    async def record_sleep(delay):
+        delays.append(delay)
+
+    monkeypatch.setattr(model_retry, "_sleep_for_retry", record_sleep)
+    scripted_agent = harness.agent
+
+    def agent_with_default_retry(model, *, catalog=False):
+        agent = scripted_agent(model, catalog=catalog)
+        agent.model_settings = ModelSettings(retry=build_default_model_retry())
+        return agent
+
+    harness.agent = agent_with_default_retry
+    labels = [f"reagent {n}" for n in range(1, 8)]
+    model = _scripted_fanout_ws_model(
+        {"plan": _plan(*labels), "short_writer": 2, "tidy_stages": "reagent 5"}, overload)
+
+    await harness.run(model)
+
+    assert sorted(model.overloaded, key=str) == sorted(overload, key=str)
+    assert delays == [6.0] * len(overload)
+    # Each failed request was sent again unchanged, and only once.
+    for failed in model.failed:
+        assert sum(1 for wire in model.sent if wire == failed) == 2
+    workspace = harness.workspaces[-1]
+    assert [len(workspace.candidates_staged_by(f"writer-{n}/a1")) for n in (1, 2, 3)] == [3, 1, 2]
+    assert not any(workspace.candidates_staged_by(f"writer-{n}/a2") for n in (1, 2, 3)), "no writer re-run"
+    tool_starts = [event["details"]["toolName"] for event in harness.events if event.get("type") == "TOOL_START"]
+    assert tool_starts.count(STAGE) == 1 + 6 + 1  # refused planning try, writers, checker
+    assert tool_starts.count("record_evidence") == 7 + 1  # one per planned record, checker's one
+    assert len(harness.finalize_calls) == 1
+    finalized = _finalized_labels(harness)
+    assert len(finalized) == len(set(finalized)) == 7
+    summary = next(event for event in harness.events if event.get("type") == "SPECIALIST_SUMMARY")["details"]
+    evidence_ids = [record["evidence_record_id"] for record in summary["liveEvidenceRecords"]]
+    assert len(evidence_ids) == len(set(evidence_ids)) == 7
+    await model.close()

@@ -15,6 +15,10 @@ then exercises real chat, extractor finalization, flow completion, and batch
 behavior against the deployed backend. Record the passing evidence in the PR body
 as `SDK-Smoke-Evidence: dev_release_smoke PASS <evidence-link-or-path>` so the
 Agent PR Gate can enforce the upgrade policy.
+The overload resend (ALL-1704) also relies on two private SDK names,
+`OpenAIResponsesWSModel._iter_websocket_response_events` (wrapped) and
+`agents.run_internal.model_retry._RETRY_SAFE_STREAM_EVENT_TYPES`; recheck them on
+any bump (pinned by `backend/tests/unit/lib/openai_agents/test_responses_overload_after_start.py`).
 
 Release skill alignment: if a change adds, removes, or materially changes a
 dev-release smoke, live integration gate, domain-corpus/evidence runner,

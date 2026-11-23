@@ -776,11 +776,15 @@ def is_responses_websocket_overload(error: object) -> bool:
     )
 
 
-def responses_websocket_retry_after(error: "ResponsesWebSocketError") -> Optional[float]:
+def responses_websocket_retry_after(
+    error: "ResponsesWebSocketError", *, max_delay: Optional[float]
+) -> Optional[float]:
     """Seconds from the frame's ``error.headers`` (``retry-after-ms``, then ``retry-after``).
 
     The pinned SDK reads retry-after only from HTTP response headers, so a
-    websocket frame's own headers are otherwise ignored. None when absent.
+    websocket frame's own headers are otherwise ignored. The value is bounded by
+    ``max_delay`` (``OPENAI_MODEL_RETRY_MAX_DELAY``). None when the header is
+    missing or not a non-negative number; the configured backoff then applies.
     """
 
     details = error.payload.get("error")
@@ -796,8 +800,79 @@ def responses_websocket_retry_after(error: "ResponsesWebSocketError") -> Optiona
         except ValueError:
             continue
         if math.isfinite(seconds) and seconds >= 0:
-            return seconds
+            return seconds if max_delay is None else min(seconds, max_delay)
     return None
+
+
+RESPONSES_WS_OVERLOAD_AFTER_START = "responses_websocket_server_overloaded_after_start"
+
+
+def _log_overload_not_resent(reason: str, attempt: int, max_retries: int) -> None:
+    logger.warning(
+        "Not resending Responses WebSocket overload frame (reason=%s; attempt %s/%s)",
+        reason,
+        attempt,
+        max_retries,
+    )
+
+
+def _overload_after_start_refusal(error: object, *, stateful_request: bool) -> Optional[str]:
+    """Why an overload frame after response start may not be resent, or None when it may."""
+
+    output_started = getattr(error, RESPONSES_WS_OUTPUT_STARTED_ATTR, None)
+    if stateful_request:
+        return "stateful_request"
+    if output_started is None:
+        return "output_not_observed"
+    if output_started:
+        return "output_started"
+    return None
+
+
+def responses_websocket_overload_advice(request, advice, *, retry_settings):
+    """Provider retry advice for OpenAI's typed overload frame (ALL-1704).
+
+    Called by the measured model's ``get_retry_advice`` for every failure that
+    is this exact frame, before the SDK evaluates the retry.
+
+    - When the retry budget is spent the SDK raises without consulting the
+      policy; this logs that refusal and returns the advice unchanged.
+    - A streamed request whose frame came after ``response.created`` /
+      ``response.in_progress`` is marked replay-unsafe by the SDK, which then
+      refuses before any policy runs. When no output event arrived (the
+      websocket observation) and the request is stateless, the advice is
+      returned as a provider-suggested retry with unknown replay safety, so the
+      policy decides as for a non-streamed request. The SDK's own veto after
+      any streamed event outside its retry-safe set still applies first.
+      Otherwise the refusal is logged and the advice is returned unchanged.
+    - Everything else is returned unchanged (the policy handles it).
+    """
+
+    from agents.retry import ModelRetryAdvice
+
+    max_retries = max(retry_settings.max_retries or 0, 0) if retry_settings is not None else 0
+    if request.attempt > max_retries:
+        _log_overload_not_resent("retry_budget_exhausted", request.attempt, max_retries)
+        return advice
+    if not (
+        request.stream
+        and advice is not None
+        and advice.replay_safety == "unsafe"
+        and advice.response_started
+    ):
+        return advice
+    refusal = _overload_after_start_refusal(
+        request.error,
+        stateful_request=bool(request.previous_response_id or request.conversation_id),
+    )
+    if refusal is not None:
+        _log_overload_not_resent(refusal, request.attempt, max_retries)
+        return advice
+    return ModelRetryAdvice(
+        suggested=True,
+        reason=RESPONSES_WS_OVERLOAD_AFTER_START,
+        response_started=True,
+    )
 
 
 def build_default_model_retry():
@@ -814,6 +889,7 @@ def build_default_model_retry():
     from agents.retry import ModelRetrySettings, ModelRetryBackoffSettings
 
     install_responses_websocket_output_observation()
+    retry_max_delay = _get_env_float("OPENAI_MODEL_RETRY_MAX_DELAY", 8.0)
 
     def retry_responses_websocket_overload(context):
         """Retry OpenAI's typed overload frame without logging frame content."""
@@ -825,47 +901,36 @@ def build_default_model_retry():
 
         retry_budget_exhausted = context.attempt == context.max_retries
         log = logger.warning if retry_budget_exhausted else logger.info
-        delay = responses_websocket_retry_after(error)
+        delay = responses_websocket_retry_after(error, max_delay=retry_max_delay)
 
         if context.response_started:
             # The frame arrived after response.created/in_progress (ALL-1704). The
             # SDK marks that replay-unsafe without knowing whether output began.
             # Resending is safe when OpenAI declared the request failed for
-            # overload (with a retry-after) before any output item, text delta or
-            # tool call: nothing of it was returned, so no output or tool call
-            # can be duplicated. The websocket observation records whether such
-            # an event arrived; an unobserved request is not resent. A stateful
-            # request (previous_response_id or conversation) is not resent.
-            output_started = getattr(error, RESPONSES_WS_OUTPUT_STARTED_ATTR, None)
-            if context.stateful_request:
-                refusal = "stateful_request"
-            elif output_started is None:
-                refusal = "output_not_observed"
-            elif output_started:
-                refusal = "output_started"
-            else:
-                refusal = None
+            # overload (with a retry-after) before any output item, text delta,
+            # reasoning item or tool call: nothing of it was returned, so no
+            # output or tool call can be duplicated. The websocket observation
+            # records whether such an event arrived; an unobserved request is not
+            # resent. A stateful request (previous_response_id or conversation)
+            # is not resent. A streamed request reaches this point only through
+            # responses_websocket_overload_advice, after the SDK's own veto.
+            refusal = _overload_after_start_refusal(
+                error, stateful_request=context.stateful_request
+            )
             if refusal is not None:
-                logger.warning(
-                    "Not resending Responses WebSocket overload frame after the response "
-                    "started (reason=%s; attempt %s/%s)",
-                    refusal,
-                    context.attempt,
-                    context.max_retries,
-                )
+                _log_overload_not_resent(refusal, context.attempt, context.max_retries)
                 return False
-            log(
+            logger.info(
                 "Resending Responses WebSocket overload frame after the response started "
-                "and before any output (retry %s/%s; retry_budget_exhausted=%s; delay=%s)",
+                "and before any output (retry %s/%s; delay=%s)",
                 context.attempt,
                 context.max_retries,
-                retry_budget_exhausted,
                 delay,
             )
             return RetryDecision(
                 retry=True,
                 delay=delay,
-                reason="responses_websocket_server_overloaded_after_start",
+                reason=RESPONSES_WS_OVERLOAD_AFTER_START,
                 approve_unsafe_replay=True,
             )
 
@@ -1016,11 +1081,12 @@ def build_default_model_retry():
                 {"id": "responses_websocket_overload", "revision": 2,
                  "event_type": "error", "error_type": "service_unavailable_error",
                  "code": "server_is_overloaded", "approves_replay": True,
-                 "delay": "frame retry-after-ms, then retry-after",
+                 "delay": "frame retry-after-ms, then retry-after, at most backoff.max_delay",
                  "after_response_start": {
                      "approve_unsafe_replay": True,
                      "requires": "no event outside response.created/response.in_progress",
-                     "stateful_request": "refused"}},
+                     "stateful_request": "refused",
+                     "streamed": "measured model advice: suggested, replay safety unknown"}},
                 {"id": "responses_input_item_ids_refused", "revision": 1,
                  "event_type": "error", "error_type": "invalid_request_error",
                  "code": "unsupported_parameter", "param": "input",
@@ -1042,7 +1108,7 @@ def build_default_model_retry():
         max_retries=max_retries,
         backoff=ModelRetryBackoffSettings(
             initial_delay=_get_env_float("OPENAI_MODEL_RETRY_INITIAL_DELAY", 0.5),
-            max_delay=_get_env_float("OPENAI_MODEL_RETRY_MAX_DELAY", 8.0),
+            max_delay=retry_max_delay,
             multiplier=_get_env_float("OPENAI_MODEL_RETRY_MULTIPLIER", 2.0),
             jitter=True,
         ),
