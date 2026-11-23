@@ -9,8 +9,8 @@ export interface PDFViewerDocumentChangedDetail {
   activeFileId: string
   /** The paper has a main file the viewer cannot show (not ready, so no URL). */
   mainFileUnavailable: boolean
-  /** Files of the paper that exist but are not ready (no URL, so no tab). */
-  notReadyFileIds: string[]
+  /** Listed files without a tab, including their status for evidence navigation. */
+  unavailableFiles: ViewerFile[]
   ownerToken?: string
   viewerState?: {
     currentPage?: number
@@ -45,6 +45,7 @@ export function buildCurationPDFViewerOwner(sessionId: string): string {
 /** Approved by Chris (23 Nov 2026). */
 export const MAIN_FILE_UNAVAILABLE_MESSAGE = 'This paper\'s main file is not available to show.'
 export const FILES_NOT_READY_MESSAGE = 'This paper\'s files are still being added.'
+export const ALL_FILES_FAILED_MESSAGE = "None of this paper's files could be added."
 
 export interface PaperFilesViewerOptions {
   ownerToken?: string
@@ -67,10 +68,13 @@ export function showPaperFilesInViewer(
   const activeFileId = defaultActiveFileId(tabFiles)
   const mainFileUnavailable = files.some((file) => file.role === 'main' && !tabFiles.includes(file))
   if (activeFileId === null) {
-    dispatchPDFViewerDocumentCleared(
-      options?.ownerToken,
-      mainFileUnavailable ? MAIN_FILE_UNAVAILABLE_MESSAGE : FILES_NOT_READY_MESSAGE,
-    )
+    let notice = FILES_NOT_READY_MESSAGE
+    if (files.length > 0 && files.every((file) => file.status === 'failed')) {
+      notice = ALL_FILES_FAILED_MESSAGE
+    } else if (mainFileUnavailable) {
+      notice = MAIN_FILE_UNAVAILABLE_MESSAGE
+    }
+    dispatchPDFViewerDocumentCleared(options?.ownerToken, notice)
     return false
   }
   window.dispatchEvent(
@@ -80,7 +84,7 @@ export function showPaperFilesInViewer(
         files: tabFiles,
         activeFileId,
         mainFileUnavailable,
-        notReadyFileIds: files.filter((file) => !tabFiles.includes(file)).map((file) => file.file_id),
+        unavailableFiles: files.filter((file) => !tabFiles.includes(file)),
         ownerToken: options?.ownerToken,
         viewerState: options?.viewerState,
       },

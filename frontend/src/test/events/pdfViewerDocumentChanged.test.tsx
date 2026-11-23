@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  ALL_FILES_FAILED_MESSAGE,
   FILES_NOT_READY_MESSAGE,
   HOME_PDF_VIEWER_OWNER,
   MAIN_FILE_UNAVAILABLE_MESSAGE,
@@ -83,11 +84,20 @@ describe('pdf-viewer-document-changed event contract (paper files)', () => {
     expect(cleared).toHaveBeenCalledWith({ ownerToken: HOME_PDF_VIEWER_OWNER, notice: FILES_NOT_READY_MESSAGE })
   })
 
-  it('says the main file is not available when it is not ready and nothing else can be shown', () => {
+  it('reports all files failed when the only file is a failed main file', () => {
     const cleared = vi.fn()
     cleanups.push(onPDFViewerDocumentCleared((event) => cleared(event.detail)))
 
     showPaperFilesInViewer(DOCUMENT_ID, [mainPdfFileNotReady('failed')])
+
+    expect(cleared).toHaveBeenCalledWith({ ownerToken: undefined, notice: ALL_FILES_FAILED_MESSAGE })
+  })
+
+  it('keeps the main-file notice when a supplement is still pending', () => {
+    const cleared = vi.fn()
+    cleanups.push(onPDFViewerDocumentCleared((event) => cleared(event.detail)))
+
+    showPaperFilesInViewer(DOCUMENT_ID, [mainPdfFileNotReady('failed'), FOUR_FILES_PAYLOAD.files[3]!])
 
     expect(cleared).toHaveBeenCalledWith({ ownerToken: undefined, notice: MAIN_FILE_UNAVAILABLE_MESSAGE })
   })

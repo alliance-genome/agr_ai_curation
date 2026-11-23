@@ -12,8 +12,8 @@ export interface ViewerDocument {
   activeFileId: string
   /** The paper has a main file the viewer cannot show (not ready, so no URL). */
   mainFileUnavailable: boolean
-  /** Files of the paper that exist but are not ready (no tab). */
-  notReadyFileIds: string[]
+  /** Listed files without a tab, including their status for evidence navigation. */
+  unavailableFiles: ViewerFile[]
   /** When the active file started loading; a new value reloads the PDF frame. */
   loadedAt: string
 }

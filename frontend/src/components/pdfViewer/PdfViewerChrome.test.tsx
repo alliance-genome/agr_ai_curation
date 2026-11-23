@@ -12,7 +12,7 @@ const paperDocument: ViewerDocument = {
   files: [singleMainPdfFile({ documentId: 'doc-1', displayName: 'paper.pdf', pageCount: 12 })],
   activeFileId: MAIN_FILE_ID,
   mainFileUnavailable: false,
-  notReadyFileIds: [],
+  unavailableFiles: [],
   loadedAt: '2026-04-27T00:00:00.000Z',
 }
 
