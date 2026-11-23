@@ -549,6 +549,50 @@ async def test_the_real_stale_sweep_fails_a_dead_adds_rows_on_a_completed_paper(
     assert _deletable(paper, owner_id) is True
 
 
+@pytest.mark.asyncio
+async def test_after_the_stale_sweep_a_run_is_no_longer_told_files_are_being_added(owner_id, index):
+    """The model's "Files are still being added" line keys on pending file rows. A dead
+    add leaves one; once the real background sweep fails it, a new run's outline no
+    longer carries the line (the count is taken per run, never cached)."""
+
+    from src.lib.document_context import DocumentContext
+    from src.lib.openai_agents.prompt_utils import FILES_BEING_ADDED_LINE, format_hierarchy_for_prompt
+    from src.lib.pdf_jobs.recovery import reconcile_stale_jobs_once
+
+    paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    job = supplement_add.start_supplement_add(paper, owner_id, [_chosen(20)])
+
+    class ProcessGone(BaseException):
+        pass
+
+    async def stop(stage):
+        if stage == "finishing":
+            raise ProcessGone()
+
+    original_undo = supplement_add._undo
+    supplement_add._undo = AsyncMock()  # nothing runs after the process is gone
+    try:
+        with pytest.raises(ProcessGone):
+            await _add(paper, owner_id, index, [_chosen(20)], job_id=UUID(job.job_id), checkpoint=stop)
+    finally:
+        supplement_add._undo = original_undo
+    with SessionLocal.begin() as db:
+        db.get(PdfProcessingJob, UUID(job.job_id)).status = PdfJobStatus.RUNNING.value
+
+    during = await DocumentContext.fetch(str(paper), TEST_USER_ID)
+    assert during.hierarchy is not None and during.hierarchy["files_being_added"] == 1
+    assert FILES_BEING_ADDED_LINE in format_hierarchy_for_prompt(during.hierarchy)
+
+    later = datetime.now(timezone.utc) + timedelta(hours=3)
+    cursor = reconcile_stale_jobs_once(now=later)
+    while cursor is not None:
+        cursor = reconcile_stale_jobs_once(after=cursor, now=later)
+
+    after = await DocumentContext.fetch(str(paper), TEST_USER_ID)
+    assert after.hierarchy is not None and after.hierarchy["files_being_added"] == 0
+    assert FILES_BEING_ADDED_LINE not in format_hierarchy_for_prompt(after.hierarchy)
+
+
 # --- a delete and an add cannot interleave (paper_lock.py) ------------------------------------
 
 

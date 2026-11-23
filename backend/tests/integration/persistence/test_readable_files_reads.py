@@ -433,3 +433,46 @@ def test_a_files_label_does_not_move_when_an_earlier_same_named_file_becomes_rea
 
     assert after.by_label("Table S1.xlsx (2)").file_id == later_id
     assert after.by_label("Table S1.xlsx").file_id == earlier_id
+
+
+@pytest.mark.asyncio
+async def test_the_evidence_list_labels_files_under_the_runs_reading_scope(owner_id, monkeypatch):
+    """The real resolver under each reading scope. Main file and supplement share the
+    display name figures.pdf, so the supplement's label is "figures.pdf (2)"; a batch
+    (main file only) cannot read the supplement, and its stored name, which equals the
+    main file's label, must not be offered as a copyable ``file``."""
+    from src.lib.openai_agents.tools import evidence_workspace
+
+    monkeypatch.setattr(evidence_workspace, "function_tool",
+                        lambda fn=None, **kwargs: fn if fn is not None else (lambda wrapped: wrapped))
+    document_id = uuid4()
+    with SessionLocal.begin() as db:
+        db.add(PDFDocument(
+            id=document_id, user_id=owner_id, filename=f"{PREFIX}{document_id}.pdf",
+            status="completed", processing_completed_at=datetime.now(timezone.utc), next_chunk_index=5,
+        ))
+        db.flush()
+        main = _file(document_id, role="main", display_name="figures.pdf", status="ready", tab_order=0,
+                     display_mode="local_pdf", file_path=f"o/{document_id}/main.pdf", page_count=3,
+                     chunk_index_start=0, chunk_index_end=2, chunk_count=3, text_bytes=300)
+        supplement = _file(document_id, role="supplement", display_name="figures.pdf", status="ready",
+                           tab_order=1, display_mode="local_pdf", file_path=f"o/{document_id}/s1.pdf",
+                           page_count=1, chunk_index_start=3, chunk_index_end=4, chunk_count=2, text_bytes=200)
+        db.add_all([main, supplement])
+        db.flush()
+        supplement_id = str(supplement.id)
+    records = [{"evidence_record_id": "ev-1", "entity": "a", "page": 1, "section": "Results",
+                "chunk_id": "chunk-3", "document_id": str(document_id), "verified_quote": "A quote.",
+                "file_id": supplement_id, "file_name": "figures.pdf"}]
+    token = evidence_workspace.set_active_evidence_records(records)
+    try:
+        list_tool = evidence_workspace.create_list_recorded_evidence_tool(str(document_id), TEST_USER_ID)
+        every_file = (await list_tool())["evidence_records"][0]
+        with reading_scope(ReadingScope.MAIN_FILE_ONLY):
+            batch = (await list_tool())["evidence_records"][0]
+    finally:
+        evidence_workspace.reset_active_evidence_records(token)
+
+    assert every_file["file"] == "figures.pdf (2)" and "file_readable" not in every_file
+    assert "file" not in batch
+    assert batch["file_readable"] is False and batch["file_name"] == "figures.pdf"

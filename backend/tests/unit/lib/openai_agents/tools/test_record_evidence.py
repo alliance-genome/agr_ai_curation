@@ -857,3 +857,17 @@ async def test_record_evidence_refuses_sentences_from_two_files_in_one_record(mo
     assert result["file_names"] == ["paper.pdf", "Table_S1.xlsx"]
     assert "resolution_failure" not in result
     assert "evidence_record_id" not in result
+
+
+def test_record_evidence_description_says_one_file_per_call(monkeypatch):
+    # Approved wording (Chris, 23 Nov 2026), right after the selections-order sentence.
+    from agr_ai_curation_runtime.function_tools import function_tool
+    from src.lib.openai_agents.tools import record_evidence as record_evidence_module
+
+    monkeypatch.setattr(record_evidence_module, "function_tool", function_tool)
+    description = record_evidence_module.create_record_evidence_tool("doc-1", "user-1").description
+    assert (
+        "Multiple selections form one evidence record, in the supplied order.\n"
+        "All selections in one call must come from one file; record each file's "
+        "sentences in a separate call."
+    ) in description

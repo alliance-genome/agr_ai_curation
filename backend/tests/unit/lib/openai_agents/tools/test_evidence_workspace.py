@@ -405,3 +405,153 @@ async def test_attach_after_field_only_target_preserves_valid_evidence(workspace
     assert 'object_ref' not in record
     payload = {key: value for key, value in record.items() if key in EvidenceRecord.model_fields}
     assert EvidenceRecord.model_validate(payload).evidence_record_id == 'ev-active'
+
+
+# The outline label the model uses with ``file=`` is shown beside ``section`` in both
+# evidence views. Files are in real ``ReadableFiles`` shape: two files with the same
+# display name are told apart by label, as ``file_labels`` numbers them.
+MAIN_FILE_ID = "11111111-1111-4111-8111-111111111111"
+SUPPLEMENT_FILE_ID = "22222222-2222-4222-8222-222222222222"
+REMOVED_FILE_ID = "33333333-3333-4333-8333-333333333333"
+
+
+def _readable_files():
+    from src.lib.document_files.readable import ReadableFile, ReadableFiles
+
+    return ReadableFiles(
+        document_id="doc-1",
+        files=(
+            ReadableFile(MAIN_FILE_ID, "figures.pdf", "main", 0, 9, "PDF", "figures.pdf"),
+            ReadableFile(SUPPLEMENT_FILE_ID, "figures.pdf", "supplement", 10, 14, "PDF", "figures.pdf (2)"),
+        ),
+    )
+
+
+@pytest.fixture
+def filed_workspace_records(monkeypatch):
+    calls = []
+
+    def resolve(document_id, user_id):
+        calls.append((document_id, user_id))
+        return _readable_files()
+
+    monkeypatch.setattr(evidence_workspace, "resolve_readable_files", resolve)
+    base = {"page": 2, "section": "Results", "chunk_id": "chunk-1", "document_id": "doc-1",
+            "verified_quote": "A quote."}
+    records = [
+        {**base, "evidence_record_id": "ev-supplement", "entity": "a",
+         "file_id": SUPPLEMENT_FILE_ID, "file_name": "figures.pdf"},
+        {**base, "evidence_record_id": "ev-removed", "entity": "b",
+         "file_id": REMOVED_FILE_ID, "file_name": "table S1.xlsx"},
+        {**base, "evidence_record_id": "ev-before-files", "entity": "c"},
+    ]
+    token = evidence_workspace.set_active_evidence_records(records)
+    try:
+        yield records, calls
+    finally:
+        evidence_workspace.reset_active_evidence_records(token)
+
+
+@pytest.mark.asyncio
+async def test_evidence_list_shows_each_records_file_by_its_outline_label(filed_workspace_records):
+    _, calls = filed_workspace_records
+    listed = await evidence_workspace.create_list_recorded_evidence_tool("doc-1", "user-1")()
+
+    by_id = {record["evidence_record_id"]: record for record in listed["evidence_records"]}
+    assert by_id["ev-supplement"]["file"] == "figures.pdf (2)"
+    assert "file_readable" not in by_id["ev-supplement"]
+    # A file the run can no longer read: no copyable ``file``; its stored name under file_name.
+    assert "file" not in by_id["ev-removed"]
+    assert by_id["ev-removed"]["file_readable"] is False
+    assert by_id["ev-removed"]["file_name"] == "table S1.xlsx"
+    # The list shows file_name only in that case.
+    assert "file_name" not in by_id["ev-supplement"]
+    # A record saved before files were recorded has no file key.
+    assert "file" not in by_id["ev-before-files"]
+    assert "file_readable" not in by_id["ev-before-files"]
+    # One resolution per call, for the run's own paper and curator.
+    assert calls == [("doc-1", "user-1")]
+
+
+@pytest.mark.asyncio
+async def test_get_recorded_evidence_shows_the_records_file_by_its_outline_label(filed_workspace_records, monkeypatch):
+    async def no_projection(value, **kwargs):
+        return value
+
+    monkeypatch.setattr(
+        "src.lib.openai_agents.document_references.project_source_references", no_projection
+    )
+    get_tool = evidence_workspace.create_get_recorded_evidence_tool("doc-1", "user-1")
+
+    supplement = (await get_tool("ev-supplement"))["record"]
+    removed = (await get_tool("ev-removed"))["record"]
+    before_files = (await get_tool("ev-before-files"))["record"]
+
+    assert supplement["file"] == "figures.pdf (2)" and "file_readable" not in supplement
+    assert supplement["file_name"] == "figures.pdf"
+    assert "file" not in removed and removed["file_readable"] is False
+    assert removed["file_name"] == "table S1.xlsx"
+    assert "file" not in before_files and "file_readable" not in before_files
+
+
+@pytest.mark.asyncio
+async def test_evidence_views_do_not_resolve_files_when_no_record_names_one(workspace_records, monkeypatch):
+    def refuse(*args):
+        raise AssertionError("no record names a file")
+
+    monkeypatch.setattr(evidence_workspace, "resolve_readable_files", refuse)
+    listed = await evidence_workspace.create_list_recorded_evidence_tool("doc-1", "user-1")()
+    assert listed["count"] == 1 and "file" not in listed["evidence_records"][0]
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_files_stored_name_is_never_offered_as_a_copyable_label(monkeypatch):
+    """Main and supplement are both named figures.pdf; a batch reads the main file only.
+    The supplement's stored name equals the main file's label, so it must not appear
+    under ``file`` (passing it to a reading tool would select the main file)."""
+    from src.lib.document_files.readable import ReadableFile, ReadableFiles
+
+    main_only = ReadableFiles("doc-1", (ReadableFile(MAIN_FILE_ID, "figures.pdf", "main", 0, 9, "PDF", "figures.pdf"),))
+    monkeypatch.setattr(evidence_workspace, "resolve_readable_files", lambda document_id, user_id: main_only)
+    records = [{"evidence_record_id": "ev-supplement", "entity": "a", "page": 2, "section": "Results",
+                "chunk_id": "chunk-1", "document_id": "doc-1", "verified_quote": "A quote.",
+                "file_id": SUPPLEMENT_FILE_ID, "file_name": "figures.pdf"}]
+    token = evidence_workspace.set_active_evidence_records(records)
+    try:
+        listed = await evidence_workspace.create_list_recorded_evidence_tool("doc-1", "user-1")()
+    finally:
+        evidence_workspace.reset_active_evidence_records(token)
+
+    record = listed["evidence_records"][0]
+    assert "file" not in record
+    assert record["file_readable"] is False and record["file_name"] == "figures.pdf"
+
+
+@pytest.mark.asyncio
+async def test_a_ready_file_without_a_range_is_the_named_document_read_failure(filed_workspace_records, monkeypatch):
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+    from src.lib.document_files.service import FileRangeMissingError
+
+    def missing_range(document_id, user_id):
+        raise FileRangeMissingError("file has no piece range")
+
+    monkeypatch.setattr(evidence_workspace, "resolve_readable_files", missing_range)
+    with pytest.raises(DocumentReadError) as raised:
+        await evidence_workspace.create_list_recorded_evidence_tool("doc-1", "user-1")()
+    assert isinstance(raised.value.__cause__, FileRangeMissingError)
+
+
+@pytest.mark.asyncio
+async def test_a_paper_that_is_gone_makes_every_named_file_unreadable(filed_workspace_records, monkeypatch):
+    from src.lib.document_files.readable import ReadableFilesError
+
+    def gone(document_id, user_id):
+        raise ReadableFilesError("Document doc-1 is not a paper of this user")
+
+    monkeypatch.setattr(evidence_workspace, "resolve_readable_files", gone)
+    listed = await evidence_workspace.create_list_recorded_evidence_tool("doc-1", "user-1")()
+    by_id = {record["evidence_record_id"]: record for record in listed["evidence_records"]}
+    for record_id, name in (("ev-supplement", "figures.pdf"), ("ev-removed", "table S1.xlsx")):
+        assert "file" not in by_id[record_id]
+        assert by_id[record_id]["file_readable"] is False and by_id[record_id]["file_name"] == name
+    assert "file_readable" not in by_id["ev-before-files"]

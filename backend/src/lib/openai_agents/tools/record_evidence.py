@@ -1283,6 +1283,7 @@ def create_record_evidence_tool(
 
         Backend verification copies exact source text; do not supply quote text.
         Multiple selections form one evidence record, in the supplied order.
+        All selections in one call must come from one file; record each file's sentences in a separate call.
         A needs_source_read response saves nothing: explicitly read the selected
         chunk/span window with read_chunk, then submit issued selections again.
         Supplying evidence_record_id replaces that active record's source while
