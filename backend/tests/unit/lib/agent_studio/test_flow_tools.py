@@ -15,6 +15,7 @@ from src.api import agent_studio as api_module
 from src.lib.agent_access import is_resource_access_allowed
 from src.lib.agent_studio.models import FlowContextDefinition
 from src.lib.flow_edge_roles import SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
+from src.lib.packages.paths import get_runtime_config_dir
 from src.lib.packages.flow_recipes import (
     FlowRecipeCatalog,
     FlowRecipeLoadError,
@@ -265,7 +266,7 @@ def test_get_flow_templates_handler_uses_registry(monkeypatch):
     monkeypatch.setattr(
         flow_tools,
         "FLOW_AGENT_IDS",
-        ["pdf_extraction", "gene_validation"],
+        ["pdf_extraction", "gene_extractor"],
     )
     monkeypatch.setattr(
         flow_tools,
@@ -277,23 +278,22 @@ def test_get_flow_templates_handler_uses_registry(monkeypatch):
                 "category": "Extraction",
                 "requires_document": True,
             },
-            "gene_validation": {
-                "name": "Gene Specialist",
-                "description": "Validate genes",
-                "category": "Validation",
-                "requires_document": False,
-                "supervisor": {"enabled": True},
+            "gene_extractor": {
+                "name": "Gene Extractor",
+                "description": "Extract genes",
+                "category": "Extraction",
+                "requires_document": True,
             },
         },
     )
     handler = flow_tools._get_flow_templates_handler()
     result = handler()
 
-    assert len(result["templates"]) >= 1
+    assert [template["name"] for template in result["templates"]] == ["Gene Extraction"]
     assert len(result["available_agents"]) == 2
     assert result["available_agents"][0]["agent_id"] in {
         "pdf_extraction",
-        "gene_validation",
+        "gene_extractor",
     }
     assert "Found" in result["message"]
 
@@ -373,8 +373,7 @@ def test_get_flow_templates_handler_filters_missing_steps_and_resolves_installed
     result = handler()
 
     assert {template["name"] for template in result["templates"]} == {
-        "Gene Curation",
-        "GO Annotation Pipeline",
+        "GO Term Lookup",
     }
     assert result["templates"][0]["steps"][0]["agent_id"] == "pdf_extraction"
     assert all(
@@ -428,19 +427,8 @@ def test_flow_templates_bind_outputs_to_canonical_validator_sources(monkeypatch)
         for template in flow_tools._filter_flow_templates(installed_agent_ids)
     }
 
-    assert templates["Gene Curation"]["steps"][-1]["source_steps"] == [2]
-    assert templates["Disease Annotation"]["steps"][-1]["source_steps"] == [2]
-    assert templates["Allele Annotation"]["steps"][-1]["source_steps"] == [2]
-    assert templates["GO Annotation Pipeline"]["steps"][-1]["source_steps"] == [
-        2,
-        3,
-    ]
-    for name in (
-        "Gene Curation",
-        "Disease Annotation",
-        "Allele Annotation",
-        "GO Annotation Pipeline",
-    ):
+    assert templates["GO Term Lookup"]["steps"][-1]["source_steps"] == [2]
+    for name in ("GO Term Lookup",):
         definition = flow_tools._build_simplified_flow_definition(
             steps=templates[name]["steps"],
             task_instructions=name,
@@ -450,7 +438,7 @@ def test_flow_templates_bind_outputs_to_canonical_validator_sources(monkeypatch)
         assert definition.version == "1.1"
 
 
-def test_all_twelve_alliance_recipes_appear_when_required_agents_are_flow_eligible(
+def test_all_nine_alliance_recipes_appear_when_required_agents_are_flow_eligible(
     monkeypatch,
 ):
     catalog = flow_tools.load_flow_recipe_catalog()
@@ -496,16 +484,13 @@ def test_all_twelve_alliance_recipes_appear_when_required_agents_are_flow_eligib
     )
 
     assert [template["name"] for template in templates] == [
-        "Gene Curation",
         "Gene Extraction",
-        "Disease Annotation",
         "Disease Extraction",
         "Chemical Entity Extraction",
         "Gene Expression Analysis",
         "Phenotype Extraction",
         "Allele/Variant Extraction",
-        "Allele Annotation",
-        "GO Annotation Pipeline",
+        "GO Term Lookup",
         "RGD GO and Disease Paper Review",
         "RGD GO Paper Review",
     ]
@@ -735,6 +720,144 @@ def test_startup_validation_rejects_invalid_group_restricted_recipe(
     assert "org.invalid" in message
     assert str(source_path) in message
     assert "source_steps must reference earlier steps" in message
+
+
+def test_every_shipped_recipe_step_is_a_step_the_flow_policy_accepts():
+    """With the real agent registry, no recipe may name an attachment-only validator as a step.
+
+    Such a step can never be added to a flow (flow_agent_policy), so the recipe was silently
+    hidden from Studio, apply_template and the benchmark catalog.
+    """
+    from src.lib.agent_studio.flow_agent_policy import agent_allows_ordinary_flow_step
+
+    catalog = flow_tools.load_flow_recipe_catalog()
+    refused = [
+        (recipe.name, step.agent_id)
+        for recipe in catalog.recipes
+        for step in recipe.steps
+        if step.agent_id in flow_tools.AGENT_REGISTRY
+        and not agent_allows_ordinary_flow_step(step.agent_id, flow_tools.AGENT_REGISTRY[step.agent_id])
+    ]
+
+    assert refused == []
+
+
+def test_every_shipped_recipe_is_offered_with_the_real_registry():
+    catalog = flow_tools.load_flow_recipe_catalog()
+
+    offered = flow_tools._filter_flow_templates(
+        set(flow_tools.FLOW_AGENT_IDS), catalog, active_group_ids=["RGD"],
+    )
+
+    assert [template["name"] for template in offered] == [recipe.name for recipe in catalog.recipes]
+
+
+def test_startup_validation_rejects_a_recipe_step_that_is_an_attachment_only_validator(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction", "chat_output"])
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "pdf_extraction": {"category": "Extraction"},
+            "gene_validation": {"category": "Validation", "supervisor": {"enabled": False}},
+            "chat_output": {"category": "Output"},
+        },
+    )
+    source_path = tmp_path / "flow_recipes.yaml"
+    catalog = FlowRecipeCatalog(
+        contributions=(
+            LoadedFlowRecipeManifest(
+                package_id="org.example",
+                export_name="default",
+                source_path=source_path,
+                manifest=FlowRecipeManifest.model_validate(
+                    {
+                        "flow_recipes_api_version": "1.0.0",
+                        "recipes": [
+                            {
+                                "name": "Validate Genes",
+                                "description": "Validate gene mentions",
+                                "steps": [
+                                    {"agent_id": "pdf_extraction"},
+                                    {"agent_id": "gene_validation"},
+                                ],
+                            }
+                        ],
+                    }
+                ),
+            ),
+        )
+    )
+
+    with pytest.raises(FlowRecipeLoadError) as exc_info:
+        flow_tools.validate_installed_flow_recipe_catalog(catalog)
+
+    message = str(exc_info.value)
+    assert "Validate Genes" in message and "org.example" in message and str(source_path) in message
+    # One refused step reads in the singular and names the setting an operator can act on,
+    # including the runtime override folder that can change it.
+    assert "names a step that cannot be a flow step" in message
+    assert (
+        "'gene_validation' has category Validation with supervisor routing not enabled, "
+        "so it can run only as an automatic check on extraction steps"
+    ) in message
+    assert str(get_runtime_config_dir() / "agents") in message
+
+
+def test_startup_validation_names_an_internal_agent_step_for_what_it_is(monkeypatch, tmp_path):
+    from src.lib.packages.flow_recipes import (
+        FlowRecipeCatalog,
+        FlowRecipeLoadError,
+        FlowRecipeManifest,
+        LoadedFlowRecipeManifest,
+    )
+
+    monkeypatch.setattr(
+        flow_tools,
+        "AGENT_REGISTRY",
+        {
+            "pdf_extraction": {"category": "Extraction"},
+            "gene_validation": {"category": "Validation", "supervisor": {"enabled": False}},
+            "task_input": {"name": "Initial Instructions", "category": "Input"},
+        },
+    )
+    catalog = FlowRecipeCatalog(
+        contributions=(
+            LoadedFlowRecipeManifest(
+                package_id="org.example",
+                export_name="default",
+                source_path=tmp_path / "flow_recipes.yaml",
+                manifest=FlowRecipeManifest.model_validate(
+                    {
+                        "flow_recipes_api_version": "1.0.0",
+                        "recipes": [
+                            {
+                                "name": "Two Refused Steps",
+                                "description": "Two steps the flow policy refuses",
+                                "steps": [
+                                    {"agent_id": "task_input"},
+                                    {"agent_id": "pdf_extraction"},
+                                    {"agent_id": "gene_validation"},
+                                ],
+                            }
+                        ],
+                    }
+                ),
+            ),
+        )
+    )
+
+    with pytest.raises(FlowRecipeLoadError) as exc_info:
+        flow_tools.validate_installed_flow_recipe_catalog(catalog)
+
+    message = str(exc_info.value)
+    assert "names steps that cannot be flow steps" in message
+    assert "'task_input' is an internal agent that is never a flow step" in message
+    assert "'gene_validation' has category Validation" in message
+    assert "attachment-only validators" not in message
 
 
 def test_get_flow_templates_handler_reports_core_only_install(monkeypatch):

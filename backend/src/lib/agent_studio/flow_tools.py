@@ -36,6 +36,7 @@ from src.lib.flow_edge_roles import (
     SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS,
     agent_can_source_output_attachment,
 )
+from src.lib.packages.paths import get_runtime_config_dir
 from src.lib.packages.flow_recipes import (
     FlowRecipeCatalog,
     FlowRecipeLoadError,
@@ -73,6 +74,7 @@ from .authoring_validation import (
 )
 from .diagnostic_tools import get_diagnostic_tools_registry
 from .flow_agent_policy import (
+    INTERNAL_FLOW_AGENT_IDS,
     agent_allows_ordinary_flow_step,
     attachment_only_validator_reason,
     flow_palette_show_in_palette,
@@ -1032,9 +1034,47 @@ def _filter_flow_templates(
 
 
 def validate_installed_flow_recipe_catalog(catalog: FlowRecipeCatalog) -> int:
-    """Validate package recipes at startup and return the compatible count."""
+    """Validate package recipes at startup and return the compatible count.
 
+    A recipe step naming an installed attachment-only validator can never be a
+    flow step, so the recipe would be skipped silently everywhere; it is a
+    named load error instead.
+    """
+
+    for contribution in catalog.contributions:
+        for recipe in contribution.manifest.recipes:
+            refused = [
+                step.agent_id
+                for step in recipe.steps
+                if step.agent_id in AGENT_REGISTRY
+                and not agent_allows_ordinary_flow_step(step.agent_id, AGENT_REGISTRY[step.agent_id])
+            ]
+            if refused:
+                subject = (
+                    "names a step that cannot be a flow step"
+                    if len(refused) == 1
+                    else "names steps that cannot be flow steps"
+                )
+                raise FlowRecipeLoadError(
+                    f"Invalid flow recipe '{recipe.name}' from package "
+                    f"'{contribution.package_id}' at {contribution.source_path}: it "
+                    f"{subject}: {'; '.join(_refused_recipe_step_reason(agent_id) for agent_id in refused)}. "
+                    "Remove the step from the recipe, or, if the agent's settings changed, check "
+                    "its category and supervisor_routing in its agent.yaml (in its package, or in "
+                    f"an override under {get_runtime_config_dir() / 'agents'})"
+                )
     return len(_filter_flow_templates(set(FLOW_AGENT_IDS), catalog))
+
+
+def _refused_recipe_step_reason(agent_id: str) -> str:
+    """Say why the flow policy refuses one recipe step, in terms an operator can act on."""
+
+    if agent_id in INTERNAL_FLOW_AGENT_IDS:
+        return f"'{agent_id}' is an internal agent that is never a flow step"
+    return (
+        f"'{agent_id}' has category Validation with supervisor routing not enabled, so it "
+        "can run only as an automatic check on extraction steps"
+    )
 
 
 def _build_package_suggestions(

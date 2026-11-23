@@ -64,16 +64,13 @@ def test_shipped_alliance_flow_recipe_contract_uses_canonical_validator_ids():
     catalog = build_flow_recipe_catalog(registry)
 
     assert [recipe.name for recipe in catalog.recipes] == [
-        "Gene Curation",
         "Gene Extraction",
-        "Disease Annotation",
         "Disease Extraction",
         "Chemical Entity Extraction",
         "Gene Expression Analysis",
         "Phenotype Extraction",
         "Allele/Variant Extraction",
-        "Allele Annotation",
-        "GO Annotation Pipeline",
+        "GO Term Lookup",
         "RGD GO and Disease Paper Review",
         "RGD GO Paper Review",
     ]
@@ -86,14 +83,11 @@ def test_shipped_alliance_flow_recipe_contract_uses_canonical_validator_ids():
         for recipe in catalog.recipes
         for step in recipe.steps
     }
-    assert {"gene_validation", "allele_validation", "disease_validation", "chemical_validation"}.issubset(
-        recipe_agent_ids
-    )
+    # Attachment-only validators run on extraction steps and are never recipe steps.
+    assert "chemical_validation" in recipe_agent_ids
+    assert not {"gene_validation", "allele_validation", "disease_validation"} & recipe_agent_ids
     assert not {"gene", "allele", "disease", "chemical"} & recipe_agent_ids
-    assert {suggestion.name for suggestion in catalog.suggestions} == {
-        "document_extraction_first",
-        "validate_expression_gene_identifiers",
-    }
+    assert {suggestion.name for suggestion in catalog.suggestions} == {"document_extraction_first"}
 
 
 def test_shipped_rgd_paper_review_recipes_keep_go_and_disease_policy_distinct():
