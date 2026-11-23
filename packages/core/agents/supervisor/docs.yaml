@@ -3,12 +3,12 @@ summary: "Routes curator queries to the appropriate specialist agent - works beh
 capabilities:
   - name: "Query routing"
     description: "Automatically determines which specialist agent should handle your question"
-    example_query: "Find the gene daf-2"
-    example_result: "Hands the question to the Gene Validation Agent"
+    example_query: "What does GO:0006281 mean?"
+    example_result: "Hands the question to the GO Term Lookup Agent"
   - name: "Multi-step coordination"
     description: "Coordinates complex queries that need multiple agents"
-    example_query: "Find all genes mentioned in the paper and validate them"
-    example_result: "Sends the paper to the PDF Specialist first, then passes the genes it finds to the Gene Validation Agent"
+    example_query: "Find the genes studied in this paper, then their GO annotations"
+    example_result: "Sends the paper to the Gene Extraction Agent, then asks the Gene GO Annotations Agent about the genes it found"
 data_sources: []
 limitations:
   - "Routing decisions are based on query keywords and context"

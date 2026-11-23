@@ -25,8 +25,8 @@ These agents have different roles. Some retrieve existing annotations or relatio
 
 | Agent | Purpose | Example request |
 |-------|---------|-----------------|
-| **Gene Validation Agent** | Resolve gene symbols, names, identifiers, or cross-references against Alliance curation records | Not available in chat: it runs automatically as a check on genes that extractors produce. Clone it in the Agent Workshop to change that check. |
-| **Allele Validation Agent** | Resolve allele mentions using identifiers, symbols, or descriptions, with species or gene context when known | Not available in chat: it runs automatically as a check on alleles that extractors produce. Clone it in the Agent Workshop to change that check. |
+| **Gene Validation Agent** | Resolve gene symbols, names, identifiers, or cross-references against Alliance curation records | Not available in chat: it runs automatically as a check on genes that extractors produce. A clone made in the Agent Workshop does not change that check; you can attach your clone as the validator on a gene detail of your own Custom Output Structure. |
+| **Allele Validation Agent** | Resolve allele mentions using identifiers, symbols, or descriptions, with species or gene context when known | Not available in chat: it runs automatically as a check on alleles that extractors produce. A clone made in the Agent Workshop does not change that check; you can attach your clone as the validator on an allele detail of your own Custom Output Structure. |
 | **Ontology Term Resolver Agent** | Resolve identifiers, labels, or synonyms within supported ontology types | “Resolve linker cell using WormBase anatomy terms.” |
 | **Disease Ontology Agent** | Look up Disease Ontology terms by name, synonym, or DOID | Not available in chat and not used by any automatic check; disease terms on extracted records are checked by the Ontology Term Resolver Agent. |
 | **Chemical Ontology Agent** | Look up chemicals in ChEBI | “Find cytidine and its ChEBI identifier.” |

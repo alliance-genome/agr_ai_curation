@@ -1,4 +1,4 @@
-# Curator-facing documentation for the Disease Validation Agent.
+# Curator-facing documentation for the Disease Ontology Agent (agent_id disease_validation).
 summary: "Confirms disease names against the Disease Ontology (DOID) and gives you the matching official disease term and its ID, so a disease annotation can be submitted with confidence."
 capabilities:
   - name: "Disease name lookup"
@@ -18,12 +18,10 @@ data_sources:
     description: "The Alliance's curated copy of the Disease Ontology — official disease names, their IDs, definitions, and synonyms."
     species_supported: null
     data_types: ["disease terms", "DOIDs", "definitions", "synonyms"]
-note: "The disease term itself is confirmed automatically by the ontology term check in the disease pack. No domain pack attaches this agent and AI Chat cannot call it; clone it in the Agent Workshop when you want a custom disease lookup with a changed prompt or different tools."
-use_when:
-  - "When you want a custom agent, cloned from this one, that looks up a disease name, synonym, or DOID and returns the official term and its definition."
+note: "This agent is not used anywhere at present: no domain pack attaches it and AI Chat cannot call it. The disease term on an extracted record is confirmed automatically by the Ontology Term Resolver Agent, and in chat you can look a disease up through that agent."
+use_when: []
 avoid_when:
-  - "For gene to disease associations; use the Gene Validation Agent."
-  - "For parent or child disease terms and obsolete history; use the Ontology Term Resolver Agent."
+  - "For gene to disease associations; those come from the Disease Extraction Agent, and the genes on its records are checked automatically by the Gene Validation Agent."
   - "For disease vocabularies other than the Disease Ontology."
   - "For disease prevalence or statistics."
 limitations:

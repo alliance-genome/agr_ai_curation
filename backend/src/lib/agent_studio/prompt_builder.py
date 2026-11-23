@@ -399,8 +399,7 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
    - use group prompt updates only for organism/group-specific exceptions or conventions.
 
 Prompt injection note:
-- Structured output instructions are inserted before the second `## ` heading, so they follow the first section.
-- If the draft has fewer than two `## ` headings, insertion happens at the top.
+- Structured output instructions are never inserted into the draft. They are a locked, backend-generated layer placed before the editable prompt, so headings in the draft do not move them.
 </agent_workshop_context>""")
             runtime_additions.append(f"""
 <agent_workshop_current_draft>

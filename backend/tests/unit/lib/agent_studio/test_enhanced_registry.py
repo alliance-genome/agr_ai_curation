@@ -121,10 +121,15 @@ class TestEnhancedRegistry:
             assert documentation.get("limitations"), (
                 f"{agent_id}: expected at least one true limitation"
             )
-            for guidance_key in ("use_when", "avoid_when"):
-                assert len(documentation.get(guidance_key, [])) >= 2, (
-                    f"{agent_id}: expected at least two '{guidance_key}' entries"
-                )
+            # Most of these validators cannot be asked directly and a clone of them
+            # cannot run outside a Workshop test, so one true "use when"
+            # (reviewing the check) is enough.
+            assert documentation.get("use_when"), (
+                f"{agent_id}: expected at least one 'use_when' entry"
+            )
+            assert len(documentation.get("avoid_when", [])) >= 2, (
+                f"{agent_id}: expected at least two 'avoid_when' entries"
+            )
 
     def test_agent_browser_documentation_omits_retired_ontology_mapping_copy(self):
         """Agent Browser docs should reference typed ontology resolution only."""
