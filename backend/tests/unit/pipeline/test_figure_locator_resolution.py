@@ -87,7 +87,7 @@ def _provider_reference_for(chunk: DocumentChunk) -> ProviderFigureReference:
 def shipped_model_catalog():
     # A worker may already have loaded a catalog from another test's package.
     models_loader.load_models(
-        models_path=Path(__file__).resolve().parents[4] / "config" / "models.yaml",
+        models_path=Path(__file__).resolve().parents[4] / "packages/core/config/models.yaml",
         force_reload=True,
     )
     yield
