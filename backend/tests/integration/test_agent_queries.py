@@ -4,7 +4,8 @@ These tests verify that AI agents can query ontology data using
 read-only database access via externally configured database URLs.
 Tests the query patterns from quickstart.md.
 
-IMPORTANT: These tests are expected to FAIL until database and tables are set up.
+They need an external curation database and skip unless CURATION_DB_URL is set
+(like backend/tests/live_integration, they do not run in CI).
 """
 
 import os

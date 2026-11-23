@@ -55,6 +55,57 @@ removes their Compose resources and images afterward.
 Older projects created before checkout-specific naming must be cleaned up using
 their original explicit project name. `ps`, `config`, and `down` never build.
 
+## What CI runs
+
+The `Unit Tests` workflow runs every backend test that can run in CI:
+
+- **Backend Unit Tests:** `tests/unit/` with no services, minus the paths in
+  `backend/tests/unit/.ci-ignore-paths`. Each entry there names its reason and
+  the job that runs those tests instead.
+- **Backend Contract Core Tests:** all of `tests/contract/`.
+- **Backend Integration Tests:** `tests/integration/` outside `persistence/`.
+- **Backend Persistence Tests:** `tests/integration/persistence/`.
+
+The contract, integration and persistence jobs run with PostgreSQL, Redis and
+Weaviate.
+
+The same workflow also runs the tooling tests:
+
+- **TraceReview Backend Tests** and **TraceReview Frontend Tests** (vitest);
+- **Midscene Harness Offline Tests** (`npm run check` in `agent_tests/midscene`:
+  type check, offline unit tests and scenario YAML validation; the live smoke run
+  stays manual);
+- **Docker Test Compose Regression**, which also runs the stub-based tests of the
+  local test, preflight and agent helper scripts in `scripts/tests/`;
+- **Benchmark Replacement Canary** (see below);
+- the **Installer**, **Publish Artifact** and **OpenAI Agents Upgrade Gate** shell
+  regression suites.
+
+Every job in the workflow is unconditional, and the agent PR gate waits for all
+of them: a red job fails the gate. (`main` has no branch protection, so the gate
+blocks a merge only because whoever merges reads the checks first.) The gate also
+runs its own script tests when their target files change; the slowest of them,
+`scripts/tests/test_agent_pr_gate_standalone_suites.sh`, copies the repository
+into a sandbox and runs the gate there, so it runs only when the gate changes.
+
+Tests that need something CI cannot give skip themselves and name what they
+need:
+
+- the live PDFX smoke (`PDFX_LIVE_ENABLE`);
+- live curation DB contracts (`ALLIANCE_LIVE_DB_CONTRACT_TESTS`);
+- the external curation database queries (`CURATION_DB_URL`);
+- the release-history migration convergence check
+  (`MIGRATION_CONVERGENCE_TEST_DATABASE_URL` plus production exports).
+
+`backend/tests/live_integration/` stays out of CI by design. Its tests call live
+providers (LLM, PDFX, ABC Literature) with real credentials and cost money; run
+them by hand, by marker, when a change touches those integrations.
+
+A new exclusion goes in an ignore file with its reason, or in the test as a skip
+that names what it needs. There is no header-phrase skip any more: the nine
+"legacy fail-first" contract files and two integration files it hid were deleted
+because none of them could run.
+
 
 ## Synthetic Benchmark Replacement Canary
 

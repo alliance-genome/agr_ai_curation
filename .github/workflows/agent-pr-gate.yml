@@ -72,7 +72,7 @@ jobs:
         if: success()
         uses: actions/github-script@v7
         env:
-          REQUIRED_CHECKS: Backend Unit Tests,Backend Contract Core Tests,Backend Persistence Tests,Frontend Tests,Frontend Build
+          REQUIRED_CHECKS: Backend Unit Tests,Backend Contract Core Tests,Backend Integration Tests,Backend Persistence Tests,Frontend Tests,Frontend Build,TraceReview Backend Tests,TraceReview Frontend Tests,Midscene Harness Offline Tests,Docker Test Compose Regression,Benchmark Replacement Canary,Installer Shell Regression Suite,Publish Artifact Shell Regression Suite,OpenAI Agents Upgrade Gate Shell Regression Suite
           CHECK_DISCOVERY_TIMEOUT_SECONDS: "180"
           CHECK_WAIT_TIMEOUT_SECONDS: "7200"
           CHECK_POLL_INTERVAL_SECONDS: "20"
