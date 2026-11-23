@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
@@ -267,8 +267,6 @@ async def test_a_failing_stage_ends_its_own_job_and_never_touches_the_paper(owne
         jobs = {
             job.id: job for job in db.query(PdfProcessingJob).filter(PdfProcessingJob.document_id == paper.id)
         }
-    from uuid import UUID
-
     assert jobs[UUID(str(import_job.job_id))].status == "completed"
     (stage_job,) = [job for job in jobs.values() if (job.metadata_json or {}).get("job_kind") == "supplement_wait"]
     assert stage_job.status == "failed"
@@ -277,3 +275,26 @@ async def test_a_failing_stage_ends_its_own_job_and_never_touches_the_paper(owne
     assert _main_file_status(paper) == "ready"
     with SessionLocal() as db:
         assert db.get(PDFDocument, paper.id).status == "completed"
+
+
+def test_the_outline_signal_reads_a_queued_stage_until_it_ends(owner, monkeypatch):
+    """A stage just created, or queued behind the limit on simultaneous stages, has
+    supplements on their way just as a polling one has; it stops counting when it ends."""
+
+    monkeypatch.delenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", raising=False)
+    monkeypatch.delenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("DOCUMENT_SOURCE_DEAD_WAIT_POLLS", raising=False)
+    owner_id, _ = owner
+    queued = _ready_paper(owner_id)
+    stage = job_service.start_supplement_wait_job(document_id=queued.id, user_id=owner_id, filename=queued.filename)
+    dead = _ready_paper(owner_id)
+    dead_stage = job_service.start_supplement_wait_job(document_id=dead.id, user_id=owner_id, filename=dead.filename)
+    _age(dead_stage.job_id, 130)
+
+    with SessionLocal() as db:
+        assert db.get(PdfProcessingJob, UUID(str(stage.job_id))).status == "pending"
+        assert job_service.supplement_wait_active(db, queued.id) is True
+        assert job_service.supplement_wait_active(db, dead.id) is False
+    assert job_service.end_supplement_wait_for_delete(document_id=queued.id, user_id=owner_id) is True
+    with SessionLocal() as db:
+        assert job_service.supplement_wait_active(db, queued.id) is False

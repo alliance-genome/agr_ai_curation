@@ -1016,15 +1016,17 @@ def _polling_stopped(job: PdfProcessingJob, *, now: datetime) -> bool:
 def supplement_wait_active(session, document_id: UUID | str) -> bool:
     """Whether a living import is waiting for the provider to convert this paper's supplements.
 
-    For the reading outline (interface agreed with P8a): a ``running`` job of the
-    paper in the supplement-wait stage whose last poll is recent, by the same
-    test as the dead-wait cancel. A job asked to stop does not count. Uses the
-    caller's session; never cached.
+    For the reading outline (interface agreed with P8a): a job of the paper in the
+    supplement-wait stage, queued (``pending``: behind the limit on simultaneous
+    stages, or before its first heartbeat) or polling (``running``), whose last
+    activity is recent by the same test as the dead-wait cancel. A job asked to
+    stop, or ended by any route, does not count. Uses the caller's session;
+    never cached.
     """
     job = session.execute(
         select(PdfProcessingJob).where(
             PdfProcessingJob.document_id == _to_uuid(document_id),
-            PdfProcessingJob.status == PdfJobStatus.RUNNING.value,
+            PdfProcessingJob.status.in_((PdfJobStatus.PENDING.value, PdfJobStatus.RUNNING.value)),
             PdfProcessingJob.current_stage == WAITING_FOR_SUPPLEMENTS_STAGE,
         )
     ).scalar_one_or_none()

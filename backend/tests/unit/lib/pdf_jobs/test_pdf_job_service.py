@@ -829,8 +829,12 @@ def test_a_supplement_wait_poll_records_activity_even_when_nothing_changes(monke
     ("status", "stage", "seconds_since_last_poll", "active"),
     [
         ("running", "waiting_for_supplements", 10, True),
+        # Queued behind the limit on simultaneous stages, or before its first
+        # heartbeat: its supplements are just as much on their way.
+        ("pending", "waiting_for_supplements", 10, True),
         # No poll for longer than 3 x (30 s + 10 s): the process is gone.
         ("running", "waiting_for_supplements", 130, False),
+        ("pending", "waiting_for_supplements", 130, False),
         # The curator asked it to stop; it ends at its next poll.
         ("cancel_requested", "waiting_for_supplements", 10, False),
         # The main paper's own wait, and the add after the wait, are not this signal.
@@ -845,7 +849,9 @@ def test_the_outline_signal_is_a_living_supplement_wait_only(
     job = _build_job(status=status)
     job.current_stage = stage
     job.updated_at = datetime.now(timezone.utc) - timedelta(seconds=seconds_since_last_poll)
-    session = _FakeSession([job if (status, stage) == ("running", "waiting_for_supplements") else None])
+    session = _FakeSession(
+        [job if status in {"pending", "running"} and stage == "waiting_for_supplements" else None]
+    )
 
     assert service_module.supplement_wait_active(session, job.document_id) is active
 
