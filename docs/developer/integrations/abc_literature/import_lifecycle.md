@@ -397,8 +397,9 @@ completed import job then carries one `left_out` entry per chosen file with
   never refused for its login.
 
 `supplement_wait_active(session, document_id)` (in `pdf_jobs/service.py`) is true
-while a living stage waits for this paper's supplements. It uses the dead-wait
-liveness test, and a job asked to stop does not count. The reading outline reads
+while a living stage waits for this paper's supplements, whether still queued
+(`pending`) or polling (`running`). It uses the dead-wait liveness test; a job
+asked to stop, or ended by any route, does not count. The reading outline reads
 it.
 
 ## Classifying An Answer For Chosen Supplements
