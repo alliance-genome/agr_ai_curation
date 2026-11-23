@@ -1740,18 +1740,23 @@ class TestDbUserIdPropagation:
 
         assert tools == []
         assert created_names == set()
+        from src.lib.agent_studio.refused_flow_steps import refused_flow_step
+
+        expected = refused_flow_step(
+            "allele_validation", {"name": "Allele Validation Agent", "category": "Validation",
+                                  "supervisor": {"enabled": False}},
+        )
         assert unavailable_steps == [
             {
                 "step": 1,
                 "agent_id": "allele_validation",
                 "agent_name": "Allele Validation Agent",
-                "reason": (
-                    "Allele Validation Agent runs through automatic extraction checks. "
-                    "Separate replacement or supplemental validator attachments are not supported."
-                ),
+                "reason": expected.explanation,
                 "reason_code": "attachment_only_validator",
+                "checking_extractors": list(expected.checking_extractors),
             }
         ]
+        assert "Allele/Variant Extraction Agent" in expected.checking_extractors
         mock_get_agent.assert_not_called()
         mock_streaming.assert_not_called()
 
@@ -4647,7 +4652,7 @@ class TestExecuteFlowTermination:
     @pytest.mark.parametrize("agent_id,reason,reason_code,advice", [
         ("pdf_extraction", "requires document", "document_required", "Open Documents"),
         ("allele_validation", "raw attachment-only policy reason", "attachment_only_validator",
-         "validation attachment"),
+         "validators cannot be flow steps"),
         ("missing_agent", "agent could not be resolved", "agent_unresolvable", "available agent"),
         ("broken_agent", "private configuration must not leak", "agent_unavailable", "available agent"),
         ("disabled_agent", "provider_disabled", "provider_disabled", "approved model"),
@@ -4662,7 +4667,7 @@ class TestExecuteFlowTermination:
         supervisor = SimpleNamespace(_flow_unavailable_steps=[{
             "step": 1, "agent_id": agent_id, "agent_name": "Required step", "reason": reason,
             "error_code": "provider_disabled" if agent_id == "disabled_agent" else None,
-            "reason_code": reason_code,
+            "reason_code": reason_code, "checking_extractors": [],
         }])
         monkeypatch.setattr("src.lib.flows.executor.create_flow_supervisor", lambda **kwargs: supervisor)
         monkeypatch.setattr("src.lib.flows.executor.build_flow_prompt", lambda *args: "fixture")

@@ -172,7 +172,10 @@ async def test_attachment_only_validator_refusal_gives_validator_advice_only(reg
     details = events[1]["details"]
     assert details["reason"] == "flow_step_unavailable"
     assert [s["reason_code"] for s in details["unavailable_steps"]] == ["attachment_only_validator"]
-    assert "validation attachment" in details["message"]
+    assert "Step 2 (Allele Validation Agent) is a validator, and validators cannot be flow steps." in details["message"]
+    assert "In Flow Builder, remove it." in details["message"]
+    # No advice to add a validation attachment: a save refuses that (ALL-1648).
+    assert "validation attachment" not in details["message"]
     assert "PDF" not in details["message"]
     assert events[-1]["data"]["unavailable_step_reason_codes"] == [
         {"step": 2, "reason_code": "attachment_only_validator"},
@@ -193,7 +196,7 @@ async def test_mixed_causes_list_each_step_and_keep_provider_policy_wording(regi
     ]
     message = details["message"]
     assert "Step 1 (Mouse Allele Identification) needs a PDF" in message
-    assert "Step 2 (Allele Validation Agent)" in message and "validation attachment" in message
+    assert "Step 2 (Allele Validation Agent) is a validator" in message and "validation attachment" not in message
     assert "Step 3 (Disabled Agent)" in message
     assert "disabled by policy" in message and "approved model" in message
     assert "private-provider" not in json.dumps(events)

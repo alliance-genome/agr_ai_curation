@@ -48,7 +48,8 @@ def test_pinned_validator_is_not_misclassified_as_extraction(monkeypatch):
         resolve_agent=lambda *_: None, apply_attachment_defaults=lambda value: value,
         entries_by_node=resolved.entries_by_node,
     )
-    assert "attachment_only_agent_in_control_flow" in {finding.code for finding in result.findings}
+    # A curator's copy of a validator is named for what it is, not as a packaged validator.
+    assert "custom_validator_in_control_flow" in {finding.code for finding in result.findings}
 
 
 def receipt(mode):

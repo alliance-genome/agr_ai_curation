@@ -60,12 +60,3 @@ def flow_palette_show_in_palette(
         and runtime_compatible_output
         and agent_allows_ordinary_flow_step(agent_id, entry)
     )
-
-
-def attachment_only_validator_reason(agent_name: str) -> str:
-    """Explain why an attachment-only validator was rejected as a flow step."""
-
-    return (
-        f"{agent_name} runs through automatic extraction checks. "
-        "Separate replacement or supplemental validator attachments are not supported."
-    )

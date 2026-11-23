@@ -91,6 +91,7 @@ def _revision_entry(
         "produces_flow_artifacts": structured,
         "batch_capabilities": ["pdf_extraction"] if structured and "document_id" in required_params else [],
         "curation": saved.curation,
+        "template_source": saved.template_source,
         "structured_finalization": saved.structured_finalization,
         "supervisor": {},
         "execution_receipt": receipt.model_dump(mode="json"),

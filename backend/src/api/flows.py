@@ -9,6 +9,7 @@ Owners control mutations; current project members can read and clone shared flow
 
 import logging
 from datetime import datetime, timezone
+from collections.abc import Mapping
 from typing import Any, Dict, Literal
 from uuid import UUID
 
@@ -48,6 +49,7 @@ from ..lib.agent_studio.catalog_service import (
     get_active_visible_agent_metadata,
 )
 from ..lib.group_rules import get_groups_from_provider_groups
+from ..lib.agent_studio.refused_flow_steps import refused_flow_step
 from ..lib.agent_studio.authoring_validation import (
     AuthoringValidationContext,
     report_authoring_validation_engine_failure,
@@ -481,6 +483,37 @@ def _missing_flow_agent_references_detail(missing_references: list[str]) -> str:
     )
 
 
+def _refused_step_warnings(
+    flow_definition: FlowDefinition,
+    *,
+    entries_by_node: Mapping[str, Mapping[str, Any] | None],
+    db_user_id: int | None,
+    active_group_ids: list[str] | None,
+) -> list[FlowValidationWarning]:
+    """Mark each step the flow policy refuses, so the opened flow names it.
+
+    The same description as the save refusal; a saved flow still opens.
+    """
+    warnings = []
+    for node in flow_definition.nodes:
+        agent_id = str(node.data.agent_id or "").strip()
+        if not agent_id or agent_id == "task_input":
+            continue
+        entry = (
+            entries_by_node[node.id]
+            if node.id in entries_by_node
+            else _flow_agent_policy_entry(agent_id, db_user_id=db_user_id, active_group_ids=active_group_ids)
+        )
+        refused = refused_flow_step(agent_id, entry, active_group_ids=list(active_group_ids or []))
+        if refused is None:
+            continue
+        warnings.append(FlowValidationWarning(
+            type="CRITICAL", code=refused.save_code, node_id=node.id,
+            path=f"flow_definition.nodes.{node.id}", message=refused.explanation,
+        ))
+    return warnings
+
+
 def _flow_to_response(
     flow: CurationFlow,
     *,
@@ -516,6 +549,10 @@ def _flow_to_response(
                               code=finding.code, node_id=finding.node_id, path=finding.path)
         for finding in resolved.findings
     ]
+    validation_warnings.extend(_refused_step_warnings(
+        flow_definition, entries_by_node=resolved.entries_by_node,
+        db_user_id=viewer_user_id, active_group_ids=active_group_ids,
+    ))
     if (any(edge.role == VALIDATION_ATTACHMENT_EDGE_ROLE for edge in flow_definition.edges)
             or any(group.state in {"replaced", "supplemental"}
                    for node in flow_definition.nodes for group in node.data.validation_groups)):

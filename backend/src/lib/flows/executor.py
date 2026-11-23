@@ -76,10 +76,7 @@ from src.lib.curation_workspace.models import CurationExtractionResultRecord as 
 from src.lib.config.schema_discovery import resolve_output_schema
 from src.lib.flows.persisted_flow_migrations import validate_persisted_flow_definition
 from src.lib.file_outputs import sanitize_output_descriptor
-from src.lib.agent_studio.flow_agent_policy import (
-    agent_allows_ordinary_flow_step,
-    attachment_only_validator_reason,
-)
+from src.lib.agent_studio.refused_flow_steps import refused_flow_step
 from src.lib.flows.chat_output_delivery import (
     chat_output_delivery_scope,
     current_chat_output_delivery,
@@ -2963,19 +2960,19 @@ def get_all_agent_tools(
             })
             continue
 
-        if not agent_allows_ordinary_flow_step(agent_id, entry):
-            agent_name = entry.get("name", agent_id)
-            reason = attachment_only_validator_reason(agent_name)
+        refused = refused_flow_step(agent_id, entry, active_group_ids=list(active_groups or []))
+        if refused is not None:
             logger.warning(
-                "[Flow Executor] Agent '%s' is attachment-only, skipping ordinary flow step",
-                agent_id,
+                "[Flow Executor] Agent '%s' cannot be an ordinary flow step (%s)",
+                agent_id, refused.run_code,
             )
             unavailable_steps.append({
                 "step": step_num,
                 "agent_id": agent_id,
-                "agent_name": agent_name,
-                "reason": reason,
-                "reason_code": "attachment_only_validator",
+                "agent_name": refused.agent_name,
+                "reason": refused.explanation,
+                "reason_code": refused.run_code,
+                "checking_extractors": list(refused.checking_extractors),
             })
             continue
 

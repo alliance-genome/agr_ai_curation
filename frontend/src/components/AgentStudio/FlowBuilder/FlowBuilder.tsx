@@ -426,8 +426,18 @@ export const rebuildValidationGroupsFromEdges = (
 const computeValidationErrors = (
   currentNodes: AgentNode[],
   currentEdges: FlowEdge[],
+  serverStepIssues: ReadonlyMap<string, string> = new Map(),
 ): Array<{ nodeId: string; message: string }> => {
   const errors: Array<{ nodeId: string; message: string }> = []
+
+  // Steps the server named when the flow was opened (for example a validator saved
+  // as an ordinary step). The mark stays until the step is removed.
+  currentNodes.forEach(node => {
+    const issue = serverStepIssues.get(node.id)
+    if (issue) {
+      errors.push({ nodeId: node.id, message: issue })
+    }
+  })
 
   // Check task_input node
   const taskInputNode = currentNodes.find(n => n.data.agent_id === 'task_input')
@@ -999,8 +1009,15 @@ function FlowBuilderInner({
   const revalidateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Ref to hold revalidateValidators function (defined later, needed in loadFlow)
   const revalidateValidatorsRef = useRef<(() => void) | null>(null)
+  // Step problems the server reported when the flow was opened, keyed by node ID.
+  const serverStepIssuesRef = useRef<Map<string, string>>(new Map())
 
   const applyFlow = useCallback((flow: FlowResponse) => {
+    serverStepIssuesRef.current = new Map(
+      (flow.validation_warnings ?? [])
+        .filter((warning) => typeof warning.node_id === 'string' && warning.node_id.length > 0)
+        .map((warning) => [warning.node_id as string, warning.message]),
+    )
     setFlowUnsaved(false)
     setFlowAccess(flow)
     setSelectedNode(null)
@@ -1334,7 +1351,7 @@ function FlowBuilderInner({
       target: edge.target,
       data: { role: edge.role ?? 'control_flow' },
     })) as FlowEdge[]
-    const localFindings = computeValidationErrors(candidateNodes, candidateEdges)
+    const localFindings = computeValidationErrors(candidateNodes, candidateEdges, serverStepIssuesRef.current)
     if (localFindings.length > 0 && !(proposal.restoration_only && canonicalPreApply.restoration_only)) {
       return { applied: false, reason: 'invalid', message: localFindings[0].message }
     }
@@ -1497,6 +1514,7 @@ function FlowBuilderInner({
       const errors = computeValidationErrors(
         currentNodes as AgentNode[],
         edges as FlowEdge[],
+        serverStepIssuesRef.current,
       )
       const errorsByNodeId = new Map(errors.map(e => [e.nodeId, e.message]))
 
@@ -1584,6 +1602,7 @@ function FlowBuilderInner({
     const validationErrors = computeValidationErrors(
       nodes as AgentNode[],
       edges as FlowEdge[],
+      serverStepIssuesRef.current,
     )
     if (validationErrors.length > 0) {
       // Find the first error node and select it
@@ -1723,6 +1742,7 @@ function FlowBuilderInner({
   // Handle new flow
   const handleNewFlow = useCallback(() => {
     loadRequestRef.current += 1
+    serverStepIssuesRef.current = new Map()
     displayedFlowIdRef.current = null
     setLoading(false)
     setFlowUnsaved(false)

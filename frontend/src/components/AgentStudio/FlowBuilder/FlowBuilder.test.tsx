@@ -2042,6 +2042,78 @@ describe('FlowBuilder', () => {
     ).toBeInTheDocument()
   }, 15000)
 
+  it('marks the step a load warning names and keeps it from being saved until removed', async () => {
+    const user = userEvent.setup()
+    const stepMessage = (
+      'Gene Validation Agent is a validator. Validators check an extraction step\'s records '
+      + 'automatically and cannot be flow steps. Remove this step.'
+    )
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Old Gene Curation'))
+    serviceMocks.getFlow.mockResolvedValue(buildFlowResponse({
+      name: 'Old Gene Curation',
+      validation_warnings: [
+        {
+          type: 'CRITICAL',
+          message: stepMessage,
+          code: 'attachment_only_agent_in_control_flow',
+          node_id: 'node_1',
+        },
+      ],
+      has_critical_issues: true,
+      flow_definition: {
+        version: '1.1' as const,
+        entry_node_id: 'node_0',
+        nodes: [
+          {
+            id: 'node_0',
+            type: 'task_input' as const,
+            position: { x: 0, y: 0 },
+            data: {
+              agent_id: 'task_input',
+              agent_display_name: 'Initial Instructions',
+              task_instructions: 'Find the genes',
+              custom_instructions: '',
+              output_key: 'task_input',
+            },
+          },
+          {
+            id: 'node_1',
+            type: 'agent' as const,
+            position: { x: 0, y: 100 },
+            data: {
+              agent_id: 'gene_validation',
+              agent_display_name: 'Gene Validation Agent',
+              custom_instructions: '',
+              output_key: 'gene_validation_output',
+            },
+          },
+        ],
+        edges: [{ id: 'e1', source: 'node_0', target: 'node_1' }],
+      },
+    }))
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Open Flow...'))
+    const openDialog = await screen.findByRole('dialog', { name: 'Open Flow' })
+    await user.click(within(openDialog).getByText('Old Gene Curation'))
+
+    // The node the server named carries the existing error mark and its message.
+    await waitFor(() => {
+      const marked = reactFlowMocks.nodes.find((node) => node.id === 'node_1') as
+        | { data?: { hasError?: boolean; errorMessage?: string } }
+        | undefined
+      expect(marked?.data?.hasError).toBe(true)
+      expect(marked?.data?.errorMessage).toBe(stepMessage)
+    })
+    const taskNode = reactFlowMocks.nodes.find((node) => node.id === 'node_0') as
+      | { data?: { hasError?: boolean } }
+      | undefined
+    expect(taskNode?.data?.hasError).toBeFalsy()
+  }, 15000)
+
   it('loads and resaves distinct extraction sources attached to one formatter', async () => {
     const user = userEvent.setup()
     const multiSourceFlow = buildFlowResponse({

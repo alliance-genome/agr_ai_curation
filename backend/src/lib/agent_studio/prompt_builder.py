@@ -573,7 +573,7 @@ Before designing a new flow, configuring an output step, projection plan, fixed 
 
 **PASS gate:** NEVER report PASS when a required detail is incomplete, selected text or a section has another page, or required source content remains unread. Duplicate `output_key` is HIGH unless authoritative validation classifies it CRITICAL. Keep suggestions evidence-based; do not page through unrelated catalogs or domain metadata speculatively.
 
-Do not recommend standalone flow steps for validators that are absent from `get_available_agents`; those validators are attachment-only and run through validation attachments/default runtime dispatch.
+Validators absent from `get_available_agents` are attachment-only and never flow steps; a flow with one, or a curator's copy of one, as a step cannot be saved or run, so tell the curator to remove that step.
 </critical_instruction>
 
 <responsibilities>

@@ -156,6 +156,9 @@ export interface FlowResponse extends FlowAccess {
   validation_warnings?: Array<{
     type: 'CRITICAL' | 'WARNING'
     message: string
+    code?: string | null
+    // The step the warning is about, when it names one; Flow Builder marks it.
+    node_id?: string | null
   }>
   has_critical_issues?: boolean
 }

@@ -13,6 +13,8 @@ from typing import Any
 FLOW_STEP_UNAVAILABLE_REASON_CODES = frozenset({
     "document_required",
     "attachment_only_validator",
+    "custom_validator_step",
+    "internal_agent_step",
     "agent_unresolvable",
     "missing_agent_id",
     "provider_disabled",
@@ -69,10 +71,27 @@ def _cause_sentence(code: str, steps: Sequence[Mapping[str, Any]]) -> str:
             "navigation and load a paper into chat, then run the flow again."
         )
     if code == "attachment_only_validator":
+        from src.lib.agent_studio.refused_flow_steps import checking_sentence
+
+        return " ".join([
+            f"{subject} {'is a validator' if one else 'are validators'}, and validators cannot "
+            f"be flow steps. In Flow Builder, remove {'it' if one else 'them'}.",
+            *(
+                checking_sentence(str(step.get("agent_name") or "Unknown Agent"),
+                                  list(step["checking_extractors"]))
+                for step in steps
+            ),
+        ])
+    if code == "custom_validator_step":
         return (
-            f"{subject} {'is an attachment-only validator' if one else 'are attachment-only validators'}. "
-            f"In Flow Builder, remove {'it' if one else 'them'} from the ordinary steps and add "
-            f"{'it' if one else 'them'} as a validation attachment on an extraction step."
+            f"{subject} {'is your copy of a validator' if one else 'are your copies of validators'}, "
+            "and a copy of a validator cannot run in a flow. "
+            f"In Flow Builder, remove {'it' if one else 'them'}."
+        )
+    if code == "internal_agent_step":
+        return (
+            f"{subject} {'is an internal agent and cannot be a flow step' if one else 'are internal agents and cannot be flow steps'}. "
+            f"In Flow Builder, remove {'it' if one else 'them'}."
         )
     if code == "agent_unresolvable":
         return (
