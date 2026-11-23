@@ -155,6 +155,36 @@ def test_a_file_removed_before_saving_keeps_the_name_read(paper):
     ]
 
 
+@pytest.mark.parametrize("status", ["removed", "failed", "pending"])
+def test_a_file_that_is_no_longer_ready_reads_like_a_removed_file(paper, status):
+    # A file row in any state but ready (`removed` while its stored files are cleaned
+    # up, a failed leftover) reads exactly like a file that is gone.
+    document_id, file_ids = paper
+    owner, run_id = f"owner-{uuid4()}", str(uuid4())
+    scope = HistoryScope(owner, run_id, str(uuid4()), "extractor", "x/", "chat-a")
+    sheet = file_ids["Table S1.xlsx"]
+    _read(document_id, scope, [(sheet, "Table S1.xlsx"), (file_ids["paper.pdf"], "paper.pdf")])
+    with SessionLocal.begin() as db:
+        db.execute(text("UPDATE pdf_document_files SET status = :status WHERE id = :id"), {"status": status, "id": sheet})
+
+    with SessionLocal.begin() as db:
+        saved = persist_extraction_result(
+            _request(document_id, owner, run_id, invocation_id=scope.invocation_id), db=db,
+        ).extraction_result
+        derived = persist_extraction_result(
+            _derived(document_id, [[_entry(sheet, "Table S1.xlsx"), _entry(file_ids["paper.pdf"], "paper.pdf", "main")]]),
+            db=db,
+        ).extraction_result
+
+    assert [entry.model_dump() for entry in saved.files_read] == [
+        _entry(file_ids["paper.pdf"], "paper.pdf", "main"),
+        {"file_id": sheet, "file_name": "Table S1.xlsx", "role": None,
+         "converted_artifact_id": None, "converted_artifact_sha256": None},
+    ]
+    # A prepared result keeps its inputs' entries as saved; the gone file goes last.
+    assert [entry.file_id for entry in derived.files_read] == [file_ids["paper.pdf"], sheet]
+
+
 def test_a_result_saved_before_files_were_recorded_is_served_unchanged(paper):
     document_id, _ = paper
     with SessionLocal.begin() as db:
