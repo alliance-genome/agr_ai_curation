@@ -25,14 +25,14 @@ _PAPER_PROVENANCE_FIELDS = (
 )
 
 
-def _doc(*, display_mode="local_pdf", document_kind="library", **values):
+def _doc(*, display_mode="local_pdf", document_kind="library", file_status="ready", **values):
     """A paper record whose per-file values live on its main file."""
     file_values = {field: values.pop(field, None) for field in _FILE_FIELDS}
     file_values["display_mode"] = display_mode
     if display_mode == "text":
         file_values["page_count"] = None
     paper_values = {field: values.pop(field, None) for field in _PAPER_PROVENANCE_FIELDS}
-    main_file = SimpleNamespace(id="main-file", role="main", **file_values)
+    main_file = SimpleNamespace(id="main-file", role="main", status=file_status, **file_values)
     return SimpleNamespace(
         document_kind=document_kind, main_file=main_file, main_file_or_none=main_file, files=[main_file],
         **paper_values, **values,
@@ -427,6 +427,7 @@ async def test_async_list_documents_filters_to_owned_docs_and_applies_defaults()
         filename="owned-paper.pdf",
         title=None,
         status="pending",
+        file_status="pending",  # a paper still processing: its main file is not ready yet
         error_message=None,
         upload_timestamp=None,
         processing_started_at=datetime(2026, 2, 10, 0, 1),
@@ -478,6 +479,7 @@ async def test_async_list_documents_filters_to_owned_docs_and_applies_defaults()
     assert owned["user_id"] == "auth-sub-1"
     assert owned["weaviate_tenant"] == "tenant-owned"
     assert owned["status"] == "PENDING"
+    assert owned["ready_file_count"] == 0
     assert owned["embedding_status"] == "pending"
     assert owned["vector_count"] is None
     assert owned["upload_timestamp"] == "2026-02-10T00:00:00"

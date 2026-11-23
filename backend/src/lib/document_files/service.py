@@ -229,3 +229,26 @@ def owned_paper_by_main_file_hash(owner_user_id: int, hashes: Iterable[str]):
             PDFDocumentFile.file_hash.in_(list(hashes)),
         )
     )
+
+
+def remove_stored_files(paths: Iterable[str]) -> None:
+    """Delete a file's stored copies (paths relative to the storage root); a missing one is fine."""
+
+    from pathlib import Path
+
+    from src.config import get_pdf_storage_path
+
+    root = Path(get_pdf_storage_path())
+    for relative in paths:
+        (root / relative).unlink(missing_ok=True)
+
+
+def ready_file_count(paper: PDFDocument) -> int:
+    """How many of the paper's files are ready: the files a curator can open and the AI reads.
+
+    Main file included. An add's files count once they become ready together; failed
+    leftovers and removed files do not count. Reads the paper's already loaded files
+    (``PDFDocument.files`` is loaded with the paper), so a list adds no query per row.
+    """
+
+    return sum(1 for file_row in paper.files if file_row.status == FILE_STATUS_READY)

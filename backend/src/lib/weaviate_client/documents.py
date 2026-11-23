@@ -234,6 +234,7 @@ def _list_documents_sync(
 
             # T030: Query PostgreSQL for ownership verification (defense-in-depth, FR-014)
             # Build map of document_id -> PostgreSQL record for ownership filtering
+            from ...lib.document_files.service import ready_file_count
             from ...models.sql.pdf_document import PDFDocument as PGDocument
             from sqlalchemy import select
             from uuid import UUID
@@ -293,6 +294,8 @@ def _list_documents_sync(
                         "weaviate_tenant": tenant_name,  # Required by contract
                         "chunk_count": doc_props.get("chunkCount"),
                         "vector_count": doc_props.get("vectorCount"),
+                        # The paper's files are loaded with it: no query per row.
+                        "ready_file_count": ready_file_count(pg_doc),
                         "embedding_status": doc_props.get("embeddingStatus", "pending"),  # Frontend expects this field
                         "error_message": pg_doc.error_message,
                         "source_provenance": build_document_source_provenance(pg_doc),

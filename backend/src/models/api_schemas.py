@@ -256,6 +256,13 @@ class DocumentResponse(BaseModel):
     )
     weaviate_tenant: str = Field(..., description="Weaviate tenant name (user_id with underscores)")
     chunk_count: Optional[int] = Field(None, description="Number of chunks created")
+    ready_file_count: Optional[int] = Field(
+        None,
+        description=(
+            "How many of the paper's files are ready (main file included); set on the document "
+            "details. Upload and import answers leave it unset."
+        ),
+    )
     error_message: Optional[str] = Field(None, description="Error message if processing failed")
     source_provenance: Optional[DocumentSourceProvenance] = Field(
         default=None,

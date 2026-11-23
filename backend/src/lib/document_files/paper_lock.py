@@ -1,4 +1,4 @@
-"""One lock per paper that orders a paper's delete against an add to it (KANBAN-1976 / ALL-1460, P7c1).
+"""One lock per paper that orders a paper's delete, an add to it and a file removal (KANBAN-1976 / ALL-1460, P7c1, P10b).
 
 A delete checks for an active job, wipes the paper's pieces from the search index,
 then deletes its rows. An add creates the paper's job and then writes pieces. If an
@@ -14,8 +14,9 @@ when it is held: a delete answers "another operation on this paper is in progres
 an add answers ``import_in_progress``. Every database call of the lock runs in a
 worker thread, never on the event loop.
 
-- ``paper_delete_lock`` (async) holds the lock for the whole delete, from the
-  active-job check through the row delete, on a connection of its own. That
+- ``paper_operation_lock`` (async) holds the lock for the whole of a paper delete
+  (from the active-job check through the row delete) or a file removal, on a
+  connection of its own. That
   connection stays checked out of the pool for the delete's few seconds: a
   session-level advisory lock lives exactly as long as its session, so it has to.
   It is released when the delete ends, succeeds, fails or is cancelled; if the
@@ -90,8 +91,8 @@ def _release(connection: Any, key: int) -> None:
 
 
 @asynccontextmanager
-async def paper_delete_lock(document_id: UUID | str) -> AsyncIterator[None]:
-    """Hold the paper's lock while it is deleted; ``PaperOperationInProgress`` when it is held."""
+async def paper_operation_lock(document_id: UUID | str) -> AsyncIterator[None]:
+    """Hold the paper's lock while it is deleted or a file is removed; ``PaperOperationInProgress`` when held."""
 
     key = paper_lock_key(document_id)
     acquiring = asyncio.ensure_future(asyncio.to_thread(_acquire, key))

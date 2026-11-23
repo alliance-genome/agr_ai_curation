@@ -1533,6 +1533,28 @@ async def test_trigger_chat_prep_maps_value_error_to_http_400(monkeypatch, caplo
 
 
 @pytest.mark.asyncio
+async def test_trigger_chat_prep_refuses_a_result_quoting_a_removed_file_with_its_code(monkeypatch):
+    from src.lib.curation_workspace.removed_file_gate import ResultQuotesRemovedFile
+
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
+
+    async def _refuse(*_args, **_kwargs):
+        raise ResultQuotesRemovedFile()
+
+    monkeypatch.setattr(module, "prepare_chat_curation_sessions", _refuse)
+
+    with pytest.raises(module.HTTPException) as exc:
+        await module.trigger_chat_prep(
+            CurationPrepChatRunRequest(session_id="session-1"),
+            user={"sub": "user-1"},
+            db=object(),
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == {"error": "result_quotes_removed_file"}
+
+
+@pytest.mark.asyncio
 async def test_trigger_chat_prep_returns_service_payload(monkeypatch):
     monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
 

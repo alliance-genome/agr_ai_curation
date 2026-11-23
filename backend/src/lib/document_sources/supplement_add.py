@@ -28,7 +28,6 @@ import hashlib
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -554,11 +553,9 @@ def _ranges(document_id: UUID, file_ids: Sequence[UUID]) -> list[tuple[int, int]
 
 
 def _remove_stored_files(paths: Sequence[str]) -> None:
-    from src.config import get_pdf_storage_path
+    from src.lib.document_files.service import remove_stored_files
 
-    root = Path(get_pdf_storage_path())
-    for relative in paths:
-        (root / relative).unlink(missing_ok=True)
+    remove_stored_files(paths)
 
 
 async def _delete_pieces(document_id: UUID, subject: str, ranges: Sequence[tuple[int, int]]) -> None:

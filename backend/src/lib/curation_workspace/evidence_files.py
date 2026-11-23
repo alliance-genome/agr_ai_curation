@@ -42,7 +42,10 @@ def require_paper_file(
         parsed_file_id = UUID(str(file_id))
     except ValueError as exc:
         raise not_in_paper from exc
-    file_row = db.get(PDFDocumentFile, parsed_file_id)
+    # FOR SHARE until the caller's transaction ends: a file removal (FOR UPDATE) waits for
+    # an anchor being written, then finds it quoted and refuses; a removal that runs first
+    # leaves this file gone, refused here as not in the paper (ALL-1460 P10b).
+    file_row = db.get(PDFDocumentFile, parsed_file_id, with_for_update={"read": True})
     if file_row is None or file_row.document_id != document_id:
         raise not_in_paper
     if file_row.status != FILE_STATUS_READY:

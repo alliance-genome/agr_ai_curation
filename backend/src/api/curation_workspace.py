@@ -952,6 +952,8 @@ async def trigger_chat_prep(
     await provision_user_async(principal_from_claims(user))
     user_id = _require_current_user_id(user)
 
+    from src.lib.curation_workspace.removed_file_gate import ResultQuotesRemovedFile
+
     try:
         return await prepare_chat_curation_sessions(
             request,
@@ -959,6 +961,9 @@ async def trigger_chat_prep(
             active_groups=tuple(_authenticated_active_groups(user)),
             db=db,
         )
+    except ResultQuotesRemovedFile as refused:
+        # The result quotes a file removed from the paper (ALL-1460 P10b, Q2): a typed code.
+        raise HTTPException(status_code=409, detail={"error": refused.code}) from None
     except ValueError as exc:
         raise_sanitized_http_exception(
             logger,
