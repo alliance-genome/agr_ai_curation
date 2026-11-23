@@ -2114,6 +2114,34 @@ def get_document_source_import_timeout_seconds() -> float:
     return max(1.0, value)
 
 
+def _finite_seconds(name: str, default: float) -> float:
+    value = _get_env_float_with_fallback(name, default)
+    if not math.isfinite(value):
+        raise ValueError(f"{name} is {value}; it must be a finite number of seconds")
+    return value
+
+
+def get_document_supplement_wait_timeout_seconds() -> float:
+    """How long an import waits for the provider to convert its chosen supplements.
+
+    Counted from when the main paper became ready.
+    """
+    name = "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS"
+    value = _finite_seconds(name, 10800.0)
+    if value <= 0:
+        raise ValueError(f"{name} is {value:g}; it must be positive")
+    return value
+
+
+def get_document_supplement_add_reserve_seconds() -> float:
+    """Login time kept back, before the curator's login expires, to add the converted files."""
+    name = "DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS"
+    value = _finite_seconds(name, 900.0)
+    if value < 0:
+        raise ValueError(f"{name} is {value:g}; it must not be negative")
+    return value
+
+
 def validate_document_source_wait_settings() -> None:
     """Startup check: wait settings that would poll the provider unsafely fail the deploy.
 
@@ -2124,24 +2152,33 @@ def validate_document_source_wait_settings() -> None:
         poll_seconds = get_document_source_poll_interval_seconds()
         deadline_seconds = get_document_source_import_timeout_seconds()
         dead_wait_polls = get_document_source_dead_wait_polls()
+        supplement_wait_seconds = get_document_supplement_wait_timeout_seconds()
+        add_reserve_seconds = get_document_supplement_add_reserve_seconds()
     except ValueError as error:
         raise DocumentSourceWaitSettingsError(str(error)) from error
-    polls = deadline_seconds / poll_seconds
-    if polls > DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT:
-        raise DocumentSourceWaitSettingsError(
-            "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS / DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS "
-            f"({deadline_seconds:g} / {poll_seconds:g}) allows {polls:.0f} provider polls in "
-            f"one wait, more than {DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT}; raise the poll "
-            "interval or lower the deadline"
-        )
+    for wait_name, wait_seconds in (
+        ("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", deadline_seconds),
+        ("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", supplement_wait_seconds),
+    ):
+        polls = wait_seconds / poll_seconds
+        if polls > DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT:
+            raise DocumentSourceWaitSettingsError(
+                f"{wait_name} / DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS "
+                f"({wait_seconds:g} / {poll_seconds:g}) allows {polls:.0f} provider polls in "
+                f"one wait, more than {DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT}; raise the poll "
+                "interval or lower the wait"
+            )
     # A deadline pinned below the default (an old override) is not unsafe and is
     # not refused; stating the effective values makes it visible.
     logger.info(
         "Document-source wait settings: DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=%g, "
-        "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=%g, DOCUMENT_SOURCE_DEAD_WAIT_POLLS=%d",
+        "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=%g, DOCUMENT_SOURCE_DEAD_WAIT_POLLS=%d, "
+        "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS=%g, DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS=%g",
         poll_seconds,
         deadline_seconds,
         dead_wait_polls,
+        supplement_wait_seconds,
+        add_reserve_seconds,
     )
 
 

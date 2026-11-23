@@ -24,6 +24,25 @@ class DocumentSourceAccessDenied(DocumentSourceError):
     """Raised when the provider denies access to a requested source artifact."""
 
 
+# Curator-facing; proposed wording awaiting the owner's sign-off (KANBAN-1976 / ALL-1460, P7b).
+LOGIN_EXPIRED_MESSAGE = (
+    "Your sign-in expired before this import finished. "
+    "Sign in again, then import the paper again."
+)
+
+
+class DocumentSourceLoginExpired(DocumentSourceError):
+    """The provider refused the curator's login (it expired during a long import).
+
+    Raised by a provider for its "not authenticated" answer, and by an import
+    whose login has run out before it starts. Its message is the curator-facing
+    ``LOGIN_EXPIRED_MESSAGE``.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(LOGIN_EXPIRED_MESSAGE)
+
+
 class DocumentSourceArtifactNotFound(DocumentSourceError):
     """The provider has no such artifact, or cannot find its stored file.
 

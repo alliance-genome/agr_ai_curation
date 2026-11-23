@@ -789,3 +789,69 @@ def test_a_non_polling_stage_records_activity_only_when_something_changes(monkey
     )
 
     assert job.updated_at == stale_mark
+
+
+# --- KANBAN-1976 / ALL-1460, P7b: the supplement wait is a polling stage
+
+
+def test_cancel_of_a_supplement_wait_that_stopped_polling_finalizes_and_keeps_the_paper(monkeypatch):
+    _dead_wait_defaults(monkeypatch)
+    job = _build_job(status=PdfJobStatus.RUNNING.value)
+    job.current_stage = "waiting_for_supplements"
+    job.updated_at = datetime.now(timezone.utc) - timedelta(seconds=130)
+    document = _build_document(job, status="completed")
+    session = _FakeSession([job, document, job])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+
+    response = service_module.request_cancel(job_id=job.id, user_id=job.user_id)
+
+    assert response.status == PdfJobStatus.CANCELLED.value
+    # The main paper was already usable; it stays so.
+    assert document.status == "completed"
+
+
+def test_a_supplement_wait_poll_records_activity_even_when_nothing_changes(monkeypatch):
+    job = _build_job(status=PdfJobStatus.RUNNING.value)
+    job.current_stage = "waiting_for_supplements"
+    stale_mark = job.updated_at
+    session = _FakeSession([job])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+
+    service_module.update_progress(
+        job_id=job.id, stage=job.current_stage, progress_percentage=job.progress_percentage,
+        message=job.message, status=PdfJobStatus.RUNNING.value,
+    )
+
+    assert job.updated_at != stale_mark
+
+
+@pytest.mark.parametrize(
+    ("status", "stage", "seconds_since_last_poll", "active"),
+    [
+        ("running", "waiting_for_supplements", 10, True),
+        # No poll for longer than 3 x (30 s + 10 s): the process is gone.
+        ("running", "waiting_for_supplements", 130, False),
+        # The curator asked it to stop; it ends at its next poll.
+        ("cancel_requested", "waiting_for_supplements", 10, False),
+        # The main paper's own wait, and the add after the wait, are not this signal.
+        ("running", "provider_conversion", 10, False),
+        ("running", "adding_supplements", 10, False),
+    ],
+)
+def test_the_outline_signal_is_a_living_supplement_wait_only(
+    monkeypatch, status, stage, seconds_since_last_poll, active
+):
+    _dead_wait_defaults(monkeypatch)
+    job = _build_job(status=status)
+    job.current_stage = stage
+    job.updated_at = datetime.now(timezone.utc) - timedelta(seconds=seconds_since_last_poll)
+    session = _FakeSession([job if (status, stage) == ("running", "waiting_for_supplements") else None])
+
+    assert service_module.supplement_wait_active(session, job.document_id) is active
+
+
+def test_the_outline_signal_is_false_for_a_paper_with_no_supplement_wait(monkeypatch):
+    _dead_wait_defaults(monkeypatch)
+    session = _FakeSession([None])
+
+    assert service_module.supplement_wait_active(session, uuid4()) is False

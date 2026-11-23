@@ -69,7 +69,11 @@ _ACTIVE_STATUSES = {
 # poll interval and records it (``update_progress``). Only these can be told
 # dead from their last activity alone.
 PROVIDER_CONVERSION_STAGE = "provider_conversion"
-_POLLING_STAGES = frozenset({PROVIDER_CONVERSION_STAGE})
+# The paper is ready; the job polls the provider for its chosen supplements.
+WAITING_FOR_SUPPLEMENTS_STAGE = "waiting_for_supplements"
+# The converted supplements are being written (no polling).
+ADDING_SUPPLEMENTS_STAGE = "adding_supplements"
+_POLLING_STAGES = frozenset({PROVIDER_CONVERSION_STAGE, WAITING_FOR_SUPPLEMENTS_STAGE})
 # updated_at is mutable activity time, so equal creation times use a stable ID tie-break.
 _JOB_CREATION_ORDERING = (
     PdfProcessingJob.created_at.desc(),
@@ -907,6 +911,26 @@ def _polling_stopped(job: PdfProcessingJob, *, now: datetime) -> bool:
         + get_document_source_request_timeout_seconds()
     )
     return (now - _last_activity_timestamp(job)).total_seconds() > dead_after_seconds
+
+
+def supplement_wait_active(session, document_id: UUID | str) -> bool:
+    """Whether a living import is waiting for the provider to convert this paper's supplements.
+
+    For the reading outline (interface agreed with P8a): a ``running`` job of the
+    paper in the supplement-wait stage whose last poll is recent, by the same
+    test as the dead-wait cancel. A job asked to stop does not count. Uses the
+    caller's session; never cached.
+    """
+    job = session.execute(
+        select(PdfProcessingJob).where(
+            PdfProcessingJob.document_id == _to_uuid(document_id),
+            PdfProcessingJob.status == PdfJobStatus.RUNNING.value,
+            PdfProcessingJob.current_stage == WAITING_FOR_SUPPLEMENTS_STAGE,
+        )
+    ).scalar_one_or_none()
+    if job is None:
+        return False
+    return not _polling_stopped(job, now=datetime.now(timezone.utc))
 
 
 def _finalize_cancelled(session, job: PdfProcessingJob, *, now: datetime) -> None:
