@@ -777,9 +777,11 @@
       "Does not walk up or down the disease hierarchy (parent or child terms) and does not track a term's obsolete history.",
       "Every answer comes from a live lookup against the Alliance's disease terms \u2014 it never answers from memory."
     ],
-    "note": "This agent is not used anywhere at present: no domain pack attaches it and AI Chat cannot call it. The disease term on an extracted record is confirmed automatically by the Ontology Term Resolver Agent, and in chat you can look a disease up through that agent.",
+    "note": "This agent is not used anywhere at present: no domain pack attaches it and AI Chat cannot call it, and a saved flow that has it as a step cannot run until that step is removed. The disease term on an extracted record is confirmed automatically by the Ontology Term Resolver Agent, and in chat you can look a disease up through that agent.",
     "summary": "Can look up Disease Ontology (DOID) terms by name, synonym, or ID, but is not used anywhere at present: no check attaches it and AI Chat cannot call it.",
-    "use_when": []
+    "use_when": [
+      "Not at present: nothing uses this agent."
+    ]
   },
   "experimental_condition": {
     "avoid_when": [
@@ -1648,7 +1650,7 @@
   "pdf_extraction": {
     "avoid_when": [
       "To extract genes, alleles, diseases, phenotypes, or expression patterns for curation; use the matching extraction agent.",
-      "To confirm a single ontology term or chemical; use the Ontology Term Resolver Agent or the Chemical Ontology Agent. Records from the packaged extractors are checked by their automatic validators where those exist; this agent's own records get no automatic check, and in an agent you save from this template only the validators you attach to its Custom Output Structure check its details.",
+      "To confirm a single ontology term or chemical; use the Ontology Term Resolver Agent or the Chemical Ontology Agent. This agent's own records get no automatic check; only validators you attach to its output structure check them.",
       "For content inside figures beyond their captions."
     ],
     "capabilities": [

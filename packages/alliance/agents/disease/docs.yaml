@@ -18,8 +18,12 @@ data_sources:
     description: "The Alliance's curated copy of the Disease Ontology — official disease names, their IDs, definitions, and synonyms."
     species_supported: null
     data_types: ["disease terms", "DOIDs", "definitions", "synonyms"]
-note: "This agent is not used anywhere at present: no domain pack attaches it and AI Chat cannot call it. The disease term on an extracted record is confirmed automatically by the Ontology Term Resolver Agent, and in chat you can look a disease up through that agent."
-use_when: []
+# KANBAN-2166 / ALL-1649: the note and use_when below describe an agent nothing uses.
+# Revise both (and the summary) when the Disease Ontology Agent is attached, fixed or retired.
+note: "This agent is not used anywhere at present: no domain pack attaches it and AI Chat cannot call it, and a saved flow that has it as a step cannot run until that step is removed. The disease term on an extracted record is confirmed automatically by the Ontology Term Resolver Agent, and in chat you can look a disease up through that agent."
+# KANBAN-2166 / ALL-1649: revise this line when the agent is given a use or retired.
+use_when:
+  - "Not at present: nothing uses this agent."
 avoid_when:
   - "For gene to disease associations; those come from the Disease Extraction Agent, and the genes on its records are checked automatically by the Gene Validation Agent."
   - "For disease vocabularies other than the Disease Ontology."
