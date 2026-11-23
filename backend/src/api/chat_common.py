@@ -83,7 +83,7 @@ from ..lib.openai_agents.evidence_summary import (
 )
 from ..lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from ..lib.flows.executor import PreferredFlowInspectionContext, execute_flow
-from ..lib.flows.outcome import FlowRunOutcome, flow_typed_output_transcript_values
+from ..lib.flows.outcome import FLOW_OUTPUT_SEPARATOR, FlowRunOutcome, flow_typed_output_transcript_values
 from ..lib.agent_studio.catalog_service import get_agent_by_id
 from ..lib.weaviate_client.documents import get_document
 from ..models.sql import CurationFlow, SessionLocal, get_db
@@ -964,6 +964,35 @@ def _serialize_session(
     )
 
 
+def _history_table_notices(record: ChatMessageRecord) -> list[dict[str, Any]]:
+    """Expose each table's receipt at its position in the visible flow response."""
+    notices = []
+    content_end = 0
+    for event in _preferred_flow_replay_events(record):
+        if event["type"] != "CHAT_OUTPUT_READY":
+            continue
+        text = FlowRunOutcome.visible_event_text(event)
+        if text is None:
+            continue
+        # FlowRunOutcome joins visible outputs with a blank line. Browser string
+        # offsets count UTF-16 code units, including two for a non-BMP character.
+        if content_end:
+            content_end += len(FLOW_OUTPUT_SEPARATOR)
+        content_end += len(text.encode("utf-16-le", errors="surrogatepass")) // 2
+        details = event.get("details")
+        if isinstance(details, dict) and isinstance(receipt := details.get("set_aside"), dict):
+            notices.append({
+                "content_end_utf16": content_end,
+                "formatter_node_id": details.get("formatter_node_id"),
+                "flow_run_id": details.get("flow_run_id"),
+                "document_id": details.get("document_id"),
+                "set_aside": {
+                    key: receipt[key] for key in ("included", "left_out", "included_keys") if key in receipt
+                },
+            })
+    return notices
+
+
 def _serialize_message(record: ChatMessageRecord) -> ChatSessionMessageResponse:
     """Convert a repository message row into the API detail payload."""
 
@@ -978,6 +1007,8 @@ def _serialize_message(record: ChatMessageRecord) -> ChatSessionMessageResponse:
                 or key == _CHAT_ROUTE_PAYLOAD_KEY
             )
         }
+        if notices := _history_table_notices(record):
+            payload_json["set_aside_notices"] = notices
     elif isinstance(record.payload_json, list):
         payload_json = list(record.payload_json)
 

@@ -5,8 +5,8 @@ import { useTheme } from '@mui/material/styles'
 import ReviewAndCurateButton from '@/features/curation/components/ReviewAndCurateButton'
 import type { CurationWorkspaceLaunchTarget } from '@/features/curation/navigation/openCurationWorkspace'
 
+import ChatTableOutputs from './ChatTableOutputs'
 import EvidenceCard from './EvidenceCard'
-import OutputSetAsideNotice from '@/features/curation/setAside/OutputSetAsideNotice'
 import FileDownloadCard from './FileDownloadCard'
 import FlowRunProgressBar from './FlowRunProgressBar'
 import FlowStepEvidenceCard from './FlowStepEvidenceCard'
@@ -94,7 +94,7 @@ function ChatMessageList({
             )
           }
 
-          if (message.role === 'assistant') {
+          if (message.role === 'assistant' || (message.role === 'flow' && message.setAsideNotices?.length)) {
             return (
               <div
                 key={message.id || index}
@@ -119,20 +119,12 @@ function ChatMessageList({
                   <div className="message-content">
                     {message.type === 'file_download' && message.fileData ? (
                       <FileDownloadCard file={message.fileData} />
+                    ) : message.setAsideNotices?.length ? (
+                      <ChatTableOutputs content={message.content} notices={message.setAsideNotices} />
                     ) : (
                       message.content
                     )}
                   </div>
-                  {message.setAsideNotices?.map((notice) => (
-                    <OutputSetAsideNotice
-                      key={notice.outputKey}
-                      counts={notice.counts}
-                      noun="table"
-                      outputName="this table"
-                      flowRunId={notice.flowRunId}
-                      documentId={notice.documentId}
-                    />
-                  ))}
                   {message.validationReview && message.validationReview.results.length > 0 ? (
                     <div role="status" className="validation-review-status">
                       {message.validationReviewSnapshot ? 'Review status at the time of this response: ' : null}

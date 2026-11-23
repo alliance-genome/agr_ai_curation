@@ -8,6 +8,7 @@ from typing import Any, Literal, cast
 
 
 
+FLOW_OUTPUT_SEPARATOR = "\n\n"
 FlowRunStatus = Literal["running", "completed", "failed", "review_pending", "review_exhausted", "interrupted"]
 REVIEW_STOP_STATUSES = frozenset({"review_pending", "review_exhausted", "interrupted"})
 FlowPersistenceStatus = Literal["pending", "succeeded", "failed"]
@@ -331,7 +332,7 @@ class FlowRunOutcome:
     def _selected_visible_text(self) -> str | None:
         if self._has_chat_output:
             return self._combined_visible_text(self._success_output_events)
-        return self._extract_visible_text(self._run_finished_event or {})
+        return self.visible_event_text(self._run_finished_event or {})
 
     @staticmethod
     def _failure_value(event: dict[str, Any], *keys: str) -> str | None:
@@ -356,7 +357,7 @@ class FlowRunOutcome:
         return None
 
     @staticmethod
-    def _extract_visible_text(event: dict[str, Any]) -> str | None:
+    def visible_event_text(event: dict[str, Any]) -> str | None:
         event_type = str(event.get("type") or "")
         if event_type == "RUN_FINISHED":
             value = event.get("response")
@@ -373,9 +374,9 @@ class FlowRunOutcome:
         visible = [
             text
             for event in events
-            if (text := cls._extract_visible_text(event)) is not None
+            if (text := cls.visible_event_text(event)) is not None
         ]
-        return "\n\n".join(visible) or None
+        return FLOW_OUTPUT_SEPARATOR.join(visible) or None
 
     @staticmethod
     def _success_output_identity(event: dict[str, Any]) -> tuple[str, str, str]:

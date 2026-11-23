@@ -1,12 +1,13 @@
 import { MAIN_FILE_ID, singleMainPdfFile } from '@/components/pdfViewer/viewerFilesFixtures'
 import type { ComponentProps } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { ThemeProvider } from '@mui/material/styles'
 import { getChatLocalStorageKeys, getChatRenderCacheKeys } from '@/lib/chatCacheKeys'
 import { createAppTheme, type ThemeMode } from '@/theme'
+import { buildRestorableChatMessages } from '@/services/chatHistoryApi'
 import Chat from '../../components/Chat'
 
 const mockNavigate = vi.fn()
@@ -568,6 +569,38 @@ describe('Chat persistence', () => {
       '/api/curation-workspace/flow-runs/run-1/set-aside-records?document_id=doc-1',
       expect.objectContaining({ method: 'POST', body: JSON.stringify({ included_keys: [] }) }),
     )
+  })
+
+  it('opens each server-restored table with its saved set-aside membership', async () => {
+    const tables = [
+      { output: 'First 🧪 table', content_end_utf16: 14, formatter_node_id: 'first', included_keys: ['first-key'] },
+      { output: 'Second table', content_end_utf16: 28, formatter_node_id: 'second', included_keys: ['second-key'] },
+    ]
+    const messages = buildRestorableChatMessages([{
+      message_id: 'summary', session_id: 'session-1', chat_kind: 'assistant_chat',
+      role: 'flow', message_type: 'flow_summary', turn_id: 'turn', created_at: '2026-11-23T10:00:00Z',
+      content: tables.map((table) => table.output).join('\n\n'),
+      payload_json: { set_aside_notices: tables.map(({ content_end_utf16, formatter_node_id, included_keys }) => ({
+        content_end_utf16, formatter_node_id, flow_run_id: 'run', document_id: 'doc',
+        set_aside: { included: 1, left_out: 1, included_keys },
+      })) },
+    }])
+    renderChat({ sessionId: 'session-1', restoredTranscript: { sessionId: 'session-1', messages } })
+
+    for (const table of tables) {
+      const group = (await screen.findByText(table.output)).parentElement!
+      vi.mocked(global.fetch).mockResolvedValueOnce(new Response(JSON.stringify({
+        flow_run_id: 'run', document_id: 'doc', set_aside_count: 0, results: [],
+      })))
+      fireEvent.click(within(group).getByRole('button', { name: 'View set-aside records for this table' }))
+      expect(await screen.findByText(/No set-aside records are waiting for this paper/)).toBeVisible()
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/curation-workspace/flow-runs/run/set-aside-records?document_id=doc',
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ included_keys: table.included_keys }) }),
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Close set-aside records' }))
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    }
   })
 
   it('does not delete stored messages when session id mismatches', () => {

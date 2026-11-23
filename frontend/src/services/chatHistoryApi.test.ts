@@ -284,3 +284,20 @@ it.each([
     flow_run_id: 'run-1', document_id: 'doc-1', set_aside: setAside,
   })
 })
+
+
+it.each([
+  { included: 0, left_out: 2, included_keys: [] },
+  { included: 0, left_out: 2 },
+])('preserves empty and historical chat table memberships on server restore: %j', (counts) => {
+  const [message] = buildRestorableChatMessages([{
+    message_id: 'summary', session_id: 'session', chat_kind: 'assistant_chat', role: 'assistant',
+    message_type: 'text', content: 'Table', turn_id: 'turn', created_at: '2026-11-23T00:00:00Z',
+    payload_json: { set_aside_notices: [{
+      formatter_node_id: 'table', flow_run_id: 'run', document_id: 'doc', content_end_utf16: 5, set_aside: counts,
+    }] },
+  }])
+  expect(message.setAsideNotices).toEqual([{
+    outputKey: 'table', flowRunId: 'run', documentId: 'doc', contentEnd: 5, counts,
+  }])
+})

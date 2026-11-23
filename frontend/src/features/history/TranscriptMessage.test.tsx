@@ -152,6 +152,20 @@ describe('TranscriptMessage', () => {
     }
   })
 
+  it('shows a saved table notice before the following output in the history preview', () => {
+    renderTranscriptMessage({
+      role: 'flow', content: 'First table\n\nSecond table',
+      setAsideNotices: [{
+        outputKey: 'first', flowRunId: 'run', documentId: 'doc', contentEnd: 11,
+        counts: { included: 1, left_out: 0, included_keys: ['first-key'] },
+      }],
+    })
+    const first = screen.getByText('First table')
+    const view = screen.getByRole('button', { name: 'View set-aside records for this table' })
+    expect(first.parentElement).toContainElement(view)
+    expect(screen.getByText('Second table')).toBeVisible()
+  })
+
   it('renders transcript-only flow evidence rows without assistant controls', async () => {
     const user = userEvent.setup()
 

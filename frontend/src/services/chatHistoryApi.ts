@@ -2,7 +2,7 @@ import { isEvidenceRecord } from '@/features/curation/evidenceRecordGuard'
 import { readCurationApiError } from '@/features/curation/services/api'
 import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
 import type { FileInfo } from '@/components/Chat/FileDownloadCard'
-import { type OutputSetAsideNotice, readOutputSetAside } from '@/features/curation/setAside/setAsideSummary'
+import { type OutputSetAsideNotice, readChatSetAsideNotice, readOutputSetAside } from '@/features/curation/setAside/setAsideSummary'
 import type { EvidenceRecord } from '@/features/curation/types'
 import type { FlowStepEvidenceDetails } from '@/types/AuditEvent'
 
@@ -323,9 +323,18 @@ function toRestorableChatMessage(
   const evidenceRecords = extractEvidenceRecords(payload?.evidence_records)
   const curationSupport = extractEvidenceCurationSupport(payload)
 
+  const notices: OutputSetAsideNotice[] = []
+  if (Array.isArray(payload?.set_aside_notices)) {
+    for (const table of payload.set_aside_notices) {
+      if (!isRecord(table) || typeof table.content_end_utf16 !== 'number') continue
+      const notice = readChatSetAsideNotice(table)
+      if (notice) notices.push({ ...notice, contentEnd: table.content_end_utf16 })
+    }
+  }
   return {
     ...baseMessage,
     type: 'text',
+    ...(notices.length ? { setAsideNotices: notices } : {}),
     ...(role === 'assistant' && isRecord(payload?.validation_review)
       && typeof payload.validation_review.pending_count === 'number'
       && Array.isArray(payload.validation_review.results)

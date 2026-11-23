@@ -126,9 +126,22 @@ export function readOutputSetAside(value: unknown): OutputSetAsideCounts | null 
 export interface OutputSetAsideNotice {
   /** The output's formatter node, so a repeated event does not add a second line. */
   outputKey: string
+  /** End of the table in a server-restored transcript. Live notices follow the message. */
+  contentEnd?: number
   counts: OutputSetAsideCounts
   flowRunId: string | null
   documentId: string | null
+}
+
+export function readChatSetAsideNotice(details: Record<string, unknown>): OutputSetAsideNotice | null {
+  const counts = readOutputSetAside(details.set_aside)
+  if (!counts) return null
+  return {
+    outputKey: String(details.formatter_node_id || 'output'),
+    counts,
+    flowRunId: typeof details.flow_run_id === 'string' && details.flow_run_id ? details.flow_run_id : null,
+    documentId: typeof details.document_id === 'string' && details.document_id ? details.document_id : null,
+  }
 }
 
 export function outputSetAsidePlacement(counts: OutputSetAsideCounts): SetAsidePlacement {

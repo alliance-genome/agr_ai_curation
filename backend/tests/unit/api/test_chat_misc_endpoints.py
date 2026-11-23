@@ -2767,6 +2767,41 @@ def test_serialize_message_omits_internal_flow_summary_payload_keys():
     }
 
 
+@pytest.mark.parametrize(("role", "message_type"), [("flow", chat.FLOW_SUMMARY_MESSAGE_TYPE), ("assistant", "text")])
+def test_serialize_message_projects_each_chat_table_set_aside_receipt(role, message_type):
+    def chat_table(text, formatter, receipt):
+        return {"type": "CHAT_OUTPUT_READY", "details": {
+            "output": text, "formatter_node_id": formatter, "flow_run_id": "run", "document_id": "doc",
+            "private_field": "internal", "set_aside": {**receipt, "private_field": "internal"},
+        }}
+
+    first = {"included": 1, "left_out": 0, "included_keys": ["first-key"]}
+    last = {"included": 1, "left_out": 2, "included_keys": ["last-key"]}
+    legacy = {"included": 0, "left_out": 1}
+    record = ChatMessageRecord(
+        message_id=uuid4(), session_id="session", chat_kind=ASSISTANT_CHAT_KIND, turn_id="turn",
+        role=role, message_type=message_type, content="First 🧪 table\n\nUnreviewed table\n\nLast table\n\nOld",
+        trace_id=None, created_at=_ts(9, 32),
+        payload_json={chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: [
+            {"type": "FILE_READY", "details": {"filename": "separate-file.tsv"}},
+            chat_table("First 🧪 table", "first", first),
+            {"type": "CHAT_OUTPUT_READY", "details": {"output": "Unreviewed table"}},
+            chat_table("Last table", "last", last),
+            chat_table("Old", "old", legacy),
+            {"type": "FLOW_FINISHED"},
+        ]},
+    )
+
+    assert chat._serialize_message(record).payload_json == {"set_aside_notices": [
+        {"content_end_utf16": 14, "formatter_node_id": "first", "flow_run_id": "run", "document_id": "doc",
+         "set_aside": first},
+        {"content_end_utf16": 44, "formatter_node_id": "last", "flow_run_id": "run", "document_id": "doc",
+         "set_aside": last},
+        {"content_end_utf16": 49, "formatter_node_id": "old", "flow_run_id": "run", "document_id": "doc",
+         "set_aside": legacy},
+    ]}
+
+
 @pytest.mark.asyncio
 async def test_get_session_history_rejects_blank_session_id(monkeypatch):
     repository = FakeChatHistoryRepository()
