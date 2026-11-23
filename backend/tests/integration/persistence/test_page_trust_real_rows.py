@@ -66,7 +66,8 @@ async def test_a_stored_row_decides_whether_stored_pages_are_shown(
     owner_id, index, display_mode, source_markdown_path, shown,
 ):
     paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
-    _set_main(paper, display_mode=display_mode, source_markdown_path=source_markdown_path)
+    _set_main(paper, display_mode=display_mode, source_markdown_path=source_markdown_path,
+              **({"page_count": None} if display_mode == "text" else {}))
     # Pieces stored with page 3, as pieces indexed before the no-marker rule can be.
     await _store_with_page(index, str(paper), 3, 3, page=3)
     _set_main(paper, chunk_index_end=3, chunk_count=4)
