@@ -330,12 +330,8 @@ async def test_update_document_status_detailed_success():
     mock_base_collection.with_tenant.return_value = mock_collection
     mock_client.collections.get.return_value = mock_base_collection
 
-    @contextmanager
-    def fake_session():
-        yield mock_client
-
     mock_connection = MagicMock()
-    mock_connection.session.side_effect = fake_session
+    mock_connection.session.return_value.__enter__.return_value = mock_client
 
     event_loop = MagicMock()
     event_loop.run_in_executor.side_effect = lambda _, func: asyncio.sleep(0, result=func())
@@ -350,6 +346,34 @@ async def test_update_document_status_detailed_success():
 
     assert result["success"] is True
     assert result["updates"]["embeddingStatus"] == "completed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller_reports_failure", [False, True])
+async def test_update_document_status_detailed_rejected_write(caller_reports_failure, monkeypatch, caplog):
+    documents = _documents_module()
+    connection = MagicMock()
+    collection = MagicMock()
+    collection.data.update.side_effect = OSError("PRIVATE_INDEX_ERROR")
+    monkeypatch.setattr(documents, "get_connection", lambda: connection)
+    monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", lambda *_: (None, collection))
+
+    result = await documents.update_document_status_detailed(
+        "PRIVATE_DOCUMENT_ID", "PRIVATE_USER_ID", embedding_status="failed",
+        caller_reports_failure=caller_reports_failure,
+    )
+
+    connection.session.assert_called_once_with(caller_reports_failure=caller_reports_failure)
+    assert result == {
+        "success": False,
+        "message": "Failed to update document status: PRIVATE_INDEX_ERROR",
+        "documentId": "PRIVATE_DOCUMENT_ID",
+        "error": {"code": "STATUS_UPDATE_FAILED", "details": "PRIVATE_INDEX_ERROR"},
+    }
+    if caller_reports_failure:
+        assert caplog.record_tuples == []
+    else:
+        assert caplog.messages == ["Failed to update document status for PRIVATE_DOCUMENT_ID: PRIVATE_INDEX_ERROR"]
 
 
 @pytest.mark.asyncio

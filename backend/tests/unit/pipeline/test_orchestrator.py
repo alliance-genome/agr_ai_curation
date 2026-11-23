@@ -293,8 +293,7 @@ async def test_failed_status_reconciliation_reports_each_write(
         connection = WeaviateConnection()
         monkeypatch.setattr("src.lib.weaviate_client.documents.get_connection", lambda: connection)
         monkeypatch.setattr("weaviate.connect_to_local", MagicMock(side_effect=ConnectionError("PRIVATE_INDEX_ERROR")))
-        # The shared connection wraps its SDK exception before the caller sees it.
-        index_context = {"exception_type": "Exception"}
+        index_context = {"exception_type": "ConnectionError"}
 
     primary = RuntimeError("original processing failure")
     await orchestrator._handle_failure(document_id, primary)
@@ -350,7 +349,9 @@ async def test_sql_session_failure_preserves_original_pipeline_failure(
 
     session.rollback.assert_called_once_with()
     session.close.assert_called_once_with()
-    update_index.assert_awaited_once_with(document_id, "PRIVATE_USER_ID", embedding_status="failed")
+    update_index.assert_awaited_once_with(
+        document_id, "PRIVATE_USER_ID", embedding_status="failed", caller_reports_failure=True,
+    )
     orchestrator.tracker.handle_pipeline_failure.assert_awaited_once_with(
         document_id, original, stage=ProcessingStage.FAILED, sentry_reported=False,
     )
@@ -386,7 +387,9 @@ async def test_nonfailed_sql_status_rethrows_original_write_error(orchestrator, 
 
 
 @pytest.mark.asyncio
-async def test_index_status_log_ownership_is_limited_to_reconciliation(orchestrator, monkeypatch, caplog):
+async def test_index_status_log_ownership_is_limited_to_reconciliation(
+    orchestrator, index_connection, monkeypatch, caplog,
+):
     from src.lib.weaviate_client import documents
 
     orchestrator._current_file_id = None
@@ -403,6 +406,9 @@ async def test_index_status_log_ownership_is_limited_to_reconciliation(orchestra
 
     assert not other_result["success"]
     report.assert_called_once()
+    index_connection.session.assert_has_calls(
+        [call(caller_reports_failure=True), call(caller_reports_failure=False)], any_order=True,
+    )
     producer_logs = [record for record in caplog.records if record.name == documents.__name__]
     assert len(producer_logs) == 1
     assert "other-paper" in producer_logs[0].getMessage()

@@ -862,7 +862,9 @@ async def update_document_status_detailed(
     document_id: str,
     user_id: str,
     processing_status: Optional[str] = None,
-    embedding_status: Optional[str] = None
+    embedding_status: Optional[str] = None,
+    *,
+    caller_reports_failure: bool = False,
 ) -> Dict[str, Any]:
     """Update the processing and/or embedding status of a document.
 
@@ -873,6 +875,7 @@ async def update_document_status_detailed(
                          embedding, storing, completed, failed)
         embedding_status: New embedding status (pending, processing,
                         completed, failed, partial)
+        caller_reports_failure: The caller owns logging and reporting connection or write failures.
 
     Returns:
         Operation result dictionary
@@ -931,7 +934,7 @@ async def update_document_status_detailed(
             }
         }
 
-    with connection.session() as client:
+    with connection.session(caller_reports_failure=caller_reports_failure) as client:
         try:
             # Get tenant-scoped collection (FR-011: user-specific data isolation)
             from ..weaviate_helpers import get_user_collections
@@ -970,7 +973,8 @@ async def update_document_status_detailed(
             }
 
         except Exception as e:
-            logger.error("Failed to update document status for %s: %s", document_id, e)
+            if not caller_reports_failure:
+                logger.error("Failed to update document status for %s: %s", document_id, e)
             return {
                 "success": False,
                 "message": f"Failed to update document status: {e}",

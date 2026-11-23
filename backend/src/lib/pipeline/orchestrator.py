@@ -1,6 +1,5 @@
 """Main pipeline orchestrator for document processing."""
 
-from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable, Optional, Dict, Any
@@ -19,22 +18,6 @@ from src.lib.observability.runtime import report_runtime_exception, sanitized_ru
 from .processing_receipt import PDFProcessingReceipt
 
 logger = logging.getLogger(__name__)
-
-_reconciling_index_status = ContextVar("reconciling_index_status", default=False)
-
-
-def _keep_index_error_log(record: logging.LogRecord) -> bool:
-    # These producers log before returning or raising. During reconciliation
-    # the caller supplies the redacted companion log and owns the Sentry event.
-    return not (
-        _reconciling_index_status.get()
-        and record.levelno == logging.ERROR
-        and record.funcName in {"update_document_status_detailed", "connect"}
-    )
-
-
-for _producer_logger in ("src.lib.weaviate_client.documents", "src.lib.weaviate_client.connection"):
-    logging.getLogger(_producer_logger).addFilter(_keep_index_error_log)
 
 
 def _report_pipeline_failure(error: Exception, *, operation: str, context: dict[str, Any]) -> bool:
@@ -659,18 +642,17 @@ class DocumentPipelineOrchestrator:
         await self._fail_current_file(safe_message)
         await self._sync_sql_document_status(document_id, status="failed", error_message=safe_message)
 
-        token = _reconciling_index_status.set(True)
         try:
             from src.lib.weaviate_client.documents import update_document_status_detailed
-            result = await update_document_status_detailed(document_id, self._current_user_id, embedding_status="failed")
+            result = await update_document_status_detailed(
+                document_id, self._current_user_id, embedding_status="failed", caller_reports_failure=True,
+            )
             if result["success"]:
                 return
             # The helper returns a fixed error code alongside raw provider detail.
             context = {"error_code": result["error"]["code"]}
         except Exception as exc:
             context = {"exception_type": type(exc).__name__}
-        finally:
-            _reconciling_index_status.reset(token)
         _report_status_write_failure(
             "Could not mark search-index status as failed",
             operation="pipeline_failure_index_status_write_failed",
