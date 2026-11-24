@@ -9,9 +9,11 @@ persistence tests cover the real rows. All values are made up.
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from dataclasses import dataclass, field
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
@@ -94,12 +96,11 @@ def storage(monkeypatch):
     monkeypatch.setattr(ingestion, "_save_processed_json", save_json)
     monkeypatch.setattr(supplement_add, "_insert_rows", lambda _doc, rows: record.inserted.extend(rows))
 
-    ranges: dict[UUID, tuple[int, int]] = {}
-
     def reserve(_document_id, file_id, count):
         start = record.next_index
         record.next_index += count
-        ranges[file_id] = (start, start + count - 1)
+        row = next(row for row in record.inserted if row.id == file_id)
+        row.chunk_index_start, row.chunk_index_end = start, start + count - 1
         return start
 
     async def store_to_weaviate(chunks, document_id, client, user_id, *, chunk_range):
@@ -113,7 +114,8 @@ def storage(monkeypatch):
         "src.lib.document_files.service.mark_files_ready", lambda items: record.ready.update(items),
     )
     monkeypatch.setattr(
-        supplement_add, "_ranges", lambda _doc, ids: [ranges[file_id] for file_id in ids if file_id in ranges],
+        supplement_add, "_rollback_files",
+        lambda _doc, ids: [supplement_add._Leftover.from_row(row) for row in record.inserted if row.id in ids],
     )
 
     async def delete_pieces(_doc, _subject, found):
@@ -336,6 +338,41 @@ async def test_a_cancel_while_writing_removes_this_adds_rows(monkeypatch, storag
     with pytest.raises(RuntimeError, match="made-up cancel"):
         await _add(provider, [_chosen(20)], checkpoint=checkpoint)
     assert storage.deleted_rows == [row.id for row in storage.inserted] and storage.ready == {}
+
+
+@pytest.mark.asyncio
+async def test_failed_ready_commit_during_cancellation_reports_and_rolls_back(monkeypatch, storage):
+    started = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+
+    def fail_commit(_sizes):
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(10)
+        raise RuntimeError("private-document-content")
+
+    report = Mock()
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+    monkeypatch.setattr("src.lib.document_files.service.mark_files_ready", fail_commit)
+    add = asyncio.create_task(_add(provider, [_chosen(20)]))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=10)
+        add.cancel("deadline")
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError, match="deadline"):
+        await add
+    assert storage.deleted_rows == [row.id for row in storage.inserted]
+    assert storage.deleted_ranges and storage.removed_paths
+    report.assert_called_once()
+    error, = report.call_args.args
+    assert error.__context__ is error.__cause__ is None
+    assert "private-document-content" not in str(report.call_args)
+    assert report.call_args.kwargs["operation"] == "supplement_add_cancelled_mutation_failed"
+    assert report.call_args.kwargs["context"] == {"exception_type": "RuntimeError"}
+    assert report.call_args.kwargs["include_request"] is False
 
 
 @pytest.mark.asyncio
