@@ -1,5 +1,6 @@
 """Unit tests for the document pipeline orchestrator."""
 
+import asyncio
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +29,14 @@ def orchestrator(mock_weaviate_client):
 
 
 MAIN_FILE_ID = "main-file-1"
+
+
+@pytest.fixture(autouse=True)
+def index_connection(monkeypatch):
+    """Exercise the real status helper with an isolated collection."""
+    connection = MagicMock()
+    monkeypatch.setattr("src.lib.weaviate_client.documents.get_connection", lambda: connection)
+    return connection
 
 
 @pytest.fixture(autouse=True)
@@ -166,7 +175,6 @@ def parsed_pdf(orchestrator, monkeypatch):
         AsyncMock(side_effect=lambda chunks: chunks),
     )
     monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", AsyncMock())
-    monkeypatch.setattr("src.lib.weaviate_client.documents.update_document_status_detailed", AsyncMock())
     return hierarchy
 
 
@@ -258,6 +266,171 @@ async def test_hierarchy_write_failure_allows_completion(
         "context": {"exception_type": "RuntimeError"},
     }
     assert_write_failure_logs_are_safe(caplog)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("index_failure", ["collection", "session"])
+async def test_failed_status_reconciliation_reports_each_write(
+    orchestrator, monkeypatch, file_steps, failure_reporter, caplog, index_failure,
+):
+    document_id = "e5639b2e-61b7-4c77-bbd4-5dbb76129947"
+    orchestrator._current_file_id = "PRIVATE_FILE_ID"
+    orchestrator._current_user_id = "PRIVATE_USER_ID"
+    orchestrator.tracker = AsyncMock()
+    file_steps.failed.side_effect = OSError("PRIVATE_FILE_ERROR")
+    session = MagicMock()
+    session.commit.side_effect = ValueError("PRIVATE_SQL_ERROR")
+    monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: session)
+    collection = MagicMock()
+    monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", lambda *_: (None, collection))
+    if index_failure == "collection":
+        collection.data.update.side_effect = ConnectionError("PRIVATE_INDEX_ERROR")
+        index_context = {"error_code": "STATUS_UPDATE_FAILED"}
+    else:
+        from src.lib.weaviate_client.connection import WeaviateConnection
+
+        monkeypatch.setattr(WeaviateConnection, "_instance", None)
+        connection = WeaviateConnection()
+        monkeypatch.setattr("src.lib.weaviate_client.documents.get_connection", lambda: connection)
+        monkeypatch.setattr("weaviate.connect_to_local", MagicMock(side_effect=ConnectionError("PRIVATE_INDEX_ERROR")))
+        index_context = {"exception_type": "ConnectionError"}
+
+    primary = RuntimeError("original processing failure")
+    await orchestrator._handle_failure(document_id, primary)
+
+    file_steps.failed.assert_called_once_with("PRIVATE_FILE_ID", error_message=str(primary))
+    session.rollback.assert_called_once_with()
+    session.close.assert_called_once_with()
+    if index_failure == "collection":
+        collection.data.update.assert_called_once_with(uuid=document_id, properties={"embeddingStatus": "failed"})
+    orchestrator.tracker.handle_pipeline_failure.assert_awaited_once_with(
+        document_id, primary, stage=ProcessingStage.FAILED, sentry_reported=False,
+    )
+    reports = failure_reporter.call_args_list
+    assert [report.kwargs["operation"] for report in reports] == [
+        "pipeline_failure_file_status_write_failed",
+        "pipeline_failure_sql_status_write_failed",
+        "pipeline_failure_index_status_write_failed",
+    ]
+    assert [report.kwargs["context"] for report in reports] == [
+        {"exception_type": "OSError"},
+        {"exception_type": "ValueError"},
+        index_context,
+    ]
+    for report in reports:
+        assert report.kwargs["component"] == "document_pipeline"
+        (error,) = report.args
+        assert error.__cause__ is error.__context__ is None
+        assert error.__traceback__ is not None
+    assert "PRIVATE_" not in repr(reports) + caplog.text
+    assert document_id not in repr(reports) + caplog.text
+    assert all(record.sentry_skip_event for record in caplog.records if record.levelno >= logging.WARNING)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup", ["rollback", "close"])
+@pytest.mark.parametrize("failure_reporter", ["reporter_raises"], indirect=True)
+async def test_sql_session_failure_preserves_original_pipeline_failure(
+    orchestrator, monkeypatch, caplog, cleanup, failure_reporter,
+):
+    document_id = "e5639b2e-61b7-4c77-bbd4-5dbb76129947"
+    session = MagicMock()
+    session.commit.side_effect = ValueError("PRIVATE_COMMIT_ERROR")
+    getattr(session, cleanup).side_effect = ConnectionError("PRIVATE_CLEANUP_ERROR")
+    monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: session)
+    update_index = AsyncMock(return_value={"success": True})
+    monkeypatch.setattr("src.lib.weaviate_client.documents.update_document_status_detailed", update_index)
+    orchestrator._current_file_id = None
+    orchestrator._current_user_id = "PRIVATE_USER_ID"
+    orchestrator.tracker = AsyncMock()
+    original = RuntimeError("original processing failure")
+
+    await orchestrator._handle_failure(document_id, original)
+
+    session.rollback.assert_called_once_with()
+    session.close.assert_called_once_with()
+    update_index.assert_awaited_once_with(
+        document_id, "PRIVATE_USER_ID", embedding_status="failed", caller_reports_failure=True,
+    )
+    orchestrator.tracker.handle_pipeline_failure.assert_awaited_once_with(
+        document_id, original, stage=ProcessingStage.FAILED, sentry_reported=False,
+    )
+    failure_reporter.assert_called_once()
+    report = failure_reporter.call_args
+    assert report.kwargs == {
+        "component": "document_pipeline",
+        "operation": "pipeline_failure_sql_status_write_failed",
+        "context": {"exception_type": "ConnectionError"},
+    }
+    (error,) = report.args
+    assert error.__cause__ is error.__context__ is None
+    assert error.__traceback__ is not None
+    assert "PRIVATE_" not in repr(report) + caplog.text
+    assert document_id not in repr(report) + caplog.text
+    assert_write_failure_logs_are_safe(caplog)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["processing", "completed"])
+async def test_nonfailed_sql_status_rethrows_original_write_error(orchestrator, monkeypatch, status):
+    session = MagicMock()
+    error = RuntimeError("commit failed")
+    session.commit.side_effect = error
+    monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: session)
+    with patch("src.lib.pipeline.orchestrator.report_runtime_exception") as report:
+        with pytest.raises(RuntimeError) as raised:
+            await orchestrator._sync_sql_document_status("e5639b2e-61b7-4c77-bbd4-5dbb76129947", status=status)
+    assert raised.value is error
+    session.rollback.assert_called_once_with()
+    session.close.assert_called_once_with()
+    report.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_index_status_log_ownership_is_limited_to_reconciliation(
+    orchestrator, index_connection, monkeypatch, caplog,
+):
+    from src.lib.weaviate_client import documents
+
+    orchestrator._current_file_id = None
+    orchestrator._current_user_id = "test_user"
+    orchestrator._sync_sql_document_status = AsyncMock()
+    collection = MagicMock()
+    collection.data.update.side_effect = OSError("collection rejected write")
+    monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", lambda *_: (None, collection))
+    with patch("src.lib.pipeline.orchestrator.report_runtime_exception") as report:
+        _, other_result = await asyncio.gather(
+            orchestrator._reconcile_failed_status("reconciling-paper", "failed"),
+            documents.update_document_status_detailed("other-paper", "test_user", embedding_status="processing"),
+        )
+
+    assert not other_result["success"]
+    report.assert_called_once()
+    index_connection.session.assert_has_calls(
+        [call(caller_reports_failure=True), call(caller_reports_failure=False)], any_order=True,
+    )
+    producer_logs = [record for record in caplog.records if record.name == documents.__name__]
+    assert len(producer_logs) == 1
+    assert "other-paper" in producer_logs[0].getMessage()
+    assert "reconciling-paper" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_cancelled_result_survives_index_status_and_reporter_failure(
+    orchestrator, sample_pdf, index_connection, monkeypatch,
+):
+    orchestrator._sync_sql_document_status = AsyncMock()
+    index_connection.session.side_effect = OSError("PRIVATE_INDEX_ERROR")
+    reporter = MagicMock(side_effect=RuntimeError("PRIVATE_REPORTER_DETAIL"))
+    monkeypatch.setattr("src.lib.pipeline.orchestrator.report_runtime_exception", reporter)
+    result = await orchestrator.process_pdf_document(
+        sample_pdf, "doc-cancelled", "test_user", validate_first=False,
+        cancel_requested_callback=AsyncMock(return_value=True),
+    )
+    assert result.cancelled and not result.success
+    assert result.error == "Processing cancelled by user request"
+    reporter.assert_called_once()
+    assert reporter.call_args.kwargs["operation"] == "pipeline_failure_index_status_write_failed"
 
 
 @pytest.mark.asyncio
@@ -422,6 +595,7 @@ async def test_process_pdf_document_cancellation_does_not_report_runtime_excepti
     sample_pdf,
     monkeypatch,
     file_steps,
+    index_connection,
 ):
     orchestrator._sync_sql_document_status = AsyncMock()
     runtime_reports = []
@@ -446,6 +620,9 @@ async def test_process_pdf_document_cancellation_does_not_report_runtime_excepti
     assert result.observability_receipt["outcome"] == "cancelled"
     assert result.observability_receipt["stages"]["total"]["status"] == "cancelled"
     assert runtime_reports == []
+    client = index_connection.session.return_value.__enter__.return_value
+    collection = client.collections.get.return_value.with_tenant.return_value
+    collection.data.update.assert_called_once_with(uuid="doc-cancelled", properties={"embeddingStatus": "failed"})
     file_steps.failed.assert_called_once_with(MAIN_FILE_ID, error_message="cancelled")
 
 
@@ -603,7 +780,7 @@ def test_pipeline_failure_has_one_sentry_owner_with_real_logging(capture_succeed
             capture_succeeds = sys.argv[1] == "True"
             capture = nullcontext() if capture_succeeds else patch("src.lib.pipeline.orchestrator.report_runtime_exception", return_value=False)
             with sentry_sdk.start_transaction(op="pdf.processing", name="test", sampled=False) as transaction, capture, patch("src.lib.pipeline.pdfx_parser.parse_pdf_document", new=AsyncMock(side_effect=failure)), \
-                 patch("src.lib.weaviate_client.documents.update_document_status_detailed", new=AsyncMock()), \
+                 patch("src.lib.weaviate_client.documents.update_document_status_detailed", new=AsyncMock(return_value={"success": True})), \
                  patch("src.lib.pdf_jobs.upload_execution_service.pdf_job_service.update_progress"), \
                  patch("src.lib.pdf_jobs.upload_execution_service.pdf_job_service.is_cancel_requested", return_value=False), \
                  patch("src.lib.observability.cost_context.execution_context", return_value={"run_id": "test-run", "activity": "background"}):

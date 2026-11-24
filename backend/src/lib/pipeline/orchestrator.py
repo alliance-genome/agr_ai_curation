@@ -30,6 +30,11 @@ def _report_pipeline_failure(error: Exception, *, operation: str, context: dict[
         return False
 
 
+def _report_status_write_failure(message: str, *, operation: str, context: dict[str, str]) -> None:
+    logger.warning(message, extra={"sentry_skip_event": True, **context})
+    _report_pipeline_failure(sanitized_runtime_error(message), operation=operation, context=context)
+
+
 def _public_pipeline_error_message(error: Exception) -> str:
     """Return a stable public message when an exception provides one."""
     if isinstance(error, PDFParsingError):
@@ -326,21 +331,7 @@ class DocumentPipelineOrchestrator:
 
         except PDFCancellationError as e:
             logger.info("Pipeline cancelled for document %s: %s", document_id, e)
-            await self._fail_current_file(str(e))
-            await self._sync_sql_document_status(
-                document_id,
-                status="failed",
-                error_message=str(e),
-            )
-            try:
-                from src.lib.weaviate_client.documents import update_document_status_detailed
-                await update_document_status_detailed(document_id, self._current_user_id, embedding_status="failed")
-            except Exception as status_error:
-                logger.warning(
-                    "Failed to mark embedding status as failed for cancelled document %s: %s",
-                    document_id,
-                    status_error,
-                )
+            await self._reconcile_failed_status(document_id, str(e))
             await self.tracker.track_pipeline_progress(
                 document_id,
                 ProcessingStage.FAILED,
@@ -525,10 +516,19 @@ class DocumentPipelineOrchestrator:
     ) -> None:
         # A source binding briefly locks the document generation row.
         # Never wait on that row from the event-loop thread.
-        await asyncio.to_thread(
-            self._write_sql_document_status, document_id,
-            status=status, error_message=error_message,
-        )
+        try:
+            await asyncio.to_thread(
+                self._write_sql_document_status, document_id,
+                status=status, error_message=error_message,
+            )
+        except Exception as exc:
+            if status != "failed":
+                raise
+            _report_status_write_failure(
+                "Could not mark SQL document status as failed",
+                operation="pipeline_failure_sql_status_write_failed",
+                context={"exception_type": type(exc).__name__},
+            )
 
     def _write_sql_document_status(
         self, document_id: str, *, status: str, error_message: Optional[str] = None,
@@ -566,16 +566,12 @@ class DocumentPipelineOrchestrator:
                 ]
 
             session.commit()
-            logger.info("Updated SQL document status for %s to %s", document_id, status)
-        except Exception as e:
-            logger.error("Error updating SQL status for document %s: %s", document_id, e)
+        except Exception:
             session.rollback()
-            # Processing/completion commits protect source generation. A failed
-            # status notification must not replace the original pipeline error.
-            if status != "failed":
-                raise
+            raise
         finally:
             session.close()
+        logger.info("Updated SQL document status for %s to %s", document_id, status)
 
     async def _update_file_paths(
         self,
@@ -636,11 +632,32 @@ class DocumentPipelineOrchestrator:
                 mark_file_failed, self._current_file_id, error_message=error_message
             )
         except Exception as status_error:
-            # Like the paper status write below, a failed status notification
-            # must not replace the original pipeline error.
-            logger.error(
-                "Failed to mark file %s failed: %s", self._current_file_id, status_error
+            _report_status_write_failure(
+                "Could not mark file status as failed",
+                operation="pipeline_failure_file_status_write_failed",
+                context={"exception_type": type(status_error).__name__},
             )
+
+    async def _reconcile_failed_status(self, document_id: str, safe_message: str) -> None:
+        await self._fail_current_file(safe_message)
+        await self._sync_sql_document_status(document_id, status="failed", error_message=safe_message)
+
+        try:
+            from src.lib.weaviate_client.documents import update_document_status_detailed
+            result = await update_document_status_detailed(
+                document_id, self._current_user_id, embedding_status="failed", caller_reports_failure=True,
+            )
+            if result["success"]:
+                return
+            # The helper returns a fixed error code alongside raw provider detail.
+            context = {"error_code": result["error"]["code"]}
+        except Exception as exc:
+            context = {"exception_type": type(exc).__name__}
+        _report_status_write_failure(
+            "Could not mark search-index status as failed",
+            operation="pipeline_failure_index_status_write_failed",
+            context=context,
+        )
 
     async def _handle_failure(
         self,
@@ -652,22 +669,7 @@ class DocumentPipelineOrchestrator:
     ):
         """Handle pipeline failure."""
         safe_message = public_error_message or _public_pipeline_error_message(error)
-        await self._fail_current_file(safe_message)
-        await self._sync_sql_document_status(
-            document_id,
-            status="failed",
-            error_message=safe_message,
-        )
-
-        try:
-            from src.lib.weaviate_client.documents import update_document_status_detailed
-            await update_document_status_detailed(document_id, self._current_user_id, embedding_status="failed")
-        except Exception as status_error:
-            logger.warning(
-                "Failed to mark embedding status as failed for %s: %s",
-                document_id,
-                status_error,
-            )
+        await self._reconcile_failed_status(document_id, safe_message)
 
         tracker_error = error
         if isinstance(error, PDFParsingError) and safe_message != str(error):
