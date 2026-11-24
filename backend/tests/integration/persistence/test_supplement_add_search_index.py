@@ -610,6 +610,42 @@ async def test_a_paper_deleted_while_its_add_writes_keeps_no_piece_in_the_index(
 
 
 @pytest.mark.asyncio
+async def test_paper_deleted_after_first_rollback_read_leaves_no_files_or_pieces(owner_id, index, tmp_path):
+    from sqlalchemy import event
+
+    from src.models.sql.database import engine
+
+    paper = await asyncio.to_thread(_paper, owner_id, index)
+
+    def delete_paper(*_args):
+        # Commit on another connection after Postgres has taken the rollback read's snapshot.
+        with SessionLocal.begin() as db:
+            db.execute(delete(PDFDocument).where(PDFDocument.id == paper))
+
+    async def checkpoint(stage):
+        if stage == "vector_storage":
+            chunk_reads.delete_pieces_of_deleted_paper(str(paper), TEST_USER_ID)
+        if stage == "finishing":
+            assert _indexes(index, str(paper))
+            assert any(path.is_file() for path in tmp_path.rglob("*"))
+            event.listen(engine, "after_cursor_execute", delete_paper, once=True)
+            raise RuntimeError("cancel add before ready")
+
+    try:
+        with pytest.raises(RuntimeError, match="cancel add before ready"):
+            await _add(paper, owner_id, index, [_chosen(20)], job_id=uuid4(), checkpoint=checkpoint)
+    finally:
+        if event.contains(engine, "after_cursor_execute", delete_paper):
+            event.remove(engine, "after_cursor_execute", delete_paper)
+
+    with SessionLocal() as db:
+        assert db.get(PDFDocument, paper) is None
+    assert _rows(paper) == []
+    assert _indexes(index, str(paper)) == []
+    assert not any(path.is_file() for path in tmp_path.rglob("*"))
+
+
+@pytest.mark.asyncio
 async def test_the_real_stale_sweep_fails_a_dead_adds_rows_on_a_completed_paper(owner_id, index):
     """A deploy-style stop: the process is gone mid-add and only the background sweep runs.
 

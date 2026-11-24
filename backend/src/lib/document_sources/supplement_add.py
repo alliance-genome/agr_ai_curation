@@ -518,34 +518,72 @@ async def _prepare(listed: ListedFile, markdown: str, *, document_id: UUID, disp
     )
 
 
+async def _drain_after_cancel(
+    work: Awaitable[Any], *, operation: str = "supplement_add_cancelled_mutation_failed",
+) -> None:
+    """Finish outstanding work and report a discarded failure before the caller re-raises cancellation."""
+    async def drain() -> None:
+        try:
+            await work
+        except asyncio.CancelledError:
+            # A chunk writer can finish its own cancellation and failure reporting.
+            pass
+        except Exception as exc:
+            from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
+
+            try:
+                report_runtime_exception(
+                    sanitized_runtime_error("Supplement mutation failed during cancellation"),
+                    component="document_files", operation=operation,
+                    context={"exception_type": type(exc).__name__}, fingerprint=[operation], include_request=False,
+                )
+            except Exception:
+                logger.warning("Supplement failure reporting unavailable", extra={"sentry_skip_event": True})
+
+    finalizer = asyncio.create_task(drain())
+    while not finalizer.done():
+        try:
+            await asyncio.shield(finalizer)
+        except asyncio.CancelledError:
+            continue
+    finalizer.result()
+
+
 async def _finish_mutation(mutation: Coroutine[Any, Any, _T]) -> _T:
     """Keep ownership of an executor-backed mutation until rollback can safely run."""
     task = asyncio.create_task(mutation)
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
-        async def drain() -> None:
-            try:
-                await task
-            except Exception as exc:
-                from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
+        await _drain_after_cancel(task)
+        raise
 
-                try:
-                    report_runtime_exception(
-                        sanitized_runtime_error("Supplement mutation failed during cancellation"),
-                        component="document_files", operation="supplement_add_cancelled_mutation_failed",
-                        context={"exception_type": type(exc).__name__}, include_request=False,
-                    )
-                except Exception:
-                    logger.warning("Supplement failure reporting unavailable", extra={"sentry_skip_event": True})
 
-        finalizer = asyncio.create_task(drain())
-        while not finalizer.done():
-            try:
-                await asyncio.shield(finalizer)
-            except asyncio.CancelledError:
-                continue
-        finalizer.result()
+async def _store_supplement_pieces(item: _Accepted, document_id: UUID, subject: str, weaviate_client: Any) -> None:
+    from src.lib.document_sources.ingestion import store_file_pieces
+
+    # The reservation thread cannot be interrupted. At the vector storage checkpoint
+    # the pipeline takes ownership and must receive cancellation to drain its chunk writer.
+    storing = False
+    cancelled = False
+
+    async def range_reserved(_stage: str) -> None:
+        nonlocal storing
+        if cancelled:
+            raise asyncio.CancelledError
+        storing = True
+
+    task = asyncio.create_task(store_file_pieces(
+        item.prepared, document_id=str(document_id), file_id=item.file_id, user_id=subject,
+        weaviate_client=weaviate_client, added_to_finished_paper=True, stage_checkpoint=range_reserved,
+    ))
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        cancelled = True
+        if storing:
+            task.cancel()
+        await _drain_after_cancel(task)
         raise
 
 
@@ -560,7 +598,7 @@ async def _write(
     commit_state: SupplementAddCommit,
 ) -> None:
     from src.lib.document_files.service import mark_files_ready
-    from src.lib.document_sources.ingestion import _save_processed_json, _save_source_markdown, store_file_pieces
+    from src.lib.document_sources.ingestion import _save_processed_json, _save_source_markdown
 
     subject = paper.owner_subject
 
@@ -609,16 +647,16 @@ async def _write(
                 await _finish_mutation(asyncio.to_thread(_save_supplement_pdf, item.pdf.file, pdf_paths[item.file_id]))
         for item in accepted:
             await stage_checkpoint("vector_storage")
-            # Range reservation is a separate thread mutation before the index writer starts.
-            await _finish_mutation(store_file_pieces(
-                item.prepared, document_id=str(document_id), file_id=item.file_id, user_id=subject,
-                weaviate_client=weaviate_client, added_to_finished_paper=True,
-            ))
+            await _store_supplement_pieces(item, document_id, subject, weaviate_client)
         await stage_checkpoint("finishing")
         await _finish_mutation(commit())
-    except BaseException:
+    except BaseException as exc:
         if not commit_state.committed:
-            await _finish_mutation(_undo(document_id, subject, [item.file_id for item in accepted], planned_paths))
+            rollback = _undo(document_id, subject, [item.file_id for item in accepted], planned_paths)
+            if isinstance(exc, asyncio.CancelledError):
+                await _drain_after_cancel(rollback, operation="supplement_add_cancelled_rollback_failed")
+            else:
+                await _finish_mutation(rollback)
         raise
 
 
@@ -749,9 +787,8 @@ def _insert_rows(document_id: UUID, rows: list[PDFDocumentFile]) -> None:
         session.add_all(rows)
 
 
-def _rollback_predicate(document_id: UUID, file_ids: Sequence[UUID]):
+def _rollback_predicate(file_ids: Sequence[UUID]):
     return and_(
-        PDFDocumentFile.document_id == document_id,
         PDFDocumentFile.id.in_(file_ids),
         PDFDocumentFile.role == FILE_ROLE_SUPPLEMENT,
         PDFDocumentFile.status.in_((FILE_STATUS_PENDING, FILE_STATUS_FAILED)),
@@ -764,15 +801,24 @@ def _delete_rows(document_id: UUID, file_ids: Sequence[UUID]) -> None:
     from src.models.sql.database import SessionLocal
 
     with SessionLocal() as session, session.begin():
-        session.execute(delete(PDFDocumentFile).where(_rollback_predicate(document_id, file_ids)))
+        session.execute(delete(PDFDocumentFile).where(
+            PDFDocumentFile.document_id == document_id, _rollback_predicate(file_ids),
+        ))
 
 
-def _rollback_files(document_id: UUID, file_ids: Sequence[UUID]) -> list[_Leftover]:
+def _rollback_files(document_id: UUID, file_ids: Sequence[UUID]) -> list[_Leftover] | None:
+    """Read both sides of a possible paper deletion in one snapshot. None means the parent is gone."""
     from src.models.sql.database import SessionLocal
 
     with SessionLocal() as session:
-        rows = session.scalars(select(PDFDocumentFile).where(_rollback_predicate(document_id, file_ids)))
-        return [_Leftover.from_row(row) for row in rows]
+        rows = session.execute(
+            select(PDFDocument.id, PDFDocumentFile)
+            .outerjoin(PDFDocument.files.and_(_rollback_predicate(file_ids)))
+            .where(PDFDocument.id == document_id)
+        ).all()
+        if not rows:
+            return None
+        return [_Leftover.from_row(row) for _, row in rows if row is not None]
 
 
 def _remove_stored_files(paths: Sequence[str], subject: str) -> None:
@@ -796,19 +842,12 @@ async def _undo(document_id: UUID, subject: str, file_ids: list[UUID], planned_p
     since no other file can own them.
     """
 
-    if await asyncio.to_thread(_paper_exists, document_id):
-        leftovers = await asyncio.to_thread(_rollback_files, document_id, file_ids)
+    leftovers = await asyncio.to_thread(_rollback_files, document_id, file_ids)
+    if leftovers is not None:
         await _remove_leftovers(document_id, subject, leftovers)
         return
     await _delete_pieces_of_deleted_paper(document_id, subject)
     await asyncio.to_thread(_remove_stored_files, planned_paths, subject)
-
-
-def _paper_exists(document_id: UUID) -> bool:
-    from src.models.sql.database import SessionLocal
-
-    with SessionLocal() as session:
-        return session.get(PDFDocument, document_id) is not None
 
 
 async def _delete_pieces_of_deleted_paper(document_id: UUID, subject: str) -> None:

@@ -791,6 +791,14 @@ file, only the reason code, the measured value, the limit and the hashed
 reference, the curator and any text are omitted. A failure that stops the add is
 reported once by the background task's own failure capture.
 
+On cancellation, a supplement add waits for the active write. A failed row or
+artifact write during that wait reports `supplement_add_cancelled_mutation_failed`.
+The pipeline owns chunk write failures once range reservation finishes. If
+rollback of an uncommitted add fails while handling cancellation, it reports
+`supplement_add_cancelled_rollback_failed`. Both supplement reports use
+`document_files`, group by operation, and carry only the exception class as
+failure detail. The caller receives the original cancellation after cleanup.
+
 The supplement stage of an import (`supplement_wait.py`) sends no event for a
 supplement left out for the provider's reasons or for time (not converted,
 conversion failed, not converted in time), and none for a curator login that
