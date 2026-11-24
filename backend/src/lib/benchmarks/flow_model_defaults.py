@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from src.lib.agent_studio.agent_service import list_agents_visible_to_user
 from src.lib.agent_studio.execution_revision_service import get_execution_revision
-from src.lib.config.models_loader import list_models
+from src.lib.config.models_loader import index_models, list_models
 from src.lib.openai_agents.config import get_agent_config, normalize_reasoning_effort, resolve_model_provider
 
 from .execution_context import BenchmarkCuratorContext
@@ -23,7 +23,7 @@ def stage_model_defaults(
     agents = {agent.agent_key: agent for agent in list_agents_visible_to_user(
         session, curator.db_user_id, active_group_ids=curator.active_groups,
     )}
-    models = {model.model_id: model for model in list_models()}
+    models = index_models(list_models())  # replaced ids resolve to their entry (ALL-1708)
     supervisor = get_agent_config("supervisor")
     result = []
     defaults: dict[str, BenchmarkSuiteRoute] = {}
@@ -50,7 +50,7 @@ def stage_model_defaults(
         if model is None:
             raise ValueError("Saved stage model is not in the installed model catalog")
         route = BenchmarkSuiteRoute(
-            provider=resolve_model_provider(model_id), model=model_id,
+            provider=resolve_model_provider(model.model_id), model=model.model_id,
             reasoning_effort=normalize_reasoning_effort(reasoning) if model.supports_reasoning else None,
         )
         if stage.route_slot in defaults and defaults[stage.route_slot] != route:

@@ -199,5 +199,10 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
     }
     assert assistant_payload["seed_session_id"] == "assistant-session-123"
     assert assistant_payload["provider_run"]["provider"] == "openai"
-    assert assistant_payload["provider_run"]["model"] == "gpt-6-astra"
+    from src.lib.config.models_loader import get_model
+    from src.lib.openai_agents.config import get_agent_studio_openai_model
+
+    # The record names the model actually called: the catalog entry for the configured
+    # Studio model (a replaced id resolves to the entry replacing it, ALL-1708).
+    assert assistant_payload["provider_run"]["model"] == get_model(get_agent_studio_openai_model()).model_id
     assert assistant_payload["provider_run"]["response_id"] == "resp-context-1"

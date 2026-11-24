@@ -33,9 +33,20 @@ def test_real_default_policy_is_stable_and_retains_live_settings(monkeypatch):
     assert recorded["retry"]["backoff"] == first.retry.backoff.to_json_dict()
     policy = recorded["retry"]["policy"]
     assert policy["id"] == "agr.default_model_retry"
-    assert policy["revision"] == 3
+    assert policy["revision"] == 4
     assert policy["sdk_version"]
     assert policy["any"][-1] == {"http_status": [408, 409, 429, 500, 502, 503, 504]}
+    overload, = [item for item in policy["any"]
+                 if isinstance(item, dict) and item.get("id") == "responses_websocket_overload"]
+    assert overload == {"id": "responses_websocket_overload", "revision": 2, "event_type": "error",
+                        "error_type": "service_unavailable_error", "code": "server_is_overloaded",
+                        "approves_replay": True,
+                        "delay": "frame retry-after-ms, then retry-after, at most backoff.max_delay",
+                        "after_response_start": {
+                            "approve_unsafe_replay": True,
+                            "requires": "no event outside response.created/response.in_progress",
+                            "stateful_request": "refused",
+                            "streamed": "measured model advice: suggested, replay safety unknown"}}
     refused, = [item for item in policy["any"]
                 if isinstance(item, dict) and item.get("id") == "responses_input_item_ids_refused"]
     assert refused == {"id": "responses_input_item_ids_refused", "revision": 1, "event_type": "error",

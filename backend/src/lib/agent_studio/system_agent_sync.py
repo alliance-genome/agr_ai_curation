@@ -17,6 +17,7 @@ from src.lib.config.agent_loader import (
     load_agent_definitions,
 )
 from src.lib.config.agent_sources import AgentConfigSource, resolve_agent_config_sources
+from src.lib.config.models_loader import resolve_model_id
 from src.models.sql.agent import Agent as DBAgent
 from src.models.sql.prompts import PromptTemplate
 
@@ -83,7 +84,8 @@ def _build_system_agent_values(
         "name": agent.name,
         "description": agent.description,
         "instructions": instructions,
-        "model_id": agent.model_config.model,
+        # System rows mirror configuration as it runs: a replaced id is its entry (ALL-1708).
+        "model_id": resolve_model_id(agent.model_config.model),
         "model_temperature": float(agent.model_config.temperature),
         "model_reasoning": agent.model_config.reasoning,
         "tool_ids": tool_ids,

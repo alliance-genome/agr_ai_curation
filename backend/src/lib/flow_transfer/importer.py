@@ -24,7 +24,7 @@ from src.lib.agent_studio.profile_mapping_service import (persist_capability_ref
                                                           validate_profile_mappings)
 from src.lib.agent_studio.runtime_validation import agent_runtime_compatibility_errors
 from src.lib.benchmarks.saved_flows import flow_summary
-from src.lib.config.models_loader import ModelDefinition, list_models
+from src.lib.config.models_loader import ModelDefinition, index_models, list_models
 from src.lib.flows.execution_revisions import (flow_execution_revision_findings,
                                                resolve_flow_execution_revisions)
 from src.lib.flows.flow_service import save_flow_definition
@@ -283,7 +283,7 @@ def _import_agent(db: Session, ctx: ImportContext, agent: BundleAgent, checked: 
 def import_dependencies(db: Session, ctx: ImportContext, checked: CheckedBundle) -> None:
     """Phase 1: compatible private dependencies, all or nothing before commit."""
     _lock_curator(db, ctx)
-    models_by_id = {model.model_id: model for model in list_models()}
+    models_by_id = index_models(list_models())  # replaced ids resolve to their entry (ALL-1708)
     for saved in checked.snapshots.values():
         _require_runtime_compatibility(saved, models_by_id)
     profile_pins = _import_profiles(db, ctx, checked)

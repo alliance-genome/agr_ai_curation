@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from agents import Model
+    from agents.models.openai_responses import ResponsesWebSocketError
 
 # =============================================================================
 # LLM Provider Configuration
@@ -431,6 +432,10 @@ def get_model_for_agent(
     Returns:
         Model name string for native OpenAI, or a direct SDK model otherwise.
     """
+    from src.lib.config.models_loader import resolve_model_id
+
+    # A replaced model id is requested as the catalog entry replacing it (ALL-1708).
+    model_name = resolve_model_id(str(model_name or "").strip())
     provider_id = resolve_model_provider(model_name, provider_override)
     require_provider_enabled(provider_id)
     provider = _get_provider_definition(provider_id)
@@ -603,16 +608,42 @@ def unsupported_reasoning_effort(model_def: object, value: object) -> Optional[R
     """Return the effort that would be sent but the catalog model does not accept.
 
     Values that normalize to "no reasoning" are never sent, so they are not
-    reported here; only a real effort outside the model's options is.
+    reported here; only a real effort outside the model's options, with no
+    reviewed ``reasoning_map`` entry, is.
     """
     effort = normalize_reasoning_effort(value)
     if effort is None:
         return None
-    if getattr(model_def, "supports_reasoning", False) and effort in tuple(
-        getattr(model_def, "reasoning_options", ()) or ()
+    if getattr(model_def, "supports_reasoning", False) and (
+        effort in tuple(getattr(model_def, "reasoning_options", ()) or ())
+        or effort in (getattr(model_def, "reasoning_map", None) or {})
     ):
         return None
     return effort
+
+
+class UnsupportedReasoningEffortError(ValueError):
+    """A saved reasoning level the model does not offer and the catalog does not map."""
+
+
+def requested_reasoning_effort(model_def: object, value: object) -> Optional[ReasoningEffort]:
+    """The effort actually requested: the saved level when the model offers it, else
+    the catalog entry's reviewed ``reasoning_map`` level; with neither, refused."""
+    effort = normalize_reasoning_effort(value)
+    offered = tuple(getattr(model_def, "reasoning_options", ()) or ())
+    # An entry that declares no levels does not constrain the effort here.
+    if effort is None or not getattr(model_def, "supports_reasoning", False) or not offered:
+        return effort
+    if effort in offered:
+        return effort
+    mapped = (getattr(model_def, "reasoning_map", None) or {}).get(effort)
+    if mapped is None:
+        raise UnsupportedReasoningEffortError(
+            f"Reasoning effort '{effort}' is not offered by model "
+            f"'{getattr(model_def, 'model_id', '')}' and the model catalog has no reviewed "
+            "mapping for it"
+        )
+    return mapped  # type: ignore[return-value]
 
 
 ReasoningSummaryStatus = Literal["present", "not_requested", "not_supported", "unavailable"]
@@ -712,35 +743,227 @@ def is_tool_namespace_refusal(error: object) -> bool:
     return param is not None and _INDEXED_TOOLS_PARAM.fullmatch(param) is not None
 
 
+# Set by the websocket observation below on an exception raised while reading a
+# Responses websocket request: True when any event other than the SDK's own
+# retry-safe set (``response.created``, ``response.in_progress``) had arrived.
+RESPONSES_WS_OUTPUT_STARTED_ATTR = "_agr_ws_output_started"
+
+
+def install_responses_websocket_output_observation() -> None:
+    """Record, on a failed websocket request, whether output had started (ALL-1704, idempotent).
+
+    The pinned SDK (0.25.0) marks every failure after the first received event
+    replay-unsafe, without telling ``response.created``/``response.in_progress``
+    apart from output. Both transport modes read events through
+    ``OpenAIResponsesWSModel._iter_websocket_response_events``; this wraps it to
+    note whether any yielded event type is outside the SDK's own
+    ``_RETRY_SAFE_STREAM_EVENT_TYPES`` and sets ``RESPONSES_WS_OUTPUT_STARTED_ATTR``
+    on the raised exception. Both private names are pinned by tests.
+    """
+
+    from contextlib import aclosing
+    from functools import wraps
+
+    from agents.models.openai_responses import OpenAIResponsesWSModel
+    from agents.run_internal.model_retry import _RETRY_SAFE_STREAM_EVENT_TYPES
+
+    iterate = OpenAIResponsesWSModel._iter_websocket_response_events
+    if getattr(iterate, "_agr_output_observation", False):
+        return
+
+    @wraps(iterate)
+    async def observed(self, create_kwargs):
+        output_started = False
+        # Closing the SDK generator releases its request lock and aborts an
+        # unfinished socket, exactly as when the SDK closes it itself.
+        async with aclosing(iterate(self, create_kwargs)) as events:
+            while True:
+                try:
+                    event = await anext(events)
+                except StopAsyncIteration:
+                    return
+                except Exception as exc:
+                    setattr(exc, RESPONSES_WS_OUTPUT_STARTED_ATTR, output_started)
+                    raise
+                if getattr(event, "type", None) not in _RETRY_SAFE_STREAM_EVENT_TYPES:
+                    output_started = True
+                yield event
+
+    observed._agr_output_observation = True
+    OpenAIResponsesWSModel._iter_websocket_response_events = observed
+
+
+def is_responses_websocket_overload(error: object) -> bool:
+    """Whether ``error`` is OpenAI's typed websocket overload frame (structured fields only)."""
+
+    from agents.models.openai_responses import ResponsesWebSocketError
+
+    return (
+        isinstance(error, ResponsesWebSocketError)
+        and error.event_type == "error"
+        and error.error_type == "service_unavailable_error"
+        and error.code == "server_is_overloaded"
+    )
+
+
+def responses_websocket_retry_after(
+    error: "ResponsesWebSocketError", *, max_delay: Optional[float]
+) -> Optional[float]:
+    """Seconds from the frame's ``error.headers`` (``retry-after-ms``, then ``retry-after``).
+
+    The pinned SDK reads retry-after only from HTTP response headers, so a
+    websocket frame's own headers are otherwise ignored. The value is bounded by
+    ``max_delay`` (``OPENAI_MODEL_RETRY_MAX_DELAY``). None when the header is
+    missing or not a non-negative number; the configured backoff then applies.
+    """
+
+    details = error.payload.get("error")
+    headers = details.get("headers") if isinstance(details, dict) else None
+    if not isinstance(headers, dict):
+        return None
+    for key, scale in (("retry-after-ms", 1000.0), ("retry-after", 1.0)):
+        value = headers.get(key)
+        if not isinstance(value, str):
+            continue
+        try:
+            seconds = float(value) / scale
+        except ValueError:
+            continue
+        if math.isfinite(seconds) and seconds >= 0:
+            return seconds if max_delay is None else min(seconds, max_delay)
+    return None
+
+
+RESPONSES_WS_OVERLOAD_AFTER_START = "responses_websocket_server_overloaded_after_start"
+
+
+def _log_overload_not_resent(reason: str, attempt: int, max_retries: int) -> None:
+    logger.warning(
+        "Not resending Responses WebSocket overload frame (reason=%s; attempt %s/%s)",
+        reason,
+        attempt,
+        max_retries,
+    )
+
+
+def _overload_after_start_refusal(error: object, *, stateful_request: bool) -> Optional[str]:
+    """Why an overload frame after response start may not be resent, or None when it may."""
+
+    output_started = getattr(error, RESPONSES_WS_OUTPUT_STARTED_ATTR, None)
+    if stateful_request:
+        return "stateful_request"
+    if output_started is None:
+        return "output_not_observed"
+    if output_started:
+        return "output_started"
+    return None
+
+
+def responses_websocket_overload_advice(request, advice, *, retry_settings):
+    """Provider retry advice for OpenAI's typed overload frame (ALL-1704).
+
+    Called by the measured model's ``get_retry_advice`` for every failure that
+    is this exact frame, before the SDK evaluates the retry.
+
+    - When the retry budget is spent the SDK raises without consulting the
+      policy; this logs that refusal and returns the advice unchanged.
+    - A streamed request whose frame came after ``response.created`` /
+      ``response.in_progress`` is marked replay-unsafe by the SDK, which then
+      refuses before any policy runs. When no output event arrived (the
+      websocket observation) and the request is stateless, the advice is
+      returned as a provider-suggested retry with unknown replay safety, so the
+      policy decides as for a non-streamed request. The SDK's own veto after
+      any streamed event outside its retry-safe set still applies first.
+      Otherwise the refusal is logged and the advice is returned unchanged.
+    - Everything else is returned unchanged (the policy handles it).
+    """
+
+    from agents.retry import ModelRetryAdvice
+
+    max_retries = max(retry_settings.max_retries or 0, 0) if retry_settings is not None else 0
+    if request.attempt > max_retries:
+        _log_overload_not_resent("retry_budget_exhausted", request.attempt, max_retries)
+        return advice
+    if not (
+        request.stream
+        and advice is not None
+        and advice.replay_safety == "unsafe"
+        and advice.response_started
+    ):
+        return advice
+    refusal = _overload_after_start_refusal(
+        request.error,
+        stateful_request=bool(request.previous_response_id or request.conversation_id),
+    )
+    if refusal is not None:
+        _log_overload_not_resent(refusal, request.attempt, max_retries)
+        return advice
+    return ModelRetryAdvice(
+        suggested=True,
+        reason=RESPONSES_WS_OVERLOAD_AFTER_START,
+        response_started=True,
+    )
+
+
 def build_default_model_retry():
     """Opt-in runner-managed retry for transient model-call failures.
 
     The Agents SDK retries model calls when ``ModelSettings.retry`` is set,
     classifying HTTP 5xx (e.g. a Responses WebSocket handshake ``503``),
-    never-sent WebSocket errors, and typed pre-response overload frames as safe
-    to retry, with exponential backoff and ``Retry-After`` support. Disable by
-    setting ``OPENAI_MODEL_MAX_RETRIES=0``.
+    never-sent WebSocket errors, and typed overload frames that arrive before
+    any output as safe to retry, with exponential backoff and ``Retry-After``
+    support. Disable by setting ``OPENAI_MODEL_MAX_RETRIES=0``.
     """
     # Import here to avoid circular dependency at module load.
     from agents import retry_policies
     from agents.retry import ModelRetrySettings, ModelRetryBackoffSettings
 
+    install_responses_websocket_output_observation()
+    retry_max_delay = _get_env_float("OPENAI_MODEL_RETRY_MAX_DELAY", 8.0)
+
     def retry_responses_websocket_overload(context):
-        """Retry a typed pre-response overload frame without logging frame content."""
-        from agents.models.openai_responses import ResponsesWebSocketError
+        """Retry OpenAI's typed overload frame without logging frame content."""
         from agents.retry import RetryDecision
 
         error = context.error
-        if not (
-            isinstance(error, ResponsesWebSocketError)
-            and error.event_type == "error"
-            and error.error_type == "service_unavailable_error"
-            and error.code == "server_is_overloaded"
-        ):
+        if not is_responses_websocket_overload(error):
             return False
 
         retry_budget_exhausted = context.attempt == context.max_retries
         log = logger.warning if retry_budget_exhausted else logger.info
+        delay = responses_websocket_retry_after(error, max_delay=retry_max_delay)
+
+        if context.response_started:
+            # The frame arrived after response.created/in_progress (ALL-1704). The
+            # SDK marks that replay-unsafe without knowing whether output began.
+            # Resending is safe when OpenAI declared the request failed for
+            # overload (with a retry-after) before any output item, text delta,
+            # reasoning item or tool call: nothing of it was returned, so no
+            # output or tool call can be duplicated. The websocket observation
+            # records whether such an event arrived; an unobserved request is not
+            # resent. A stateful request (previous_response_id or conversation)
+            # is not resent. A streamed request reaches this point only through
+            # responses_websocket_overload_advice, after the SDK's own veto.
+            refusal = _overload_after_start_refusal(
+                error, stateful_request=context.stateful_request
+            )
+            if refusal is not None:
+                _log_overload_not_resent(refusal, context.attempt, context.max_retries)
+                return False
+            logger.info(
+                "Resending Responses WebSocket overload frame after the response started "
+                "and before any output (retry %s/%s; delay=%s)",
+                context.attempt,
+                context.max_retries,
+                delay,
+            )
+            return RetryDecision(
+                retry=True,
+                delay=delay,
+                reason=RESPONSES_WS_OVERLOAD_AFTER_START,
+                approve_unsafe_replay=True,
+            )
+
         log(
             "Retrying transient Responses WebSocket overload frame "
             "(retry %s/%s; retry_budget_exhausted=%s)",
@@ -751,10 +974,12 @@ def build_default_model_retry():
 
         decision = RetryDecision(
             retry=True,
+            delay=delay,
             reason="responses_websocket_server_overloaded",
         )
-        # The typed `error` frame is raised by the pinned SDK before it yields a
-        # model event. Marking this decision replay-safe permits stateful model
+        # Here the typed `error` frame arrived before any model event (the
+        # provider did not report a started response). Marking this decision
+        # replay-safe permits stateful model
         # calls to use the shared runner loop; the runner still vetoes retries
         # after any response/tool-bearing stream event.
         setattr(decision, "_approves_replay", True)  # noqa: B010
@@ -879,13 +1104,19 @@ def build_default_model_retry():
             retry_policies.http_status(list(_DEFAULT_RETRY_HTTP_STATUSES)),
         ),
         {
-            "id": "agr.default_model_retry", "revision": 3,
+            "id": "agr.default_model_retry", "revision": 4,
             "sdk_version": version("openai-agents"),
             "any": [
                 "provider_suggested",
-                {"id": "responses_websocket_overload", "revision": 1,
+                {"id": "responses_websocket_overload", "revision": 2,
                  "event_type": "error", "error_type": "service_unavailable_error",
-                 "code": "server_is_overloaded", "approves_replay": True},
+                 "code": "server_is_overloaded", "approves_replay": True,
+                 "delay": "frame retry-after-ms, then retry-after, at most backoff.max_delay",
+                 "after_response_start": {
+                     "approve_unsafe_replay": True,
+                     "requires": "no event outside response.created/response.in_progress",
+                     "stateful_request": "refused",
+                     "streamed": "measured model advice: suggested, replay safety unknown"}},
                 {"id": "responses_input_item_ids_refused", "revision": 1,
                  "event_type": "error", "error_type": "invalid_request_error",
                  "code": "unsupported_parameter", "param": "input",
@@ -907,7 +1138,7 @@ def build_default_model_retry():
         max_retries=max_retries,
         backoff=ModelRetryBackoffSettings(
             initial_delay=_get_env_float("OPENAI_MODEL_RETRY_INITIAL_DELAY", 0.5),
-            max_delay=_get_env_float("OPENAI_MODEL_RETRY_MAX_DELAY", 8.0),
+            max_delay=retry_max_delay,
             multiplier=_get_env_float("OPENAI_MODEL_RETRY_MULTIPLIER", 2.0),
             jitter=True,
         ),
@@ -1075,6 +1306,10 @@ def build_model_settings(
     # Import here to avoid circular dependency
     from agents import ModelSettings
     from openai.types.shared import Reasoning
+    from src.lib.config.models_loader import resolve_model_id
+
+    # Settings (prompt-cache key included) describe the model actually requested.
+    model = resolve_model_id(str(model or "").strip())
 
     # Build reasoning config for models that support it. Normalize first so an
     # invalid value (e.g. "disabled" from the flow builder) becomes "no reasoning"
@@ -1082,6 +1317,13 @@ def build_model_settings(
     reasoning = None
     reasoning_effort = normalize_reasoning_effort(reasoning_effort)
     if reasoning_effort and supports_reasoning(model):
+        from src.lib.config.models_loader import get_model
+
+        # Catalog models apply their offered levels and reviewed reasoning_map; a
+        # provider-override model outside the catalog has no catalog policy to apply.
+        catalog_model = get_model(model)
+        if catalog_model is not None:
+            reasoning_effort = requested_reasoning_effort(catalog_model, reasoning_effort)
         summary_settings = reasoning_summary_request_settings(
             model=model,
             reasoning_effort=reasoning_effort,
@@ -1285,7 +1527,10 @@ def get_agent_config(agent_id: str) -> AgentConfig:
     # global defaults lazy so stale unused defaults do not break explicit agent
     # overrides or registry-owned defaults.
     model_default = defaults["model"] if "model" in defaults else get_default_model()
-    model = _get_env(f"{prefix}MODEL", model_default)
+    from src.lib.config.models_loader import resolve_model_id
+
+    # The configuration of what runs: a replaced id is its current entry (ALL-1708).
+    model = resolve_model_id(_get_env(f"{prefix}MODEL", model_default))
 
     # Temperature can be None for models that don't support it
     temperature_str = os.getenv(f"{prefix}TEMPERATURE")
@@ -4396,7 +4641,19 @@ def get_agent_model_capacity_overrides() -> dict:
             any(key not in names or type(limit) is not int or limit < 1 for key, limit in item.items())
             for item in value.values()):
         raise ValueError("AGENT_MODEL_CAPACITY_OVERRIDES_JSON must map model IDs to positive capacity values")
-    return value
+    from src.lib.config.models_loader import resolve_model_id
+
+    # Looked up by the model actually requested: a key naming a replaced id applies to
+    # the entry replacing it (ALL-1708).
+    resolved: dict = {}
+    for model_id, limits in value.items():
+        current = resolve_model_id(model_id)
+        if current in resolved:
+            raise ValueError(
+                f"AGENT_MODEL_CAPACITY_OVERRIDES_JSON names model '{current}' more than once "
+                "(directly or through a model id it replaces)")
+        resolved[current] = limits
+    return resolved
 
 
 # --- Authenticated user provisioning ---
@@ -4453,7 +4710,10 @@ def get_validation_review_source_group_records() -> int:
 
 def get_validation_review_model() -> str:
     """Model for supervisor review; empty keeps the supervisor's own model."""
-    return _get_env("VALIDATION_REVIEW_MODEL", "gpt-6.1-sol").strip()
+    from src.lib.config.models_loader import resolve_model_id
+
+    # Review records name the model actually requested (ALL-1708).
+    return resolve_model_id(_get_env("VALIDATION_REVIEW_MODEL", "gpt-6.1-sol").strip())
 
 
 def get_validation_review_reasoning() -> str:

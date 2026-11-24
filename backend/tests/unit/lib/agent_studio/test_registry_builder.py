@@ -76,8 +76,9 @@ class TestBuildConfigDefaults:
 
         result = _build_config_defaults(config)
 
+        # The registry describes the model that runs: a replaced id is its entry (ALL-1708).
         assert result == {
-            "model": "gpt-6.1-sol",
+            "model": "gpt-6.2-sol",
             "temperature": 0.5,
             "reasoning": "low",
         }

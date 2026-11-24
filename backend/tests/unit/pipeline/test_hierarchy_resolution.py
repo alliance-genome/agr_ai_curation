@@ -8,6 +8,7 @@ import pytest
 
 from src.lib.observability.cost_context import cost_scope
 from src.lib.pipeline import hierarchy_resolution as hierarchy
+from src.lib.config.models_loader import resolve_model_id
 
 
 @pytest.fixture
@@ -93,7 +94,8 @@ async def test_resolve_document_hierarchy_applies_classification_and_metadata(mo
     assert metadata.top_level_sections == ["Introduction"]
     assert "abstract_section_title" not in metadata.model_dump()
     assert metadata.llm_raw_response == {"model": "stub"}
-    assert metadata.model_used == "gpt-6.1-sol"
+    # The environment names a replaced id; the record names the model actually called (ALL-1708).
+    assert metadata.model_used == resolve_model_id("gpt-6.1-sol") == "gpt-6.2-sol"
 
 
 @pytest.mark.asyncio
@@ -376,7 +378,7 @@ async def test_call_llm_for_hierarchy_handles_empty_final_output(monkeypatch):
 
     assert sections == []
     assert raw is not None
-    assert raw["model"] == "gpt-6.1-sol"
+    assert raw["model"] == "gpt-6.2-sol"  # the env names gpt-6.1-sol; resolved (ALL-1708)
     assert captured["temperature"] is None
 
 

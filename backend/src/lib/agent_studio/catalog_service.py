@@ -2319,7 +2319,11 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
     instructions = prompt_bundle.render()
 
     model_id_override = str(kwargs.get("model_id_override") or "").strip()
-    effective_model_id = model_id_override or db_agent.model_id
+    from src.lib.config.models_loader import resolve_model_id
+
+    # Settings, provider, the agent-config event and every record name the model actually
+    # requested: a replaced saved or override id is its current catalog entry (ALL-1708).
+    effective_model_id = resolve_model_id(model_id_override or db_agent.model_id)
     if "model_temperature_override" in kwargs:
         effective_temperature = kwargs.get("model_temperature_override")
     else:

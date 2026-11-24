@@ -8,6 +8,7 @@ import {
   describeChangedSections,
   formatCharCount,
   formatRelativeTime,
+  resolveModelSelection,
   resolveReasoningSelection,
   shortRequestId,
   toolIdeaStatusLabel,
@@ -160,6 +161,7 @@ describe('resolveReasoningSelection', () => {
       reasoning_descriptions: {},
       recommended_for: [],
       avoid_for: [],
+      replaces: [],
     },
   ]
 
@@ -168,5 +170,36 @@ describe('resolveReasoningSelection', () => {
     expect(resolveReasoningSelection(models, 'm', 'bogus')).toBe('medium')
     expect(resolveReasoningSelection([{ ...models[0], default_reasoning: undefined }], 'm')).toBe('low')
     expect(resolveReasoningSelection(models, 'missing')).toBe('')
+  })
+})
+
+describe('resolveModelSelection', () => {
+  const option = (model_id: string, replaces: string[], isDefault = false) => ({
+    model_id,
+    name: model_id,
+    provider: 'openai',
+    description: '',
+    guidance: '',
+    default: isDefault,
+    supports_reasoning: true,
+    supports_temperature: false,
+    reasoning_options: ['low', 'medium', 'high'],
+    default_reasoning: 'medium',
+    reasoning_descriptions: {},
+    recommended_for: [],
+    avoid_for: [],
+    replaces,
+  })
+  const models = [option('sol-2', ['sol-1'], true), option('astra-2', ['astra-1'])]
+
+  it('shows an agent saved on a replaced version as the option that replaces it', () => {
+    expect(resolveModelSelection(models, 'sol-2', 'sol-1')).toBe('sol-2')
+    // Stays in its own family; never switched to the default model.
+    expect(resolveModelSelection(models, 'sol-2', 'astra-1')).toBe('astra-2')
+  })
+
+  it('keeps an offered id and uses the default for an unknown one', () => {
+    expect(resolveModelSelection(models, 'sol-2', 'astra-2')).toBe('astra-2')
+    expect(resolveModelSelection(models, 'sol-2', 'unknown-model')).toBe('sol-2')
   })
 })

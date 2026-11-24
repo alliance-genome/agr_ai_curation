@@ -1826,3 +1826,71 @@ async def test_early_close_generator_exit_does_not_swallow_new_cancellation():
     finally:
         release.set()
         await asyncio.gather(task, return_exceptions=True)
+
+
+# ---------------------------------------------------------------------------
+# Replaced model ids (ALL-1708): what is configured vs what reaches the provider
+# ---------------------------------------------------------------------------
+
+
+def _replaced_pairs():
+    from src.lib.config.models_loader import list_models
+
+    return [(replaced, model.model_id) for model in list_models()
+            if model.provider == "openai" for replaced in model.replaces]
+
+
+class _RecordingProvider:
+    """A model provider at the provider boundary: records the model name it is asked for."""
+
+    def __init__(self):
+        self.requested: list[str] = []
+
+    def get_model(self, model_name):
+        self.requested.append(model_name)
+        model = FakeResponsesHTTPModel([_final()])
+        model.model = model_name
+        return model
+
+
+@pytest.mark.parametrize("configured,current", _replaced_pairs())
+def test_an_agent_configured_on_a_replaced_id_requests_its_current_entry(published, configured, current):
+    provider = _RecordingProvider()
+    asyncio.run(Runner.run(Agent(name="gene", instructions="Extract.", model=configured), "Read",
+                           run_config=RunConfig(model_provider=provider, tracing_disabled=True)))
+    assert provider.requested == [current]
+    assert [record["model"] for record in published] == [current]
+
+
+@pytest.mark.parametrize("configured,current", _replaced_pairs())
+def test_a_run_config_model_on_a_replaced_id_requests_its_current_entry(published, configured, current):
+    provider = _RecordingProvider()
+    asyncio.run(Runner.run(Agent(name="gene", instructions="Extract."), "Read",
+                           run_config=RunConfig(model=configured, model_provider=provider,
+                                                tracing_disabled=True)))
+    assert provider.requested == [current]
+
+
+@pytest.mark.parametrize("configured,current", _replaced_pairs())
+def test_a_model_object_still_naming_a_replaced_id_is_refused_by_name(published, configured, current):
+    model = FakeResponsesHTTPModel([_final()])
+    model.model = configured
+    with pytest.raises(measurement_module.ReplacedModelRequestError, match=f"replaced model id '{configured}'"):
+        _run(Agent(name="gene", instructions="Extract.", model=model))
+    assert model.calls == []
+
+
+@pytest.mark.parametrize("configured,current", _replaced_pairs())
+def test_a_direct_request_on_a_replaced_id_sends_its_current_entry(published, configured, current):
+    sent = []
+
+    async def call(**kwargs):
+        sent.append(kwargs["model"])
+        return SimpleNamespace(id="chatcmpl_1", usage={"prompt_tokens": 5, "completion_tokens": 1,
+                                                        "total_tokens": 6})
+
+    asyncio.run(call_measured_direct_request(
+        surface="abstract_extraction", provider="openai", api="chat_completions",
+        kwargs={"model": configured, "messages": [{"role": "user", "content": "u"}]}, call=call))
+    assert sent == [current]
+    assert [record["model"] for record in published] == [current]
