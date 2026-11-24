@@ -2210,8 +2210,11 @@ def test_provider_poll_interval_has_a_five_second_minimum(monkeypatch):
     [
         # An .env still pinning the old 2 s poll: refused, whatever the deadline.
         ({"DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS": "2"}, "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS"),
-        # 3600 / 5 = 720 polls in one wait: more than 400.
+        # ceil(3600 / 5) + 5 = 725 polls in one wait: more than 400.
         ({"DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS": "5"}, "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS"),
+        # ALL-1678: ceil(3600 / 9) + 5 = 405 polls (reads and the two conversion requests);
+        # the old reads-only ratio let it through.
+        ({"DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS": "9"}, "DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"),
         ({"DOCUMENT_SOURCE_DEAD_WAIT_POLLS": "1"}, "DOCUMENT_SOURCE_DEAD_WAIT_POLLS"),
     ],
 )
@@ -2276,6 +2279,7 @@ def test_startup_logs_the_effective_wait_settings_only(monkeypatch, caplog):
         "DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS",
         "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS",
         "DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS",
+        "DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", "600")
@@ -2288,13 +2292,14 @@ def test_startup_logs_the_effective_wait_settings_only(monkeypatch, caplog):
         "Document-source wait settings: DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=30, "
         "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=600, DOCUMENT_SOURCE_DEAD_WAIT_POLLS=3, "
         "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS=10800, DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS=900, "
-        "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS=60, DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS=3"
+        "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS=60, DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS=3, "
+        "DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT=400"
     ]
 
 
 def test_startup_accepts_the_default_wait_settings_and_the_limit_itself(monkeypatch):
     from src.lib.openai_agents.config import (
-        DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT,
+        get_document_source_max_polls_per_wait,
         validate_document_source_wait_settings,
     )
 
@@ -2306,13 +2311,16 @@ def test_startup_accepts_the_default_wait_settings_and_the_limit_itself(monkeypa
         "DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS",
         "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS",
         "DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS",
+        "DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT",
     ):
         monkeypatch.delenv(key, raising=False)
     validate_document_source_wait_settings()  # 3600 / 30 = 120 polls
 
-    assert DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT == 400
-    monkeypatch.setenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", "9")  # 3600 / 9 = 400
-    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", "27")  # 10,800 / 27 = 400
+    assert get_document_source_max_polls_per_wait() == 400
+    # ALL-1678: the ceiling counts requests: the smallest settings that fit 400.
+    # ceil(3600 / 9.12) + 5 = 400; ceil(10,800 / 26.94) - 1 = 400.
+    monkeypatch.setenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", "9.12")
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", "26.94")
     validate_document_source_wait_settings()
 
 
@@ -2628,6 +2636,7 @@ def _clear_wait_settings(monkeypatch):
         "DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS",
         "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS",
         "DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS",
+        "DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT",
         "DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -2681,8 +2690,9 @@ def test_the_main_poll_no_longer_has_to_cover_the_supplement_wait(monkeypatch):
 @pytest.mark.parametrize(
     ("env", "named"),
     [
-        # 10,800 / 25 = 432 listing reads in one supplement wait: more than 400.
+        # ceil(10,800 / 25) - 1 = 431 listing reads in one supplement wait: more than 400.
         ({"DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS": "25"}, "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS"),
+        ({"DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS": "26.9"}, "DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"),
         ({"DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS": "4"}, "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS"),
         ({"DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS": "nan"}, "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS"),
         ({"DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS": "0"}, "DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS"),
@@ -2710,7 +2720,7 @@ def test_startup_accepts_the_default_supplement_wait(monkeypatch):
     from src.lib.openai_agents.config import validate_document_source_wait_settings
 
     _clear_wait_settings(monkeypatch)
-    validate_document_source_wait_settings()  # 10,800 / 30 = 360 polls
+    validate_document_source_wait_settings()  # ceil(10,800 / 60) - 1 = 179 polls
 
 
 
@@ -2748,3 +2758,71 @@ def test_startup_refuses_a_request_timeout_that_leaves_no_room_for_the_end_reque
         assert "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS" in str(error.value)
     else:
         validate_document_source_wait_settings()
+
+
+
+# --- ALL-1678: the ceiling on provider requests per wait is a plain setting
+
+
+def test_the_request_ceiling_default_override_and_minimum(monkeypatch):
+    from src.lib.openai_agents.config import (
+        DocumentSourceWaitSettingsError,
+        get_document_source_max_polls_per_wait,
+        validate_document_source_wait_settings,
+    )
+
+    _clear_wait_settings(monkeypatch)
+    assert get_document_source_max_polls_per_wait() == 400
+    monkeypatch.setenv("DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT", "1000")
+    assert get_document_source_max_polls_per_wait() == 1000
+    monkeypatch.setenv("DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT", "0")
+    with pytest.raises(DocumentSourceWaitSettingsError, match="DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"):
+        validate_document_source_wait_settings()
+
+
+def test_another_provider_can_raise_the_ceiling_for_a_faster_poll(monkeypatch):
+    """The drift point: core no longer holds the number; a deployment sets it."""
+    from src.lib.openai_agents.config import validate_document_source_wait_settings
+
+    _clear_wait_settings(monkeypatch)
+    monkeypatch.setenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", "5")  # 725 polls per main wait
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", "10")  # 1079 per supplement wait
+    monkeypatch.setenv("DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT", "2200")
+    validate_document_source_wait_settings()
+
+
+@pytest.mark.parametrize(("deadline", "poll", "expected"), [
+    (3600, 30, 125), (3600, 9.12, 400), (600, 30, 25), (100, 7, 20),
+])
+def test_the_main_waits_worst_case_requests(deadline, poll, expected):
+    from src.lib.openai_agents.config import main_wait_max_polls
+
+    assert main_wait_max_polls(deadline_seconds=deadline, poll_seconds=poll) == expected
+
+
+@pytest.mark.parametrize(("wait", "poll", "expected"), [(10800, 60, 179), (600, 60, 9), (610, 60, 10), (10800, 26.94, 400)])
+def test_the_supplement_waits_worst_case_requests(wait, poll, expected):
+    from src.lib.openai_agents.config import supplement_wait_max_polls
+
+    assert supplement_wait_max_polls(wait_seconds=wait, listing_poll_seconds=poll) == expected
+
+
+
+@pytest.mark.parametrize(("env", "smallest"), [
+    ({"DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS": "9"}, "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS to at least 9.12"),
+    ({"DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS": "26.9"}, "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS to at least 26.94"),
+])
+def test_the_refusal_names_the_smallest_interval_that_fits(monkeypatch, env, smallest):
+    from src.lib.openai_agents.config import (
+        DocumentSourceWaitSettingsError,
+        validate_document_source_wait_settings,
+    )
+
+    _clear_wait_settings(monkeypatch)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    with pytest.raises(DocumentSourceWaitSettingsError) as error:
+        validate_document_source_wait_settings()
+    assert smallest in str(error.value)
+    assert "our own polling cap" in str(error.value)  # never presented as the provider's protection
+

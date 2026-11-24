@@ -162,11 +162,20 @@ Document-source operational limits are env-configurable in `.env.example`:
 - `DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS`
 - `DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS`
 - `DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS`
+- `DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT`
 - `DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS`
 - `DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS`
 - `DOCUMENT_SOURCE_IMPORT_BATCH_LIMIT`
 - ABC Literature live-smoke timeout/evidence knobs
 - READY upload and identifier-import smoke timeout/evidence knobs
+
+**`DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT` (default 400) is our own polling cap,
+not a protection for ABC.** It bounds the listing reads one wait makes (plus the
+main wait's two conversion requests); start-up refuses wait settings over it.
+ABC recycles each API worker after about 1,000 requests from all of its clients,
+and an on-demand conversion runs inside the worker that accepted it, so no
+per-wait number can keep a conversion from being ended by a recycle; downloads
+and listings are not counted.
 
 **Operators: `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS` depends on an ABC rule.**
 Before the deadline of a main paper's own on-demand request (the wait is timed

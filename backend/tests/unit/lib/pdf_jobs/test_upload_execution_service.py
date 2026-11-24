@@ -3716,3 +3716,26 @@ async def test_the_next_paper_of_a_request_starts_while_the_first_waits_for_its_
     stage_may_end.set()
     await asyncio.wait_for(asyncio.gather(*list(supplement_wait._stage_tasks)), timeout=10)
     assert [event["job_id"] for event in completed] == ["job-1", "job-2", "stage-job-1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("deadline", "poll"), [(3600, 30), (3600, 9.2), (600, 30), (100, 7), (95, 13)])
+async def test_a_main_wait_never_makes_more_polls_than_the_start_up_cap(monkeypatch, deadline, poll):
+    """ALL-1678: the polling cap's start-up bound must hold for the real loop."""
+    from src.lib.openai_agents.config import main_wait_max_polls
+
+    clock = _VirtualClock()
+    provider = _ProviderReadyAt(clock, ready_at=float("inf"))
+    outcomes = _record_job_outcomes(monkeypatch)
+    monkeypatch.setattr(service_module, "asyncio", clock)
+    monkeypatch.setattr(service_module, "time", SimpleNamespace(time=lambda: clock.now))
+    monkeypatch.setattr(service_module, "get_document_source_import_timeout_seconds", lambda: float(deadline))
+    monkeypatch.setattr(service_module, "get_document_source_poll_interval_seconds", lambda: float(poll))
+    service = UploadExecutionService(pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: provider)
+
+    await service.execute_provider_conversion(_wait_request())
+
+    sent = len(provider.conversion_requests) + len(provider.list_artifact_calls)
+    assert len(provider.conversion_requests) == 2  # the wait's own on-demand request and the end one
+    assert sent <= main_wait_max_polls(deadline_seconds=deadline, poll_seconds=poll)
+    assert len(outcomes["failed"]) == 1

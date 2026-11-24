@@ -572,3 +572,112 @@ async def test_every_start_phase_sends_exactly_one_end_request_when_abc_never_co
 
     assert abc.conversion_requests == 1
     assert [status for status, _ in job.ended] == ["failed"]
+
+
+# --- ALL-1678: the polling cap per main wait (owner's option b, 24 Nov 2026), proven at the HTTP
+# boundary. The cap counts our polls: the listing reads the wait makes while it waits and its two
+# conversion requests. Each test also reports every request the wait really sends.
+
+
+class _ReadFailures(_Abc):
+    """ABC whose listing fails on the reads ``fails(n)`` says, as often as the tolerance allows."""
+
+    def __init__(self, fails, **kwargs):
+        super().__init__(**kwargs)
+        self.fails = fails
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        if unquote(request.url.path) == SHOW_ALL_PATH and self.fails(self.show_all_reads + 1):
+            self.requests.append(SHOW_ALL_PATH)
+            return httpx.Response(502, json={"detail": "made-up failure"})
+        return super().handle(request)
+
+    @property
+    def polls(self) -> int:
+        """Conversion requests, plus listing reads until the main text was found."""
+        found = next(
+            (index for index, path in enumerate(self.requests) if "/download_file/" in path),
+            len(self.requests),
+        )
+        return sum(1 for path in self.requests[:found] if path in (SHOW_ALL_PATH, CONVERSION_PATH))
+
+
+async def _one_main_wait(monkeypatch, *, deadline, poll, fails=lambda n: False, main_after=None):
+    """One main wait on a virtual clock; every HTTP request counted. Returns (polls, total)."""
+
+    from tests.unit.lib.pdf_jobs.test_upload_execution_service import _VirtualClock
+
+    clock = _VirtualClock()
+    monkeypatch.setattr(service_module, "asyncio", clock)
+    monkeypatch.setattr(service_module, "time", SimpleNamespace(time=lambda: clock.now))
+    monkeypatch.setattr(service_module, "get_document_source_import_timeout_seconds", lambda: float(deadline))
+    monkeypatch.setattr(service_module, "get_document_source_poll_interval_seconds", lambda: float(poll))
+    monkeypatch.setattr(service_module, "get_document_source_request_timeout_seconds", lambda: 10.0)
+    abc = _ReadFailures(fails, answers=[RUNNING], main_after=main_after)
+    _Job().install(monkeypatch)  # no record: the wait sends its own on-demand request
+    await _service(abc, []).execute_provider_conversion(_request(import_answer=None))
+    return abc.polls, len(abc.requests)
+
+
+@pytest.mark.asyncio
+async def test_at_the_edge_of_the_cap_a_main_wait_makes_exactly_the_bound(monkeypatch, quiet):
+    """3,600 s at 9.12 s, the smallest poll the default cap allows. ABC never converts: every
+    read, the read the capped sleep adds, the end request and its re-read."""
+    from src.lib.openai_agents.config import main_wait_max_polls
+
+    polls, total = await _one_main_wait(monkeypatch, deadline=3600, poll=9.12)
+
+    assert polls == main_wait_max_polls(deadline_seconds=3600, poll_seconds=9.12) == 400
+    assert total == 400  # nothing else is sent when ABC never converts
+
+
+@pytest.mark.asyncio
+async def test_a_main_text_found_on_the_last_read_adds_requests_the_cap_does_not_count(monkeypatch, quiet):
+    """The reviewer's case: the text appears on the last read. The polls stay within the cap;
+    the main text's download comes on top (and in the product the ingestion's figure-metadata
+    read and figure downloads, which this harness does not reach)."""
+    from src.lib.openai_agents.config import main_wait_max_polls
+
+    polls, total = await _one_main_wait(monkeypatch, deadline=3600, poll=9.12, main_after=398)
+
+    assert polls == main_wait_max_polls(deadline_seconds=3600, poll_seconds=9.12) == 400
+    assert total == 401  # the polls, plus the main text's download
+
+
+@pytest.mark.asyncio
+async def test_at_the_edge_with_every_allowed_failed_read_a_main_wait_stays_within_the_cap(monkeypatch, quiet):
+    """Two failed reads in a row, then a good one, all the way (three in a row would end it)."""
+    from src.lib.openai_agents.config import main_wait_max_polls
+
+    polls, total = await _one_main_wait(monkeypatch, deadline=3600, poll=9.12, fails=lambda n: n % 3 != 0)
+
+    assert polls == total <= main_wait_max_polls(deadline_seconds=3600, poll_seconds=9.12)
+
+
+@pytest.mark.asyncio
+async def test_a_sweep_of_legal_settings_never_exceeds_the_main_waits_cap(monkeypatch, quiet):
+    """A few hundred deadline and poll pairs, with and without failed reads and a late text."""
+    import random
+
+    from src.lib.openai_agents.config import main_wait_max_polls
+
+    generator = random.Random(1678)
+    equal = 0
+    for _ in range(240):
+        deadline = generator.choice([60, 125, 600, 1800, 3600])
+        poll = round(generator.uniform(max(5.0, deadline / 395), deadline / 4), 2)
+        pattern = generator.choice(["none", "two_of_three", "random"])
+        if pattern == "two_of_three":
+            fails = lambda n: n % 3 != 0  # noqa: E731
+        elif pattern == "random":
+            fails = lambda n, seed=generator.random(): random.Random(seed * 1000 + n).random() < 0.4  # noqa: E731
+        else:
+            fails = lambda n: False  # noqa: E731
+        main_after = generator.choice([None, None, generator.randrange(1, 400)])
+        with pytest.MonkeyPatch.context() as each:
+            polls, total = await _one_main_wait(each, deadline=deadline, poll=poll, fails=fails, main_after=main_after)
+        bound = main_wait_max_polls(deadline_seconds=deadline, poll_seconds=poll)
+        assert polls <= bound, (deadline, poll, pattern, main_after, polls, bound)
+        assert total <= polls + 1  # at most the main text's download on top here
+        equal += polls == bound
+    assert equal > 0  # the bound is reached, not only respected

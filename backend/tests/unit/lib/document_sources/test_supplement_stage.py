@@ -28,6 +28,7 @@ from src.lib.document_sources.supplement_add import AddResult, FileOutcome
 from src.lib.document_sources.supplement_plan import ChosenSupplement, SupplementPlan
 from tests.unit.lib.document_sources.test_abc_literature_provider import (
     FakeABCLiteratureClient,
+    _abc_reference_record,
     _abc_show_all_main_pdf,
     provider_from_fake,
 )
@@ -874,3 +875,190 @@ async def test_a_good_read_resets_the_count_of_failed_reads(job):
 
     assert client.reads == 9  # never three failed reads in a row
     assert _final_entries(job) == {"30": ("added", None)}
+
+
+# --- ALL-1678: the polling cap per supplement wait (owner's option b, 24 Nov 2026), proven
+# against the real wait sending real requests: the real ABC adapter over a client that counts
+# every call, and the real file listing (resolve, show_all, check downloads). The cap counts the
+# wait's own reads of the listing; each test also reports every request the wait really sends.
+
+
+class _CountingAbc(FakeABCLiteratureClient):
+    """ABC's client, every call counted and marked as the wait's own poll or not."""
+
+    def __init__(self, *, fails):
+        super().__init__()
+        self.rows: list = []
+        self.calls: list[tuple[str, bool]] = []
+        self.in_listing = False
+        self.fails = fails  # fails(kind, n, in_listing) -> bool
+        self.show_reference_payload = _abc_reference_record()
+
+    def _record(self, kind):
+        self.calls.append((kind, self.in_listing))
+        if self.fails(kind, sum(1 for call in self.calls if call[0] == kind), self.in_listing):
+            from agr_ai_curation_alliance.literature.client import ABCLiteratureHTTPError
+
+            raise ABCLiteratureHTTPError("ABC Literature returned HTTP 502", status_code=502, endpoint=kind)
+
+    async def show_reference(self, reference, *, request_bearer_token=None):
+        self._record("reference")
+        return self.show_reference_payload
+
+    async def show_referencefiles(self, reference, *, request_bearer_token=None):
+        self._record("show_all")
+        return list(self.rows)
+
+    async def download_referencefile(self, artifact_id, *, request_bearer_token=None, max_bytes=None):
+        self._record("download")
+        return GOOD_TABLE
+
+    async def request_referencefile_conversion(self, reference, *, wait=False, request_bearer_token=None):
+        self._record("conversion")
+        return _answer_payload("running", [])
+
+    @property
+    def polls(self) -> int:
+        return sum(1 for kind, in_listing in self.calls if kind == "show_all" and not in_listing)
+
+
+async def _one_supplement_wait(monkeypatch, job, *, wait, poll, files, converts_at, fails=lambda *_: False):
+    """One supplement wait on the fake clock with the real listing; returns (polls, total, client).
+
+    ``converts_at(n)`` is the index of the file ABC has converted by the wait's read ``n``. The
+    add is a stand-in here (the persistence route test drives the real one): its own listing
+    and downloads come on top of ``total``.
+    """
+    from src.lib.document_sources.file_listing import ListingRoute, list_reference_files
+    from tests.unit.lib.document_sources.test_file_listing import _limits, _Store
+
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", str(wait))
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", str(poll))
+    clock = _Clock()
+    client = _CountingAbc(fails=fails)
+    provider = provider_from_fake(client)
+    ids = [30 + 2 * index for index in range(files)]
+    converted: list[int] = []
+
+    def _rows():
+        return [_abc_show_all_main_pdf(10, "WB")] + [
+            row for i in ids for row in (_pair(i, "WB") if i in converted else [_unconverted(i, "xlsx")])
+        ]
+
+    client.rows = _rows()
+    original_show_all = client.show_referencefiles
+
+    async def _show_all(reference, *, request_bearer_token=None):
+        if not client.in_listing:
+            new = converts_at(client.polls + 1)
+            if new is not None and 0 <= new < len(ids) and ids[new] not in converted:
+                converted.append(ids[new])
+                client.rows = _rows()
+        return await original_show_all(reference, request_bearer_token=request_bearer_token)
+
+    client.show_referencefiles = _show_all
+    store = _Store()
+
+    async def _list_files(document_id, *, owner_user_id, provider, context):
+        client.in_listing = True
+        try:
+            reference = await provider.resolve_reference("AGRKB:101", request_bearer_token="curator-token")
+            return await list_reference_files(
+                provider=provider, reference=reference, authorized_group_ids=("WB",),
+                bearer_kind=ProviderBearerKind.CURATOR, request_bearer_token="curator-token",
+                files_in_paper=("10",), limits=_limits(), check_limit=20,
+                load_stored=store.load, save_assessment=store.save, route=ListingRoute.PAPER,
+                provider_observations={}, find_paper_in_library=None,
+            )
+        finally:
+            client.in_listing = False
+
+    from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
+
+    await stage.run_supplement_stage(
+        job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
+        plan=SupplementPlan(chosen=tuple(_chosen(str(i)) for i in ids), request_context=_context(),
+                            login_expires_at=clock() + 86400, owner_user_id=7, reference="AGRKB:101"),
+        conversion_requested=True, last_answer=_map_conversion_result(RUNNING, provider="abc_literature"),
+        main_ready_at=clock(), provider=provider, weaviate_client=object(), outcomes=_Outcomes(),
+        list_files=_list_files, add_files=_Add(), clock=clock, sleep=clock.sleep,
+    )
+    assert not any(kind == "conversion" for kind, _ in client.calls)  # never asks ABC to convert
+    return client.polls, len(client.calls), client
+
+
+@pytest.mark.asyncio
+async def test_at_the_defaults_a_supplement_wait_makes_exactly_its_cap_bound(job, monkeypatch):
+    """ABC never converts: 179 reads in 10,800 s at 60 s. The stage's first listing (a resolve
+    and a show_all) comes on top."""
+    from src.lib.openai_agents.config import supplement_wait_max_polls
+
+    polls, total, _ = await _one_supplement_wait(
+        monkeypatch, job, wait=10800, poll=60, files=1, converts_at=lambda n: None,
+    )
+
+    assert polls == supplement_wait_max_polls(wait_seconds=10800, listing_poll_seconds=60) == 179
+    assert total == 181
+
+
+@pytest.mark.asyncio
+async def test_at_the_edge_with_the_alternating_failure_the_polls_stay_capped_and_the_rest_is_counted(
+    job, monkeypatch,
+):
+    """10,800 s at 26.94 s, the smallest listing poll the default cap allows. A converted row is
+    listed from the first read while every later full listing's show_all fails (a good read
+    resets the count, so they alternate to the limit: the separate finding)."""
+    from src.lib.openai_agents.config import supplement_wait_max_polls
+
+    polls, total, client = await _one_supplement_wait(
+        monkeypatch, job, wait=10800, poll=26.94, files=19, converts_at=lambda n: 0 if n == 1 else None,
+        fails=lambda kind, n, in_listing: kind == "show_all" and in_listing and n > 1,
+    )
+
+    assert polls == supplement_wait_max_polls(wait_seconds=10800, listing_poll_seconds=26.94) == 400
+    # The cap does not count: the first listing (2), then a resolve and a failing show_all in
+    # every interval (2 x 400).
+    assert total == 1202
+    assert [kind for kind, _ in client.calls].count("download") == 0
+
+
+@pytest.mark.asyncio
+async def test_files_converting_one_per_read_send_listings_and_downloads_the_cap_does_not_count(job, monkeypatch):
+    """610 s at 60 s: ten reads, a file converted before each; every full listing answers."""
+    from src.lib.openai_agents.config import supplement_wait_max_polls
+
+    polls, total, client = await _one_supplement_wait(
+        monkeypatch, job, wait=610, poll=60, files=19, converts_at=lambda n: n - 1,
+    )
+
+    assert polls == supplement_wait_max_polls(wait_seconds=610, listing_poll_seconds=60) == 10
+    kinds = [kind for kind, _ in client.calls]
+    # 10 polls; 11 listings (a resolve and a show_all each); one check download per converted text.
+    assert (kinds.count("reference"), kinds.count("download"), total) == (11, 10, 42)
+
+
+@pytest.mark.asyncio
+async def test_a_sweep_of_legal_settings_never_exceeds_the_supplement_waits_cap(job, monkeypatch):
+    """Random settings, file counts, conversions and failures of reads, listings and downloads,
+    all sent as real requests through the adapter and the real listing."""
+    import random
+
+    from src.lib.openai_agents.config import supplement_wait_max_polls
+
+    generator = random.Random(16780)
+    equal = 0
+    for _ in range(200):
+        wait = generator.choice([300, 610, 1800])
+        poll = round(generator.uniform(max(5.0, wait / 60), wait / 3), 2)
+        seed = generator.random()
+        with pytest.MonkeyPatch.context() as each:
+            polls, total, _ = await _one_supplement_wait(
+                each, job, wait=wait, poll=poll, files=generator.choice([1, 5, 19]),
+                converts_at=lambda n, s=seed: random.Random(s * 7 + n).randrange(-3, 19),
+                fails=lambda kind, n, in_listing, s=seed: random.Random(f"{s}{kind}{n}{in_listing}").random() < 0.3,
+            )
+        bound = supplement_wait_max_polls(wait_seconds=wait, listing_poll_seconds=poll)
+        assert polls <= bound, (wait, poll, polls, bound)
+        assert total >= polls
+        equal += polls == bound
+    assert equal > 0

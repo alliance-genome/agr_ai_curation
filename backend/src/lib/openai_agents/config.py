@@ -2299,16 +2299,8 @@ def get_document_source_import_batch_limit() -> int:
     return max(1, _get_env_int_with_fallback("DOCUMENT_SOURCE_IMPORT_BATCH_LIMIT", 10))
 
 
-# How long an import waits on the provider, and how often it asks. Each poll
-# is one provider request: at 30 s a one-hour wait is at most 121 requests.
-#
-# At most this many polls in one wait. ABC recycles a worker after about 1,000
-# requests (its gunicorn ``max_requests``), which reports the conversion that
-# worker was running as failed and so ends our import. That count includes
-# every other caller's requests to the same worker, so one wait stays under
-# half of it. A supplement wait's listing reads count the same way (180 in 3
-# hours at the 60 s listing poll).
-DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT = 400
+# How long an import waits on the provider, and how often it reads its listing.
+# Each poll is one provider request: at 30 s a one-hour wait is about 121 reads.
 DOCUMENT_SOURCE_MIN_POLL_INTERVAL_SECONDS = 5.0
 # At 1 a living iteration (a poll plus two provider requests) can pass the threshold.
 DOCUMENT_SOURCE_MIN_DEAD_WAIT_POLLS = 2
@@ -2435,11 +2427,64 @@ def get_document_supplement_max_concurrent_waits() -> int:
     return value
 
 
+def get_document_source_max_polls_per_wait() -> int:
+    """Most polls one of our waits may send to the document-source provider (ALL-1678).
+
+    Our own polling cap, counted per wait: the listing reads a wait makes while
+    it waits, plus the main paper's wait's two conversion requests. Start-up
+    refuses wait settings whose worst case exceeds it. It is NOT a protection
+    for ABC's API workers and does not count downloads or full listings: ABC
+    recycles each API worker after about 1,000 requests from all of its clients,
+    and an on-demand conversion runs inside the worker that accepted it, so what
+    can end a conversion is the total traffic that worker receives, which no
+    per-wait number can bound. Owner's ruling, 24 Nov 2026 (option b).
+    """
+    name = "DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"
+    value = _get_env_int_with_fallback(name, 400)
+    if value < 1:
+        raise ValueError(f"{name} is {value}; it must be at least 1")
+    return value
+
+
+def main_wait_max_polls(*, deadline_seconds: float, poll_seconds: float) -> int:
+    """Worst case for the main paper's wait: its listing reads plus two conversion requests.
+
+    Reads: one at the start, one after each sleep, and the re-read straight after
+    the end request. The sleeps are full polls plus at most two shorter ones (cut
+    at the end-request window and at the deadline), both longer than zero, and
+    together they last less than the deadline: so at most ``ceil(deadline / poll)
+    - 1`` full ones. Reads: at most ``ceil(deadline / poll) + 3``. Conversion
+    requests: the wait's own on-demand request (when the import did not send it)
+    and the end request. Not counted: the main text's download and the
+    ingestion's reads once the text is found.
+    """
+    return math.ceil(deadline_seconds / poll_seconds) + 5
+
+
+def supplement_wait_max_polls(*, wait_seconds: float, listing_poll_seconds: float) -> int:
+    """Worst case for a supplement wait: its reads of the provider's listing.
+
+    A read follows each full listing poll that ends before the wait's limit: at
+    most ``ceil(wait / listing poll) - 1``. Not counted: the full listings after
+    a newly converted text, their check downloads, the stage's first listing and
+    the add's listing and downloads.
+    """
+    return math.ceil(wait_seconds / listing_poll_seconds) - 1
+
+
+def _smallest_interval(wait_seconds: float, most_intervals: int) -> float:
+    """The smallest interval with ``ceil(wait / interval) <= most_intervals``, to 0.01 s."""
+    if most_intervals < 1:
+        return wait_seconds
+    return math.ceil(wait_seconds / most_intervals * 100) / 100
+
+
 def validate_document_source_wait_settings() -> None:
-    """Startup check: wait settings that would poll the provider unsafely fail the deploy.
+    """Startup check: invalid or conflicting wait settings fail the deploy, each by name.
 
     An ``.env`` that still pins an old short poll interval, or a deadline raised
-    without the interval, stops here instead of exhausting the provider's workers.
+    without the interval, stops here. The polling cap bounds our own polls per
+    wait; it does not protect the provider's workers.
     """
     try:
         poll_seconds = get_document_source_poll_interval_seconds()
@@ -2449,6 +2494,7 @@ def validate_document_source_wait_settings() -> None:
         add_reserve_seconds = get_document_supplement_add_reserve_seconds()
         listing_poll_seconds = get_document_supplement_listing_poll_seconds()
         max_failed_reads = get_document_source_listing_max_failed_reads()
+        max_polls = get_document_source_max_polls_per_wait()
         get_document_supplement_max_concurrent_waits()
     except ValueError as error:
         raise DocumentSourceWaitSettingsError(str(error)) from error
@@ -2462,29 +2508,39 @@ def validate_document_source_wait_settings() -> None:
             f"({deadline_seconds:g}) minus DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS ({poll_seconds:g}); "
             f"set DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS below {deadline_seconds - poll_seconds:g}"
         )
-    for wait_name, wait_seconds, poll_name, interval_seconds in (
-        ("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", deadline_seconds,
-         "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", poll_seconds),
-        ("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", supplement_wait_seconds,
-         "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", listing_poll_seconds),
-    ):
-        polls = wait_seconds / interval_seconds
-        if polls > DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT:
-            raise DocumentSourceWaitSettingsError(
-                f"{wait_name} / {poll_name} "
-                f"({wait_seconds:g} / {interval_seconds:g}) allows {polls:.0f} provider polls in "
-                f"one wait, more than {DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT}; set "
-                f"{poll_name} to at least "
-                f"{math.ceil(wait_seconds / DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT):g}, or {wait_name} "
-                f"to at most {DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT * interval_seconds:g}"
-            )
+    # Each wait's worst-case number of polls (ALL-1678): our own polling cap, not a
+    # protection for the provider's workers (see get_document_source_max_polls_per_wait).
+    main_polls = main_wait_max_polls(deadline_seconds=deadline_seconds, poll_seconds=poll_seconds)
+    if main_polls > max_polls:
+        raise DocumentSourceWaitSettingsError(
+            f"DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS / DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS "
+            f"({deadline_seconds:g} / {poll_seconds:g}) lets one main paper's wait make up to "
+            f"{main_polls} polls (listing reads and its two conversion requests), more than "
+            f"DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT ({max_polls}), our own polling cap; set "
+            f"DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS to at least "
+            f"{_smallest_interval(deadline_seconds, max_polls - 5):g}, lower "
+            f"DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS, or raise DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"
+        )
+    supplement_polls = supplement_wait_max_polls(
+        wait_seconds=supplement_wait_seconds, listing_poll_seconds=listing_poll_seconds,
+    )
+    if supplement_polls > max_polls:
+        raise DocumentSourceWaitSettingsError(
+            f"DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS / DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS "
+            f"({supplement_wait_seconds:g} / {listing_poll_seconds:g}) lets one supplement wait make "
+            f"up to {supplement_polls} listing reads, more than DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT "
+            f"({max_polls}), our own polling cap; set DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS to at "
+            f"least {_smallest_interval(supplement_wait_seconds, max_polls + 1):g}, lower "
+            f"DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS, or raise DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"
+        )
     # A deadline pinned below the default (an old override) is not unsafe and is
     # not refused; stating the effective values makes it visible.
     logger.info(
         "Document-source wait settings: DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=%g, "
         "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=%g, DOCUMENT_SOURCE_DEAD_WAIT_POLLS=%d, "
         "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS=%g, DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS=%g, "
-        "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS=%g, DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS=%d",
+        "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS=%g, DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS=%d, "
+        "DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT=%d",
         poll_seconds,
         deadline_seconds,
         dead_wait_polls,
@@ -2492,6 +2548,7 @@ def validate_document_source_wait_settings() -> None:
         add_reserve_seconds,
         listing_poll_seconds,
         max_failed_reads,
+        max_polls,
     )
 
 
