@@ -16,6 +16,7 @@ file ready, paper completed). All values are made up.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import sys
 import time
 from pathlib import Path
@@ -140,8 +141,10 @@ class _Abc:
                               display_name=f"{self.main['display_name']}_merged", source=_source(self.main)))
 
     def abc_stores_the_supplement_text(self):
-        self.rows.append(_row(31, file_class="converted_merged_supplement", extension="md",
-                              display_name="Made_up_S30_xlsx", source=_source(self.supplement)))
+        row = _row(31, file_class="converted_merged_supplement", extension="md",
+                   display_name="Made_up_S30_xlsx", source=_source(self.supplement))
+        row["md5sum"] = hashlib.md5(WORKBOOK).hexdigest()
+        self.rows.append(row)
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = unquote(request.url.path)

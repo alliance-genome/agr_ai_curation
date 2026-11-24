@@ -46,7 +46,7 @@ from uuid import UUID
 from sqlalchemy import and_, select
 
 from src.lib.document_sources.access import DocumentSourceRequestContext
-from src.lib.document_sources.file_assessment import FileProfile, assess_converted_file
+from src.lib.document_sources.file_assessment import FileCheckLimits, FileProfile, assess_converted_file
 from src.lib.document_sources.file_listing import (
     ProviderFileDownloadFailure,
     ListedFile,
@@ -438,7 +438,7 @@ async def _download_and_check(
     *,
     token: str,
     download_cap: int,
-    limits: Any,
+    limits: FileCheckLimits,
 ) -> tuple[str, str] | FileOutcome:
     """Download the converted text with the curator's login and run the stored or new checks."""
 
@@ -449,7 +449,10 @@ async def _download_and_check(
     profile = FileProfile(single_title_required=listed.single_title_required)
     load, save = _stores(provider.provider_id)
     md5 = converted.md5sum
-    stored = await asyncio.to_thread(load, converted.artifact_id, md5, limits.check_version) if md5 else None
+    if not md5:
+        return FileOutcome(listed.provider_file_id, "left_out", FileReason.FILE_NOT_TICKABLE)
+    version = limits.assessment_version(profile)
+    stored = await asyncio.to_thread(load, converted.artifact_id, md5, version)
     if stored is not None and stored.refused:
         # Refused before for this exact text and check version: not downloaded again.
         return FileOutcome(
@@ -458,6 +461,8 @@ async def _download_and_check(
         )
 
     def use(content: bytes):
+        if hashlib.md5(content).hexdigest() != md5:
+            return FileOutcome(listed.provider_file_id, "left_out", FileReason.FILE_CHANGED_SINCE_LISTED)
         assessment = stored if stored is not None else assess_converted_file(content, profile, limits)
         return content, hashlib.sha256(content).hexdigest(), assessment
 
@@ -478,9 +483,11 @@ async def _download_and_check(
             listed.provider_file_id, "left_out", failure_codes[outcome.failure], limit_value=outcome.limit_value,
         )
     assert outcome.result is not None
+    if isinstance(outcome.result, FileOutcome):
+        return outcome.result
     content, sha256, assessment = outcome.result
-    if stored is None and md5:
-        await asyncio.to_thread(save, converted.artifact_id, md5, limits.check_version, assessment)
+    if stored is None:
+        await asyncio.to_thread(save, converted.artifact_id, md5, version, assessment)
     if assessment.refused:
         return FileOutcome(
             listed.provider_file_id, "left_out", assessment.reason,

@@ -130,12 +130,13 @@ def test_r7_needs_exactly_one_top_level_title_when_the_profile_asks(titles):
     assert _assess(text, PLAIN, few_characters_below=0).refused is False
 
 
-def test_check_version_changes_with_every_threshold_and_the_token_encoding():
-    base = _limits().check_version
-    assert _limits(max_bytes=10_001).check_version != base
-    assert _limits(few_characters_below=21).check_version != base
-    assert _limits(row_token_limit=51).check_version != base
-    assert _limits(token_encoding="another-encoding").check_version != base
+def test_assessment_version_changes_with_each_threshold_encoding_and_title_rule():
+    base = _limits().assessment_version(PLAIN)
+    assert _limits(max_bytes=10_001).assessment_version(PLAIN) != base
+    assert _limits(few_characters_below=21).assessment_version(PLAIN) != base
+    assert _limits(row_token_limit=51).assessment_version(PLAIN) != base
+    assert _limits(token_encoding="another-encoding").assessment_version(PLAIN) != base
+    assert _limits().assessment_version(TITLED) != base
 
 
 def test_the_summary_counts_results_and_notes_only():

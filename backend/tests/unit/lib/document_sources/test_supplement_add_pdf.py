@@ -45,13 +45,13 @@ def _pdf(pages: int) -> bytes:
 
 PDF = _pdf(3)
 PDF_TEXT = b"## Supplementary methods\n\nMade-up methods of the supplement.\n\n## Table S5\n\n| strain | score |\n| --- | --- |\n| s1 | 1 |\n"
-ROWS = [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"),
-        *_pair(50, "WB", extension="pdf", md5=hashlib.md5(PDF).hexdigest())]
+ROWS = [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB", content=GOOD["21"]),
+        *_pair(50, "WB", extension="pdf", content=PDF_TEXT, md5=hashlib.md5(PDF).hexdigest())]
 PAYLOADS = {**GOOD, "50": PDF, "51": PDF_TEXT}
 
 
 def _chosen_pdf(payload: bytes = PDF) -> ChosenFile:
-    return ChosenFile(provider_file_id="50", md5=hashlib.md5(payload).hexdigest(), converted_md5="md5-51")
+    return ChosenFile(provider_file_id="50", md5=hashlib.md5(payload).hexdigest(), converted_md5=hashlib.md5(PDF_TEXT).hexdigest())
 
 
 @pytest.fixture
@@ -144,7 +144,7 @@ async def test_a_pdf_over_the_cap_is_left_out_and_nothing_is_stored(monkeypatch,
 @pytest.mark.parametrize("payload", [b"not a pdf at all", b"%PDF-1.4\n%made-up broken file"])
 async def test_bytes_that_are_not_a_readable_pdf_are_pdf_invalid(monkeypatch, pdf_store, payload):
     rows = [_abc_show_all_main_pdf(10, "WB"),
-            *_pair(50, "WB", extension="pdf", md5=hashlib.md5(payload).hexdigest())]
+            *_pair(50, "WB", extension="pdf", content=PDF_TEXT, md5=hashlib.md5(payload).hexdigest())]
     _, provider = _provider(rows, {**PAYLOADS, "50": payload})
     _paper_lookup(monkeypatch)
 
@@ -157,7 +157,7 @@ async def test_bytes_that_are_not_a_readable_pdf_are_pdf_invalid(monkeypatch, pd
 @pytest.mark.asyncio
 async def test_a_pdf_with_no_page_is_pdf_invalid(monkeypatch, pdf_store):
     empty = _pdf(0)
-    rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(50, "WB", extension="pdf", md5=hashlib.md5(empty).hexdigest())]
+    rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(50, "WB", extension="pdf", content=PDF_TEXT, md5=hashlib.md5(empty).hexdigest())]
     _, provider = _provider(rows, {**PAYLOADS, "50": empty})
     _paper_lookup(monkeypatch)
 
@@ -208,10 +208,10 @@ async def test_a_pdf_left_out_uses_up_neither_the_file_nor_the_text_limit(monkey
     monkeypatch.setattr(supplement_add, "_paper_state", lambda *_: _paper(file_count=1))
     monkeypatch.setenv("DOCUMENT_MAX_FILES_PER_PAPER", "2")
     rows = [_abc_show_all_main_pdf(10, "WB"),
-            *_pair(12, "WB", extension="pdf", md5=hashlib.md5(PDF).hexdigest()), *_pair(20, "WB")]
+            *_pair(12, "WB", extension="pdf", content=PDF_TEXT, md5=hashlib.md5(PDF).hexdigest()), *_pair(20, "WB", content=GOOD["21"])]
     _, provider = _provider(rows, {**PAYLOADS, "12": _http_error(403), "13": PDF_TEXT})
     _paper_lookup(monkeypatch)
-    chosen_pdf = ChosenFile(provider_file_id="12", md5=hashlib.md5(PDF).hexdigest(), converted_md5="md5-13")
+    chosen_pdf = ChosenFile(provider_file_id="12", md5=hashlib.md5(PDF).hexdigest(), converted_md5=hashlib.md5(PDF_TEXT).hexdigest())
 
     result = await _add(provider, [chosen_pdf, _chosen(20)])
 

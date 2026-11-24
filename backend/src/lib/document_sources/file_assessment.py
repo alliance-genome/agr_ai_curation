@@ -15,9 +15,8 @@ from dataclasses import dataclass
 from src.lib.document_sources.file_reasons import CHECK_REASONS, FileReason, reason_in_group
 
 # Bump when a check's code changes; thresholds are added to the version separately.
-# "2": the shared cell splitter now treats an even run of backslashes before a pipe as a
-# cell boundary (ALL-1460 P1), which can change R4 results.
-_CHECK_CODE_VERSION = "2"
+# Version 3 invalidates results stored before downloaded bytes and the title rule were verified.
+_CHECK_CODE_VERSION = "3"
 
 _ALLOWED_CONTROL_CHARACTERS = frozenset("\t\n\r")
 
@@ -48,6 +47,11 @@ class FileCheckLimits:
         )
         digest = hashlib.sha256(thresholds.encode("utf-8")).hexdigest()[:16]
         return f"{_CHECK_CODE_VERSION}-{digest}"
+
+    def assessment_version(self, profile: FileProfile) -> str:
+        """Version of a stored assessment for this file profile."""
+
+        return f"{self.check_version}-t{int(profile.single_title_required)}"
 
 
 @dataclass(frozen=True, slots=True)

@@ -62,7 +62,9 @@ import's supplement stage inside its own job):
   with the curator's login and `DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES` (`too_large`,
   `source_file_missing`, `source_unavailable`, `source_download_failed`,
   `access_denied`); the checks R1, R2, R4 to R7 (a stored refusal is not
-  downloaded again); the clean-up (`markdown_invalid`); and the paper total
+  downloaded again). Before using a stored pass or running the checks, the add compares the
+  downloaded converted text with its listed MD5. A mismatch gives `file_changed_since_listed`.
+  Verified text proceeds to clean-up (`markdown_invalid`) and the paper total
   `DOCUMENT_PAPER_MAX_TEXT_BYTES` over the ready files' `text_bytes`, main file
   included (`paper_text_limit`; a later smaller file can still fit).
 - **Sections by structure, no model** (`pipeline/structural_sections.py`): the

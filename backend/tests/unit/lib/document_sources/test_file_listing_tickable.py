@@ -78,11 +78,11 @@ def _unconverted(original_id: int, *mods: str, extension: str, file_class: str =
 
 # A WB paper: main PDF, one converted Excel supplement, unconverted Excel and PDF supplements,
 # an unconverted video and a large data file.
-def _wb_rows(*main_text_rows: dict[str, Any]) -> list[dict[str, Any]]:
+def _wb_rows(*main_text_rows: dict[str, Any], content: bytes = GOOD_TABLE) -> list[dict[str, Any]]:
     return [
         _abc_show_all_main_pdf(10, "WB"),
         *main_text_rows,
-        *_pair(20, "WB"),
+        *_pair(20, "WB", content=content),
         _unconverted(30, "WB", extension="xlsx"),
         _unconverted(40, "WB", extension="pdf"),
         _unconverted(50, "WB", extension="mov"),
@@ -220,7 +220,7 @@ async def test_the_identifier_listing_keeps_pdf_supplements_as_they_were():
 @pytest.mark.asyncio
 async def test_a_converted_text_that_did_not_pass_its_check_is_not_tickable():
     refused = b"# One\n\n# Two\n"  # an Office file must have exactly one top-level title (R7)
-    listing, _ = await _listing(_wb_rows(_main_text(11)), payloads={"21": refused})
+    listing, _ = await _listing(_wb_rows(_main_text(11), content=refused), payloads={"21": refused})
     entry = {item.provider_file_id: item for item in listing.files}["20"]
     assert entry.check.status is ListedFileCheckStatus.REFUSED
     assert (entry.tickable, entry.not_tickable_reason) == (False, FileReason.CHECK_NOT_PASSED)

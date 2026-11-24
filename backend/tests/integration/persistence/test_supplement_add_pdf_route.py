@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -59,6 +58,7 @@ def _pdf(pages: int) -> bytes:
 
 
 PDF = _pdf(2)
+PDF_TEXT = b"## Made_up_S70\n\nMade-up text of a PDF.\n"
 
 
 def _pdf_entry(original_id: int) -> ListedFile:
@@ -66,12 +66,11 @@ def _pdf_entry(original_id: int) -> ListedFile:
 
     original = _artifact(
         str(original_id), SourceArtifactRole.SOURCE_PDF, SourceArtifactFormat.PDF,
-        file_class="supplement", file_extension="pdf",
+        md5sum=hashlib.md5(PDF).hexdigest(), file_class="supplement", file_extension="pdf",
     )
-    original = replace(original, md5sum=hashlib.md5(PDF).hexdigest())  # ABC stores the original's MD5
     converted = _artifact(
         str(original_id + 1), SourceArtifactRole.CONVERTED_TEXT, SourceArtifactFormat.MARKDOWN,
-        file_class="converted_merged_supplement", file_extension="md",
+        md5sum=hashlib.md5(PDF_TEXT).hexdigest(), file_class="converted_merged_supplement", file_extension="md",
     )
     return ListedFile(
         provider_file_id=original.artifact_id, converted_text_id=converted.artifact_id,
@@ -113,13 +112,13 @@ async def test_the_add_route_adds_a_pdf_supplement_as_its_pdf_with_the_rest(owne
     monkeypatch.setattr(documents_api, "_document_source_context_or_503", context)
     monkeypatch.setattr(
         "src.lib.document_sources.registry.get_configured_document_source_provider",
-        lambda: _ClosingProvider({"21": WORKBOOK, "70": PDF, "71": b"## Made_up_S70\n\nMade-up text of a PDF.\n"}),
+        lambda: _ClosingProvider({"21": WORKBOOK, "70": PDF, "71": PDF_TEXT}),
     )
     monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda: index)
 
     payload = AddFilesRequest(files=[
-        {"provider_file_id": "70", "md5": hashlib.md5(PDF).hexdigest(), "converted_md5": "md5-71"},
-        {"provider_file_id": "20", "md5": "md5-20", "converted_md5": "md5-21"},
+        {"provider_file_id": "70", "md5": hashlib.md5(PDF).hexdigest(), "converted_md5": hashlib.md5(PDF_TEXT).hexdigest()},
+        {"provider_file_id": "20", "md5": "md5-20", "converted_md5": hashlib.md5(WORKBOOK).hexdigest()},
     ])
     request = Request({"type": "http", "method": "POST", "path": f"/weaviate/documents/{paper}/files", "headers": []})
     background = BackgroundTasks()
