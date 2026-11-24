@@ -1166,6 +1166,8 @@ class MeasuredModel(Model):
         self._agent = agent
         self._provider_hint = provider_hint
         self._attempts = 0
+        # Retry settings of the latest request, read by get_retry_advice for its budget.
+        self._retry_settings = None
 
     def __getattr__(self, name: str) -> Any:
         if name == "_inner":
@@ -1190,7 +1192,14 @@ class MeasuredModel(Model):
                 replay_safety="unsafe",
                 reason="blocked_before_send",
             )
-        return self._inner.get_retry_advice(request)
+        advice = self._inner.get_retry_advice(request)
+        from .config import is_responses_websocket_overload, responses_websocket_overload_advice
+
+        if is_responses_websocket_overload(request.error):
+            return responses_websocket_overload_advice(
+                request, advice, retry_settings=self._retry_settings
+            )
+        return advice
 
     def _measure(
         self,
@@ -1326,6 +1335,7 @@ class MeasuredModel(Model):
         model_settings, prompt_cache_tool_surface = bind_prompt_cache_tool_surface(
             model_settings, tools, handoffs
         )
+        self._retry_settings = model_settings.retry
         from src.lib.validation_review.provider import admit_model, guarded_await
         measurement = self._measure(
             system_instructions,
@@ -1409,6 +1419,7 @@ class MeasuredModel(Model):
         model_settings, prompt_cache_tool_surface = bind_prompt_cache_tool_surface(
             model_settings, tools, handoffs
         )
+        self._retry_settings = model_settings.retry
         from src.lib.validation_review.provider import admit_model, guarded_await
         measurement = self._measure(
             system_instructions,
@@ -1548,6 +1559,43 @@ def measure_resolved_model(
     return MeasuredModel(model, agent=agent, provider_hint=provider_hint, history=history, context_policy=policy)
 
 
+class ReplacedModelRequestError(RuntimeError):
+    """A model object still names a replaced catalog id: its path skipped resolution."""
+
+
+def _resolved_string_model(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    from src.lib.config.models_loader import resolve_model_id
+
+    return resolve_model_id(value)
+
+
+def resolve_requested_model(resolve_model: Any, agent: Any, run_config: Any) -> Model:
+    """Resolve the SDK model with replaced catalog ids requested as their current entry.
+
+    Configured string ids (agent or run config) resolve before the provider builds the
+    model; a model object that still names a replaced id is refused (ALL-1708)."""
+    from dataclasses import replace
+
+    from src.lib.config.models_loader import is_replaced_model_id
+
+    agent_model = _resolved_string_model(getattr(agent, "model", None))
+    config_model = _resolved_string_model(getattr(run_config, "model", None))
+    if agent is not None and agent_model != getattr(agent, "model", None):
+        agent = replace(agent, model=agent_model)
+    if run_config is not None and config_model != getattr(run_config, "model", None):
+        run_config = replace(run_config, model=config_model)
+    model = resolve_model(agent, run_config)
+    inner = getattr(model, "_model", model)  # the benchmark telemetry adapter
+    named = getattr(inner, "model", None)
+    if isinstance(named, str) and is_replaced_model_id(named):
+        raise ReplacedModelRequestError(
+            f"A model object names replaced model id '{named}'; build it from the catalog "
+            "entry that replaces it (resolve_model_id)")
+    return model
+
+
 def install_model_request_measurement() -> None:
     """Route every Agents SDK model resolution through ``MeasuredModel`` (idempotent).
 
@@ -1570,7 +1618,7 @@ def install_model_request_measurement() -> None:
 
         def get_measured_model(agent: Any, run_config: Any) -> Model:
             return measure_resolved_model(
-                resolve_model(agent, run_config),
+                resolve_requested_model(resolve_model, agent, run_config),
                 agent=agent,
                 run_config=run_config,
             )
@@ -1730,6 +1778,11 @@ async def call_measured_direct_request(
 
     from src.lib.validation_review.provider import guard_direct_request, register_provider_call, guarded_await
     guard_direct_request(provider=provider, api=api)
+    if isinstance(kwargs.get("model"), str):
+        from src.lib.config.models_loader import resolve_model_id
+
+        # A replaced model id is requested as the catalog entry replacing it (ALL-1708).
+        kwargs = {**kwargs, "model": resolve_model_id(kwargs["model"])}
     measurement = measure_direct_request(
         surface=surface,
         provider=provider,

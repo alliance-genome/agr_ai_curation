@@ -561,13 +561,16 @@ async def test_core_plus_org_custom_runtime_loads_without_alliance_package(monke
         agents["demo_agent_validation"].output_projection.row_list_field
         == "projected_records"
     )
+    from src.lib.config.models_loader import resolve_model_id
+
     monkeypatch.setenv("OPENAI_API_KEY", "fixture-openai-key")
     for agent in agents.values():
         if agent.model_config is None:
             continue
         model_id = agent.model_config.model
         provider_id = resolve_model_provider(model_id)
-        assert get_model_for_agent(model_id, provider_override=provider_id) == model_id
+        # A replaced catalog id is requested as the entry replacing it (ALL-1708).
+        assert get_model_for_agent(model_id, provider_override=provider_id) == resolve_model_id(model_id)
 
     schemas = schema_discovery.discover_agent_schemas(packages_dir, force_reload=True)
     assert set(schemas) == {

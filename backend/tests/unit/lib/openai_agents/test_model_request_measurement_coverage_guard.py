@@ -16,6 +16,7 @@ cover:
 from __future__ import annotations
 
 import ast
+import inspect
 from functools import lru_cache
 import os
 from pathlib import Path
@@ -319,3 +320,20 @@ def test_app_startup_installs_measurement():
         "install_model_request_measurement",
         "initialize_sentry_if_configured",
     ]
+
+
+def test_both_measured_boundaries_resolve_replaced_model_ids():
+    """ALL-1708: every request reaches a provider through the SDK per-turn hook or the
+    direct-request helper (the guards above), and both resolve replaced catalog ids,
+    so a configured id on a replaced model version is never sent as configured. The
+    hook also refuses a model object that still names a replaced id (behaviour tests
+    in test_model_request_measurement.py)."""
+    from agents.run_internal import turn_preparation
+
+    import src.lib.openai_agents.runner  # noqa: F401  (installs measurement)
+    from src.lib.openai_agents import model_request_measurement as measurement
+
+    installed = turn_preparation.get_model
+    assert getattr(installed, "__wrapped__", None) is measurement._SDK_GET_MODEL
+    assert "resolve_requested_model" in installed.__code__.co_names
+    assert "resolve_model_id(" in inspect.getsource(measurement.call_measured_direct_request)

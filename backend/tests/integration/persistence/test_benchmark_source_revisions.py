@@ -64,7 +64,7 @@ async def test_custom_benchmark_executes_frozen_source_with_separate_model_route
             "input": {"resolver": "fixture", "reference": "paper", "version": "1", "digest": "sha256:" + "d" * 64},
             "user_query": "Extract the requested evidence",
         }], "configurations": [{"configuration_id": "different-model", "routes": {
-            slot: {"provider": "openai", "model": "gpt-6-astra", "reasoning_effort": "low"},
+            slot: {"provider": "openai", "model": "gpt-6.2-astra", "reasoning_effort": "low"},
         }}],
     })
     limits = dict(max_cases=1, max_configurations=1, max_repetitions=1, max_cells=1)
@@ -98,7 +98,7 @@ async def test_custom_benchmark_executes_frozen_source_with_separate_model_route
         assert agent.execution_revision_id == str(first.id)
         assert agent.execution_receipt == source.model_dump(mode="json")
         assert agent.execution_snapshot_fingerprint == saved.fingerprint()
-        assert agent.model == agent.benchmark_requested_model == "gpt-6-astra"
+        assert agent.model == agent.benchmark_requested_model == "gpt-6.2-astra"
         assert agent.benchmark_requested_provider == "openai"
         assert agent.benchmark_route_slot == slot
         assert agent.benchmark_reasoning_effort == "low"
@@ -113,7 +113,7 @@ async def test_custom_benchmark_executes_frozen_source_with_separate_model_route
         db.flush()
     with pytest.raises(ValueError, match="cannot be overridden"):
         catalog_service.get_agent_by_id(head.agent_key, db_user_id=1, authenticated_groups=[],
-                                       execution_revision_id=str(first.id), model_id_override="gpt-6-astra")
+                                       execution_revision_id=str(first.id), model_id_override="gpt-6.2-astra")
     with pytest.raises(ExecutionRevisionNotFoundError):
         await runtime.execute_resolved_agent_cell(cell, {**runtime_input, "db_user_id": 3}, "denied")
     with pytest.raises(ValueError, match="frozen source"):

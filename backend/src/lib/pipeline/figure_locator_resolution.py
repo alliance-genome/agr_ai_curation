@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel, Field
 
 from src.lib.config.env import require_env
+from src.lib.config.models_loader import resolve_model_id
 from src.lib.document_sources.figure_metadata import (
     PROVIDER_FIGURE_METADATA_SECTION,
     is_provider_figure_subsection,
@@ -102,7 +103,7 @@ async def resolve_figure_locators(
     reference. Any missing, malformed, or non-unique model result fails closed.
     """
 
-    model_name = require_env("FIGURE_LOCATOR_LLM_MODEL")
+    model_name = resolve_model_id(require_env("FIGURE_LOCATOR_LLM_MODEL"))
     configured_reasoning = require_env("FIGURE_LOCATOR_LLM_REASONING")
     from src.lib.openai_agents.config import require_model_reasoning_effort
 

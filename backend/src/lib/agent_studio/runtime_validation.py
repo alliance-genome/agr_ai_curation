@@ -16,7 +16,7 @@ from src.lib.packages.tool_roles import (
 from src.lib.agent_studio.agent_finalize_invariant import (
     validate_agent_finalize_tool_invariant,
 )
-from src.lib.config.models_loader import list_models, load_models
+from src.lib.config.models_loader import index_models, list_models, load_models
 from src.models.sql.agent import Agent as DBAgent
 from src.models.sql.agent_execution_revision import AgentExecutionRevision
 from src.models.sql.database import SessionLocal
@@ -237,7 +237,7 @@ def build_agent_runtime_report(
 
     try:
         load_models()
-        models_by_id = {model.model_id: model for model in list_models()}
+        models_by_id = index_models(list_models())  # replaced ids resolve to their entry (ALL-1708)
     except Exception as exc:
         return {
             "status": "unhealthy",

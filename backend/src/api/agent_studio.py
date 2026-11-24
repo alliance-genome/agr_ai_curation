@@ -498,6 +498,7 @@ async def get_models_endpoint(
                     reasoning_descriptions=dict(model.reasoning_descriptions or {}),
                     recommended_for=list(model.recommended_for or []),
                     avoid_for=list(model.avoid_for or []),
+                    replaces=list(getattr(model, "replaces", ())),
                 )
                 for model in models
             ]

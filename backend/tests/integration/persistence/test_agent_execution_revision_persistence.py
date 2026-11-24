@@ -375,7 +375,9 @@ def test_saved_profile_builds_real_closed_agent_from_postgres(execution_db, monk
         db.refresh(old_revision)
         assert old_revision.snapshot == old_bytes
         assert head.instructions == saved.instructions
-        assert head.model_id == saved.model_id
+        from src.lib.config.models_loader import resolve_model_id
+        # A re-save writes the current catalog entry for a replaced id (ALL-1708).
+        assert head.model_id == resolve_model_id(saved.model_id)
         assert set(head.tool_ids) == set(profile_builder_tool_ids(old_tools))
         assert revision.id != old_revision.id
     else:
@@ -820,9 +822,10 @@ def test_restore_rejects_a_revision_whose_model_left_the_catalog(execution_db, m
     db.commit()
     # Simulate a later catalog that retired the model the first revision pinned.
     real_get_model = models_loader.get_model
+    saved_model = head.model_id  # saves store the current entry's id (ALL-1708)
     monkeypatch.setattr(
         models_loader, "get_model",
-        lambda model_id: None if model_id == "gpt-6.1-sol" else real_get_model(model_id),
+        lambda model_id: None if model_id == saved_model else real_get_model(model_id),
     )
 
     with pytest.raises(HTTPException) as rejected:

@@ -28,7 +28,7 @@ from src.lib.openai_agents.config import (
 )
 from src.lib.prompts import assembly
 
-OPENAI_MODEL = "gpt-6.1-sol"
+OPENAI_MODEL = "gpt-6.2-sol"
 COMPATIBLE_MODEL = "deepseek/deepseek-v4-pro-0813"  # openrouter, openai_compatible
 
 
@@ -112,7 +112,7 @@ def test_same_agent_model_and_static_prompt_yield_one_key():
     [
         ("gene_validation", "Validate alleles.", OPENAI_MODEL),
         ("allele_validation", "Validate alleles. v2", OPENAI_MODEL),
-        ("allele_validation", "Validate alleles.", "gpt-6-astra"),
+        ("allele_validation", "Validate alleles.", "gpt-6.2-astra"),
     ],
 )
 def test_agent_prompt_version_or_model_change_changes_key(agent_key, static_prompt, model):

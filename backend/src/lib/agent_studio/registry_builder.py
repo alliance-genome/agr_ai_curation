@@ -54,7 +54,10 @@ def _build_config_defaults(model_config: Optional[ModelConfig]) -> Dict[str, Any
     # included when the agent actually sets them (e.g. the supervisor omits
     # reasoning; Gemini agents set temperature). There is no ModelConfig() code
     # default to compare against.
-    defaults: Dict[str, Any] = {"model": model_config.model}
+    from src.lib.config.models_loader import resolve_model_id
+
+    # The registry describes the model that runs: a replaced id is its entry (ALL-1708).
+    defaults: Dict[str, Any] = {"model": resolve_model_id(model_config.model)}
 
     if model_config.reasoning is not None:
         defaults["reasoning"] = model_config.reasoning

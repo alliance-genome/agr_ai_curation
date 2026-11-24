@@ -174,6 +174,14 @@ export function resolveModelSelection(
   if (candidate && modelOptions.some((model) => model.model_id === candidate)) {
     return candidate
   }
+  // A saved agent on a replaced model version shows (and saves) the option that
+  // replaces it, so it stays in its own model family.
+  const replacing = candidate
+    ? modelOptions.find((model) => model.replaces.includes(candidate))
+    : undefined
+  if (replacing) {
+    return replacing.model_id
+  }
   return fallbackModelId
 }
 

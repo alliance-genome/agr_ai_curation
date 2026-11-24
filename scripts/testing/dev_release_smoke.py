@@ -59,9 +59,9 @@ DEFAULT_FLOW_QUERY = (
     "Extract exactly one experimentally supported gene from the loaded paper: crb/Crumbs. "
     "Include the organism and one verified evidence record for that gene."
 )
-DEFAULT_FLOW_MODEL = "gpt-6.1-sol"
-DEFAULT_CHAT_MODEL = "gpt-6.1-sol"
-DEFAULT_SPECIALIST_MODEL = "gpt-6.1-sol"
+DEFAULT_FLOW_MODEL = "gpt-6.2-sol"
+DEFAULT_CHAT_MODEL = "gpt-6.2-sol"
+DEFAULT_SPECIALIST_MODEL = "gpt-6.2-sol"
 OPENAI_AGENTS_DISTRIBUTION = "openai-agents"
 OPENAI_AGENTS_LOCKFILE_RELATIVE_PATH = Path("backend/requirements.lock.txt")
 # Batch plumbing exports now project canonical extraction object rows. The curation
@@ -1525,13 +1525,13 @@ def create_chat_session(
     return session_id
 
 
-def catalog_default_reasoning(
+def catalog_model_entry(
     *,
     base_url: str,
     headers: Dict[str, str],
     model_id: str,
-) -> str:
-    """Return the backend catalog's default reasoning effort for one model."""
+) -> Dict[str, Any]:
+    """The backend catalog entry for a model id, or the entry that replaces it (ALL-1708)."""
     response = http_request(
         "GET",
         f"{base_url}/api/agent-studio/models",
@@ -1545,10 +1545,27 @@ def catalog_default_reasoning(
     models = response.json_body.get("models")
     require(isinstance(models, list), f"Model catalog response missing models: {response.text}")
     entry = next(
-        (model for model in models if isinstance(model, dict) and model.get("model_id") == model_id),
+        (model for model in models if isinstance(model, dict)
+         and (model.get("model_id") == model_id or model_id in model["replaces"])),
         None,
     )
     require(entry is not None, f"Model {model_id!r} is not in the backend model catalog")
+    return entry
+
+
+def catalog_current_model_id(*, base_url: str, headers: Dict[str, str], model_id: str) -> str:
+    """The model the backend actually runs for a configured id (a replaced id is its entry)."""
+    return str(catalog_model_entry(base_url=base_url, headers=headers, model_id=model_id)["model_id"])
+
+
+def catalog_default_reasoning(
+    *,
+    base_url: str,
+    headers: Dict[str, str],
+    model_id: str,
+) -> str:
+    """Return the backend catalog's default reasoning effort for one model."""
+    entry = catalog_model_entry(base_url=base_url, headers=headers, model_id=model_id)
     reasoning = str(entry.get("default_reasoning") or "").strip()
     require(
         bool(entry.get("supports_reasoning")) and reasoning in (entry.get("reasoning_options") or []),
@@ -3100,7 +3117,9 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                 message=args.stream_chat_message,
                 chat_model=None,
                 specialist_model=None,
-                expected_model=args.chat_model,
+                # The run reports the model actually called: the catalog's current entry.
+                expected_model=catalog_current_model_id(
+                    base_url=base_url, headers=headers, model_id=args.chat_model),
                 chat_timeout_seconds=args.chat_timeout_seconds,
                 checks=checks,
             )

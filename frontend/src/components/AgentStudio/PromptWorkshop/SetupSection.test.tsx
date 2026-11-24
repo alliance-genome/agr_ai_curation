@@ -20,6 +20,7 @@ const modelOptions: ModelOption[] = [
     reasoning_descriptions: { low: 'Fastest', medium: 'Balanced', high: 'Deep' },
     recommended_for: ['Validation'],
     avoid_for: ['Deep adjudication'],
+    replaces: [],
   },
   {
     model_id: 'plain',
@@ -34,6 +35,7 @@ const modelOptions: ModelOption[] = [
     reasoning_descriptions: {},
     recommended_for: [],
     avoid_for: [],
+    replaces: [],
   },
 ]
 

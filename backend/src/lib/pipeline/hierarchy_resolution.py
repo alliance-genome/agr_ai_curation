@@ -27,6 +27,7 @@ from src.lib.document_sources.figure_metadata import (
     is_provider_figure_subsection,
 )
 from src.lib.config.env import require_env
+from src.lib.config.models_loader import resolve_model_id
 from src.lib.observability.cost_context import current_cost_context
 from src.lib.observability.payload_contracts import (
     PayloadContractViolation,
@@ -304,7 +305,7 @@ async def resolve_document_hierarchy(
             sections=[item.model_dump() for item in hierarchy_result],
             top_level_sections=top_level_sections,
             created_at=datetime.now(timezone.utc).isoformat(),
-            model_used=require_env("HIERARCHY_LLM_MODEL"),
+            model_used=resolve_model_id(require_env("HIERARCHY_LLM_MODEL")),
             llm_raw_response=raw_response
         )
 
@@ -430,7 +431,7 @@ OUTPUT: Refer to sections only by their [n] numbers; never repeat title text. Re
             supports_temperature,
         )
 
-        model_name = require_env("HIERARCHY_LLM_MODEL")
+        model_name = resolve_model_id(require_env("HIERARCHY_LLM_MODEL"))
         # The catalog decides the request shape: the effort must be one the
         # model accepts, and reasoning models reject a temperature parameter.
         reasoning_effort = require_model_reasoning_effort(

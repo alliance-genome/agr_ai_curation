@@ -7,11 +7,12 @@ import pytest
 from src.lib.config.agent_loader import load_agent_definitions, reset_cache
 from src.lib.config.models_loader import get_default_model, get_model, load_models
 from src.lib.openai_agents.config import PromptCacheIdentity, build_model_settings
+from src.lib.config.models_loader import resolve_model_id
 
 ROOT = Path(__file__).resolve().parents[5]
 # ALL-1248: the seven packaged extractors run on Sol/medium. Since the November 2026 speed and cost
 # hotfix, routing and output run on Sol/low too; only Agent Studio AI Chat stays on Astra.
-# 2026-09-24: GPT-6.1 Sol replaced GPT-6.1 Sol (extraction) and GPT-6.1 Sol (validation).
+# 2026-09-24: GPT-6.2 Sol replaced GPT-6.2 Sol (extraction) and GPT-6.2 Sol (validation).
 EXTRACTORS = {
     'allele_extractor': 'allele_extractor',
     'disease_extractor': 'disease_extractor',
@@ -38,7 +39,7 @@ def _clear_model_env(monkeypatch):
 def package_agents(monkeypatch):
     _clear_model_env(monkeypatch)
     # A deployment's GO validator override must not choose the paper curator model.
-    monkeypatch.setenv('AGENT_GO_ANNOTATIONS_MODEL', 'gpt-6-astra')
+    monkeypatch.setenv('AGENT_GO_ANNOTATIONS_MODEL', 'gpt-6.2-astra')
     reset_cache()
     agents = load_agent_definitions(ROOT / 'packages/alliance/agents', force_reload=True)
     yield {agent.folder_name: agent for agent in agents.values()}
@@ -46,7 +47,8 @@ def package_agents(monkeypatch):
 
 
 def _assert_effective(config, model, reasoning, label):
-    assert (config.model, config.reasoning) == (model, reasoning), label
+    # Package defaults may name a replaced id; they run on the entry replacing it (ALL-1708).
+    assert (resolve_model_id(config.model), config.reasoning) == (model, reasoning), label
     settings = build_model_settings(config.model, temperature=config.temperature,
                                     reasoning_effort=config.reasoning,
                                     prompt_cache=PromptCacheIdentity(label, 'static'))
@@ -58,17 +60,17 @@ def test_packaged_extractors_use_sol_medium_without_env_override(package_agents)
     for folder, agent_id in EXTRACTORS.items():
         agent = package_agents[folder]
         assert agent.agent_id == agent_id
-        _assert_effective(agent.model_config, 'gpt-6.1-sol', 'medium', agent_id)
+        _assert_effective(agent.model_config, 'gpt-6.2-sol', 'medium', agent_id)
 
 
 def test_output_agents_use_sol_low_and_validators_use_sol_medium(package_agents):
     for folder in FORMATTERS:
-        _assert_effective(package_agents[folder].model_config, 'gpt-6.1-sol', 'low', folder)
+        _assert_effective(package_agents[folder].model_config, 'gpt-6.2-sol', 'low', folder)
     for folder in GO_ANNOTATIONS_ENV_AGENTS:
-        assert package_agents[folder].model_config.model == 'gpt-6-astra', folder
+        assert resolve_model_id(package_agents[folder].model_config.model) == 'gpt-6.2-astra', folder
     for folder, agent in package_agents.items():
         if folder not in EXTRACTORS.keys() | FORMATTERS | GO_ANNOTATIONS_ENV_AGENTS:
-            _assert_effective(agent.model_config, 'gpt-6.1-sol', 'medium', folder)
+            _assert_effective(agent.model_config, 'gpt-6.2-sol', 'medium', folder)
 
 
 def test_supervisor_uses_sol_low(monkeypatch):
@@ -77,28 +79,28 @@ def test_supervisor_uses_sol_low(monkeypatch):
     try:
         agents = load_agent_definitions(ROOT / 'packages/core/agents', force_reload=True)
         supervisor = next(a for a in agents.values() if a.folder_name == 'supervisor')
-        _assert_effective(supervisor.model_config, 'gpt-6.1-sol', 'low', 'supervisor')
+        _assert_effective(supervisor.model_config, 'gpt-6.2-sol', 'low', 'supervisor')
     finally:
         reset_cache()
 
 
 def test_extractor_model_env_override_still_applies(monkeypatch):
     _clear_model_env(monkeypatch)
-    monkeypatch.setenv('AGENT_GENE_EXTRACTOR_MODEL', 'gpt-6-astra')
+    monkeypatch.setenv('AGENT_GENE_EXTRACTOR_MODEL', 'gpt-6.2-astra')
     reset_cache()
     try:
         agents = load_agent_definitions(ROOT / 'packages/alliance/agents', force_reload=True)
         gene = next(a for a in agents.values() if a.folder_name == 'gene_extractor')
-        assert (gene.model_config.model, gene.model_config.reasoning) == ('gpt-6-astra', 'medium')
+        assert (gene.model_config.model, gene.model_config.reasoning) == ('gpt-6.2-astra', 'medium')
     finally:
         reset_cache()
 
 
 def test_catalog_defaults_new_agents_to_sol_medium_and_keeps_astra_selectable():
     load_models(force_reload=True)
-    astra = get_model('gpt-6-astra')
-    sol = get_model('gpt-6.1-sol')
-    assert get_default_model().model_id == 'gpt-6.1-sol'
+    astra = get_model('gpt-6.2-astra')
+    sol = get_model('gpt-6.2-sol')
+    assert get_default_model().model_id == 'gpt-6.2-sol'
     assert sol.default and sol.curator_visible and sol.default_reasoning == 'medium'
     assert not astra.default and astra.curator_visible and astra.default_reasoning == 'low'
     settings = build_model_settings(sol.model_id, reasoning_effort='medium',
@@ -111,7 +113,7 @@ def test_retired_sol_and_terra_models_are_not_in_the_catalog():
     assert get_model('gpt-5.6-sol') is None
     assert get_model('gpt-5.6-terra') is None
     assert get_model('gpt-6-sol') is None
-    sol = get_model('gpt-6.1-sol')
+    sol = get_model('gpt-6.2-sol')
     # Curators get low, medium and high only; the API's xhigh and max are not offered.
     assert sol.reasoning_options == ['low', 'medium', 'high']
     assert not sol.supports_temperature and sol.supports_tool_search
@@ -134,12 +136,12 @@ def test_only_agent_studio_chat_defaults_to_astra(monkeypatch):
     try:
         for folder in ('packages/core/agents', 'packages/alliance/agents'):
             agents = load_agent_definitions(ROOT / folder, force_reload=True)
-            on_astra = sorted(a.folder_name for a in agents.values() if a.model_config.model == 'gpt-6-astra')
+            on_astra = sorted(a.folder_name for a in agents.values() if resolve_model_id(a.model_config.model) == 'gpt-6.2-astra')
             assert on_astra == [], (folder, on_astra)
             reset_cache()
     finally:
         reset_cache()
-    assert resolve_agent_studio_model() == ('gpt-6-astra', 'medium')
+    assert resolve_agent_studio_model() == ('gpt-6.2-astra', 'medium')
     assert _astra_env_defaults(_env_example().read_text()) == ['AGENT_STUDIO_OPENAI_MODEL']
 
 
@@ -151,11 +153,11 @@ def _astra_env_defaults(text: str) -> list[str]:
             continue
         key, value = stripped.split('=', 1)
         value = value.split(' #', 1)[0].strip().strip('"').strip("'")
-        if value == 'gpt-6-astra':
+        if resolve_model_id(value) == 'gpt-6.2-astra':
             keys.append(key.strip())
     return sorted(keys)
 
 
 def test_astra_env_scan_reads_quoted_and_commented_values():
-    text = 'A=gpt-6-astra\nB="gpt-6-astra"\nC=gpt-6-astra  # note\n# D=gpt-6-astra\nE=gpt-6.1-sol\n'
+    text = 'A=gpt-6.2-astra\nB="gpt-6.2-astra"\nC=gpt-6.2-astra  # note\n# D=gpt-6.2-astra\nE=gpt-6.2-sol\n'
     assert _astra_env_defaults(text) == ['A', 'B', 'C']

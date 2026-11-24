@@ -506,7 +506,8 @@ def test_review_uses_its_configured_model_and_keeps_tool_call_policy(monkeypatch
     overrides = _review_model_overrides(_phase_supervisor(), "Review instructions")
     assert overrides == {"model": sentinel, "model_settings": settings}
     arguments = build.call_args.kwargs
-    assert arguments["model"] == "gpt-6.1-sol" and arguments["reasoning_effort"] == "medium"
+    # A replaced configured id is requested as its current entry (ALL-1708).
+    assert arguments["model"] == "gpt-6.2-sol" and arguments["reasoning_effort"] == "medium"
     assert arguments["parallel_tool_calls"] is False
     assert arguments["prompt_cache"].agent_key == "supervisor.validation_review"
 
@@ -533,7 +534,7 @@ def test_review_model_defaults_to_sol(monkeypatch):
 
     monkeypatch.delenv("VALIDATION_REVIEW_MODEL", raising=False)
     monkeypatch.delenv("VALIDATION_REVIEW_REASONING", raising=False)
-    assert get_validation_review_model() == "gpt-6.1-sol"
+    assert get_validation_review_model() == "gpt-6.2-sol"  # resolved (ALL-1708)
     assert get_validation_review_reasoning() == "medium"
 
 

@@ -14,7 +14,7 @@ from src.lib.agent_studio.execution_revision_service import (
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.lib.agent_studio.flow_tools import build_flow_definition_from_recipe
 from src.lib.config.agent_loader import canonical_system_agent_key, get_agent_definition_for_package
-from src.lib.config.models_loader import list_models
+from src.lib.config.models_loader import list_models, resolve_model_id
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
 from src.lib.flow_edge_roles import SUPPORTED_OUTPUT_FORMATTER_AGENT_IDS
 from src.lib.flows.executor import CURATION_HANDOFF_AGENT_ID
@@ -59,6 +59,8 @@ def build_curator_route_catalog(
     models_by_id = {model.model_id: model for model in models}
 
     def route(model: str, reasoning: str | None) -> BenchmarkSuiteRoute:
+        # A saved replaced id is benchmarked as the entry replacing it (ALL-1708).
+        model = resolve_model_id(model)
         definition = models_by_id.get(model)
         return BenchmarkSuiteRoute(
             provider=resolve_model_provider(model), model=model,
