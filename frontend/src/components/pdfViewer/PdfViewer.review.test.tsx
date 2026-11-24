@@ -12,8 +12,9 @@ import { buildNavigationCommandFromChatEvidenceRecord } from '@/features/curatio
 import { fuzzyMatchPdfEvidenceQuote } from '@/features/curation/services/pdfEvidenceMatcherService'
 import { DOCUMENT_LOAD_COMPLETE_EVENT, DOCUMENT_LOAD_ERROR_EVENT } from '@/features/documents/documentLoadEvents'
 import PdfViewer from './PdfViewer'
-import { HOME_PDF_VIEWER_OWNER, dispatchPDFViewerNavigateEvidence, showPaperFilesInViewer } from './pdfEvents'
+import { ALL_FILES_FAILED_MESSAGE, HOME_PDF_VIEWER_OWNER, dispatchPDFViewerNavigateEvidence, showPaperFilesInViewer } from './pdfEvents'
 import { TextFileBlocks } from './TextFileBlocks'
+import { FILE_FAILED_MESSAGE, fileFailedNote } from './viewerFileNavigation'
 import { parseViewerFile, type DisplayBlock, type ViewerFile } from './viewerFiles'
 import {
   DOCUMENT_ID,
@@ -552,6 +553,38 @@ describe('P9b review fixes', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'This evidence\'s file is still being added to the paper, so it cannot be shown yet.',
     )
+  })
+
+  it('reports a failed evidence file after a refresh and keeps the ready tab open', async () => {
+    stubViewerFetch()
+    const onNavigationStateChange = vi.fn()
+    render(<PdfViewer onNavigationStateChange={onNavigationStateChange} />)
+    act(() => { showPaperFilesInViewer(DOCUMENT_ID, FOUR_FILES_PAYLOAD.files) })
+    await screen.findAllByRole('tab')
+    const files = FOUR_FILES_PAYLOAD.files.map((file) =>
+      file.file_id === PENDING_SUPPLEMENT_FILE_ID ? { ...file, status: 'failed' as const } : file,
+    )
+    act(() => { showPaperFilesInViewer(DOCUMENT_ID, files) })
+    act(() => { dispatchPDFViewerNavigateEvidence(chatCommand({ file_id: PENDING_SUPPLEMENT_FILE_ID })) })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(FILE_FAILED_MESSAGE)
+    expect(onNavigationStateChange).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'file-failed',
+      note: fileFailedNote(PENDING_SUPPLEMENT_FILE_ID),
+    }))
+    expect(screen.getByRole('tab', { selected: true })).toHaveAccessibleName(/made-up-paper.pdf/)
+    expect(fuzzyMatchPdfEvidenceQuote).not.toHaveBeenCalled()
+  })
+
+  it('clears the viewer with a failure notice when every supplement failed', async () => {
+    stubViewerFetch()
+    await showFourFilePaper()
+    const failedSupplements = FOUR_FILES_PAYLOAD.files.filter((file) => file.role === 'supplement')
+      .map((file) => ({ ...file, status: 'failed' as const, content_url: null, text_url: null, page_count: null }))
+    act(() => { showPaperFilesInViewer(DOCUMENT_ID, failedSupplements, { ownerToken: HOME_PDF_VIEWER_OWNER }) })
+
+    expect(await screen.findByText(ALL_FILES_FAILED_MESSAGE)).toBeInTheDocument()
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument()
   })
 
   describe('kept behaviour (review probes)', () => {

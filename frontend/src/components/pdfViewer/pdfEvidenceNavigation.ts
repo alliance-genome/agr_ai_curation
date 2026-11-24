@@ -56,6 +56,7 @@ export type PdfEvidenceSpikeStatus =
   | 'file-removed'
   // Evidence naming a file of the paper that is not ready yet: nothing is opened.
   | 'file-not-ready'
+  | 'file-failed'
 
 export type PdfEvidenceSpikeStrategy =
   | PdfEvidenceSpikeCandidateReason

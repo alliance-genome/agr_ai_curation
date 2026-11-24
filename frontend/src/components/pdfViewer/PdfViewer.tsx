@@ -104,7 +104,7 @@ export type { PdfViewerProps } from './pdfViewerTypes'
 
 const PDFJS_FIND_STATE_NOT_FOUND = 1
 
-/** Whether two tab lists show the same files the same way (a refreshed list from the server). */
+/** Whether a refreshed file list changes what the viewer can show or report. */
 function sameViewerFiles(left: readonly ViewerFile[], right: readonly ViewerFile[]): boolean {
   return left.length === right.length && left.every((file, index) => {
     const other = right[index]!
@@ -117,10 +117,6 @@ function sameViewerFiles(left: readonly ViewerFile[], right: readonly ViewerFile
       && file.content_url === other.content_url
       && file.text_url === other.text_url
   })
-}
-
-function sameIds(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((id, index) => id === right[index])
 }
 
 const MAIN_FILE_UNREACHABLE_MESSAGE = 'Unable to reach the PDF document. Please retry or re-upload.'
@@ -1346,14 +1342,14 @@ export function PdfViewer({
         if (stillThere && stillThere.content_url === current.content_url && stillThere.text_url === current.text_url) {
           const unchanged = sameViewerFiles(activeDocument.files, files)
             && activeDocument.mainFileUnavailable === event.detail.mainFileUnavailable
-            && sameIds(activeDocument.notReadyFileIds, event.detail.notReadyFileIds)
+            && sameViewerFiles(activeDocument.unavailableFiles, event.detail.unavailableFiles)
           if (!unchanged) {
             setActiveDocument({
               ...activeDocument,
               // Keep the page count pdf.js found for the file on screen.
               files: files.map((file) => (file.file_id === current.file_id ? { ...file, page_count: current.page_count } : file)),
               mainFileUnavailable: event.detail.mainFileUnavailable,
-              notReadyFileIds: event.detail.notReadyFileIds,
+              unavailableFiles: event.detail.unavailableFiles,
             })
           }
           if (!isPdfFile(stillThere) && status === 'loading') {
@@ -1369,7 +1365,7 @@ export function PdfViewer({
         files,
         activeFileId: event.detail.activeFileId,
         mainFileUnavailable: event.detail.mainFileUnavailable,
-        notReadyFileIds: event.detail.notReadyFileIds,
+        unavailableFiles: event.detail.unavailableFiles,
         loadedAt: new Date().toISOString(),
       }
       console.debug('[PDF DEBUG] beginDocumentLoad called with', nextDoc)
@@ -1588,10 +1584,12 @@ export function PdfViewer({
       return
     }
     if (!activeDocument.files.some((file) => file.file_id === targetFileId)) {
+      const unavailableFile = activeDocument.unavailableFiles.find((file) => file.file_id === targetFileId)
+      const unavailableStatus = unavailableFile?.status === 'failed' ? 'file-failed' : 'file-not-ready'
       finishWithoutSearch(isHover ? null : buildEvidenceFileResult(
         effectivePendingNavigation,
         activeDocument.documentId,
-        activeDocument.notReadyFileIds.includes(targetFileId) ? 'file-not-ready' : 'file-removed',
+        unavailableFile ? unavailableStatus : 'file-removed',
       ))
       return
     }

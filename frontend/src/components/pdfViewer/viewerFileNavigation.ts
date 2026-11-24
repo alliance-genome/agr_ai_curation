@@ -4,7 +4,7 @@
  * Every evidence record written from 0.12.0 names its file. The viewer decides from
  * the file id alone, before any search, whether the evidence can be shown:
  * - no file id: saved before files were recorded; nothing opens (Q4, Chris's text);
- * - a file id that is not one of the paper's tabs: the file was removed; nothing opens;
+ * - a file id without a tab: report its listed status, or removal if absent; nothing opens;
  * - otherwise the file's tab is shown and the quote is located inside that file only.
  *
  * Locating a quote in a text file is exact copied-text matching (AGENTS.md section 8
@@ -25,6 +25,9 @@ export const FILE_REMOVED_MESSAGE = 'This file is no longer part of the paper, s
 
 /** Approved by Chris (23 Nov 2026). */
 export const FILE_NOT_READY_MESSAGE = 'This evidence\'s file is still being added to the paper, so it cannot be shown yet.'
+
+export const FILE_FAILED_MESSAGE = 'The file for this evidence could not be added to the paper.'
+export const fileFailedNote = (fileId: string | null) => `File ${fileId} could not be added to the paper. Nothing was opened.`
 
 /** Approved by Chris (23 Nov 2026). */
 export const TEXT_QUOTE_NOT_FOUND_MESSAGE = 'This quote could not be found in the file\'s text.'
@@ -81,12 +84,13 @@ function baseFileResult(
 export function buildEvidenceFileResult(
   command: EvidenceNavigationCommand,
   documentId: string | null,
-  kind: 'evidence-without-file' | 'file-removed' | 'file-not-ready',
+  kind: 'evidence-without-file' | 'file-removed' | 'file-not-ready' | 'file-failed',
 ): PdfViewerNavigationResult {
   const message = {
     'evidence-without-file': EVIDENCE_WITHOUT_FILE_MESSAGE,
     'file-removed': FILE_REMOVED_MESSAGE,
     'file-not-ready': FILE_NOT_READY_MESSAGE,
+    'file-failed': FILE_FAILED_MESSAGE,
   }[kind]
   return {
     ...baseFileResult(command, documentId),
@@ -98,6 +102,7 @@ export function buildEvidenceFileResult(
       'evidence-without-file': 'The evidence names no file (saved before files were recorded); nothing was opened.',
       'file-removed': `The evidence names file ${command.fileId}, which is not one of the paper's files; nothing was opened.`,
       'file-not-ready': `The evidence names file ${command.fileId}, which is not ready yet; nothing was opened.`,
+      'file-failed': fileFailedNote(command.fileId),
     }[kind],
     curatorMessage: message,
   }
