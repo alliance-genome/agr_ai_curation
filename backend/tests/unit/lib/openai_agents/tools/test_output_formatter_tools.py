@@ -242,6 +242,87 @@ def _tool_param_names(tool) -> set[str]:
 
 
 @pytest.mark.asyncio
+async def test_supervisor_chat_csv_from_saved_flow_and_chat_results(monkeypatch):
+    import csv
+    import io
+
+    from src.lib.openai_agents.agents import supervisor_agent
+    from src.lib.openai_agents.tools.file_output_tools import _projection_content_for_file_type
+    from src.lib.validation_history import projection as history
+    from src.schemas.curation_workspace import CurationExtractionResultRecord
+    from src.schemas.domain_envelope import DomainEnvelope
+
+    document_id = "00000000-0000-0000-0000-000000000001"
+    records = []
+    publications = {}
+    for kind, label in [("flow", "Flow observation"), ("chat", "Chat observation")]:
+        result_id = f"{kind}-result"
+        step = _completed_generic_attribute_step_for_result(result_id, label=label, tumor_term="lymphoma")
+        payload = step["candidate"].payload_json
+        reference = {"artifact_id": f"{kind}-artifact", "session_id": "session"}
+        payload["metadata"] = {"validation_history": reference}
+        publications[reference["artifact_id"]] = DomainEnvelope.model_validate(payload)
+        records.append(CurationExtractionResultRecord(
+            extraction_result_id=result_id, source_kind=kind, document_id=document_id,
+            origin_session_id="session", user_id="curator", agent_key="pdf_extraction",
+            adapter_key="generic", candidate_count=1, payload_json=payload,
+            created_at="2026-01-01T00:00:00Z", flow_run_id="run" if kind == "flow" else None,
+            metadata={"flow_review": reference, "flow_step_key": "extract-node"} if kind == "flow" else {},
+        ))
+
+    monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session")
+    monkeypatch.setattr(supervisor_agent, "_formatter_source_extraction_results", lambda **kwargs: records)
+    monkeypatch.setattr(history, "latest_publication_reference", lambda scope, artifact_id: {"fact_id": artifact_id})
+    monkeypatch.setattr(history, "read_current_projection_with_reasons", lambda scope, ref, **kwargs: (
+        publications[ref["fact_id"]], {"ready": True}, {}, set(), set()))
+    monkeypatch.setattr(history, "read_published_projection", lambda scope, ref, **kwargs: (
+        publications[ref["fact_id"]], {"ready": True}))
+
+    bundle, _, error = supervisor_agent._build_chat_formatter_bundle(user_id="curator", document_id=document_id)
+    assert bundle is not None, error
+    saved = []
+
+    async def save(output_format, projection, filename_hint, formatter_agent_id):
+        content = _projection_content_for_file_type(output_format=output_format, projection=projection)
+        saved.append(list(csv.reader(io.StringIO(content))))
+        return {"file_id": "observations"}
+
+    tools = build_output_formatter_tools(
+        bundle=bundle, output_format="csv", formatter_agent_id="csv_formatter", save_projected_output=save,
+    )
+    inspection = await _invoke(_tool_by_name(tools, "inspect_output_artifacts"), {"catalog_query": "artifact.node_id"})
+    inventory = inspection["inventory"]
+    assert inventory["source_refs"] == {
+        "source_extraction_result_ids": ["chat-result", "flow-result"],
+        "source_keys": ["extract-node", "extraction_result:chat-result"],
+    }
+    sources = inventory["generic_source_summary"]["sources"]
+    assert [(source["source_ref"], source["row_count"]) for source in sources] == [
+        ("chat-result", 1), ("flow-result", 1),
+    ]
+    for source in sources:
+        assert source["all_attribute_keys"] == ["tumor_classification_term", "section"]
+    assert {field["row_source"]: field["examples"] for field in inventory["field_catalog"]["entries"]} == {
+        "artifact": ["extract-node"], "object": ["extract-node"],
+    }
+
+    plan = {
+        "format": "csv", "row_source": "object", "source_extraction_result_ids": ["flow-result", "chat-result"],
+        "columns": [{"key": key, "header": key, "field_ref": ref} for key, ref in (
+            ("Result", "artifact.extraction_result_id"), ("Source", "artifact.source_key"),
+            ("Node", "artifact.node_id"), ("Observation", "object.payload.label"),
+        )],
+    }
+    receipt = await _invoke(_tool_by_name(tools, "finalize_and_save"), {"plan_json": json.dumps(plan)})
+    assert receipt["status"] == "ok", receipt
+    assert saved == [[
+        ["Result", "Source", "Node", "Observation"],
+        ["flow-result", "extract-node", "extract-node", "Flow observation"],
+        ["chat-result", "extraction_result:chat-result", "", "Chat observation"],
+    ]]
+
+
+@pytest.mark.asyncio
 async def test_formatter_tool_suite_is_plan_only_and_structure_bound():
     tools = build_output_formatter_tools(
         bundle=_bundle(),

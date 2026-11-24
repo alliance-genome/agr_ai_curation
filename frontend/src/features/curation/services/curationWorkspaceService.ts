@@ -140,11 +140,17 @@ export function buildFlowRunSetAsideRecordsPath(flowRunId: string, documentId: s
 export async function fetchFlowRunSetAsideRecords(
   flowRunId: string,
   documentId: string,
-  options: CurationWorkspaceRequestOptions = {},
+  options: CurationWorkspaceRequestOptions & { includedKeys?: string[] } = {},
 ): Promise<FlowRunSetAsideRecordsResponse> {
   return fetchCurationWorkspaceJson<FlowRunSetAsideRecordsResponse>(
     buildFlowRunSetAsideRecordsPath(flowRunId, documentId),
-    { signal: options.signal },
+    {
+      signal: options.signal,
+      ...(options.includedKeys !== undefined && {
+        method: 'POST',
+        body: JSON.stringify({ included_keys: options.includedKeys }),
+      }),
+    },
   )
 }
 

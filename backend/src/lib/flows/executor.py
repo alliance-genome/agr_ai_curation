@@ -146,6 +146,7 @@ from src.schemas.curation_workspace import (
     CurationExtractionSourceKind,
 )
 from src.schemas.domain_envelope import DomainEnvelope
+from src.schemas.set_aside_records import OutputSetAsideReceipt
 
 logger = logging.getLogger(__name__)
 
@@ -2378,7 +2379,7 @@ def get_all_agent_tools(
             internal_event_cursor = _capture_internal_extraction_event_cursor()
             specialist_started_at = time.monotonic()
             projected_chat_output: str | None = None
-            projected_chat_set_aside: dict[str, int] | None = None
+            projected_chat_set_aside: OutputSetAsideReceipt | None = None
             selection_token = set_flow_validator_selections(
                 effective_validation_groups
             )

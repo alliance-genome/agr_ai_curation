@@ -101,7 +101,7 @@ _FILE_READY_EVENT_DETAIL_FIELDS = (
     "source_envelope_ids",
     "document_id",
     # Records the review set aside in this file's sources (ALL-1561):
-    # {"included": n, "left_out": n}, or None when there are none.
+    # Counts and the included record keys, or None when there are none.
     "set_aside",
 )
 

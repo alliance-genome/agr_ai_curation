@@ -136,6 +136,15 @@ describe('SetAsideRecordsDialog', () => {
     expect(screen.queryByText(SET_ASIDE_INCLUDE_ADVICE)).not.toBeInTheDocument()
   })
 
+  it('uses saved inclusion even if the current result no longer offers review fields', async () => {
+    mockFetch.mockResolvedValue(jsonResponse(response('doc-1', { review_fields_available: false })))
+    render(<SetAsideRecordsDialog open onClose={vi.fn()} flowName={null}
+      papers={[paper({ placement: 'mixed' })]} includedKeys={['extract|result|pending_ref_id:plim']} />)
+
+    expect(await screen.findByText('In the file')).toBeVisible()
+    expect(screen.queryByText(SET_ASIDE_UNPROFILED_NOTE)).not.toBeInTheDocument()
+  })
+
   it('combines several papers in one viewer with a folding section per paper', async () => {
     mockFetch.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input)

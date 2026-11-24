@@ -138,6 +138,7 @@ def _bundle(flow, item, monkeypatch):
     return build_flow_output_artifact_bundle(
         user_id=item.scope.owner_id, document_id=item.scope.document_id,
         completed_steps=[{"step": 1, "node_id": "extract", "agent_id": "fixture", "agent_name": "Fixture",
+            "extraction_result_id": str(flow.record.extraction_result_id),
             "validated_candidate": SimpleNamespace(payload_json=envelope.model_dump(mode="json"), agent_key="fixture",
                 adapter_key="fixture", candidate_count=2, conversation_summary="x")}],
         flow_name="Set aside", output_format="tsv")
@@ -339,6 +340,8 @@ async def test_a_stopped_review_is_not_exported_even_with_review_status(planned,
 
 @pytest.mark.asyncio
 async def test_the_viewer_lists_the_owners_set_aside_records_only(planned, monkeypatch):
+    from src.lib.flows.output_projection import finalize_output_projection
+    from src.lib.openai_agents.tools.output_formatter_tools import _set_aside_summary
     from src.lib.flows.set_aside_records import FlowRunResultsNotFound, list_set_aside_records
 
     item = planned
@@ -355,6 +358,14 @@ async def test_the_viewer_lists_the_owners_set_aside_records_only(planned, monke
     assert record.review_status == "set aside"
     assert record.review_reason == f"evidence_code_curies[0]: {ASIDE_REASON}"
     assert record.fields and all(field.field_ref != STATUS for field in record.fields)
+
+    projection = finalize_output_projection(_bundle(flow, item, monkeypatch),
+                                            _plan("tsv", [("status", STATUS)]))
+    keys = set(_set_aside_summary([projection])["included_keys"])
+    scope = dict(user_id=item.scope.owner_id, flow_run_id=flow.flow_run_id, document_id=item.scope.document_id)
+    assert list_set_aside_records(**scope, included_keys=keys) == listed
+    assert list_set_aside_records(**scope, included_keys={"different-output"}).results == []
+    assert list_set_aside_records(**scope, included_keys=set()).results == []
     with pytest.raises(FlowRunResultsNotFound):
         list_set_aside_records(user_id="someone-else", flow_run_id=flow.flow_run_id,
                                document_id=item.scope.document_id)

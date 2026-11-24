@@ -2,6 +2,8 @@ import { Box } from '@mui/material'
 import { alpha, useTheme } from '@mui/material/styles'
 import type { Theme } from '@mui/material/styles'
 
+import type { OutputSetAsideNotice } from '@/features/curation/setAside/setAsideSummary'
+import ChatTableOutputs from '@/components/Chat/ChatTableOutputs'
 import EvidenceCard from '@/components/Chat/EvidenceCard'
 import FileDownloadCard, { type FileInfo } from '@/components/Chat/FileDownloadCard'
 import FlowStepEvidenceCard from '@/components/Chat/FlowStepEvidenceCard'
@@ -17,6 +19,7 @@ export interface TranscriptMessageRecord {
   content: string
   timestamp?: string | Date | null
   type?: 'text' | 'file_download'
+  setAsideNotices?: OutputSetAsideNotice[]
   fileData?: FileInfo | null
   flowStepEvidence?: FlowStepEvidenceDetails | null
   evidenceRecords?: EvidenceRecord[] | null
@@ -176,6 +179,8 @@ export default function TranscriptMessage({ message }: TranscriptMessageProps) {
               cardTestId="transcript-file-card"
               file={transcriptFile}
             />
+          ) : message.setAsideNotices?.length ? (
+            <ChatTableOutputs content={message.content} notices={message.setAsideNotices} />
           ) : (
             message.content
           )}

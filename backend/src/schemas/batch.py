@@ -43,6 +43,7 @@ class BatchFileSetAside(BaseModel):
 
     included: int = Field(..., ge=0)
     left_out: int = Field(..., ge=0)
+    included_keys: list[str] | None = Field(default=None, exclude_if=lambda keys: keys is None)
 
 
 BatchResultFile.model_rebuild()

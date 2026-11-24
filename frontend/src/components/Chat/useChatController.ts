@@ -88,7 +88,7 @@ import type {
   StoredChatData,
 } from './types'
 import type { FileInfo } from './FileDownloadCard'
-import { type OutputSetAsideNotice, readOutputSetAside } from '@/features/curation/setAside/setAsideSummary'
+import { readChatSetAsideNotice, readOutputSetAside } from '@/features/curation/setAside/setAsideSummary'
 
 type ChatStreamEvent = SSEEvent & {
   session_id?: unknown
@@ -864,19 +864,7 @@ export function useChatController({
       // Emit an assistant message so the user sees the actual flow result text.
       if (parsed.type === 'CHAT_OUTPUT_READY' && parsed.details) {
         const outputText = String(parsed.details.output || parsed.details.output_preview || '').trim()
-        const setAsideCounts = readOutputSetAside(parsed.details.set_aside)
-        const setAsideNotice: OutputSetAsideNotice | null = setAsideCounts
-          ? {
-            outputKey: String(parsed.details.formatter_node_id || 'output'),
-            counts: setAsideCounts,
-            flowRunId: typeof parsed.details.flow_run_id === 'string' && parsed.details.flow_run_id
-              ? parsed.details.flow_run_id
-              : null,
-            documentId: typeof parsed.details.document_id === 'string' && parsed.details.document_id
-              ? parsed.details.document_id
-              : null,
-          }
-          : null
+        const setAsideNotice = readChatSetAsideNotice(parsed.details)
         if (outputText) {
           if (turnId) {
             const formatterNodeId = String(parsed.details.formatter_node_id || '').trim()

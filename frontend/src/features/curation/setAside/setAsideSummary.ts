@@ -90,6 +90,8 @@ export function setAsidePlacement(summary: FlowSetAsideSummary): SetAsidePlaceme
 
 /** One output's own counts (FILE_READY / CHAT_OUTPUT_READY `details.set_aside`). */
 export interface OutputSetAsideCounts {
+  /** Absent on historical count-only receipts. An empty list selects no records. */
+  included_keys?: string[]
   included: number
   left_out: number
 }
@@ -99,6 +101,10 @@ export function isOutputSetAsideCounts(value: unknown): value is OutputSetAsideC
   const candidate = value as Record<string, unknown>
   return isCount(candidate.included) && isCount(candidate.left_out)
     && candidate.included + candidate.left_out > 0
+    && (candidate.included_keys === undefined
+      || (Array.isArray(candidate.included_keys)
+        && candidate.included_keys.length === candidate.included
+        && candidate.included_keys.every((key) => typeof key === 'string')))
 }
 
 /**
@@ -120,9 +126,22 @@ export function readOutputSetAside(value: unknown): OutputSetAsideCounts | null 
 export interface OutputSetAsideNotice {
   /** The output's formatter node, so a repeated event does not add a second line. */
   outputKey: string
+  /** End of the table in a server-restored transcript. Live notices follow the message. */
+  contentEnd?: number
   counts: OutputSetAsideCounts
   flowRunId: string | null
   documentId: string | null
+}
+
+export function readChatSetAsideNotice(details: Record<string, unknown>): OutputSetAsideNotice | null {
+  const counts = readOutputSetAside(details.set_aside)
+  if (!counts) return null
+  return {
+    outputKey: String(details.formatter_node_id || 'output'),
+    counts,
+    flowRunId: typeof details.flow_run_id === 'string' && details.flow_run_id ? details.flow_run_id : null,
+    documentId: typeof details.document_id === 'string' && details.document_id ? details.document_id : null,
+  }
 }
 
 export function outputSetAsidePlacement(counts: OutputSetAsideCounts): SetAsidePlacement {

@@ -44,6 +44,8 @@ EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/api/curation-workspace/flow-runs/{run_id}/sessions"): "flow-run members are the caller's sessions only",
     ("GET", "/api/curation-workspace/flow-runs/{flow_run_id}/set-aside-records"):
         "reads only the caller's own saved flow results (owner on every row, then each result's history scope)",
+    ("POST", "/api/curation-workspace/flow-runs/{flow_run_id}/set-aside-records"):
+        "receipt keys narrow the same owner-scoped run and document lookup as GET",
     ("GET", "/api/curation-workspace/views"): "saved views are filtered by their creator",
     ("POST", "/api/curation-workspace/views"): "creates a saved view owned by the caller",
     ("DELETE", "/api/curation-workspace/views/{view_id}"): "saved-view deletion is filtered by its creator",
@@ -181,7 +183,7 @@ def test_exempt_list_names_only_existing_routes():
 
 def test_route_inventory_is_complete():
     # A new route must be classified above; this count makes the change visible.
-    assert sum(len(route.methods) for route in _routes()) == 50
+    assert sum(len(route.methods) for route in _routes()) == 51
 
 
 @pytest.fixture
@@ -393,3 +395,18 @@ def test_stale_scope_query_params_still_list_only_the_callers_sessions(world):
     )
     assert response.status_code == 200, response.text
     assert [item["session_id"] for item in response.json()["sessions"]] == [str(world["mine"].id)]
+
+
+@pytest.mark.parametrize("keys", [[], ["extract|result|pending_ref_id:shared"]])
+def test_set_aside_receipt_keys_narrow_the_callers_run_and_document(world, monkeypatch, keys):
+    document_id = str(world["own_document"].id)
+    calls = []
+
+    def read(**kwargs):
+        calls.append(kwargs)
+        return {"flow_run_id": "run", "document_id": document_id, "set_aside_count": 0, "results": []}
+
+    monkeypatch.setattr(module, "list_set_aside_records", read)
+    path = f"/api/curation-workspace/flow-runs/run/set-aside-records?document_id={document_id}"
+    assert world["client"].post(path, json={"included_keys": keys}).status_code == 200
+    assert calls == [dict(user_id=OWNER, flow_run_id="run", document_id=document_id, included_keys=set(keys))]

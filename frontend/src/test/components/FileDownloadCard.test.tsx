@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import FileDownloadCard, { FileInfo } from '../../components/Chat/FileDownloadCard'
 
 // Mock fetch globally
@@ -296,6 +296,38 @@ describe('FileDownloadCard - records set aside by the review (ALL-1561)', () => 
       '/api/curation-workspace/flow-runs/run-1/set-aside-records?document_id=doc-1',
       expect.objectContaining({ credentials: 'include' }),
     )
+  })
+
+  it('opens the selected file with its own membership and marks the retained record as included', async () => {
+    const files = ['first', 'second'].map((id) => createTestFileInfo({
+      file_id: id, filename: `${id}.csv`, flow_run_id: 'run-1', document_id: 'doc-1',
+      set_aside: { included: 1, left_out: 2, included_keys: [`${id}|result|pending_ref_id:shared`] },
+    }))
+    render(<>{files.map((file) => <FileDownloadCard key={file.file_id} file={file} />)}</>)
+
+    for (const file of files) {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        flow_run_id: 'run-1', document_id: 'doc-1', set_aside_count: 1,
+        results: [{
+          extraction_result_id: 'result', node_id: file.file_id, step: 1, agent_name: file.file_id,
+          review_fields_available: true, held_by_curator: false,
+          records: [{ extraction_result_id: 'result', label: file.file_id, review_status: 'set aside',
+            review_reason: null, fields: [] }],
+        }],
+      })))
+      fireEvent.click(screen.getByRole('button', { name: `View set-aside records for ${file.filename}` }))
+      expect(await screen.findByText('In the file')).toBeVisible()
+      const dialog = within(screen.getByRole('dialog', { name: '1 record set aside' }))
+      expect(dialog.getAllByRole('region')).toHaveLength(1)
+      expect(dialog.getByRole('region', { name: 'Record 1' })).toHaveTextContent(file.file_id)
+      expect(screen.queryByText('Not in every file')).not.toBeInTheDocument()
+      expect(mockFetch).toHaveBeenLastCalledWith(
+        '/api/curation-workspace/flow-runs/run-1/set-aside-records?document_id=doc-1',
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ included_keys: file.set_aside?.included_keys }) }),
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Close set-aside records' }))
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    }
   })
 
   it('says when set-aside records are in the file', () => {
