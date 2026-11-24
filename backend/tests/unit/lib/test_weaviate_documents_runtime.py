@@ -488,6 +488,23 @@ async def test_delete_document_without_chunks_keeps_success_when_sql_unavailable
 
 
 @pytest.mark.asyncio
+async def test_delete_document_cleans_sql_when_index_object_is_already_absent(monkeypatch):
+    chunks, papers = MagicMock(), MagicMock()
+    chunks.data.delete_many.return_value = SimpleNamespace(successful=0, matches=0, failed=0)
+    papers.data.delete_by_id.return_value = False
+    monkeypatch.setattr(documents, "get_connection", lambda: _connection_with_client(MagicMock()))
+    monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
+    delete_sql_row = MagicMock(return_value=True)
+    monkeypatch.setattr(documents, "_delete_sql_row", delete_sql_row)
+
+    result = await documents.delete_document("user-1", "doc-1")
+
+    assert result["success"] is False
+    assert result["postgres_deleted"] is True
+    delete_sql_row.assert_called_once_with("user-1", "doc-1")
+
+
+@pytest.mark.asyncio
 async def test_delete_document_failure_returns_error_payload():
     chunk_collection = MagicMock()
     chunk_collection.data.delete_many.side_effect = RuntimeError("delete failed")

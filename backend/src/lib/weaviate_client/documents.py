@@ -626,22 +626,8 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
             raise
 
 
-async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
-    """Delete a document and all its chunks.
-
-    An incomplete chunk wipe returns failure with the bulk-delete counts.
-    The paper and its SQL records are retained so the caller can retry.
-
-    Args:
-        user_id: User identifier for tenant scoping (required, FR-011, FR-014)
-        document_id: Document UUID
-
-    Returns:
-        Operation result dictionary
-
-    Raises:
-        ValueError: If user_id is None (required for tenant scoping)
-    """
+async def delete_paper_search_entries(user_id: str, document_id: str) -> Dict[str, Any]:
+    """Wipe the tenant's chunks, then delete the index object only after a complete wipe."""
     # T037: Validate user_id is provided (required for tenant scoping)
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped document deletion (FR-011, FR-014)")
@@ -686,7 +672,6 @@ async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
                     "message": "Document deletion reported as unsuccessful",
                     "documentId": document_id,
                     **counts,
-                    "postgres_deleted": False,
                 }
 
             # Then delete the document itself
@@ -695,73 +680,12 @@ async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
                 lambda: pdf_collection.data.delete_by_id(document_id)
             )
 
-            # T031: Also delete from PostgreSQL if it exists there (with ownership verification).
-            # In a worker thread, so waiting for a pooled connection never blocks the event loop.
-            def delete_sql_row() -> bool:
-                postgres_deleted = False
-                from src.models.sql.user import User
-                from sqlalchemy import select
-
-                # Create a new database session
-                db_gen = get_db()
-                db = next(db_gen)
-                try:
-                    # T031: Get database user for ownership verification (FR-014)
-                    db_user = db.execute(select(User).where(User.auth_sub == user_id)).scalar_one_or_none()
-
-                    if not db_user:
-                        logger.warning(
-                            "User with auth_sub %s not found in database during delete",
-                            user_id,
-                        )
-                    else:
-                        # Try to find and delete from PostgreSQL with ownership check
-                        pdf_doc = db.get(PdfDocumentModel, UUID(document_id))
-                        if pdf_doc:
-                            # T031: Verify ownership before deletion (FR-014)
-                            if pdf_doc.user_id == db_user.id:
-                                cleanup_document_curation_dependencies(db, pdf_doc.id)
-                                db.delete(pdf_doc)
-                                db.commit()
-                                postgres_deleted = True
-                                logger.info(
-                                    "Deleted document %s from PostgreSQL (user_id=%s)",
-                                    document_id,
-                                    db_user.id,
-                                )
-                            else:
-                                logger.warning(
-                                    "Document %s ownership mismatch in PostgreSQL (doc.user_id=%s, user_id=%s)",
-                                    document_id,
-                                    pdf_doc.user_id,
-                                    db_user.id,
-                                )
-                        else:
-                            logger.info("Document %s not found in PostgreSQL, skipping", document_id)
-                finally:
-                    db.close()
-                return postgres_deleted
-
-            postgres_deleted = False
-            try:
-                postgres_deleted = await asyncio.to_thread(delete_sql_row)
-            except Exception as e:
-                logger.warning("Failed to delete from PostgreSQL: %s", e)
-                # Don't fail the whole operation if PostgreSQL deletion fails
-
-            logger.info(
-                "Deleted document %s and its chunks from Weaviate%s",
-                document_id,
-                " and PostgreSQL" if postgres_deleted else "",
-            )
-
             return {
                 "success": bool(doc_deleted),
                 "message": "Document and chunks deleted successfully" if doc_deleted else "Document deletion reported as unsuccessful",
                 "documentId": document_id,
                 "chunks_deleted": chunks_deleted,
                 "chunks_matched": chunks_matched,
-                "postgres_deleted": postgres_deleted
             }
 
         except Exception as e:
@@ -776,6 +700,60 @@ async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
                     "details": str(e)
                 }
             }
+
+
+def _delete_sql_row(user_id: str, document_id: str) -> bool:
+    """Remove the owned paper and its curation dependencies in one transaction."""
+    from sqlalchemy import select
+    from src.models.sql.user import User
+
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        db_user = db.execute(select(User).where(User.auth_sub == user_id)).scalar_one_or_none()
+        if not db_user:
+            logger.warning("User with auth_sub %s not found in database during delete", user_id)
+            return False
+        pdf_doc = db.get(PdfDocumentModel, UUID(document_id))
+        if not pdf_doc:
+            logger.info("Document %s not found in PostgreSQL, skipping", document_id)
+            return False
+        if pdf_doc.user_id != db_user.id:
+            logger.warning(
+                "Document %s ownership mismatch in PostgreSQL (doc.user_id=%s, user_id=%s)",
+                document_id, pdf_doc.user_id, db_user.id,
+            )
+            return False
+        cleanup_document_curation_dependencies(db, pdf_doc.id)
+        db.delete(pdf_doc)
+        db.commit()
+        logger.info("Deleted document %s from PostgreSQL (user_id=%s)", document_id, db_user.id)
+        return True
+    finally:
+        db.close()
+
+
+async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
+    """Delete the search entries, then clean up SQL for import compensation and CLI deletes."""
+    result = await delete_paper_search_entries(user_id, document_id)
+    if "error" in result:
+        return result
+    if "chunks_failed" in result:
+        # The bulk wipe was incomplete. Keep both the paper and its owner for retry.
+        return {**result, "postgres_deleted": False}
+
+    # A complete chunk wipe allows SQL cleanup even when delete_by_id found no index object.
+    try:
+        postgres_deleted = await asyncio.to_thread(_delete_sql_row, user_id, document_id)
+    except Exception as e:
+        logger.warning("Failed to delete from PostgreSQL: %s", e)
+        postgres_deleted = False
+
+    logger.info(
+        "Deleted document %s and its chunks from Weaviate%s",
+        document_id, " and PostgreSQL" if postgres_deleted else "",
+    )
+    return {**result, "postgres_deleted": postgres_deleted}
 
 
 async def re_embed_document(

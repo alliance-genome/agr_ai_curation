@@ -621,7 +621,7 @@ def _wire_delete(monkeypatch, owner_id, *, in_wipe=None, wipe_seconds: float = 0
 
     monkeypatch.setattr(documents_api, "provision_user_async", provision)
     monkeypatch.setattr(documents_api, "get_document", present)
-    monkeypatch.setattr(documents_api, "delete_document", wipe)
+    monkeypatch.setattr(documents_api, "delete_paper_search_entries", wipe)
 
 
 async def _delete(paper: UUID):
