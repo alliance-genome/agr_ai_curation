@@ -34,7 +34,7 @@ If a paper is already in your **Library**, Add Literature links you to it there 
 3. Tick any converted supplements you want to include and click **Add 1 file** (or **Add {n} files**).
    - Adding from the Library only offers files that your literature source has already converted; use **Refresh details** in the dialog header to check again later.
    - Files can be added only to papers imported from your literature source (not manually uploaded PDFs), and adding or removing is paused while an import or add job is running on the paper.
-4. When the files finish adding while the details dialog is open, the paper's file list, the Library **Files** count, and any open PDF viewer for that paper refresh automatically. If you close the details dialog before the job finishes, reopen it later to check the result and refresh those views.
+4. When the files finish adding while the details dialog is open, the paper's file list, the Library **Files** count, and any open PDF viewer for that paper refresh automatically. If you close the details dialog before the job finishes, reopen it later to check the result.
 
 ### Remove a supplement
 
