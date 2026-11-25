@@ -28,7 +28,7 @@ class DocumentFilesChanged(Exception):
 
 FILES_CHANGED_ERROR_CODE = "readable_files_changed"
 
-# Proposed wording (for Chris's sign-off). Keep in step with the outline's
+# Approved wording (Card 8, 24 Nov 2026). Keep in step with the outline's
 # "Files are still being added to this paper; they cannot be read yet."
 FILES_CHANGED_MESSAGE = "This paper's files changed while reading; read again to use the current files."
 # record_evidence's other refusals carry "saved": false and begin "Nothing was saved."

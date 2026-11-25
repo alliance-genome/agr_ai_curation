@@ -1889,7 +1889,10 @@ async def import_documents_by_source_identifiers(
         )
         return result.to_dict()
     except SupplementSelectionError as selection_error:
-        raise HTTPException(status_code=422, detail={"code": selection_error.code}) from None
+        detail: dict[str, Any] = {"code": selection_error.code}
+        if selection_error.limit_value is not None:
+            detail["limit_value"] = selection_error.limit_value
+        raise HTTPException(status_code=422, detail=detail) from None
     except IdentifierImportValidationError as validation_error:
         raise_sanitized_http_exception(
             logger,

@@ -129,6 +129,11 @@ class DocumentSourceSupplementChoice(BaseModel):
     converted_md5: Optional[str] = Field(
         None, description="The listing entry's converted_md5; null for an unconverted file",
     )
+    display_name: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="Optional client hint for the listing entry's display name; authoritative name is resolved from the provider listing",
+    )
 
 
 class DocumentSourceIdentifierImportRequest(DocumentSourceIdentifierResolveRequest):
@@ -281,8 +286,8 @@ class DocumentResponse(BaseModel):
     ready_file_count: Optional[int] = Field(
         None,
         description=(
-            "How many of the paper's files are ready (main file included); set on the document "
-            "details. Upload and import answers leave it unset."
+            "How many of the paper's files are ready (main file included); set on the Library list "
+            "and document details. Upload and import answers leave it unset."
         ),
     )
     error_message: Optional[str] = Field(None, description="Error message if processing failed")

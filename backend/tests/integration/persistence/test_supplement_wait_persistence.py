@@ -230,7 +230,20 @@ async def test_a_failing_stage_ends_its_own_job_and_never_touches_the_paper(owne
     )
     with SessionLocal.begin() as db:
         db.add(paper)
-    import_job = job_service.create_job(document_id=paper.id, user_id=owner_id, filename=paper.filename)
+    plan = SupplementPlan(
+        chosen=(ChosenSupplement(provider_file_id="20", md5="md5-20", converted_md5="md5-21"),),
+        request_context=DocumentSourceRequestContext(
+            provider_groups=("made-up-staff",), authorized_group_ids=("made-up-group",),
+            bearer_kind=ProviderBearerKind.CURATOR, curator_token="made-up-token",
+        ),
+        login_expires_at=None, owner_user_id=owner_id, reference="MADEUP:1",
+    )
+    import_job = job_service.create_job(
+        document_id=paper.id,
+        user_id=owner_id,
+        filename=paper.filename,
+        metadata={"supplements": supplement_wait.queued_entries(plan)},
+    )
     reported = []
 
     async def _failing_stage(**_kwargs):
@@ -251,14 +264,7 @@ async def test_a_failing_stage_ends_its_own_job_and_never_touches_the_paper(owne
         owner_user_id=owner_id, filename=paper.filename, converted_artifact_id="made-up-text",
         curator_token="made-up-token", bearer_kind=ProviderBearerKind.CURATOR,
         source_provenance={}, file_path=Path("/tmp/made-up.pdf"),
-        supplements=SupplementPlan(
-            chosen=(ChosenSupplement(provider_file_id="20", md5="md5-20", converted_md5="md5-21"),),
-            request_context=DocumentSourceRequestContext(
-                provider_groups=("made-up-staff",), authorized_group_ids=("made-up-group",),
-                bearer_kind=ProviderBearerKind.CURATOR, curator_token="made-up-token",
-            ),
-            login_expires_at=None, owner_user_id=owner_id, reference="MADEUP:1",
-        ),
+        supplements=plan,
     )
 
     await service._complete_main_paper(request, message="Processing completed")

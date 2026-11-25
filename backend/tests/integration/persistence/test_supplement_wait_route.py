@@ -322,6 +322,7 @@ async def test_an_imported_supplement_joins_once_abc_lists_it_with_no_conversion
     assert abc.main_reads == 3
     main_job = _main_job(document_id)
     assert main_job.status == "completed"
+    assert "supplements" not in (main_job.metadata_json or {})
     assert set(main_job.metadata_json["provider_conversion_requests"]) == {"on_demand_sent_at"}
     # After the main paper was ready: the stage's first full listing, two show_all
     # reads (the second found the converted row), the full listing for that text,
@@ -340,6 +341,7 @@ async def test_an_imported_supplement_joins_once_abc_lists_it_with_no_conversion
     assert [(entry["provider_file_id"], entry["state"]) for entry in stage_job.metadata_json["supplements"]] == [
         ("30", "added"),
     ]
+    assert stage_job.metadata_json["supplements"][0]["display_name"] == "Made_up_S30.xlsx"
     latest = job_service.get_latest_paper_job_for_document(document_id=document_id, user_id=owner_id)
     assert latest.status == "completed"
 
@@ -380,5 +382,79 @@ async def test_a_paper_abc_never_converts_gets_exactly_one_request_at_the_end(ow
 
     assert abc.conversion_requests == ["main", "main"]  # the import's, and the one at the end
     main_job = _main_job(document_id)
-    assert (main_job.status, main_job.error_message) == ("failed", "Provider conversion exceeded 12 seconds")
+    assert (main_job.status, main_job.error_message) == (
+        "failed",
+        "ABC had not converted this paper 12 seconds after the import started, "
+        "so the import stopped. The time includes any wait behind other imports.",
+    )
     assert set(main_job.metadata_json["provider_conversion_requests"]) == {"on_demand_sent_at", "end_sent_at"}
+    assert [
+        (entry["provider_file_id"], entry["display_name"], entry["state"], entry["reason_code"])
+        for entry in main_job.metadata_json["supplements"]
+    ] == [("30", "Made_up_S30", "left_out", "supplement_stage_failed")]
+
+
+@pytest.mark.asyncio
+async def test_cancelling_an_import_while_queued_closes_chosen_supplements_as_import_cancelled(
+    owner, monkeypatch, tmp_path,
+):
+    owner_id, subject = owner
+    abc = _Abc(main_name=f"{PREFIX}{uuid4().hex}")
+    _search_index(monkeypatch)
+    monkeypatch.setattr(documents, "external_document_source_import_enabled", lambda: True)
+    monkeypatch.setattr(
+        "src.lib.document_sources.access.get_groups_for_provider_groups", lambda groups: ["WB"],
+    )
+    executions = UploadExecutionService(
+        pipeline_tracker=AsyncMock(),
+        document_source_provider_factory=abc.provider,
+        provider_markdown_ingestion_fn=_main_ingestion,
+    )
+    monkeypatch.setattr(
+        documents,
+        "identifier_import_service",
+        IdentifierImportService(
+            upload_execution_service=executions,
+            provider_factory=abc.provider,
+            storage_path_provider=lambda: tmp_path,
+            create_document_fn=AsyncMock(return_value={"success": True}),
+        ),
+    )
+
+    background_tasks = BackgroundTasks()
+    request = Request({
+        "type": "http", "method": "POST", "path": "/documents/import/source-identifiers",
+        "headers": [(b"cookie", b"auth_token=made-up-token")], "query_string": b"",
+    })
+    user = {"sub": subject, "groups": ["made-up-staff"], "exp": int(time.time()) + 86400}
+
+    answer = await documents.import_documents_by_source_identifiers(
+        DocumentSourceIdentifierImportRequest(
+            identifiers=REFERENCE,
+            supplements=[DocumentSourceSupplementChoice(
+                identifier=REFERENCE, provider_file_id="30", md5="md5-30", converted_md5=None,
+            )],
+        ),
+        background_tasks, request, user,
+    )
+    document_id = UUID(answer["results"][0]["document_id"])
+    job_id = answer["results"][0]["job_id"]
+
+    # Before the background task starts, the accepted job carries queued entries with real display_name.
+    accepted = _main_job(document_id)
+    assert [
+        (entry["provider_file_id"], entry["display_name"], entry["state"], entry["reason_code"])
+        for entry in accepted.metadata_json["supplements"]
+    ] == [("30", "Made_up_S30", "queued", None)]
+
+    # Cancel while queued, then run the queued background task.
+    job_service.request_cancel(job_id=job_id, user_id=owner_id)
+    await asyncio.wait_for(background_tasks(), timeout=60)
+
+    cancelled = _main_job(document_id)
+    assert cancelled.status == "cancelled"
+    assert [
+        (entry["provider_file_id"], entry["display_name"], entry["state"], entry["reason_code"])
+        for entry in cancelled.metadata_json["supplements"]
+    ] == [("30", "Made_up_S30", "left_out", "import_cancelled")]
+    assert cancelled.metadata_json["supplements"][0]["observed_at"]

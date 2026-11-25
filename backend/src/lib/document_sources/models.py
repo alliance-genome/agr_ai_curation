@@ -24,7 +24,7 @@ class DocumentSourceAccessDenied(DocumentSourceError):
     """Raised when the provider denies access to a requested source artifact."""
 
 
-# Curator-facing; proposed wording awaiting the owner's sign-off (KANBAN-1976 / ALL-1460, P7b).
+# Curator-facing; approved wording (Chris, 23 Nov 2026, card 39).
 LOGIN_EXPIRED_MESSAGE = (
     "Your sign-in expired before this import finished. "
     "Sign in again, then import the paper again."

@@ -740,11 +740,18 @@ async def update_document_metadata(
 
 
 async def update_document_piece_count(
-    document_id: str, piece_count: int, weaviate_client: Any, user_id: str,
+    document_id: str,
+    piece_count: int,
+    weaviate_client: Any,
+    user_id: str,
+    *,
+    caller_reports_failure: bool = False,
 ) -> None:
     """Write only the paper object's piece counts (after files are added to a finished paper).
 
     The object's processing and embedding status are left as they are. Failures raise.
+    Pass ``caller_reports_failure=True`` when the caller owns sanitized failure reporting so
+    connection-layer errors do not emit duplicate unmarked error logs.
     """
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped metadata updates")
@@ -752,7 +759,7 @@ async def update_document_piece_count(
     def sync_update() -> None:
         from ..weaviate_helpers import get_user_collections
 
-        with weaviate_client.session() as client:
+        with weaviate_client.session(caller_reports_failure=caller_reports_failure) as client:
             _, pdf_collection = get_user_collections(client, user_id)
             pdf_collection.data.update(
                 uuid=document_id, properties={"chunkCount": piece_count, "vectorCount": piece_count},

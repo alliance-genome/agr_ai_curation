@@ -1,0 +1,134 @@
+{
+  "accepted_queued": {
+    "supplements": [
+      {
+        "provider_file_id": "30",
+        "display_name": "Table_S1.xlsx",
+        "state": "queued",
+        "reason_code": null,
+        "observed_at": null,
+        "file_id": null,
+        "measured_value": null,
+        "limit_value": null
+      },
+      {
+        "provider_file_id": "40",
+        "display_name": null,
+        "state": "queued",
+        "reason_code": null,
+        "observed_at": null,
+        "file_id": null,
+        "measured_value": null,
+        "limit_value": null
+      }
+    ]
+  },
+  "cancelled_while_queued": {
+    "supplements": [
+      {
+        "provider_file_id": "30",
+        "display_name": "Table_S1.xlsx",
+        "state": "left_out",
+        "reason_code": "import_cancelled",
+        "observed_at": "2026-11-24T15:05:00+00:00",
+        "file_id": null,
+        "measured_value": null,
+        "limit_value": null
+      },
+      {
+        "provider_file_id": "40",
+        "display_name": null,
+        "state": "left_out",
+        "reason_code": "import_cancelled",
+        "observed_at": "2026-11-24T15:05:00+00:00",
+        "file_id": null,
+        "measured_value": null,
+        "limit_value": null
+      }
+    ],
+    "pdf_processing_receipt": {
+      "schema_version": 2,
+      "started_at": "2026-11-24T15:00:00+00:00",
+      "completed_at": "2026-11-24T15:05:00+00:00",
+      "outcome": "cancelled",
+      "selection": {},
+      "stages": {
+        "external_request": {
+          "status": "not_started"
+        },
+        "hierarchy": {
+          "status": "not_started"
+        },
+        "chunking": {
+          "status": "not_started"
+        },
+        "figure_locator": {
+          "status": "not_started"
+        },
+        "embedding_storage": {
+          "status": "not_started"
+        },
+        "total": {
+          "status": "cancelled",
+          "started_at": "2026-11-24T15:00:00+00:00",
+          "completed_at": "2026-11-24T15:05:00+00:00",
+          "duration_ms": 300000.0
+        }
+      }
+    }
+  },
+  "failed_login_expired_while_queued": {
+    "supplements": [
+      {
+        "provider_file_id": "30",
+        "display_name": "Table_S1.xlsx",
+        "state": "left_out",
+        "reason_code": "login_expired",
+        "observed_at": "2026-11-24T15:05:00+00:00",
+        "file_id": null,
+        "measured_value": null,
+        "limit_value": null
+      },
+      {
+        "provider_file_id": "40",
+        "display_name": null,
+        "state": "left_out",
+        "reason_code": "login_expired",
+        "observed_at": "2026-11-24T15:05:00+00:00",
+        "file_id": null,
+        "measured_value": null,
+        "limit_value": null
+      }
+    ],
+    "pdf_processing_receipt": {
+      "schema_version": 2,
+      "started_at": "2026-11-24T15:00:00+00:00",
+      "completed_at": "2026-11-24T15:05:00+00:00",
+      "outcome": "failed",
+      "selection": {},
+      "stages": {
+        "external_request": {
+          "status": "not_started"
+        },
+        "hierarchy": {
+          "status": "not_started"
+        },
+        "chunking": {
+          "status": "not_started"
+        },
+        "figure_locator": {
+          "status": "not_started"
+        },
+        "embedding_storage": {
+          "status": "not_started"
+        },
+        "total": {
+          "status": "failed",
+          "started_at": "2026-11-24T15:00:00+00:00",
+          "completed_at": "2026-11-24T15:05:00+00:00",
+          "duration_ms": 300000.0
+        }
+      }
+    }
+  }
+}

@@ -149,10 +149,26 @@ _FILE_ROLE_LABELS = {"main": "main paper", "supplement": "supplement"}
 # Approved by Chris, 22 Nov 2026 (O4). Shown while the paper has files being added.
 FILES_BEING_ADDED_LINE = "\nFiles are still being added to this paper; they cannot be read yet.\n"
 
-# Approved by Chris, 23 Nov 2026, replacing card 42's "is still converting": ABC does not tell
-# us when it fails a file, so the wait cannot know it is still converting. Shown while a living
-# import waits for ABC to convert the paper's supplements.
-SUPPLEMENTS_CONVERTING_LINE = "\nABC has not finished converting this paper's supplements; they cannot be read yet.\n"
+# Approved by Chris, 23 Nov 2026, replacing card 42's "is still converting": providers may not
+# report per-file failures, so the wait cannot know a file is still converting. Shown while a
+# living import waits for the configured document source to convert the paper's supplements.
+def _supplements_converting_line(provider_id: Optional[str] = None) -> str:
+    from collections.abc import Mapping
+
+    from src.lib.document_sources.registry import get_document_source_provider_metadata
+    from src.lib.openai_agents.config import get_document_source_provider
+
+    resolved_id = (provider_id or get_document_source_provider() or "").strip()
+    label = "The document source"
+    if resolved_id:
+        metadata = get_document_source_provider_metadata(resolved_id)
+        if isinstance(metadata, Mapping):
+            for key in ("short_label", "display_label"):
+                raw = metadata.get(key)
+                if isinstance(raw, str) and raw.strip():
+                    label = raw.strip()
+                    break
+    return f"\n{label} has not finished converting this paper's supplements; they cannot be read yet.\n"
 
 
 def _size_label(pages: List[int], chunk_count: int) -> str:
@@ -203,7 +219,11 @@ def format_hierarchy_for_prompt(hierarchy: Dict[str, Any]) -> str:
         file_count="1 file" if len(files) == 1 else f"{len(files)} files",
         hierarchy_text="\n\n".join(blocks),
         files_being_added=FILES_BEING_ADDED_LINE if hierarchy.get("files_being_added") else "",
-        supplements_converting=SUPPLEMENTS_CONVERTING_LINE if hierarchy.get("supplements_converting") else "",
+        supplements_converting=(
+            _supplements_converting_line(hierarchy.get("source_provider"))
+            if hierarchy.get("supplements_converting")
+            else ""
+        ),
     )
 
 

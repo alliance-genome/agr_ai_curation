@@ -813,3 +813,95 @@ async def test_get_document_waits_for_its_database_session_off_the_event_loop():
         stop.set()
         await tick
     assert gaps and max(gaps) < 0.5
+
+
+@pytest.mark.asyncio
+async def test_async_list_documents_reports_ready_file_count_for_single_and_multi_file_papers():
+    zero_uuid = UUID("00000000-0000-0000-0000-000000000401")
+    single_uuid = UUID("00000000-0000-0000-0000-000000000402")
+    multi_uuid = UUID("00000000-0000-0000-0000-000000000403")
+    empty_files_uuid = UUID("00000000-0000-0000-0000-000000000404")
+
+    fetch_result = SimpleNamespace(
+        objects=[
+            SimpleNamespace(uuid=zero_uuid, properties={"filename": "pending.pdf", "creationDate": "2026-02-10T00:00:00"}),
+            SimpleNamespace(uuid=single_uuid, properties={"filename": "single.pdf", "creationDate": "2026-02-11T00:00:00"}),
+            SimpleNamespace(uuid=multi_uuid, properties={"filename": "multi.pdf", "creationDate": "2026-02-12T00:00:00"}),
+            SimpleNamespace(uuid=empty_files_uuid, properties={"filename": "empty.pdf", "creationDate": "2026-02-13T00:00:00"}),
+        ]
+    )
+    pdf_collection = DummyCollection(fetch_result, SimpleNamespace(total_count=4))
+    chunk_collection = MagicMock()
+    mock_client = MagicMock()
+
+    @contextmanager
+    def fake_session():
+        yield mock_client
+
+    mock_connection = MagicMock()
+    mock_connection.session.side_effect = fake_session
+
+    zero_doc = _doc(
+        id=zero_uuid, filename="pending.pdf", title=None, status="pending", file_status="pending",
+        error_message=None, upload_timestamp=None, processing_started_at=None, processing_completed_at=None,
+        file_size=100,
+    )
+    single_doc = _doc(
+        id=single_uuid, filename="single.pdf", title=None, status="completed", file_status="ready",
+        error_message=None, upload_timestamp=None, processing_started_at=None, processing_completed_at=None,
+        file_size=200,
+    )
+    multi_doc = _doc(
+        id=multi_uuid, filename="multi.pdf", title=None, status="completed", file_status="ready",
+        error_message=None, upload_timestamp=None, processing_started_at=None, processing_completed_at=None,
+        file_size=300,
+    )
+    multi_doc.files = [
+        multi_doc.main_file,
+        SimpleNamespace(id="supp-ready-1", role="supplement", status="ready"),
+        SimpleNamespace(id="supp-ready-2", role="supplement", status="ready"),
+        SimpleNamespace(id="supp-failed", role="supplement", status="failed"),
+        SimpleNamespace(id="supp-pending", role="supplement", status="pending"),
+        SimpleNamespace(id="supp-removed", role="supplement", status="removed"),
+    ]
+    empty_files_doc = _doc(
+        id=empty_files_uuid, filename="empty.pdf", title=None, status="completed", file_status="ready",
+        error_message=None, upload_timestamp=None, processing_started_at=None, processing_completed_at=None,
+        file_size=400,
+    )
+    empty_files_doc.main_file_or_none = None
+    empty_files_doc.files = []
+
+    user_lookup_result = MagicMock()
+    user_lookup_result.scalar_one_or_none.return_value = SimpleNamespace(id=42)
+    ownership_lookup_result = MagicMock()
+    ownership_lookup_result.scalars.return_value.all.return_value = [
+        zero_doc, single_doc, multi_doc, empty_files_doc,
+    ]
+    mock_db_session = MagicMock()
+    mock_db_session.execute.side_effect = [user_lookup_result, ownership_lookup_result]
+    mock_db_session.scalars.return_value = []
+    mock_db_session.close = MagicMock()
+
+    def mock_get_db():
+        yield mock_db_session
+
+    with patch("src.lib.weaviate_client.documents.get_connection", return_value=mock_connection), \
+         patch("src.lib.weaviate_client.documents.get_db", mock_get_db), \
+         patch("src.lib.weaviate_client.documents.get_user_collections", return_value=(chunk_collection, pdf_collection)), \
+         patch("src.lib.weaviate_helpers.get_tenant_name", return_value="tenant-owned"):
+        result = await _documents_module().async_list_documents(
+            "auth-sub-1",
+            SimpleNamespace(),
+            {"page": 1, "page_size": 20, "sort_by": "creationDate", "sort_order": "desc"},
+        )
+
+    counts = {row["document_id"]: row["ready_file_count"] for row in result["documents"]}
+    assert counts == {
+        str(zero_uuid): 0,
+        str(single_uuid): 1,
+        str(multi_uuid): 3,
+        str(empty_files_uuid): 0,
+    }
+    # User lookup + one batched ownership/files fetch (never N+1 per row).
+    assert mock_db_session.execute.call_count == 2

@@ -52,7 +52,10 @@ from src.lib.document_sources.provenance import (
     find_existing_document_by_source,
     sanitize_document_source_provenance,
 )
-from src.lib.document_sources.registry import get_configured_document_source_provider
+from src.lib.document_sources.registry import (
+    get_configured_document_source_provider,
+    get_document_source_provider_metadata,
+)
 from src.lib.openai_agents.config import (
     get_document_max_files_per_paper,
     get_document_source_import_batch_limit,
@@ -114,16 +117,34 @@ class SupplementSelectionError(ValueError):
     ``supplement_identifier_unknown``, ``file_chosen_twice`` or ``paper_file_limit``.
     """
 
-    def __init__(self, code: str):
+    def __init__(self, code: str, *, limit_value: int | None = None):
         super().__init__(code)
         self.code = code
+        self.limit_value = limit_value
 
 
-# Per-identifier result for an unconverted supplement this import will not ask the
-# provider to convert. Curator-facing; proposed wording awaiting the owner's sign-off.
-FILE_NOT_TICKABLE_MESSAGE = (
-    "This file can no longer be chosen: ABC has not converted it and this import will not ask ABC to."
-)
+def _provider_short_label(provider_id: str | None) -> str:
+    resolved_id = (provider_id or "").strip()
+    if resolved_id:
+        metadata = get_document_source_provider_metadata(resolved_id)
+        if isinstance(metadata, Mapping):
+            for key in ("short_label", "display_label"):
+                raw = metadata.get(key)
+                if isinstance(raw, str) and raw.strip():
+                    return raw.strip()
+    return "the document source"
+
+
+def file_not_tickable_message(provider_id: str | None = None) -> str:
+    """Curator-facing message for an unconverted supplement this import will not ask to convert.
+
+    Approved wording (Chris, 23 Nov 2026, card 41), parameterized by registered provider label.
+    """
+    label = _provider_short_label(provider_id)
+    return (
+        f"This file can no longer be chosen: {label} has not converted it "
+        f"and this import will not ask {label} to."
+    )
 
 
 class ReferenceImportDecisionStatus(str):
@@ -165,6 +186,8 @@ class ReferenceImportDecision:
     conversion_answer: SourceConversionResult | None = None
     # When that request was sent (taken just before sending, so never later than it).
     conversion_requested_at: datetime | None = None
+    # Listed artifacts fetched during decision making, used to resolve supplement display names.
+    artifacts: tuple[SourceArtifact, ...] = ()
 
     @property
     def is_ready(self) -> bool:
@@ -482,6 +505,7 @@ async def decide_reference_import(
             selected=candidate,
             candidates=(candidate,),
             message="One authorized converted Markdown artifact is ready",
+            artifacts=tuple(artifacts),
         )
     if bearer_kind is ProviderBearerKind.SERVICE:
         # No provider conversion or reference-level text under a machine reader:
@@ -499,6 +523,7 @@ async def decide_reference_import(
             selected=source_only_candidate,
             candidates=(source_only_candidate,),
             message="No converted Markdown is bound to the authorized source PDF",
+            artifacts=tuple(artifacts),
         )
     if any(
         artifact.status is SourceArtifactStatus.RUNNING
@@ -516,6 +541,7 @@ async def decide_reference_import(
                 provider_metadata_artifacts=provider_metadata_artifacts,
             ),
             message="Provider conversion is still running",
+            artifacts=tuple(artifacts),
         )
     if any(
         artifact.status is SourceArtifactStatus.FAILED
@@ -591,6 +617,7 @@ async def decide_reference_import(
                     candidates=(candidate,),
                     message="Provider conversion produced main Markdown",
                     metadata=conversion_metadata,
+                    artifacts=tuple(refreshed_artifacts),
                 )
         if conversion_result.status is SourceConversionStatus.RUNNING:
             return _reference_decision(
@@ -607,6 +634,7 @@ async def decide_reference_import(
                 ),
                 message="Provider conversion is still running",
                 metadata=conversion_metadata,
+                artifacts=tuple(artifacts),
             )
         if conversion_result.status is SourceConversionStatus.FAILED:
             return _reference_decision(
@@ -666,6 +694,7 @@ async def decide_reference_import(
         selected=source_only_candidate,
         candidates=(source_only_candidate,),
         message="No converted main Markdown artifact is available for this reference",
+        artifacts=tuple(artifacts),
     )
 
 
@@ -1008,12 +1037,18 @@ class IdentifierImportService:
                     normalized_identifier=normalized.normalized,
                     status="error",
                     error_code="file_not_tickable",
-                    message=FILE_NOT_TICKABLE_MESSAGE,
+                    message=file_not_tickable_message(decision.provider),
                 )
             plan = None
             if chosen:
+                resolved_chosen = _resolve_chosen_display_names(
+                    chosen,
+                    decision.artifacts,
+                    provider=provider,
+                    authorized_group_ids=document_source_context.authorized_group_ids,
+                )
                 plan = SupplementPlan(
-                    chosen=tuple(chosen),
+                    chosen=resolved_chosen,
                     request_context=document_source_context,
                     login_expires_at=login_expires_at,
                     owner_user_id=db_user.id,
@@ -1242,14 +1277,19 @@ class IdentifierImportService:
 
         try:
             job_values: dict[str, Any] = {}
+            job_metadata: dict[str, Any] = {}
             if wait_for_conversion and decision.conversion_answer is not None:
                 # This import sent the provider's on-demand request: the job keeps
                 # that fact, so its wait never sends it again (KANBAN-2191 / ALL-1725).
-                job_values["metadata"] = {
-                    pdf_job_service.CONVERSION_REQUESTS_KEY: {
-                        "on_demand_sent_at": decision.conversion_requested_at.isoformat(),
-                    },
+                job_metadata[pdf_job_service.CONVERSION_REQUESTS_KEY] = {
+                    "on_demand_sent_at": decision.conversion_requested_at.isoformat(),
                 }
+            if supplements is not None and supplements.chosen:
+                from src.lib.document_sources.supplement_wait import queued_entries
+
+                job_metadata["supplements"] = queued_entries(supplements)
+            if job_metadata:
+                job_values["metadata"] = job_metadata
             job = self._create_job(
                 document_id=document_id,
                 user_id=db_user.id,
@@ -1468,6 +1508,7 @@ def _reference_decision(
     metadata: dict[str, Any] | None = None,
     conversion_answer: SourceConversionResult | None = None,
     conversion_requested_at: datetime | None = None,
+    artifacts: tuple[SourceArtifact, ...] = (),
 ) -> ReferenceImportDecision:
     return ReferenceImportDecision(
         status=status,
@@ -1480,6 +1521,7 @@ def _reference_decision(
         metadata=metadata or {},
         conversion_answer=conversion_answer,
         conversion_requested_at=conversion_requested_at,
+        artifacts=artifacts,
     )
 
 
@@ -1616,6 +1658,50 @@ def _reference_conversion_metadata(result: SourceConversionResult) -> dict[str, 
     return metadata
 
 
+def _normalize_display_name(value: object) -> str | None:
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned:
+            return cleaned
+    return None
+
+
+def _resolve_chosen_display_names(
+    chosen: Sequence[ChosenSupplement],
+    artifacts: Sequence[SourceArtifact],
+    *,
+    provider: DocumentSourceProvider,
+    authorized_group_ids: tuple[str, ...] | list[str] | set[str],
+) -> tuple[ChosenSupplement, ...]:
+    """Attach the authoritative human-readable display name from visible listed supplements.
+
+    Applies the exact visible-supplement access rule from ``file_listing`` (checking
+    both the original and any listed converted supplement text access policies) and
+    never falls back to untrusted caller-supplied display names or raw ``provider_file_id``.
+    """
+    from src.lib.document_sources.file_listing import visible_supplement_candidates
+
+    visible_candidates, _ = visible_supplement_candidates(
+        provider,
+        artifacts,
+        authorized_group_ids=authorized_group_ids,
+    )
+    listed_names: dict[str, str] = {}
+    for candidate in visible_candidates:
+        name = _normalize_display_name(candidate.original.display_name)
+        if name is not None:
+            listed_names[candidate.original.artifact_id] = name
+    return tuple(
+        ChosenSupplement(
+            provider_file_id=item.provider_file_id,
+            md5=item.md5,
+            converted_md5=item.converted_md5,
+            display_name=listed_names.get(item.provider_file_id),
+        )
+        for item in chosen
+    )
+
+
 def _chosen_supplements_by_identifier(
     raw_identifiers: Sequence[str], supplements: Sequence[Any],
 ) -> dict[str, tuple[Any, ...]]:
@@ -1639,7 +1725,7 @@ def _chosen_supplements_by_identifier(
         if len(set(ids)) != len(ids):
             raise SupplementSelectionError("file_chosen_twice")
         if len(chosen) + 1 > file_limit:  # the main paper counts
-            raise SupplementSelectionError("paper_file_limit")
+            raise SupplementSelectionError("paper_file_limit", limit_value=file_limit)
     return {identifier: tuple(chosen) for identifier, chosen in grouped.items()}
 
 

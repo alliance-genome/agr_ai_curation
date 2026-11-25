@@ -186,6 +186,24 @@ class _FakeProvider:
             and artifact.reference_curie == source_artifact.reference_curie
         )
 
+    def supplement_file_category(self, artifact: SourceArtifact):
+        from src.lib.document_sources.models import SupplementFileCategory
+
+        if artifact.role is SourceArtifactRole.SOURCE_SUPPLEMENT:
+            return SupplementFileCategory.CONVERTIBLE
+        return None
+
+    def is_listed_converted_supplement_text(self, artifact: SourceArtifact) -> bool:
+        return artifact.role is SourceArtifactRole.CONVERTED_TEXT and bool(artifact.parent_artifact_id)
+
+    def supplement_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
+        del artifact
+        return (0,)
+
+    def converted_text_has_single_title(self, original: SourceArtifact) -> bool:
+        del original
+        return False
+
 
 class _FakeConversionProvider(_FakeProvider):
     def __init__(

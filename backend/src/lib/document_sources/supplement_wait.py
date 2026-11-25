@@ -38,9 +38,11 @@ from src.lib.document_sources.models import (
     SourceConversionResult,
     SourceConversionStatus,
 )
+from src.lib.document_sources.registry import get_document_source_provider_metadata
 from src.lib.exceptions import PDFCancellationError
 from src.lib.openai_agents.config import (
     get_document_source_listing_max_failed_reads,
+    get_document_source_provider,
     get_document_supplement_add_reserve_seconds,
     get_document_supplement_listing_poll_seconds,
     get_document_supplement_max_concurrent_waits,
@@ -114,7 +116,7 @@ def classify_conversion_answer(
 # --- The supplement stage -----------------------------------------------------
 
 # Curator-facing job message when the stage itself fails unexpectedly; the main
-# paper stays usable. Proposed wording awaiting the owner's sign-off.
+# paper stays usable. Approved wording (Chris, 23 Nov 2026, card 39).
 SUPPLEMENT_STAGE_FAILED_MESSAGE = "The main paper is ready, but its supplements could not be added."
 
 
@@ -138,7 +140,7 @@ _FINAL_STATES = frozenset({SupplementState.ADDED, SupplementState.LEFT_OUT})
 @dataclass(slots=True)
 class _Entry:
     provider_file_id: str
-    display_name: str
+    display_name: str | None
     state: SupplementState
     reason_code: str | None = None
     observed_at: str | None = None
@@ -165,17 +167,23 @@ def _iso(epoch_seconds: float) -> str:
     return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc).isoformat()
 
 
-def not_started_entries(plan: SupplementPlan, *, now: float | None = None) -> list[dict[str, Any]]:
-    """Per-file outcomes when no supplement stage could start (the paper was busy or gone)."""
+def _clean_display_name(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
 
-    observed = _iso(time.time() if now is None else now)
+
+def queued_entries(plan: SupplementPlan) -> list[dict[str, Any]]:
+    """Initial per-file entries recorded when an import with supplements is accepted."""
+
     return [
         _Entry(
             provider_file_id=chosen.provider_file_id,
-            display_name=chosen.provider_file_id,
-            state=SupplementState.LEFT_OUT,
-            reason_code=FileReason.PAPER_BUSY_WHEN_READY.value,
-            observed_at=observed,
+            display_name=_clean_display_name(chosen.display_name),
+            state=SupplementState.QUEUED,
+            reason_code=None,
+            observed_at=None,
         ).as_metadata()
         for chosen in plan.chosen
     ]
@@ -301,7 +309,7 @@ async def run_supplement_stage(
     for chosen in plan.chosen:
         stage.entries[chosen.provider_file_id] = _Entry(
             provider_file_id=chosen.provider_file_id,
-            display_name=chosen.provider_file_id,
+            display_name=_clean_display_name(chosen.display_name),
             state=(
                 SupplementState.QUEUED
                 if chosen.converted_md5 is not None
@@ -334,11 +342,17 @@ async def run_supplement_stage(
         except DocumentSourceError:
             listing = None
         if listing is not None:
-            names = {item.provider_file_id: item.display_name for item in listing.files}
+            names = {
+                item.provider_file_id: _clean_display_name(item.display_name)
+                for item in listing.files
+            }
             for entry in stage.entries.values():
-                entry.display_name = names.get(entry.provider_file_id) or entry.provider_file_id
+                entry.display_name = names.get(entry.provider_file_id) or entry.display_name
         if stage.ids_in(SupplementState.WAITING):
-            await stage.record(pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE, _waiting_message(stage))
+            await stage.record(
+                pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE,
+                _waiting_message(stage, provider_id=getattr(provider, "provider_id", None)),
+            )
 
         if time_used_up:
             # The wait time was used up (for example while queued) but the login is
@@ -422,8 +436,9 @@ async def run_supplement_stage(
             else:
                 for outcome in result.files:
                     entry = stage.entries[outcome.provider_file_id]
-                    if outcome.display_name:
-                        entry.display_name = outcome.display_name
+                    cleaned_name = _clean_display_name(outcome.display_name)
+                    if cleaned_name is not None:
+                        entry.display_name = cleaned_name
                     if outcome.outcome == "added":
                         entry.state = SupplementState.ADDED
                         entry.file_id = str(outcome.file_id)
@@ -488,7 +503,10 @@ async def _poll_until_done(
     stage.apply(_converted_in(listing, stage.ids_in(SupplementState.WAITING)), listing)
     seen_texts: set[str] = set()
     while stage.ids_in(SupplementState.WAITING):
-        await stage.record(pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE, _waiting_message(stage))
+        await stage.record(
+            pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE,
+            _waiting_message(stage, provider_id=getattr(provider, "provider_id", None)),
+        )
         remaining = stage.wait_ends_at - stage.clock()
         if remaining <= 0:
             break
@@ -549,12 +567,26 @@ def _converted_in(listing: FileListing, provider_file_ids: Iterable[str]) -> dic
     return {key: CONVERTED for key in provider_file_ids if key in converted}
 
 
-def _waiting_message(stage: _Stage) -> str:
+def _provider_short_label(provider_id: str | None = None) -> str:
+    """Resolve the provider's short label from canonical registration metadata."""
+    resolved_id = (provider_id or get_document_source_provider() or "").strip()
+    if resolved_id:
+        metadata = get_document_source_provider_metadata(resolved_id)
+        if isinstance(metadata, Mapping):
+            for key in ("short_label", "display_label"):
+                raw = metadata.get(key)
+                if isinstance(raw, str) and raw.strip():
+                    return raw.strip()
+    return "the document source"
+
+
+def _waiting_message(stage: _Stage, *, provider_id: str | None = None) -> str:
     # Approved wording (Chris, 23 Nov 2026, card 39; the singular for one file too).
     count = len(stage.ids_in(SupplementState.WAITING))
     noun = "supplement" if count == 1 else "supplements"
+    provider_label = _provider_short_label(provider_id)
     return (
-        f"Main paper ready. Waiting for ABC to convert {count} {noun}; "
+        f"Main paper ready. Waiting for {provider_label} to convert {count} {noun}; "
         "you can use the paper and leave this page."
     )
 
@@ -659,7 +691,7 @@ async def _wait_for_slot(
                 pdf_job_service.update_progress,
                 job_id=job_id,
                 stage=pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE,
-                message="Waiting for ABC",
+                message=f"Waiting for {_provider_short_label()}",
                 status="running",
             )
     except BaseException:

@@ -691,6 +691,19 @@ still demote damaged records without changing storage when reporting fails.
 Valid historical values and ordinary unresolved outcomes stay quiet. Companion
 read and materialization warnings skip log-event promotion to avoid duplicates.
 
+Unfinished file-removal cleanup steps (`pieces`, `stored_files`, `piece_count`,
+`file_row`) that leave `cleanup_finished=False` report at error level with
+component `document_files`, operation `file_removal_cleanup_failed`, and
+fingerprint `["file_removal_cleanup_failed", step]`; outline-cache invalidation
+failures (`cache`, where `cleanup_finished=True`) report at warning level.
+Reports wrap failures in a traceback-bearing, chain-free
+`FileRemovalCleanupFailed` carrying only the cleanup step and original exception
+class name, hash `document_id` through runtime context redaction, omit HTTP
+request metadata (`include_request=False`) so raw document and file URLs are not
+sent, and mark companion logs with `extra={"sentry_skip_event": True}` to avoid
+duplicate promoted-log events. Capture failures leave the removal HTTP response
+(`removed`, `cleanup_finished`, `ready_file_count`) unchanged.
+
 Use the tool-failure notifier only for tool/specialist failure alerts. Do not
 use it as a generic application-error facade. Its Sentry events correlate through
 `ai_curation.trace.id_hash` and `ai_curation.chat.session_id_hash`, using the
@@ -819,7 +832,9 @@ expired (`DocumentSourceLoginExpired`, the curator's own condition; the import
 fails by name). When the stage itself fails unexpectedly, it reports once under
 component `document_sources` and operation `supplement_stage`, with only the tag
 `failure_type` (the exception's type name). The exception is the fixed,
-chain-free "Supplement stage failed"; paper, file names, the reference, the
+chain-free "Supplement stage failed" (or "Supplement stage launch failed" with
+`include_request=False` if launching the worker task fails after the main paper
+commits); paper, file names, the reference, the
 curator and any text are omitted. The job then ends failed with a named message;
 the main paper stays usable. An error after the stage's job was made terminal
 elsewhere (the curator deleted the paper, which can make a listing fail, or a

@@ -177,9 +177,12 @@ def _context():
 GOOD_TABLE_MD5 = hashlib.md5(GOOD_TABLE).hexdigest()
 
 
-def _chosen(provider_file_id, *, converted_md5=None):
+def _chosen(provider_file_id, *, converted_md5=None, display_name=None):
     return ChosenSupplement(
-        provider_file_id=provider_file_id, md5=f"md5-{provider_file_id}", converted_md5=converted_md5,
+        provider_file_id=provider_file_id,
+        md5=f"md5-{provider_file_id}",
+        converted_md5=converted_md5,
+        display_name=display_name,
     )
 
 
@@ -1066,3 +1069,130 @@ async def test_a_sweep_of_legal_settings_never_exceeds_the_supplement_waits_cap(
         assert total >= polls
         equal += polls == bound
     assert equal > 0
+
+
+def test_queued_entries_use_real_display_name_never_provider_id():
+    plan = SupplementPlan(
+        chosen=(
+            _chosen("30", display_name="Table_S1.xlsx"),
+            _chosen("40", converted_md5="md5-41", display_name=None),
+            _chosen("50", display_name="   "),
+        ),
+        request_context=_context(),
+        login_expires_at=None,
+        owner_user_id=7,
+        reference="AGRKB:101",
+    )
+
+    queued = stage.queued_entries(plan)
+    assert [(entry["provider_file_id"], entry["display_name"], entry["state"]) for entry in queued] == [
+        ("30", "Table_S1.xlsx", "queued"),
+        ("40", None, "queued"),
+        ("50", None, "queued"),
+    ]
+    assert all(entry["display_name"] != entry["provider_file_id"] for entry in queued)
+
+
+@pytest.mark.asyncio
+async def test_login_expired_before_listing_keeps_chosen_display_name_never_provider_id(job):
+    clock = _Clock()
+    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB")], payloads={"21": GOOD_TABLE})
+    _client, provider = _plain_provider()
+
+    await _stage(
+        job,
+        chosen=[_chosen("20", converted_md5="md5-21", display_name="Table_S20.xlsx"), _chosen("30")],
+        paper=paper,
+        main_ready_at=clock(),
+        clock=clock,
+        provider=provider,
+        login_expires_at=clock() + 300,
+    )
+
+    entries = job.progress[-1]["metadata"]["supplements"]
+    assert [(e["provider_file_id"], e["display_name"], e["reason_code"]) for e in entries] == [
+        ("20", "Table_S20.xlsx", "login_expired"),
+        ("30", None, "login_expired"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_whitespace_display_name_in_listing_and_unnamed_add_outcome_preserve_clean_names(job):
+    clock = _Clock()
+    pair_20 = _pair(20, "WB")
+    pair_20[0]["display_name"] = "   "
+    pair_30 = _pair(30, "WB")
+    pair_30[0]["display_name"] = ""
+    rows = [_abc_show_all_main_pdf(10, "WB"), *pair_20, *pair_30]
+    paper = _Paper(rows, payloads={"21": GOOD_TABLE, "31": GOOD_TABLE})
+    _client, provider = _plain_provider()
+
+    class _UnnamedOutcomeAdd:
+        async def __call__(self, document_id, owner_user_id, context, chosen, **kwargs):
+            return AddResult(
+                files=tuple(
+                    FileOutcome(
+                        item.provider_file_id,
+                        "added",
+                        file_id=uuid4(),
+                        display_name="   " if item.provider_file_id == "20" else None,
+                    )
+                    for item in chosen
+                )
+            )
+
+    await _stage(
+        job,
+        chosen=[
+            _chosen("20", converted_md5="md5-21", display_name="Table_S20.xlsx"),
+            _chosen("30", converted_md5="md5-31", display_name=None),
+        ],
+        paper=paper,
+        main_ready_at=clock(),
+        clock=clock,
+        provider=provider,
+        add=_UnnamedOutcomeAdd(),
+    )
+
+    entries = job.progress[-1]["metadata"]["supplements"]
+    assert [(e["provider_file_id"], e["display_name"], e["state"]) for e in entries] == [
+        ("20", "Table_S20.xlsx", "added"),
+        ("30", None, "added"),
+    ]
+
+
+def test_waiting_message_uses_registered_provider_short_label_without_hardcoding(monkeypatch):
+    plan = SupplementPlan(
+        chosen=(_chosen("30", display_name="Table_S1.xlsx"),),
+        request_context=_context(),
+        login_expires_at=None,
+        owner_user_id=7,
+        reference="AGRKB:101",
+    )
+    st = stage._Stage(job_id=JOB_ID, plan=plan, main_ready_at=1_000_000.0, clock=_Clock())
+    st.entries["30"] = stage._Entry(
+        provider_file_id="30",
+        display_name="Table_S1.xlsx",
+        state=stage.SupplementState.WAITING,
+    )
+
+    assert stage._waiting_message(st, provider_id="abc_literature") == (
+        "Main paper ready. Waiting for ABC to convert 1 supplement; "
+        "you can use the paper and leave this page."
+    )
+
+    monkeypatch.setattr(
+        stage,
+        "get_document_source_provider_metadata",
+        lambda provider_id: {"short_label": "EXL", "display_label": "Example Literature"}
+        if provider_id == "example_lit"
+        else None,
+    )
+    assert stage._waiting_message(st, provider_id="example_lit") == (
+        "Main paper ready. Waiting for EXL to convert 1 supplement; "
+        "you can use the paper and leave this page."
+    )
+    assert stage._waiting_message(st, provider_id="unknown_source") == (
+        "Main paper ready. Waiting for the document source to convert 1 supplement; "
+        "you can use the paper and leave this page."
+    )

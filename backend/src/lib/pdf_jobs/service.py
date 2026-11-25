@@ -295,18 +295,22 @@ _FINAL_SUPPLEMENT_STATES = frozenset({"added", "left_out"})
 
 
 def _close_open_supplement_entries(job: PdfProcessingJob, *, reason: str, now: datetime) -> None:
-    """A supplement wait finalized from outside its stage (its task is gone) leaves no
-    file open: each entry not yet ended becomes ``left_out`` with ``reason``.
+    """Close any unfinished ``metadata.supplements`` entries when a job ends outside its stage.
+
+    Applies to both an accepted import job cancelled or failed before its supplement stage
+    and a queued or running ``supplement_wait`` job finalized outside its stage. Ended
+    entries (``added`` / ``left_out``) are preserved untouched.
 
     Called inside the transaction that finalizes the job, under its row lock.
     """
     metadata = dict(job.metadata_json or {})
-    if metadata.get(JOB_KIND_KEY) != SUPPLEMENT_WAIT_JOB_KIND or not metadata.get("supplements"):
+    raw_entries = metadata.get("supplements")
+    if not isinstance(raw_entries, list) or not raw_entries:
         return
     observed_at = now.isoformat()
     entries = []
-    for entry in metadata["supplements"]:
-        if entry.get("state") not in _FINAL_SUPPLEMENT_STATES:
+    for entry in raw_entries:
+        if isinstance(entry, dict) and entry.get("state") not in _FINAL_SUPPLEMENT_STATES:
             entry = {**entry, "state": "left_out", "reason_code": reason, "observed_at": observed_at}
         entries.append(entry)
     metadata["supplements"] = entries
@@ -704,56 +708,261 @@ def is_supplement_add_job(job: PdfJobResponse | PdfProcessingJob) -> bool:
     return bool(metadata) and metadata.get(JOB_KIND_KEY) in _FILE_JOB_KINDS
 
 
-def start_supplement_wait_job(*, document_id: UUID | str, user_id: int, filename: Optional[str]) -> PdfJobResponse:
-    """Create the job of a new paper's supplement stage, once its import job has completed.
+class SupplementHandoffRefusedError(RuntimeError):
+    """The completed import no longer owns open queued supplements to hand off."""
 
-    Ordered against a delete of the same paper by the paper's lock (never waiting
-    for it). Raises ``ActiveJobExistsError`` when the paper already has an active
-    job, or a delete or an add holds its lock.
+    def __init__(self, job_id: UUID | str, reason: str) -> None:
+        super().__init__(f"Cannot hand off supplements from job {job_id}: {reason}")
+        self.job_id = job_id
+        self.reason = reason
+
+
+def _open_queued_supplement_entries(job: PdfProcessingJob) -> list[dict] | None:
+    """Return copied persisted supplement entries if the job still owns open queued ones."""
+    metadata = job.metadata_json
+    if not isinstance(metadata, dict):
+        return None
+    raw_entries = metadata.get("supplements")
+    if not isinstance(raw_entries, list) or not raw_entries:
+        return None
+    entries: list[dict] = []
+    has_queued = False
+    for entry in raw_entries:
+        if not isinstance(entry, dict):
+            return None
+        state = entry.get("state")
+        if state in _FINAL_SUPPLEMENT_STATES:
+            return None
+        if state == "queued":
+            has_queued = True
+        entries.append(dict(entry))
+    return entries if has_queued else None
+
+
+def complete_import_and_start_supplement_wait(
+    *,
+    job_id: UUID | str,
+    document_id: UUID | str,
+    user_id: int,
+    filename: Optional[str],
+    message: Optional[str] = None,
+    metadata: Optional[dict] = None,
+) -> tuple[Optional[PdfJobResponse], Optional[PdfJobResponse]]:
+    """Atomically complete an import job and hand off or close its queued supplements.
+
+    Runs in one row-locked transaction:
+    - Locks the import job row first (matching cancel/fail lock order). If the job is
+      already terminal (cancelled/failed/completed elsewhere), returns it untouched
+      with ``stage_job=None`` so a late worker can never overwrite terminal outcomes
+      or reopen supplements.
+    - Otherwise transitions the import job to ``completed`` and reads its persisted
+      open ``queued`` entries in ``metadata.supplements``:
+      1. If ``source_job.cancel_requested`` is True, closes those queued entries on
+         the completed import job as ``import_cancelled`` and returns ``stage_job=None``
+         (never launching a new supplement stage after a live cancel landed).
+      2. Else if the paper lock is acquired and no other active job conflicts,
+         transfers those persisted entries to a newly created ``supplement_wait``
+         stage job (removing ``supplements`` from the completed import job).
+      3. Else (paper is busy or missing), closes those entries directly on the
+         completed import job as ``paper_busy_when_ready`` in the same transaction.
     """
     from src.lib.document_files.paper_lock import try_lock_paper_for_add
 
+    doc_uuid = _to_uuid(document_id)
     session = SessionLocal()
     try:
-        if not try_lock_paper_for_add(session, document_id):
-            session.rollback()
-            raise ActiveJobExistsError(document_id)
-        paper = session.execute(
-            select(PDFDocument).where(PDFDocument.id == _to_uuid(document_id)).with_for_update()
+        source_job = session.execute(
+            select(PdfProcessingJob)
+            .where(PdfProcessingJob.id == _to_uuid(job_id))
+            .with_for_update()
         ).scalar_one_or_none()
-        if paper is None:
+        if source_job is None:
             session.rollback()
-            raise ActiveJobExistsError(document_id)
-        # Born in the waiting stage, so a delete can end it from its first moment
-        # (queued or not), never only after its first poll.
-        return create_job_in_session(
-            session, document_id=document_id, user_id=user_id, filename=filename,
-            metadata={JOB_KIND_KEY: SUPPLEMENT_WAIT_JOB_KIND},
-            current_stage=WAITING_FOR_SUPPLEMENTS_STAGE,
+            return None, None
+        if source_job.document_id != doc_uuid:
+            session.rollback()
+            raise ValueError(f"Import job {job_id} does not belong to document {document_id}")
+        if source_job.status in _TERMINAL_STATUSES:
+            session.rollback()
+            return _to_response(source_job), None
+
+        now = datetime.now(timezone.utc)
+        if source_job.started_at is None:
+            source_job.started_at = now
+        source_job.completed_at = now
+        source_job.status = PdfJobStatus.COMPLETED.value
+        source_job.current_stage = "completed"
+        source_job.progress_percentage = 100
+        source_job.message = message or "Processing completed"
+        source_job.error_message = None
+        _store_terminal_metadata(
+            source_job,
+            metadata=metadata,
+            outcome="completed",
+            completed_at=now,
         )
+
+        handoff_entries = _open_queued_supplement_entries(source_job)
+        if not handoff_entries:
+            session.commit()
+            session.refresh(source_job)
+            return _to_response(source_job), None
+
+        if source_job.cancel_requested:
+            _close_open_supplement_entries(
+                source_job,
+                reason=FileReason.IMPORT_CANCELLED.value,
+                now=now,
+            )
+            session.commit()
+            session.refresh(source_job)
+            return _to_response(source_job), None
+
+        source_metadata = dict(source_job.metadata_json or {})
+
+        # Flush completion first so ONE_ACTIVE_JOB_PER_PAPER_INDEX releases source_job's active slot.
+        session.flush()
+
+        stage_job: Optional[PdfProcessingJob] = None
+        if try_lock_paper_for_add(session, doc_uuid):
+            paper = session.execute(
+                select(PDFDocument).where(PDFDocument.id == doc_uuid).with_for_update()
+            ).scalar_one_or_none()
+            if paper is not None:
+                candidate_stage = PdfProcessingJob(
+                    document_id=doc_uuid,
+                    user_id=user_id,
+                    filename=filename,
+                    status=PdfJobStatus.PENDING.value,
+                    current_stage=WAITING_FOR_SUPPLEMENTS_STAGE,
+                    progress_percentage=0,
+                    message="Queued for background processing",
+                    cancel_requested=False,
+                    metadata_json={
+                        JOB_KIND_KEY: SUPPLEMENT_WAIT_JOB_KIND,
+                        "supplements": handoff_entries,
+                    },
+                )
+                try:
+                    with session.begin_nested():
+                        session.add(candidate_stage)
+                        session.flush()
+                    stage_job = candidate_stage
+                except IntegrityError as exc:
+                    if not _violates_constraint(exc, ONE_ACTIVE_JOB_PER_PAPER_INDEX):
+                        raise
+
+        if stage_job is not None:
+            source_metadata.pop("supplements", None)
+            source_job.metadata_json = source_metadata or None
+            session.commit()
+            session.refresh(source_job)
+            session.refresh(stage_job)
+            return _to_response(source_job), _to_response(stage_job)
+
+        observed_at = now.isoformat()
+        source_metadata["supplements"] = [
+            (
+                {
+                    **entry,
+                    "state": "left_out",
+                    "reason_code": FileReason.PAPER_BUSY_WHEN_READY.value,
+                    "observed_at": observed_at,
+                }
+                if entry.get("state") not in _FINAL_SUPPLEMENT_STATES
+                else entry
+            )
+            for entry in handoff_entries
+        ]
+        source_job.metadata_json = source_metadata
+        session.commit()
+        session.refresh(source_job)
+        return _to_response(source_job), None
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
 
 
-def record_supplement_outcomes_on_finished_job(*, job_id: UUID | str, supplements: list[dict]) -> None:
-    """Write an import's per-file supplement outcomes onto its already-finished job.
+def start_supplement_wait_job(
+    *,
+    document_id: UUID | str,
+    user_id: int,
+    filename: Optional[str],
+    supplements: Optional[list[dict]] = None,
+    source_job_id: Optional[UUID | str] = None,
+) -> PdfJobResponse:
+    """Create the job of a new paper's supplement stage, once its import job has completed.
 
-    Used when the paper became busy or was deleted at the moment it was ready, so
-    no supplement stage started: the import's result still says what happened to
-    each chosen file. A job that no longer exists (the paper was deleted) is left alone.
+    Ordered against a delete of the same paper by the paper's lock (never waiting
+    for it). Raises ``ActiveJobExistsError`` when the paper already has an active
+    job, or a delete or an add holds its lock. When ``source_job_id`` is provided,
+    the locked source job must match ``document_id``, be ``completed`` without
+    ``cancel_requested``, and still own open ``queued`` entries in
+    ``metadata.supplements``; those persisted entries are transferred atomically
+    and cleared from the source job (so a late worker after cancel/failure can
+    never overwrite terminal outcomes or reopen supplements).
     """
+    from src.lib.document_files.paper_lock import try_lock_paper_for_add
+
+    doc_uuid = _to_uuid(document_id)
     session = SessionLocal()
     try:
-        job = session.execute(
-            select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id)).with_for_update()
-        ).scalar_one_or_none()
-        if job is None:
+        source_job: Optional[PdfProcessingJob] = None
+        transferred_supplements: Optional[list[dict]] = None
+        if source_job_id is not None:
+            source_job = session.execute(
+                select(PdfProcessingJob)
+                .where(PdfProcessingJob.id == _to_uuid(source_job_id))
+                .with_for_update()
+            ).scalar_one_or_none()
+            if source_job is None:
+                session.rollback()
+                raise SupplementHandoffRefusedError(source_job_id, "source job not found")
+            if source_job.document_id != doc_uuid:
+                session.rollback()
+                raise SupplementHandoffRefusedError(source_job_id, "source job belongs to another document")
+            if source_job.status != PdfJobStatus.COMPLETED.value:
+                session.rollback()
+                raise SupplementHandoffRefusedError(
+                    source_job_id, f"source job status is {source_job.status}"
+                )
+            if source_job.cancel_requested:
+                session.rollback()
+                raise SupplementHandoffRefusedError(source_job_id, "source job cancellation was requested")
+            transferred_supplements = _open_queued_supplement_entries(source_job)
+            if not transferred_supplements:
+                session.rollback()
+                raise SupplementHandoffRefusedError(
+                    source_job_id, "source job owns no open queued supplements"
+                )
+        if not try_lock_paper_for_add(session, doc_uuid):
             session.rollback()
-            return
-        metadata = dict(job.metadata_json or {})
-        metadata["supplements"] = supplements
-        job.metadata_json = metadata
-        session.commit()
+            raise ActiveJobExistsError(document_id)
+        paper = session.execute(
+            select(PDFDocument).where(PDFDocument.id == doc_uuid).with_for_update()
+        ).scalar_one_or_none()
+        if paper is None:
+            session.rollback()
+            raise ActiveJobExistsError(document_id)
+        if source_job is not None:
+            updated_source_metadata = dict(source_job.metadata_json or {})
+            updated_source_metadata.pop("supplements", None)
+            source_job.metadata_json = updated_source_metadata or None
+        metadata: dict = {JOB_KIND_KEY: SUPPLEMENT_WAIT_JOB_KIND}
+        stage_supplements = (
+            transferred_supplements if source_job is not None else supplements
+        )
+        if stage_supplements:
+            metadata["supplements"] = list(stage_supplements)
+        # Born in the waiting stage, so a delete can end it from its first moment
+        # (queued or not), never only after its first poll.
+        return create_job_in_session(
+            session, document_id=doc_uuid, user_id=user_id, filename=filename,
+            metadata=metadata,
+            current_stage=WAITING_FOR_SUPPLEMENTS_STAGE,
+        )
     finally:
         session.close()
 
@@ -1288,6 +1497,7 @@ def mark_failed(
     message: str,
     stage: Optional[str] = None,
     metadata: Optional[dict] = None,
+    supplement_failure_reason: str = FileReason.SUPPLEMENT_STAGE_FAILED.value,
 ) -> Optional[PdfJobResponse]:
     """Mark job terminal failure state."""
     session = SessionLocal()
@@ -1318,6 +1528,11 @@ def mark_failed(
             metadata=metadata,
             outcome="failed",
             completed_at=now,
+        )
+        _close_open_supplement_entries(
+            job,
+            reason=supplement_failure_reason,
+            now=now,
         )
 
         _reconcile_terminal_document(session, job)
@@ -1365,6 +1580,11 @@ def mark_cancelled(
             metadata=metadata,
             outcome="cancelled",
             completed_at=now,
+        )
+        _close_open_supplement_entries(
+            job,
+            reason=FileReason.IMPORT_CANCELLED.value,
+            now=now,
         )
 
         _reconcile_terminal_document(session, job)
