@@ -1297,3 +1297,134 @@ async def test_after_add_reuses_paper_lock_connection_under_one_connection_pool(
             assert not held_conn.in_transaction()
     finally:
         small_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_zero_write_supplement_add_job_never_fails_concurrent_writers_pending_row(paper, monkeypatch):
+    """All-skipped run_supplement_add_job must not reconcile another concurrent writer's pending row."""
+    import asyncio
+    from unittest.mock import Mock
+
+    from src.lib.document_sources.file_reasons import FileReason
+
+    monkeypatch.setenv("DOCUMENT_PAPER_MAX_TEXT_BYTES", "1100")
+    document_id, owner_id, subject, storage = paper
+    index = _Index().install(monkeypatch)
+
+    writer_a_inserted = asyncio.Event()
+    writer_b_finished = asyncio.Event()
+    writer_b_prepared = asyncio.Event()
+
+    async def _writer_a_checkpoint(stage: str) -> None:
+        if stage == "saving_files":
+            await asyncio.wait_for(writer_b_prepared.wait(), timeout=10)
+        elif stage == "vector_storage":
+            writer_a_inserted.set()
+            await asyncio.wait_for(writer_b_finished.wait(), timeout=10)
+
+    # Create writer B's standalone supplement_add job (the paper's latest job row) and wire a
+    # fresh listing + closable provider so writer B runs through the real run_supplement_add_job.
+    job_b = supplement_add.start_supplement_add(document_id, owner_id, [_chosen(40)])
+    provider_b = _ClosableProvider(WORKBOOKS)
+    monkeypatch.setattr("src.lib.document_sources.registry.get_configured_document_source_provider", lambda: provider_b)
+    monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda **_kwargs: object())
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", Mock(return_value=True))
+
+    real_checkpoint_factory = supplement_add._cancel_checkpoint
+
+    def _coordinating_checkpoint(job_id, *, document_id=None):
+        inner = real_checkpoint_factory(job_id, document_id=document_id)
+
+        async def _checkpoint(stage: str) -> None:
+            if stage == "saving_files":
+                writer_b_prepared.set()
+                await asyncio.wait_for(writer_a_inserted.wait(), timeout=10)
+            await inner(stage)
+
+        return _checkpoint
+
+    monkeypatch.setattr(supplement_add, "_cancel_checkpoint", _coordinating_checkpoint)
+
+    pending_observed_after_writer_b: list[tuple[str | None, str]] = []
+
+    async def _run_writer_b() -> None:
+        try:
+            await supplement_add.run_supplement_add_job(supplement_add.SupplementAddJobRequest(
+                job_id=UUID(job_b.job_id),
+                document_id=document_id,
+                user_id=subject,
+                owner_user_id=owner_id,
+                context=CONTEXT,
+                files=(_chosen(40),),
+            ))
+            # While writer A is still paused pre-commit, verify writer A's row is STILL pending.
+            pending_observed_after_writer_b.extend(
+                (row.source_provider_source_file_id, row.status) for row in _files(document_id)
+            )
+        finally:
+            writer_b_finished.set()
+
+    result_a, _ = await asyncio.gather(
+        supplement_add.add_files_to_paper_with_listing(
+            document_id, owner_id, CONTEXT, [_chosen(20)],
+            listing=_bound_listing(20), job_id=uuid4(), provider=_AbcBoundProvider(WORKBOOKS),
+            weaviate_client=object(), stage_checkpoint=_writer_a_checkpoint,
+        ),
+        _run_writer_b(),
+    )
+
+    assert pending_observed_after_writer_b == [("10", "ready"), ("20", "pending")]
+    fresh_job_b = _fresh_job(job_b.job_id)
+    assert fresh_job_b.status == PdfJobStatus.FAILED.value
+    assert fresh_job_b.message == supplement_add._MESSAGE_NONE_ADDED
+    assert fresh_job_b.metadata_json["supplements"][0]["state"] == "left_out"
+    assert fresh_job_b.metadata_json["supplements"][0]["reason_code"] == FileReason.PAPER_TEXT_LIMIT.value
+
+    (outcome_a,) = result_a.files
+    assert outcome_a.outcome == "added" and outcome_a.file_id is not None
+    assert [(row.source_provider_source_file_id, row.status) for row in _files(document_id)] == [
+        ("10", "ready"), ("20", "ready"),
+    ]
+    assert (storage / f"{subject}/source_markdown/{outcome_a.file_id}.md").is_file()
+    assert len(index.stored) == 1
+
+
+@pytest.mark.asyncio
+async def test_zero_write_all_skipped_job_respects_cancel_requested_under_row_lock(paper, monkeypatch):
+    """If request_cancel commits while _insert_rows skips all candidates, the job ends cancelled."""
+    from unittest.mock import Mock
+
+    from src.lib.document_sources.file_reasons import FileReason
+
+    document_id, owner_id, subject, _storage = paper
+    _Index().install(monkeypatch)
+    job = supplement_add.start_supplement_add(document_id, owner_id, [_chosen(20)])
+    provider = _ClosableProvider(WORKBOOKS)
+    monkeypatch.setattr("src.lib.document_sources.registry.get_configured_document_source_provider", lambda: provider)
+    monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda **_kwargs: object())
+    report = Mock(return_value=True)
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+
+    def _raced_all_skipped_insert(*_args, **_kwargs):
+        # Simulate curator clicking cancel while _insert_rows runs and skips all candidates.
+        pdf_job_service.request_cancel(job_id=job.job_id, user_id=owner_id)
+        return {"20": (FileReason.PAPER_TEXT_LIMIT, 1150, 1100)}
+
+    monkeypatch.setattr(supplement_add, "_insert_rows", _raced_all_skipped_insert)
+
+    await supplement_add.run_supplement_add_job(supplement_add.SupplementAddJobRequest(
+        job_id=UUID(job.job_id),
+        document_id=document_id,
+        user_id=subject,
+        owner_user_id=owner_id,
+        context=CONTEXT,
+        files=(_chosen(20),),
+    ))
+
+    fresh_job = _fresh_job(job.job_id)
+    assert fresh_job.status == PdfJobStatus.CANCELLED.value
+    assert fresh_job.current_stage == "cancelled"
+    assert fresh_job.cancel_requested is True
+    assert fresh_job.error_message is None
+    assert provider.closed == 1
+    report.assert_not_called()

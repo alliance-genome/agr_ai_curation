@@ -863,9 +863,9 @@ async def _drain_after_cancel(
     async def drain() -> None:
         try:
             await work
-        except (asyncio.CancelledError, PDFCancellationError):
-            # A chunk writer can finish its own cancellation and failure reporting,
-            # and curator cancellation observed inside the ready lock is expected.
+        except (asyncio.CancelledError, PDFCancellationError, FileRemovalUnfinished):
+            # A chunk writer can finish its own cancellation and failure reporting;
+            # curator cancellation and a concurrent unfinished removal are expected.
             pass
         except Exception as exc:
             _report_supplement_failure(exc, operation=operation, message=message)
@@ -1874,6 +1874,7 @@ async def run_supplement_add_job(request: SupplementAddJobRequest) -> None:
                             message=_MESSAGE_TIMED_OUT,
                             stage="timed_out",
                             metadata={"error_code": "add_timed_out"},
+                            reconcile_document=False,
                         )
                     )
                     _report_supplement_failure(
@@ -1893,14 +1894,18 @@ async def run_supplement_add_job(request: SupplementAddJobRequest) -> None:
                     _report_drained_task_exception(task_exc, committed=True, during="cancellation")
                 else:
                     _write_job_terminal_state(
-                        lambda: pdf_job_service.mark_cancelled(job_id=job_id, document_id=document_id)
+                        lambda: pdf_job_service.mark_cancelled(
+                            job_id=job_id, document_id=document_id, reconcile_document=False,
+                        )
                     )
                     _report_drained_task_exception(task_exc, committed=False, during="cancellation")
                 raise
         except PDFCancellationError:
             if not commit_state.committed:
                 _write_job_terminal_state(
-                    lambda: pdf_job_service.mark_cancelled(job_id=job_id, document_id=document_id)
+                    lambda: pdf_job_service.mark_cancelled(
+                        job_id=job_id, document_id=document_id, reconcile_document=False,
+                    )
                 )
             return
         except DocumentSourceLoginExpired:
@@ -1919,6 +1924,7 @@ async def run_supplement_add_job(request: SupplementAddJobRequest) -> None:
                                 display_names=display_names,
                             ),
                         },
+                        reconcile_document=False,
                     )
                 )
             return
@@ -1932,6 +1938,7 @@ async def run_supplement_add_job(request: SupplementAddJobRequest) -> None:
                         message=_MESSAGE_FAILED,
                         stage="failed",
                         metadata={"error_code": error_code},
+                        reconcile_document=False,
                     )
                 )
             if isinstance(stopped, SupplementAddError) and error_code in _INTERNAL_INVARIANT_ERROR_CODES:
@@ -1957,6 +1964,7 @@ async def run_supplement_add_job(request: SupplementAddJobRequest) -> None:
                     message=_MESSAGE_FAILED,
                     stage="failed",
                     metadata={"error_code": "add_failed"},
+                    reconcile_document=False,
                 )
             )
             _report_supplement_failure(
@@ -1968,17 +1976,29 @@ async def run_supplement_add_job(request: SupplementAddJobRequest) -> None:
 
         if not result.added:
             metadata = {"supplements": _supplement_entries(result)}
+            terminal_job: list[Any] = []
             _write_job_terminal_state(
-                lambda: pdf_job_service.mark_failed(
-                    job_id=job_id,
-                    document_id=document_id,
-                    message=_MESSAGE_NONE_ADDED,
-                    stage="failed",
-                    metadata=metadata,
+                lambda: terminal_job.append(
+                    pdf_job_service.mark_failed(
+                        job_id=job_id,
+                        document_id=document_id,
+                        message=_MESSAGE_NONE_ADDED,
+                        stage="failed",
+                        metadata=metadata,
+                        reconcile_document=False,
+                        respect_cancel_requested=True,
+                    )
                 )
             )
+            job_was_cancelled = bool(
+                terminal_job
+                and terminal_job[0] is not None
+                and getattr(terminal_job[0], "status", None) == "cancelled"
+            )
             # Choosing files that are all in the paper already (a repeated click) is not worth a warning.
-            if any(item.reason_code is not FileReason.ALREADY_IN_PAPER for item in result.files):
+            if not job_was_cancelled and any(
+                item.reason_code is not FileReason.ALREADY_IN_PAPER for item in result.files
+            ):
                 _report_nothing_added(result, request.document_id)
         if deferred_cancel is not None:
             raise deferred_cancel from None

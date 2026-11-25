@@ -1544,6 +1544,8 @@ def mark_failed(
     metadata: Optional[dict] = None,
     supplement_failure_reason: str = FileReason.SUPPLEMENT_STAGE_FAILED.value,
     document_id: Optional[UUID | str] = None,
+    reconcile_document: bool = True,
+    respect_cancel_requested: bool = False,
 ) -> Optional[PdfJobResponse]:
     """Mark job terminal failure state."""
     session = SessionLocal()
@@ -1556,7 +1558,7 @@ def mark_failed(
         if document_id is not None and job.document_id != _to_uuid(document_id):
             return None
         if job.status in _TERMINAL_STATUSES:
-            if _reconcile_terminal_document(session, job):
+            if reconcile_document and _reconcile_terminal_document(session, job):
                 session.commit()
                 session.refresh(job)
             return _to_response(job)
@@ -1565,6 +1567,28 @@ def mark_failed(
         if job.started_at is None:
             job.started_at = now
         job.completed_at = now
+        if respect_cancel_requested and job.cancel_requested:
+            job.status = PdfJobStatus.CANCELLED.value
+            job.current_stage = "cancelled"
+            job.message = "Cancelled by user"
+            job.error_message = None
+            _store_terminal_metadata(
+                job,
+                metadata=None,
+                outcome="cancelled",
+                completed_at=now,
+            )
+            _close_open_supplement_entries(
+                job,
+                reason=FileReason.IMPORT_CANCELLED.value,
+                now=now,
+            )
+            if reconcile_document:
+                _reconcile_terminal_document(session, job)
+            session.commit()
+            session.refresh(job)
+            return _to_response(job)
+
         job.status = PdfJobStatus.FAILED.value
         job.current_stage = stage or job.current_stage or "failed"
         job.error_message = (message or "Processing failed")[
@@ -1583,7 +1607,8 @@ def mark_failed(
             now=now,
         )
 
-        _reconcile_terminal_document(session, job)
+        if reconcile_document:
+            _reconcile_terminal_document(session, job)
         session.commit()
         session.refresh(job)
         return _to_response(job)
@@ -1600,6 +1625,7 @@ def mark_cancelled(
     reason: Optional[str] = None,
     metadata: Optional[dict] = None,
     document_id: Optional[UUID | str] = None,
+    reconcile_document: bool = True,
 ) -> Optional[PdfJobResponse]:
     """Mark job terminal cancelled state."""
     session = SessionLocal()
@@ -1612,7 +1638,7 @@ def mark_cancelled(
         if document_id is not None and job.document_id != _to_uuid(document_id):
             return None
         if job.status in _TERMINAL_STATUSES:
-            if _reconcile_terminal_document(session, job):
+            if reconcile_document and _reconcile_terminal_document(session, job):
                 session.commit()
                 session.refresh(job)
             return _to_response(job)
@@ -1638,7 +1664,8 @@ def mark_cancelled(
             now=now,
         )
 
-        _reconcile_terminal_document(session, job)
+        if reconcile_document:
+            _reconcile_terminal_document(session, job)
         session.commit()
         session.refresh(job)
         return _to_response(job)

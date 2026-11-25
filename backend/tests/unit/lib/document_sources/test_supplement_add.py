@@ -2951,3 +2951,55 @@ async def test_after_add_uses_piece_count_lock_wait_timeout_and_preserves_comple
     assert report.call_args.kwargs["operation"] == "supplement_add_finish_failed"
     assert report.call_args.kwargs["level"] == "warning"
     assert report.call_args.kwargs["context"] == {"document_id": str(DOCUMENT_ID)}
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_insert_rows_file_removal_unfinished_emits_no_sentry_event(
+    monkeypatch, storage, caplog,
+):
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def blocked_insert_rows(*_args, **_kwargs):
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(10)
+        raise supplement_add.FileRemovalUnfinished(DOCUMENT_ID)
+
+    monkeypatch.setattr(supplement_add, "_insert_rows", blocked_insert_rows)
+    _, provider = _provider(ROWS, GOOD)
+    provider.aclose = AsyncMock()
+    _paper_lookup(monkeypatch)
+    monkeypatch.setattr("src.lib.document_sources.registry.get_configured_document_source_provider", lambda: provider)
+    monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda **_kwargs: object())
+    monkeypatch.setattr("src.lib.pdf_jobs.service.is_cancel_requested", lambda **_: False)
+    monkeypatch.setattr("src.lib.pdf_jobs.service.update_progress", lambda **_: None)
+    cancelled = []
+    monkeypatch.setattr("src.lib.pdf_jobs.service.mark_cancelled", lambda **kwargs: cancelled.append(kwargs))
+    report = Mock(return_value=True)
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+
+    with caplog.at_level(logging.ERROR):
+        job_task = asyncio.create_task(supplement_add.run_supplement_add_job(_job_request()))
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=10)
+            job_task.cancel("stop-during-insert")
+            await asyncio.sleep(0)
+            assert not job_task.done()
+        finally:
+            release.set()
+
+        with pytest.raises(asyncio.CancelledError, match="stop-during-insert"):
+            await job_task
+
+    assert len(cancelled) == 1
+    assert cancelled[0]["document_id"] == DOCUMENT_ID
+    assert cancelled[0]["reconcile_document"] is False
+    provider.aclose.assert_awaited_once()
+    report.assert_not_called()
+    promotable_errors = [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.ERROR and not getattr(record, "sentry_skip_event", False)
+    ]
+    assert promotable_errors == []
