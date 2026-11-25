@@ -14,6 +14,9 @@ Tool Categories:
 
 from agr_ai_curation_runtime.tool_result_bounds import requested_text_length
 
+from collections.abc import Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 import logging
 import inspect
 import hashlib
@@ -48,6 +51,50 @@ logger = logging.getLogger(__name__)
 _TOOL_INVENTORY_DEFAULT_ITEMS = get_agent_studio_tool_inventory_default_items()
 _TOOL_INVENTORY_MAX_ITEMS = get_agent_studio_tool_inventory_max_items()
 _TOOL_INVENTORY_SUMMARY_MAX_CHARS = get_agent_studio_tool_inventory_summary_max_chars()
+
+_ACTIVE_DIAGNOSTIC_GROUP_IDS: ContextVar[Optional[tuple[str, ...]]] = ContextVar(
+    "agent_studio_diagnostic_active_group_ids",
+    default=None,
+)
+
+
+def get_active_diagnostic_group_ids() -> Optional[tuple[str, ...]]:
+    """Return trusted caller groups for the active Studio diagnostic call, if scoped."""
+    return _ACTIVE_DIAGNOSTIC_GROUP_IDS.get()
+
+
+@contextmanager
+def scoped_diagnostic_active_groups(
+    active_group_ids: Optional[Sequence[str]],
+):
+    """Bind trusted caller groups for request-scoped diagnostic tool calls."""
+    token = _ACTIVE_DIAGNOSTIC_GROUP_IDS.set(
+        None if active_group_ids is None else tuple(active_group_ids)
+    )
+    try:
+        yield
+    finally:
+        _ACTIVE_DIAGNOSTIC_GROUP_IDS.reset(token)
+
+
+def _is_agent_accessible_for_groups(
+    agent_id: str,
+    active_group_ids: Optional[Sequence[str]],
+) -> bool:
+    """Apply existing allowed_group_ids access rules when caller groups are scoped."""
+    if active_group_ids is None:
+        return True
+    from src.lib.agent_access import is_resource_access_allowed
+    from src.lib.agent_studio import catalog_service
+
+    entry = catalog_service.AGENT_REGISTRY.get(agent_id) or {}
+    allowed_group_ids = list(entry.get("allowed_group_ids") or [])
+    return is_resource_access_allowed(
+        visibility_allowed=True,
+        allowed_group_ids=allowed_group_ids,
+        active_group_ids=list(active_group_ids),
+        resource_kind="agent_prompt_diagnostic",
+    )
 
 
 def _canonical_json(value: Any) -> str:
@@ -372,13 +419,19 @@ def _create_get_prompt_handler():
         if guidance is not None:
             return guidance
         catalog = get_prompt_catalog()
-        agent = catalog.get_agent(agent_id)
+        active_groups = _ACTIVE_DIAGNOSTIC_GROUP_IDS.get()
+        agent = (
+            catalog.get_agent(agent_id)
+            if _is_agent_accessible_for_groups(agent_id, active_groups)
+            else None
+        )
 
         if not agent:
             available_agents = []
             for cat in catalog.catalog.categories:
                 for a in cat.agents:
-                    available_agents.append(a.agent_id)
+                    if _is_agent_accessible_for_groups(a.agent_id, active_groups):
+                        available_agents.append(a.agent_id)
             return {
                 "status": "error",
                 "message": f"Agent '{agent_id}' not found",
@@ -564,7 +617,9 @@ def _create_get_prompt_handler():
     return handler
 
 
-def _get_prompt_diagnostic_contract() -> tuple[str, Dict[str, Any]]:
+def _get_prompt_diagnostic_contract(
+    active_group_ids: Optional[Sequence[str]] = None,
+) -> tuple[str, Dict[str, Any]]:
     """Describe prompt inspection using only targets installed in the live catalog."""
     from src.lib.agent_studio.catalog_service import get_prompt_catalog
     from src.lib.prompts.cache import is_initialized
@@ -637,8 +692,13 @@ redirect guidance, not installed-prompt version selection."""
         )
         return description, input_schema
 
+    effective_groups = (
+        _ACTIVE_DIAGNOSTIC_GROUP_IDS.get()
+        if active_group_ids is None
+        else active_group_ids
+    )
     catalog = get_prompt_catalog().catalog
-    agent_ids = sorted(
+    all_agent_ids = sorted(
         agent.agent_id
         for category in catalog.categories
         for agent in category.agents
@@ -646,16 +706,22 @@ redirect guidance, not installed-prompt version selection."""
     )
     group_ids = sorted(catalog.available_groups)
 
-    if not agent_ids:
+    if not all_agent_ids:
         raise RuntimeError(
             "Cannot register get_prompt before the installed prompt catalog is initialized"
         )
 
-    installed_targets = ", ".join(agent_ids)
-    description += (
-        "\n\nUse these live catalog values instead of assuming a package-specific "
-        f"agent or group.\nInstalled prompt targets: {installed_targets}."
-    )
+    agent_ids = [
+        agent_id
+        for agent_id in all_agent_ids
+        if _is_agent_accessible_for_groups(agent_id, effective_groups)
+    ]
+    if agent_ids:
+        installed_targets = ", ".join(agent_ids)
+        description += (
+            "\n\nUse these live catalog values instead of assuming a package-specific "
+            f"agent or group.\nInstalled prompt targets: {installed_targets}."
+        )
     if group_ids:
         description += (
             "\nInstalled group-rule identifiers: " + ", ".join(group_ids) + "."
@@ -781,7 +847,12 @@ def _create_get_tool_inventory_handler():
         offset = parse_offset_cursor(cursor)
 
         if normalized_agent_id:
-            agent_entry = catalog_service.AGENT_REGISTRY.get(normalized_agent_id)
+            active_groups = _ACTIVE_DIAGNOSTIC_GROUP_IDS.get()
+            agent_entry = (
+                catalog_service.AGENT_REGISTRY.get(normalized_agent_id)
+                if _is_agent_accessible_for_groups(normalized_agent_id, active_groups)
+                else None
+            )
             if agent_entry is None:
                 return {
                     "success": False,
@@ -947,9 +1018,14 @@ def _create_get_tool_details_handler():
             return {"success": False, "error": "tool_id is required."}
 
         if normalized_agent_id:
-            metadata = catalog_service.get_tool_for_agent(
-                normalized_tool_id,
-                normalized_agent_id,
+            active_groups = _ACTIVE_DIAGNOSTIC_GROUP_IDS.get()
+            metadata = (
+                catalog_service.get_tool_for_agent(
+                    normalized_tool_id,
+                    normalized_agent_id,
+                )
+                if _is_agent_accessible_for_groups(normalized_agent_id, active_groups)
+                else None
             )
         else:
             metadata = catalog_service.get_tool_details(normalized_tool_id)

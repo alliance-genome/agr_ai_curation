@@ -97,4 +97,42 @@ describe('Workshop output choices', () => {
     expect(screen.getByLabelText('Selected output mode')).toHaveTextContent('profile_bound_generic')
     expect(screen.getByText(/Curator details/)).toBeInTheDocument()
   })
+
+  it('omits show_in_palette=false formats for new drafts while retaining an already-pinned saved format', async () => {
+    const hiddenRef = { package_id: 'fixture.package', agent_id: 'hidden_builder', domain_pack_id: 'fixture.hidden_pack' }
+    const agents = {
+      facts: {
+        name: 'Facts', icon: '', category: 'Extraction', output_schema_key: 'facts', show_in_palette: true,
+        domain_envelope: { ...buildDomainEnvelopeMetadata(), display_name: 'Facts', status: 'under_development' },
+      },
+      hidden_builder: {
+        name: 'Hidden Builder', icon: '', category: 'Extraction', output_schema_key: null, show_in_palette: false,
+        domain_envelope: { ...buildDomainEnvelopeMetadata(), display_name: 'Hidden Builder Proposals', status: 'under_development' },
+        domain_extraction_ref: hiddenRef,
+      },
+    }
+
+    const { rerender } = render(
+      <WorkshopOutputSetup value={emptyOutputDraft('domain')} onChange={vi.fn()} onEditStructure={vi.fn()} agents={agents} />
+    )
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Domain format' }))
+    const options = await screen.findAllByRole('option')
+    expect(options.map((option) => option.textContent)).toEqual([
+      'Choose a domain format',
+      'Facts — under_development',
+    ])
+    fireEvent.click(options[0])
+
+    rerender(
+      <WorkshopOutputSetup
+        value={{ ...emptyOutputDraft('domain'), domainExtractionRef: hiddenRef }}
+        onChange={vi.fn()}
+        onEditStructure={vi.fn()}
+        agents={agents}
+      />
+    )
+    expect(screen.getByRole('combobox', { name: 'Domain format' })).toHaveTextContent(
+      'fixture.hidden_pack (saved format unavailable in catalog)'
+    )
+  })
 })

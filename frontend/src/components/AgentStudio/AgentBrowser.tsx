@@ -135,25 +135,34 @@ function AgentBrowser({
     return allAgents.find((a) => a.agent_id === selectedAgentId) || null
   }, [allAgents, selectedAgentId])
 
+  const isTemplateEligible = useMemo(() => {
+    return (agent: PromptInfo): boolean => {
+      if (agent.agent_id === 'task_input' || agent.agent_id.startsWith('ca_')) return false
+      const metadataShow = agentMetadata[agent.agent_id]?.show_in_palette
+      if (metadataShow !== undefined) return metadataShow !== false
+      return agent.show_in_palette !== false
+    }
+  }, [agentMetadata])
+
   const filterCounts = useMemo(() => {
     const shared = allAgents.filter((agent) => agent.subcategory === 'Shared Agents').length
-    const templates = allAgents.filter((agent) => !agent.agent_id.startsWith('ca_')).length
+    const templates = allAgents.filter(isTemplateEligible).length
     return {
       all: allAgents.length,
       shared,
       templates,
     }
-  }, [allAgents])
+  }, [allAgents, isTemplateEligible])
 
   const tabFilteredAgents = useMemo(() => {
     if (browserFilter === 'shared') {
       return allAgents.filter((agent) => agent.subcategory === 'Shared Agents')
     }
     if (browserFilter === 'templates') {
-      return allAgents.filter((agent) => !agent.agent_id.startsWith('ca_'))
+      return allAgents.filter(isTemplateEligible)
     }
     return allAgents
-  }, [allAgents, browserFilter])
+  }, [allAgents, browserFilter, isTemplateEligible])
 
   // Filter agents based on tab + search query
   const filteredAgents = useMemo(() => {

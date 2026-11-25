@@ -164,10 +164,14 @@ def test_topic_tag_agent_is_excluded_from_agent_studio_templates(monkeypatch):
             def all(self):
                 return list(self._items)
 
+        wb_user = {"sub": "wb-curator", "cognito:groups": ["WormBaseCurator"]}
+        assert api_module._authenticated_group_ids(wb_user) == ["WB"]
+        assert api_module._agent_record_is_group_accessible(topic_row, wb_user) is True
+
         fake_db = SimpleNamespace(query=lambda *_args, **_kwargs: _FilteringQuery(rows))
         response = asyncio.run(
             api_module.get_agent_templates_endpoint(
-                user={"sub": "wb-curator", "cognito:groups": ["WormBase"]},
+                user=wb_user,
                 db=fake_db,
             )
         )
@@ -176,6 +180,164 @@ def test_topic_tag_agent_is_excluded_from_agent_studio_templates(monkeypatch):
         template_ids = [item.agent_id for item in response.templates]
         assert "gene_expression_topic_tag" not in template_ids
         assert "gene_extractor" in template_ids
+    finally:
+        agent_loader.reset_cache()
+
+
+def test_get_prompt_diagnostic_hides_topic_tag_from_non_wb_and_allows_wb(monkeypatch):
+    import src.api.agent_studio as api_module
+    from src.lib.agent_studio import catalog_service
+    from src.lib.agent_studio.diagnostic_tools import tool_definitions
+    from src.lib.agent_studio.models import ChatContext
+    from src.lib.prompts import cache as prompt_cache
+    from src.lib.prompts.assembly import PromptLayer, PromptLayerBundle
+
+    try:
+        definitions = _load_shipped_agents(monkeypatch)
+        registry = build_agent_registry()
+        monkeypatch.setattr(catalog_service, "AGENT_REGISTRY", registry)
+        monkeypatch.setattr(prompt_cache, "is_initialized", lambda: True)
+
+        topic_def = definitions["gene_expression_topic_tag"]
+        gene_def = definitions["gene_extractor"]
+        topic_agent = SimpleNamespace(
+            agent_id="gene_expression_topic_tag",
+            agent_name=topic_def.name,
+            description=topic_def.description,
+            source_file="packages/alliance/agents/gene_expression_topic_tag/prompt.yaml",
+            has_group_rules=True,
+            group_rules={"WB": SimpleNamespace()},
+        )
+        gene_agent = SimpleNamespace(
+            agent_id="gene_extractor",
+            agent_name=gene_def.name,
+            description=gene_def.description,
+            source_file="packages/alliance/agents/gene_extractor/prompt.yaml",
+            has_group_rules=True,
+            group_rules={"WB": SimpleNamespace(), "FB": SimpleNamespace()},
+        )
+        agents_by_id = {
+            "gene_expression_topic_tag": topic_agent,
+            "gene_extractor": gene_agent,
+        }
+        layer = PromptLayer(
+            id="gene_expression_topic_tag:base_prompt",
+            kind="base_prompt",
+            title="Base",
+            content="Topic tag base prompt",
+            provenance="prompt_template:system",
+            editable=True,
+            locked=False,
+            source_ref="prompt_templates:topic:version:1",
+            hash="hash-topic",
+        )
+        bundle = PromptLayerBundle(
+            agent_id="gene_expression_topic_tag",
+            layers=(layer,),
+            hash="hash-topic",
+        )
+        fake_catalog = SimpleNamespace(
+            get_agent=lambda agent_id: agents_by_id.get(agent_id),
+            get_effective_prompt_bundle=lambda agent_id, group_id=None: (
+                bundle if agent_id == "gene_expression_topic_tag" else None
+            ),
+            catalog=SimpleNamespace(
+                categories=[SimpleNamespace(agents=list(agents_by_id.values()))],
+                available_groups=["FB", "WB"],
+            ),
+        )
+        monkeypatch.setattr(catalog_service, "get_prompt_catalog", lambda: fake_catalog)
+
+        # Tool contract description sent to Studio chat hides topic tag for non-WB callers.
+        non_wb_desc, _ = tool_definitions._get_prompt_diagnostic_contract(
+            active_group_ids=["FB"]
+        )
+        assert "gene_expression_topic_tag" not in non_wb_desc
+        assert "gene_extractor" in non_wb_desc
+
+        wb_desc, _ = tool_definitions._get_prompt_diagnostic_contract(
+            active_group_ids=["WB"]
+        )
+        assert "gene_expression_topic_tag" in wb_desc
+
+        with tool_definitions.scoped_diagnostic_active_groups(["FB"]):
+            fb_tools = {
+                t["name"]: t
+                for t in api_module._get_all_opus_tools(ChatContext(active_tab="agents"))
+            }
+        assert "gene_expression_topic_tag" not in fb_tools["get_prompt"]["description"]
+
+        with tool_definitions.scoped_diagnostic_active_groups(["WB"]):
+            wb_tools = {
+                t["name"]: t
+                for t in api_module._get_all_opus_tools(ChatContext(active_tab="agents"))
+            }
+        assert "gene_expression_topic_tag" in wb_tools["get_prompt"]["description"]
+
+        # Runtime execution via _execute_tool_call enforces group access.
+        fb_result = asyncio.run(
+            api_module._execute_tool_call(
+                tool_name="get_prompt",
+                tool_input={"agent_id": "gene_expression_topic_tag"},
+                context=ChatContext(active_tab="agents"),
+                user_email="fb@example.org",
+                user_auth_sub="fb-sub",
+                active_group_ids=["FB"],
+            )
+        )
+        assert fb_result["status"] == "error"
+        assert "gene_expression_topic_tag" not in fb_result["available_agents"]
+        assert "gene_extractor" in fb_result["available_agents"]
+
+        wb_result = asyncio.run(
+            api_module._execute_tool_call(
+                tool_name="get_prompt",
+                tool_input={"agent_id": "gene_expression_topic_tag"},
+                context=ChatContext(active_tab="agents"),
+                user_email="wb@example.org",
+                user_auth_sub="wb-sub",
+                active_group_ids=["WB"],
+            )
+        )
+        assert wb_result["status"] == "ok"
+        assert wb_result["agent_id"] == "gene_expression_topic_tag"
+    finally:
+        agent_loader.reset_cache()
+
+
+def test_registry_metadata_omits_topic_tag_domain_format_and_marks_hidden(monkeypatch):
+    import src.api.agent_studio as api_module
+    from src.lib.agent_studio import catalog_service
+
+    try:
+        _load_shipped_agents(monkeypatch)
+        monkeypatch.setattr(catalog_service, "AGENT_REGISTRY", build_agent_registry())
+        monkeypatch.setattr(
+            api_module,
+            "provision_user_async",
+            lambda _principal: asyncio.sleep(0, result=SimpleNamespace(id=1)),
+        )
+        monkeypatch.setattr(
+            api_module, "list_custom_agents_visible_to_user", lambda _db, _uid: []
+        )
+
+        wb_user = {"sub": "wb-curator", "cognito:groups": ["WormBaseCurator"]}
+        assert api_module._authenticated_group_ids(wb_user) == ["WB"]
+        wb_metadata = asyncio.run(
+            api_module.get_registry_metadata(user=wb_user, db=SimpleNamespace())
+        )
+        topic_meta = wb_metadata.agents["gene_expression_topic_tag"]
+        assert topic_meta.show_in_palette is False
+        assert topic_meta.domain_extraction_ref is None
+        assert wb_metadata.agents["gene_extractor"].show_in_palette is True
+        assert wb_metadata.agents["gene_extractor"].domain_extraction_ref is not None
+
+        fb_user = {"sub": "fb-curator", "cognito:groups": ["FlyBaseCurator"]}
+        assert api_module._authenticated_group_ids(fb_user) == ["FB"]
+        fb_metadata = asyncio.run(
+            api_module.get_registry_metadata(user=fb_user, db=SimpleNamespace())
+        )
+        assert "gene_expression_topic_tag" not in fb_metadata.agents
     finally:
         agent_loader.reset_cache()
 

@@ -130,6 +130,20 @@ def test_unauthorized_builder_is_not_projected_as_an_output_choice(sources, monk
     assert not any(item.detail.get("contract_kind") == "packaged_builder" for item in records)
 
 
+def test_hidden_system_agent_records_show_in_palette_false_and_omits_builder_format(sources, monkeypatch):
+    from src.schemas.agent_execution_revision import DomainExtractionRef
+
+    sources[0].show_in_palette = False
+    ref = DomainExtractionRef(package_id="fixture.package", agent_id="fixture_builder", domain_pack_id="fixture.domain")
+    monkeypatch.setattr(catalog, "domain_extraction_ref_for_agent", lambda *_args, **_kwargs: ref)
+
+    records = catalog.build_authorized_capability_catalog(db=object(), context=catalog.CapabilityCatalogContext(user_id=7))
+    system_record = next(item for item in records if item.kind == "agent" and item.resource_id == "system_agent")
+    assert system_record.detail["show_in_palette"] is False
+    assert system_record.detail["domain_extraction_ref"] is None
+    assert not any(item.detail.get("contract_kind") == "packaged_builder" for item in records)
+
+
 def test_small_capability_detail_is_complete_in_one_authorized_call(sources):
     context = catalog.CapabilityCatalogContext(user_id=7)
     search = catalog.search_capabilities(db=object(), context=context, kinds=["agent"])

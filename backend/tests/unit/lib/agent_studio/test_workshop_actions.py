@@ -79,6 +79,21 @@ def test_new_agent_opens_a_draft_without_replacing_a_flow_node(catalog, mode, ag
     assert "node_id" not in result["origin"]
 
 
+def test_hidden_template_is_rejected_for_new_template_draft(catalog):
+    catalog.return_value = [
+        CapabilityRecord(
+            kind="agent",
+            resource_id="hidden_system_agent",
+            name="Hidden System Agent",
+            description="",
+            authorization_scope="system",
+            detail={"show_in_palette": False},
+        )
+    ]
+    with pytest.raises(ValueError, match="not available as a Workshop template"):
+        prepare({"action": "new_agent", "mode": "template", "agent_id": "hidden_system_agent"})
+
+
 @pytest.mark.parametrize("action_input", [
     {"action": "save"}, {"action": "save_as"}, {"action": "return_to_flow"},
     {"action": "show_section", "section": "versions"},

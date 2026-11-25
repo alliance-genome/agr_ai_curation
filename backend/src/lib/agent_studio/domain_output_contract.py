@@ -63,6 +63,7 @@ def domain_extraction_ref_for_agent(
         definition is None or not definition.package_id
         or not definition.curation.domain_pack_id
         or definition.output_schema is not None
+        or not definition.frontend.show_in_palette
         or not is_resource_access_allowed(
             visibility_allowed=True, allowed_group_ids=definition.access.allowed_group_ids,
             active_group_ids=active_group_ids, resource_kind="packaged extraction capability",

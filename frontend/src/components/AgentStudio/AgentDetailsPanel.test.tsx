@@ -352,4 +352,40 @@ describe('AgentDetailsPanel', () => {
     expect(effective).toHaveTextContent('Parent base prompt')
     expect(effective).toHaveTextContent('Curator overlay guidance')
   })
+
+  it('hides Clone to Workshop for show_in_palette=false system agents while preserving Guide tab', () => {
+    metadataMocks.agents = {
+      hidden_agent: { allowed_group_ids: ['group_a'], show_in_palette: false },
+    }
+    const hiddenAgent: PromptInfo = {
+      ...buildDocumentedAgent(),
+      agent_id: 'hidden_agent',
+      agent_name: 'Hidden Agent',
+      show_in_palette: false,
+      documentation: {
+        summary: 'Hidden agent summary.',
+        capabilities: [],
+        data_sources: [],
+        limitations: ['This agent is not offered in this release.'],
+        use_when: ['Not offered in release 0.12.0.'],
+        avoid_when: [],
+        note: '',
+      },
+    }
+
+    render(
+      <AgentDetailsPanel
+        agent={hiddenAgent}
+        selectedGroupId={null}
+        onGroupSelect={vi.fn()}
+        onDiscussWithClaude={vi.fn()}
+        onCloneToWorkshop={vi.fn()}
+      />
+    )
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Hidden Agent' })).toBeInTheDocument()
+    expect(screen.getByText('Not offered in release 0.12.0.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Clone to Workshop' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Discuss with AI Chat' })).toBeInTheDocument()
+  })
 })

@@ -238,11 +238,12 @@ def _agent_records(
         agent_id = str(agent.agent_key)
         category = str(getattr(agent, "category", "") or "Custom")
         supervisor = {"enabled": bool(getattr(agent, "supervisor_enabled", False))}
+        show_in_palette = bool(getattr(agent, "show_in_palette", True))
         policy_entry = {
             "category": category,
             "supervisor": supervisor,
             "frontend": {
-                "show_in_palette": bool(getattr(agent, "show_in_palette", True)),
+                "show_in_palette": show_in_palette,
             },
         }
         flow_selectable = flow_palette_show_in_palette(agent_id, policy_entry)
@@ -255,7 +256,7 @@ def _agent_records(
         domain_envelope = _domain_envelope_detail(agent)
         domain_ref = (
             domain_extraction_ref_for_agent(agent_id, active_group_ids=list(context.active_group_ids))
-            if agent.visibility == "system" else None
+            if agent.visibility == "system" and show_in_palette else None
         )
         output_schema_key = str(
             getattr(agent, "output_schema_key", "") or ""
@@ -314,6 +315,7 @@ def _agent_records(
                     "identity_contract": identity_contract,
                     **exporter_metadata,
                     "visibility": str(agent.visibility),
+                    "show_in_palette": show_in_palette,
                     "allowed_group_ids": list(agent.allowed_group_ids or []),
                     "model_id": str(agent.model_id),
                     "model_reasoning": getattr(agent, "model_reasoning", None),

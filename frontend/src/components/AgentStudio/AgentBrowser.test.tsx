@@ -206,4 +206,52 @@ describe('AgentBrowser', () => {
     expect(screen.getByRole('heading', { level: 2, name: 'Validator A' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Back to Agents' })).not.toBeInTheDocument()
   })
+
+  it('excludes show_in_palette=false system agents from Templates while keeping their Guide readable in All', () => {
+    metadataMocks.agents = {
+      hidden_agent: { allowed_group_ids: ['group_a'], show_in_palette: false },
+      validator_template: { allowed_group_ids: [], show_in_palette: true },
+    }
+    render(
+      <AgentBrowser
+        catalog={buildCatalog([
+          buildAgent('hidden_agent', 'Hidden Template Agent', {
+            show_in_palette: false,
+            subcategory: 'PDF Extraction',
+            documentation: {
+              summary: 'Hidden agent summary.',
+              capabilities: [],
+              data_sources: [],
+              limitations: ['Not offered in this release.'],
+              use_when: ['Not offered in release 0.12.0.'],
+              avoid_when: [],
+              note: '',
+            },
+          }),
+          buildAgent('validator_template', 'Validator Template', {
+            show_in_palette: false,
+            subcategory: 'Data Validation',
+          }),
+        ])}
+        selectedAgentId="hidden_agent"
+        selectedGroupId={null}
+        onAgentSelect={vi.fn()}
+        onGroupSelect={vi.fn()}
+        onCloneToWorkshop={vi.fn()}
+      />
+    )
+
+    // Still readable in All with its Guide tab, without Clone to Workshop.
+    expect(screen.getByText('Not offered in release 0.12.0.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Clone to Workshop' })).not.toBeInTheDocument()
+
+    // Templates tab excludes show_in_palette=false system agents, while keeping
+    // template-eligible validators whose metadata show_in_palette is true.
+    const filterTabs = within(screen.getByRole('tablist', { name: 'Agent list filter' })).getAllByRole('tab')
+    expect(filterTabs.map((tab) => tab.textContent)).toEqual(['All (2)', 'Shared (0)', 'Templates (1)'])
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Templates (1)' }))
+    expect(screen.queryByRole('button', { name: /Hidden Template Agent/ })).not.toBeInTheDocument()
+    expect(screen.getByText('Data Validation')).toBeInTheDocument()
+  })
 })

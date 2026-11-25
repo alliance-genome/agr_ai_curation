@@ -333,6 +333,7 @@ export interface AgentMetadata {
   output_schema_key?: string | null
   is_active?: boolean
   visible?: boolean
+  show_in_palette?: boolean
   allowed_group_ids?: string[]
   produces_flow_artifacts?: boolean
   supervisor_tool?: string

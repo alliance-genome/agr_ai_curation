@@ -174,6 +174,9 @@ def test_human_and_ai_discovery_use_current_package_access(monkeypatch, installe
     assert domain_extraction_ref_for_agent("public_builder", active_group_ids=["WB"]) is None
     assert domain_extraction_ref_for_agent("public_builder", active_group_ids=[]) is None
     assert domain_extraction_ref_for_agent("missing", active_group_ids=["FB"]) is None
+    installed_builder.frontend.show_in_palette = False
+    assert domain_extraction_ref_for_agent("public_builder", active_group_ids=["FB"]) is None
+    installed_builder.frontend.show_in_palette = True
     installed_builder.output_schema = "ValidationResult"
     assert domain_extraction_ref_for_agent("public_builder", active_group_ids=["FB"]) is None
 
