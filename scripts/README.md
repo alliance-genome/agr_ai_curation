@@ -332,7 +332,8 @@ Checks:
 - `local_transformers` backend startup with the `local-reranker` Compose profile
 - `none` backend startup with reranking disabled
 - `/api/admin/health/connections` contract for when the reranker service is
-  actually required
+  actually required (admin-protected; works in local dev mode or with an
+  admin-allowlisted `TESTING_API_KEY`)
 - for `local_transformers`, the backend's effective `RERANKER_URL` matches the
   configured target resolved from exported env, then the local backend `.env`,
   defaulting to `http://reranker-transformers:8080`

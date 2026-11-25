@@ -6,10 +6,7 @@ import {
   WarningAmber as WarningIcon,
 } from '@mui/icons-material';
 import { alpha, useTheme } from '@mui/material/styles';
-import {
-  useConnectionsHealth,
-  getUnhealthyServices,
-} from '../services/adminService';
+import { useConnectionsHealth } from '../services/adminService';
 
 type HealthStatusLevel = 'healthy' | 'degraded' | 'unhealthy';
 
@@ -20,12 +17,12 @@ type HealthStatusLevel = 'healthy' | 'degraded' | 'unhealthy';
  * are unhealthy or unavailable.
  *
  * Features:
- * - Polls /api/admin/health/connections every minute
+ * - Polls /api/health/connections every minute
  * - Shows warning for degraded status (optional services down)
  * - Shows error for unhealthy status (required services down)
  * - Dismissible with X button
  * - Reappears if status worsens after being dismissed
- * - Lists affected services with error messages
+ * - Lists affected service descriptions without exposing URLs or raw errors
  */
 const ConnectionsHealthBanner: React.FC = () => {
   const theme = useTheme();
@@ -65,7 +62,9 @@ const ConnectionsHealthBanner: React.FC = () => {
     return null;
   }
 
-  const unhealthyServices = getUnhealthyServices(health);
+  const unhealthyServices = health.unhealthy_services.filter(
+    (service) => service.description.trim().length > 0
+  );
 
   // Choose styling based on severity
   const isError = health.status === 'unhealthy';
@@ -146,13 +145,10 @@ const ConnectionsHealthBanner: React.FC = () => {
                 Affected services:
               </Typography>
               <Box component="ul" sx={{ m: 0, pl: '1.25rem' }}>
-                {unhealthyServices.slice(0, 4).map((service) => (
-                  <li key={service.service_id}>
-                    {service.service_id}
+                {unhealthyServices.slice(0, 4).map((service, index) => (
+                  <li key={`${service.description}-${service.required}-${index}`}>
+                    {service.description}
                     {service.required && ' (required)'}
-                    {service.last_error && (
-                      <Box component="span" sx={{ opacity: 0.8 }}> - {service.last_error}</Box>
-                    )}
                   </li>
                 ))}
                 {unhealthyServices.length > 4 && (

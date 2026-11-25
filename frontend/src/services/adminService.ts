@@ -1,8 +1,7 @@
 /**
- * Admin Service - API hooks for admin endpoints
+ * Connection Health Service - API hooks for curator status banner
  *
- * Provides hooks for:
- * - Connection health monitoring
+ * Polls the public minimal status endpoint (`GET /api/health/connections`).
  */
 
 import { useQuery, UseQueryOptions } from '@tanstack/react-query';
@@ -37,33 +36,24 @@ const HEALTH_STALE_TIME_MS = parseInt(
 // Types
 // =============================================================================
 
-export interface ServiceHealthStatus {
-  service_id: string;
+export interface UnhealthyServiceStatus {
   description: string;
-  url: string;
   required: boolean;
-  is_healthy: boolean | null;
-  last_error: string | null;
 }
 
 export interface ConnectionsHealthResponse {
+  observed_at: string;
   status: 'healthy' | 'degraded' | 'unhealthy';
-  total_services: number;
-  healthy_count: number;
-  unhealthy_count: number;
-  unknown_count: number;
   required_healthy: boolean;
-  services: Record<string, ServiceHealthStatus>;
+  unhealthy_services: UnhealthyServiceStatus[];
 }
 
 // =============================================================================
 // API Functions
 // =============================================================================
 
-const fetchConnectionsHealth = async (): Promise<ConnectionsHealthResponse> => {
-  const response = await fetch('/api/admin/health/connections', {
-    credentials: 'include', // Include httpOnly cookies for authentication
-  });
+export const fetchConnectionsHealth = async (): Promise<ConnectionsHealthResponse> => {
+  const response = await fetch('/api/health/connections');
 
   if (!response.ok) {
     if (response.status === 503) {
@@ -80,9 +70,8 @@ const fetchConnectionsHealth = async (): Promise<ConnectionsHealthResponse> => {
 // =============================================================================
 
 /**
- * Hook to fetch and monitor external service connection health.
+ * Hook to fetch and monitor minimal public service connection health status.
  *
- * Returns health status for all services defined in config/connections.yaml.
  * Automatically refetches every 60 seconds.
  *
  * @example
@@ -102,35 +91,3 @@ export const useConnectionsHealth = (
     staleTime: HEALTH_STALE_TIME_MS,
     ...options,
   });
-
-/**
- * Get unhealthy services from the health response.
- *
- * @param health - ConnectionsHealthResponse from useConnectionsHealth
- * @returns Array of unhealthy service statuses
- */
-export const getUnhealthyServices = (
-  health: ConnectionsHealthResponse | undefined
-): ServiceHealthStatus[] => {
-  if (!health) return [];
-
-  return Object.values(health.services).filter(
-    (service) => service.is_healthy === false
-  );
-};
-
-/**
- * Get unhealthy required services from the health response.
- *
- * @param health - ConnectionsHealthResponse from useConnectionsHealth
- * @returns Array of unhealthy required service statuses
- */
-export const getUnhealthyRequiredServices = (
-  health: ConnectionsHealthResponse | undefined
-): ServiceHealthStatus[] => {
-  if (!health) return [];
-
-  return Object.values(health.services).filter(
-    (service) => service.required && service.is_healthy === false
-  );
-};

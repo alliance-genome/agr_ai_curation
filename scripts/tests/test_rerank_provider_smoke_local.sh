@@ -173,11 +173,69 @@ test_compose_override_file_is_created_for_custom_reranker_url() {
   )
 }
 
+test_run_http_check_sends_api_key_via_stdin_only_for_admin_paths() {
+  (
+    cd "${REPO_ROOT}"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/scripts/testing/rerank_provider_smoke_local.sh"
+    ensure_python_bin
+
+    local temp_dir
+    temp_dir="$(mktemp -d)"
+    trap 'rm -rf "${temp_dir}"' EXIT
+
+    cat > "${temp_dir}/curl" <<'EOF'
+#!/usr/bin/env bash
+out_file=""
+stdin_header=""
+printf '%s\n' "$@" > "${CURL_LOG_DIR}/args.txt"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o)
+      out_file="$2"
+      shift 2
+      ;;
+    -H)
+      if [[ "$2" == "@-" ]]; then
+        stdin_header="$(cat)"
+      fi
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+printf '%s' "${stdin_header}" > "${CURL_LOG_DIR}/stdin_header.txt"
+printf '{"status":"healthy"}' > "${out_file}"
+printf '200'
+EOF
+    chmod +x "${temp_dir}/curl"
+
+    export PATH="${temp_dir}:${PATH}"
+    export CURL_LOG_DIR="${temp_dir}"
+    export TESTING_API_KEY="smoke-secret-value"
+    PASS_COUNT=0
+    FAIL_COUNT=0
+
+    run_http_check "none" "NONE_CONNECTIONS" "/api/admin/health/connections" "200" >/dev/null
+    [[ "$(cat "${temp_dir}/stdin_header.txt")" == "X-API-Key: smoke-secret-value" ]]
+    ! grep -F "smoke-secret-value" "${temp_dir}/args.txt" >/dev/null
+
+    run_http_check "none" "NONE_HEALTH" "/health" "200" >/dev/null
+    [[ -z "$(cat "${temp_dir}/stdin_header.txt")" ]]
+    ! grep -F "smoke-secret-value" "${temp_dir}/args.txt" >/dev/null
+    [[ "${PASS_COUNT}" -eq 2 ]]
+    [[ "${FAIL_COUNT}" -eq 0 ]]
+  )
+}
+
 test_local_transformers_target_check_passes_for_local_compose_url
 test_local_transformers_target_check_passes_for_custom_override_url
 test_local_transformers_target_check_passes_for_repo_env_url
 test_local_transformers_target_check_fails_for_mismatched_configured_url
 test_compose_override_file_is_skipped_when_repo_env_sets_reranker_url
 test_compose_override_file_is_created_for_custom_reranker_url
+test_run_http_check_sends_api_key_via_stdin_only_for_admin_paths
 
 echo "rerank_provider_smoke_local tests passed"

@@ -30,9 +30,12 @@ from src.api.benchmark_flow_imports import router as benchmark_flow_imports_rout
 from src.api.benchmark_assistant import router as benchmark_assistant_router
 from src.api.benchmark_onboarding import router as benchmark_onboarding_router
 from src.schemas.benchmark_job_examples import install_openapi_examples as install_benchmark_openapi_examples
-from src.api.admin import connections_router as admin_connections_router
+from src.api.admin import (
+    connections_router as admin_connections_router,
+    prompts_router as admin_prompts_router,
+    public_connections_router,
+)
 from src.api.admin.costs import router as admin_costs_router
-from src.api.admin import prompts_router as admin_prompts_router
 from src.config import get_app_version, get_pdf_storage_path
 from src.lib.logging_config import configure_logging, create_request_context_middleware
 from src.lib.flow_transfer.config import validate_flow_transfer_config
@@ -951,6 +954,7 @@ def create_app() -> FastAPI:
     application.include_router(settings.router, tags=["Settings"])
     application.include_router(schema.router, tags=["Schema"])
     application.include_router(health.router, tags=["Health"])
+    application.include_router(public_connections_router)
     application.include_router(pdf_viewer.router, tags=["PDF Viewer"])
     application.include_router(logs.router, prefix="/api", tags=["Logs"])
     application.include_router(admin_prompts_router, tags=["Admin - Prompts"])

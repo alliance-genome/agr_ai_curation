@@ -1,16 +1,19 @@
-"""Integration tests for /api/admin/health/connections endpoints.
+"""Integration tests for public and admin connection health endpoints.
 
-Tests that the health API properly redacts credentials and returns
-expected response structure.
-
-Note: These endpoints are public (no auth required) for monitoring purposes.
-Both answer from the shared cached observation.
+Verifies:
+- GET /api/health/connections is public and returns only minimal status fields
+  (no URLs, hostnames, ports, raw errors, or internal service IDs).
+- GET /api/admin/health/connections and /api/admin/health/connections/{service_id}
+  require admin authorization (401 unauthenticated, 403 non-admin, 200 admin)
+  and redact credentials from URLs and errors.
 """
 
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from unittest.mock import patch, AsyncMock
+
+import src.api.admin.auth as admin_auth
 
 # Common credential patterns that should NEVER appear in API responses
 CREDENTIAL_PATTERNS = [
@@ -42,7 +45,7 @@ def mock_connections_loaded():
         "test_db": ConnectionDefinition(
             service_id="test_db",
             description="Test database",
-            url="testdb://dbuser:dbsecretpass@localhost:5432/testdb",
+            url="testdb://dbuser:dbsecretpass@db-private.local:5432/testdb",
             health_check=HealthCheck(method="CONNECT"),
             required=True,
             is_healthy=True,
@@ -51,16 +54,16 @@ def mock_connections_loaded():
         "test_cache": ConnectionDefinition(
             service_id="test_cache",
             description="Test cache",
-            url="testcache://cacheuser:cachesecretpw@localhost:6379",
+            url="testcache://cacheuser:cachesecretpw@cache-private.local:6379",
             health_check=HealthCheck(method="PING"),
             required=False,
-            is_healthy=True,
-            last_error=None,
+            is_healthy=False,
+            last_error="Connection refused to cache-private.local:6379",
         ),
         "test_api": ConnectionDefinition(
             service_id="test_api",
             description="Test API (no credentials)",
-            url="http://localhost:8080/api",
+            url="http://api-private.local:8080/api",
             health_check=HealthCheck(endpoint="/health", method="GET"),
             required=False,
             is_healthy=True,
@@ -92,14 +95,98 @@ async def test_client():
             await owner.close()
 
 
+@pytest.fixture
+def admin_headers(monkeypatch):
+    """Configure an authenticated admin API-key identity."""
+    monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.setenv("TESTING_API_KEY", "integration-admin-key")
+    monkeypatch.setenv("TESTING_API_KEY_EMAIL", "admin@example.org")
+    monkeypatch.setattr(admin_auth, "get_admin_emails", lambda: {"admin@example.org"})
+    return {"X-API-Key": "integration-admin-key"}
+
+
 class TestConnectionsHealthEndpointSecurity:
-    """Test that health endpoints never expose credentials."""
+    """Test public vs admin connection health authorization and redaction."""
+
+    @pytest.mark.asyncio
+    async def test_public_connections_route_exposes_only_minimal_status(
+        self, test_client, mock_connections_loaded, monkeypatch
+    ):
+        """GET /api/health/connections works without auth and omits all internal details."""
+        monkeypatch.setenv("DEV_MODE", "false")
+        monkeypatch.delenv("TESTING_API_KEY", raising=False)
+        monkeypatch.setattr(admin_auth, "get_admin_emails", lambda: {"admin@example.org"})
+
+        with patch(
+            "src.lib.config.connections_loader.check_all_health",
+            new_callable=AsyncMock,
+        ) as mock_check:
+            from src.lib.config.connections_loader import get_connection_status
+            mock_check.return_value = get_connection_status()
+
+            response = await test_client.get("/api/health/connections")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert set(data.keys()) == {
+                "observed_at",
+                "status",
+                "required_healthy",
+                "unhealthy_services",
+            }
+            assert data["status"] == "degraded"
+            assert data["required_healthy"] is True
+            assert data["unhealthy_services"] == [
+                {"description": "Test cache", "required": False}
+            ]
+
+            raw = response.text
+            for forbidden in (
+                "url",
+                "last_error",
+                "service_id",
+                "test_db",
+                "test_cache",
+                "test_api",
+                "db-private.local",
+                "cache-private.local",
+                "api-private.local",
+                "5432",
+                "6379",
+                "8080",
+                "dbsecretpass",
+                "cachesecretpw",
+                "Connection refused",
+            ):
+                assert forbidden not in raw
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "path",
+        ["/api/admin/health/connections", "/api/admin/health/connections/test_db"],
+    )
+    async def test_admin_routes_require_authentication_and_admin_role(
+        self, test_client, mock_connections_loaded, monkeypatch, path
+    ):
+        """Admin connection health routes return 401 unauthenticated and 403 for curators."""
+        monkeypatch.setenv("DEV_MODE", "false")
+        monkeypatch.delenv("TESTING_API_KEY", raising=False)
+        monkeypatch.delenv("AUTH_PROVIDER", raising=False)
+        monkeypatch.setattr(admin_auth, "get_admin_emails", lambda: {"admin@example.org"})
+
+        anon = await test_client.get(path)
+        assert anon.status_code == 401
+
+        monkeypatch.setenv("TESTING_API_KEY", "curator-key")
+        monkeypatch.setenv("TESTING_API_KEY_EMAIL", "curator@example.org")
+        curator = await test_client.get(path, headers={"X-API-Key": "curator-key"})
+        assert curator.status_code == 403
 
     @pytest.mark.asyncio
     async def test_all_connections_endpoint_redacts_credentials(
-        self, test_client, mock_connections_loaded
+        self, test_client, mock_connections_loaded, admin_headers
     ):
-        """GET /api/admin/health/connections should never expose credentials."""
+        """GET /api/admin/health/connections allows admins and never exposes credentials."""
         # Mock the health check to avoid actual network calls
         with patch(
             "src.lib.config.connections_loader.check_all_health",
@@ -109,7 +196,10 @@ class TestConnectionsHealthEndpointSecurity:
             from src.lib.config.connections_loader import get_connection_status
             mock_check.return_value = get_connection_status()
 
-            response = await test_client.get("/api/admin/health/connections")
+            response = await test_client.get(
+                "/api/admin/health/connections",
+                headers=admin_headers,
+            )
 
             # Should succeed
             assert response.status_code == 200
@@ -128,9 +218,9 @@ class TestConnectionsHealthEndpointSecurity:
 
     @pytest.mark.asyncio
     async def test_single_connection_endpoint_redacts_credentials(
-        self, test_client, mock_connections_loaded
+        self, test_client, mock_connections_loaded, admin_headers
     ):
-        """GET /api/admin/health/connections/{service_id} should never expose credentials."""
+        """GET /api/admin/health/connections/{service_id} allows admins and never exposes credentials."""
         with patch(
             "src.lib.config.connections_loader.check_all_health",
             new_callable=AsyncMock,
@@ -138,7 +228,10 @@ class TestConnectionsHealthEndpointSecurity:
             from src.lib.config.connections_loader import get_connection_status
             mock_check.return_value = get_connection_status()
 
-            response = await test_client.get("/api/admin/health/connections/test_db")
+            response = await test_client.get(
+                "/api/admin/health/connections/test_db",
+                headers=admin_headers,
+            )
 
             # Should succeed
             assert response.status_code == 200
@@ -160,9 +253,9 @@ class TestConnectionsHealthEndpointSecurity:
 
     @pytest.mark.asyncio
     async def test_response_structure_includes_required_fields(
-        self, test_client, mock_connections_loaded
+        self, test_client, mock_connections_loaded, admin_headers
     ):
-        """Verify response structure is correct."""
+        """Verify admin response structure is correct."""
         with patch(
             "src.lib.config.connections_loader.check_all_health",
             new_callable=AsyncMock,
@@ -170,7 +263,10 @@ class TestConnectionsHealthEndpointSecurity:
             from src.lib.config.connections_loader import get_connection_status
             mock_check.return_value = get_connection_status()
 
-            response = await test_client.get("/api/admin/health/connections")
+            response = await test_client.get(
+                "/api/admin/health/connections",
+                headers=admin_headers,
+            )
 
             assert response.status_code == 200
             data = response.json()

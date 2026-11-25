@@ -225,7 +225,11 @@ run_http_check() {
   local tmp_body
   tmp_body="$(mktemp)"
   local http_code
-  http_code="$(curl -sS --max-time "${max_time}" -w "%{http_code}" -o "${tmp_body}" "${BASE_URL}${path}" || true)"
+  if [[ "${path}" == /api/admin/* && -n "${TESTING_API_KEY:+set}" ]]; then
+    http_code="$(curl -sS --max-time "${max_time}" -H @- -w "%{http_code}" -o "${tmp_body}" "${BASE_URL}${path}" <<<"X-API-Key: ${TESTING_API_KEY}" || true)"
+  else
+    http_code="$(curl -sS --max-time "${max_time}" -w "%{http_code}" -o "${tmp_body}" "${BASE_URL}${path}" || true)"
+  fi
 
   local body
   body="$(cat "${tmp_body}" 2>/dev/null || true)"
