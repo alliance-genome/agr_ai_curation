@@ -86,6 +86,13 @@ export type PaperSourceFileTickability =
 
 export type PaperSourceFile = PaperSourceFileFields & PaperSourceFileTickability
 
+/** On the identifier listing, the main paper and unconverted supplements can be tickable without converted text. */
+export type IdentifierSourceFileTickability =
+  | { tickable: true; not_tickable_reason: null; converted_md5: string | null }
+  | { tickable: false; not_tickable_reason: NotTickableReasonCode; converted_md5: string | null }
+
+export type IdentifierSourceFile = PaperSourceFileFields & IdentifierSourceFileTickability
+
 interface PaperSourceFileFields {
   recognized: true
   provider_file_id: string
@@ -110,8 +117,21 @@ export interface UnrecognizedPaperSourceFile {
 
 export type PaperSourceListedFile = PaperSourceFile | UnrecognizedPaperSourceFile
 
+export type IdentifierSourceListedFile = IdentifierSourceFile | UnrecognizedPaperSourceFile
+
 export interface PaperSourceListing {
   files: PaperSourceListedFile[]
+  not_shown_count: number
+  duplicate_copies_count: number
+}
+
+export interface IdentifierSourceListing {
+  provider: string | null
+  reference_id: string | null
+  reference_curie: string | null
+  main_status: string
+  existing_document_id: string | null
+  files: IdentifierSourceListedFile[]
   not_shown_count: number
   duplicate_copies_count: number
 }
@@ -119,6 +139,10 @@ export interface PaperSourceListing {
 export type PaperSourceListingResult =
   | { kind: 'listing'; listing: PaperSourceListing }
   /** The HTTP status tells causes of one code apart (a missing sign-in is 409, a reader that is down 503). */
+  | { kind: 'refused'; code: ListingRefusalCode; httpStatus: number }
+
+export type IdentifierSourceListingResult =
+  | { kind: 'listing'; listing: IdentifierSourceListing }
   | { kind: 'refused'; code: ListingRefusalCode; httpStatus: number }
 
 export class PaperSourceFilesContractError extends Error {
@@ -207,7 +231,11 @@ function parseCheck(value: unknown): PaperSourceFileCheck {
   }
 }
 
-function parseFile(value: unknown): PaperSourceListedFile {
+type ListingRoute = 'paper' | 'identifier'
+
+function parseFile(value: unknown, route: 'paper'): PaperSourceListedFile
+function parseFile(value: unknown, route: 'identifier'): IdentifierSourceListedFile
+function parseFile(value: unknown, route: ListingRoute = 'paper'): PaperSourceListedFile | IdentifierSourceListedFile {
   if (!isRecord(value)) {
     throw new PaperSourceFilesContractError('A listed file must be an object')
   }
@@ -225,11 +253,21 @@ function parseFile(value: unknown): PaperSourceListedFile {
   const fileRole = oneOfOrNull(value.file_role, FILE_ROLES, 'file_role')
   const md5 = stringOrNull(value.md5, 'md5')
   const convertedMd5 = stringOrNull(value.converted_md5, 'converted_md5')
-  if (value.tickable && fileRole === 'main') {
-    throw new PaperSourceFilesContractError('The per-paper listing never offers the main file for adding')
-  }
-  if (value.tickable && (convertedMd5 === null || convertedMd5.length === 0)) {
-    throw new PaperSourceFilesContractError('A supplement that can be added must have converted text')
+  const status = oneOf(value.status, FILE_STATUSES, 'status')
+  if (route === 'paper') {
+    if (value.tickable && fileRole === 'main') {
+      throw new PaperSourceFilesContractError('The per-paper listing never offers the main file for adding')
+    }
+    if (value.tickable && (convertedMd5 === null || convertedMd5.length === 0)) {
+      throw new PaperSourceFilesContractError('A supplement that can be added must have converted text')
+    }
+  } else if (value.tickable && fileRole !== 'main') {
+    if (status === 'ready' && (convertedMd5 === null || convertedMd5.length === 0)) {
+      throw new PaperSourceFilesContractError('A converted supplement that can be chosen must have converted text')
+    }
+    if (status === 'large_data_file' || status === 'type_not_supported') {
+      throw new PaperSourceFilesContractError('An unsupported or large data file cannot be chosen')
+    }
   }
   const tickable = value.tickable
   const known = {
@@ -238,13 +276,37 @@ function parseFile(value: unknown): PaperSourceListedFile {
     file_role: fileRole,
     md5,
     category: oneOfOrNull(value.category, CATEGORIES, 'category'),
-    status: oneOf(value.status, FILE_STATUSES, 'status'),
+    status,
     in_this_paper: value.in_this_paper,
   }
   try {
     const reason = codeOrNull(value.not_tickable_reason, NOT_TICKABLE_REASON_CODES, 'not_tickable_reason')
-    let tickability: PaperSourceFileTickability
-    if (tickable && reason === null && convertedMd5 !== null && convertedMd5.length > 0) {
+    const parsedObservation = observation === null
+      ? null
+      : {
+          code: code(observation.code, OBSERVATION_CODES, 'last_provider_observation.code'),
+          observed_at: observation.observed_at as string,
+        }
+    const parsedCheck = parseCheck(value.check)
+    if (route === 'paper') {
+      let tickability: PaperSourceFileTickability
+      if (tickable && reason === null && convertedMd5 !== null && convertedMd5.length > 0) {
+        tickability = { tickable: true, not_tickable_reason: null, converted_md5: convertedMd5 }
+      } else if (!tickable && reason !== null) {
+        tickability = { tickable: false, not_tickable_reason: reason, converted_md5: convertedMd5 }
+      } else {
+        throw new PaperSourceFilesContractError('A listed file must be either tickable or give a reason, not both or neither')
+      }
+      return {
+        recognized: true,
+        ...known,
+        ...tickability,
+        last_provider_observation: parsedObservation,
+        check: parsedCheck,
+      }
+    }
+    let tickability: IdentifierSourceFileTickability
+    if (tickable && reason === null) {
       tickability = { tickable: true, not_tickable_reason: null, converted_md5: convertedMd5 }
     } else if (!tickable && reason !== null) {
       tickability = { tickable: false, not_tickable_reason: reason, converted_md5: convertedMd5 }
@@ -255,13 +317,8 @@ function parseFile(value: unknown): PaperSourceListedFile {
       recognized: true,
       ...known,
       ...tickability,
-      last_provider_observation: observation === null
-        ? null
-        : {
-            code: code(observation.code, OBSERVATION_CODES, 'last_provider_observation.code'),
-            observed_at: observation.observed_at as string,
-          },
-      check: parseCheck(value.check),
+      last_provider_observation: parsedObservation,
+      check: parsedCheck,
     }
   } catch (error) {
     if (!(error instanceof UnknownCode)) {
@@ -276,7 +333,26 @@ export function parsePaperSourceListing(value: unknown): PaperSourceListing {
     throw new PaperSourceFilesContractError('The listing must hold a list of files')
   }
   return {
-    files: value.files.map(parseFile),
+    files: value.files.map((item) => parseFile(item, 'paper')),
+    not_shown_count: count(value.not_shown_count, 'not_shown_count'),
+    duplicate_copies_count: count(value.duplicate_copies_count, 'duplicate_copies_count'),
+  }
+}
+
+export function parseIdentifierSourceListing(value: unknown): IdentifierSourceListing {
+  if (!isRecord(value) || !Array.isArray(value.files)) {
+    throw new PaperSourceFilesContractError('The listing must hold a list of files')
+  }
+  if (typeof value.main_status !== 'string' || value.main_status.length === 0) {
+    throw new PaperSourceFilesContractError('Listing field "main_status" must be a non-empty string')
+  }
+  return {
+    provider: stringOrNull(value.provider, 'provider'),
+    reference_id: stringOrNull(value.reference_id, 'reference_id'),
+    reference_curie: stringOrNull(value.reference_curie, 'reference_curie'),
+    main_status: value.main_status,
+    existing_document_id: stringOrNull(value.existing_document_id, 'existing_document_id'),
+    files: value.files.map((item) => parseFile(item, 'identifier')),
     not_shown_count: count(value.not_shown_count, 'not_shown_count'),
     duplicate_copies_count: count(value.duplicate_copies_count, 'duplicate_copies_count'),
   }

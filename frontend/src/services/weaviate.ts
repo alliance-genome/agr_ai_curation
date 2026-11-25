@@ -10,6 +10,12 @@ import { logger } from './logger';
 import { clearAllNamespacedChatLocalStorage } from '../lib/chatCacheKeys';
 import { safeSetItem } from '../lib/browserStorage';
 import { PDF_JOB_LIMIT } from '../features/documents/documentIntakeConfig';
+import {
+  LISTING_REFUSAL_CODES,
+  parseIdentifierSourceListing,
+  type IdentifierSourceListing,
+  type IdentifierSourceListingResult,
+} from '../features/documents/paperSourceFiles';
 import type {
   AddPaperFileInput,
   AddPaperFilesRequest,
@@ -32,6 +38,8 @@ export type {
   DocumentFileRemovalCheckResponse,
   DocumentFileRemovalResponse,
   FileRemovalRefusalCode,
+  IdentifierSourceListing,
+  IdentifierSourceListingResult,
   RecognizedSupplementProgressEntry,
   SupplementJobKind,
   SupplementJobProgress,
@@ -392,6 +400,7 @@ export interface LiteratureImportResult {
   normalizedIdentifier: string | null;
   status: LiteratureImportStatus;
   message: string;
+  errorCode?: string;
   documentId?: string;
   filename?: string;
   jobId?: string;
@@ -402,6 +411,32 @@ export interface LiteratureImportResult {
     convertedArtifactId?: string;
     sourceMd5: string | null;
   };
+}
+
+export type ImportSourceSupplementChoice =
+  Pick<ChosenSupplementInput, 'identifier' | 'provider_file_id'>
+  & Partial<Pick<ChosenSupplementInput, 'md5' | 'converted_md5'>>;
+
+/**
+ * Structured error thrown by source-identifier resolve/import requests.
+ * Preserves HTTP status and structured refusal codes (e.g. 422 `file_not_tickable` /
+ * `paper_file_limit` with optional `limit_value`, or 409 / 503 refusals).
+ */
+export class SourceIdentifierImportError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+  readonly limitValue: number | null;
+
+  constructor(
+    message: string,
+    options: { status: number; code?: string | null; limitValue?: number | null },
+  ) {
+    super(message);
+    this.name = 'SourceIdentifierImportError';
+    this.status = options.status;
+    this.code = options.code ?? null;
+    this.limitValue = options.limitValue ?? null;
+  }
 }
 
 interface IdentifierImportApiResult {
@@ -790,6 +825,9 @@ const normalizeIdentifierImportResult = (
     normalizedIdentifier: result.normalized_identifier ?? null,
     status: identifierStatusFromApiResult(result),
     message: result.message,
+    ...(typeof result.error_code === 'string' && result.error_code.trim()
+      ? { errorCode: result.error_code.trim() }
+      : {}),
     documentId: result.document_id ?? result.existing_document_id ?? undefined,
     filename: result.filename ?? undefined,
     jobId: result.job_id ?? undefined,
@@ -805,23 +843,81 @@ const normalizeIdentifierImportResult = (
   };
 };
 
+const toPositiveIntegerOrNull = (value: unknown): number | null => (
+  typeof value === 'number' && Number.isInteger(value) && value >= 1 ? value : null
+);
+
 const postIdentifierBatch = async (
   action: 'resolve' | 'import',
   rawIdentifiers: string,
+  supplements?: ReadonlyArray<ImportSourceSupplementChoice>,
 ): Promise<IdentifierImportResponse> => {
+  const requestBody: {
+    identifiers: string;
+    supplements?: Array<{
+      identifier: string;
+      provider_file_id: string;
+      md5: string | null;
+      converted_md5: string | null;
+    }>;
+  } = { identifiers: rawIdentifiers };
+
+  if (action === 'import' && supplements && supplements.length > 0) {
+    // Serialize ONLY the exact I6 fields accepted by DocumentSourceSupplementChoice (extra="forbid").
+    requestBody.supplements = supplements.map((choice) => ({
+      identifier: choice.identifier,
+      provider_file_id: choice.provider_file_id,
+      md5: choice.md5 ?? null,
+      converted_md5: choice.converted_md5 ?? null,
+    }));
+  }
+
   const response = await fetch(`${API_BASE_URL}/documents/${action}/source-identifiers`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ identifiers: rawIdentifiers }),
+    body: JSON.stringify(requestBody),
   });
 
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    const detail = typeof payload === 'object' && payload && 'detail' in payload
-      ? String((payload as { detail?: unknown }).detail ?? '')
-      : '';
-    throw new Error(detail || 'Failed to process source identifiers.');
+    const rawDetail = toRecordOrNull(payload)?.detail;
+    if (typeof rawDetail === 'string') {
+      const trimmedDetail = rawDetail.trim();
+      const disabledCode =
+        response.status === 503 && trimmedDetail.toLowerCase() === 'document-source import is disabled'
+          ? 'document_source_import_disabled'
+          : null;
+      throw new SourceIdentifierImportError(
+        trimmedDetail || 'Failed to process source identifiers.',
+        { status: response.status, code: disabledCode },
+      );
+    }
+    const detailRecord = toRecordOrNull(rawDetail);
+    if (detailRecord) {
+      const code =
+        (typeof detailRecord.code === 'string' && detailRecord.code.trim())
+        || (typeof detailRecord.error === 'string' && detailRecord.error.trim())
+        || null;
+      const limitValue = toPositiveIntegerOrNull(detailRecord.limit_value);
+      const detailMessage =
+        typeof detailRecord.message === 'string' && detailRecord.message.trim()
+          ? detailRecord.message.trim()
+          : null;
+      const defaultMessage = code === 'document_source_import_disabled'
+        ? 'Document-source import is disabled.'
+        : code
+          ? `Request refused (${code}).`
+          : 'Failed to process source identifiers.';
+      throw new SourceIdentifierImportError(detailMessage ?? defaultMessage, {
+        status: response.status,
+        code,
+        limitValue,
+      });
+    }
+    throw new SourceIdentifierImportError('Failed to process source identifiers.', {
+      status: response.status,
+    });
   }
 
   const payload = await response.json();
@@ -841,7 +937,32 @@ export const resolveSourceIdentifiers = (
 
 export const importSourceIdentifiers = (
   rawIdentifiers: string,
-): Promise<IdentifierImportResponse> => postIdentifierBatch('import', rawIdentifiers);
+  supplements?: ReadonlyArray<ImportSourceSupplementChoice>,
+): Promise<IdentifierImportResponse> => postIdentifierBatch('import', rawIdentifiers, supplements);
+
+export const fetchDocumentSourceFiles = async (
+  identifier: string,
+  signal?: AbortSignal,
+): Promise<IdentifierSourceListingResult> => {
+  const response = await fetch(
+    `${API_BASE_URL}/document-sources/files?identifier=${encodeURIComponent(identifier)}`,
+    {
+      credentials: 'include',
+      signal,
+    },
+  );
+  const payload = await response.json().catch(() => null);
+  if (response.ok) {
+    return { kind: 'listing', listing: parseIdentifierSourceListing(payload) };
+  }
+  const detail = toRecordOrNull(toRecordOrNull(payload)?.detail);
+  const rawCode = detail?.error;
+  const refusal = LISTING_REFUSAL_CODES.find((candidate) => candidate === rawCode);
+  if (refusal !== undefined) {
+    return { kind: 'refused', code: refusal, httpStatus: response.status };
+  }
+  throw new Error(`Failed to list the paper's files in the provider (${response.status})`);
+};
 
 export const fetchDocumentSourceProviderConfiguration = async (
   options?: RequestInit,

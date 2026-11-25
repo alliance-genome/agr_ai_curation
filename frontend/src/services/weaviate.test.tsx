@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import fileListingFixture from '@/test/fixtures/supplements/file_listing.json';
+import { PaperSourceFilesContractError } from '@/features/documents/paperSourceFiles';
 import {
   ACTIVE_PDF_JOB_STATUSES,
   AddDocumentSourceFilesError,
@@ -9,12 +11,14 @@ import {
   addDocumentSourceFiles,
   fetchActivePdfJobsForDocument,
   fetchDocumentList,
+  fetchDocumentSourceFiles,
   fetchDocumentSourceProviderConfiguration,
   fetchPdfJob,
   fetchPdfJobs,
   importSourceIdentifiers,
   isActivePdfJobStatus,
   resolveSourceIdentifiers,
+  SourceIdentifierImportError,
   useDocument,
   useDocumentChunks,
   useWeaviateSettings,
@@ -25,6 +29,7 @@ import {
   useWeaviateHealth,
   normalizeDocumentListResponse,
   normalizeDocumentDetailResponse,
+  type ChosenSupplementInput,
   type OperationResult,
 } from './weaviate';
 import { logger } from './logger';
@@ -41,9 +46,11 @@ const createWrapper = () => {
     },
   });
 
-  return ({ children }: { children: React.ReactNode }) => (
+  const QueryClientTestWrapper = ({ children }: { children: React.ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
+
+  return QueryClientTestWrapper;
 };
 
 describe('weaviate service', () => {
@@ -470,6 +477,235 @@ describe('weaviate service', () => {
       );
       expect(rawPage.total).toBe(75);
       expect(rawPage.jobs).toEqual([otherJob]);
+    });
+
+    it('fetches and parses identifier file listings from /document-sources/files', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => fileListingFixture,
+      });
+
+      const controller = new AbortController();
+      const result = await fetchDocumentSourceFiles('PMID:23970418', controller.signal);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/weaviate/document-sources/files?identifier=PMID%3A23970418',
+        {
+          credentials: 'include',
+          signal: controller.signal,
+        },
+      );
+      expect(result.kind).toBe('listing');
+      if (result.kind === 'listing') {
+        expect(result.listing.main_status).toBe('ready');
+        expect(result.listing.existing_document_id).toBeNull();
+        expect(result.listing.not_shown_count).toBe(2);
+        expect(result.listing.duplicate_copies_count).toBe(1);
+        expect(result.listing.files).toHaveLength(6);
+        const tickable = result.listing.files[1];
+        expect(tickable?.recognized).toBe(true);
+        if (tickable?.recognized) {
+          expect(tickable.md5).toBe('original-md5-20');
+          expect(tickable.converted_md5).toBe('converted-md5-20');
+        }
+      }
+    });
+
+    it('maps structured /document-sources/files refusals and rejects unknown errors or bad shapes', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 409,
+          json: async () => ({ detail: { error: 'document_source_curator_token_unavailable' } }),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 503,
+          json: async () => ({ detail: { error: 'document_source_curator_token_unavailable' } }),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          json: async () => ({ detail: { error: 'file_listing_failed' } }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ ...fileListingFixture, files: 'bad' }),
+        });
+
+      await expect(fetchDocumentSourceFiles('PMID:1')).resolves.toEqual({
+        kind: 'refused',
+        code: 'document_source_curator_token_unavailable',
+        httpStatus: 409,
+      });
+      await expect(fetchDocumentSourceFiles('PMID:1')).resolves.toEqual({
+        kind: 'refused',
+        code: 'document_source_curator_token_unavailable',
+        httpStatus: 503,
+      });
+      await expect(fetchDocumentSourceFiles('PMID:1')).rejects.toThrow(
+        'Failed to list the paper\'s files in the provider (500)',
+      );
+      await expect(fetchDocumentSourceFiles('PMID:1')).rejects.toThrow(
+        PaperSourceFilesContractError,
+      );
+    });
+
+    it('serializes only the exact I6 fields when supplements are non-empty and omits supplements when empty', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ imported_count: 1, results: [] }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ imported_count: 1, results: [] }),
+        });
+
+      await importSourceIdentifiers('PMID:101', []);
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        '/api/weaviate/documents/import/source-identifiers',
+        expect.objectContaining({
+          body: JSON.stringify({ identifiers: 'PMID:101' }),
+        }),
+      );
+
+      const withDisplayName: ChosenSupplementInput = {
+        identifier: 'PMID:101',
+        provider_file_id: '20',
+        md5: 'original-md5-20',
+        converted_md5: 'converted-md5-20',
+        display_name: 'Made_up_S20',
+      };
+      await importSourceIdentifiers('PMID:101', [
+        withDisplayName,
+        {
+          identifier: 'PMID:101',
+          provider_file_id: '40',
+          md5: 'original-md5-40',
+          converted_md5: null,
+        },
+      ]);
+
+      const secondInit = mockFetch.mock.calls[1]?.[1] as { body: string };
+      const parsedBody = JSON.parse(secondInit.body) as {
+        identifiers: string;
+        supplements: Array<Record<string, unknown>>;
+      };
+      expect(parsedBody).toEqual({
+        identifiers: 'PMID:101',
+        supplements: [
+          {
+            identifier: 'PMID:101',
+            provider_file_id: '20',
+            md5: 'original-md5-20',
+            converted_md5: 'converted-md5-20',
+          },
+          {
+            identifier: 'PMID:101',
+            provider_file_id: '40',
+            md5: 'original-md5-40',
+            converted_md5: null,
+          },
+        ],
+      });
+      expect(Object.keys(parsedBody.supplements[0]!).sort()).toEqual([
+        'converted_md5',
+        'identifier',
+        'md5',
+        'provider_file_id',
+      ]);
+      expect('display_name' in parsedBody.supplements[0]!).toBe(false);
+    });
+
+    it('preserves structured 422/409/503 refusal details and per-row errorCode on source-identifier imports', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 422,
+          json: async () => ({ detail: { code: 'paper_file_limit', limit_value: 20 } }),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 422,
+          json: async () => ({ detail: { code: 'file_not_tickable' } }),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 503,
+          json: async () => ({
+            detail: {
+              error: 'document_source_curator_token_unavailable',
+              message: 'Document-source authentication is unavailable.',
+            },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 503,
+          json: async () => ({ detail: 'Document-source import is disabled' }),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 503,
+          json: async () => ({ detail: { error: 'document_source_import_disabled' } }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            imported_count: 0,
+            results: [
+              {
+                identifier: 'PMID:101',
+                normalized_identifier: 'PMID:101',
+                status: 'error',
+                error_code: 'file_not_tickable',
+                message: 'Refused by backend.',
+              },
+            ],
+          }),
+        });
+
+      await expect(importSourceIdentifiers('PMID:101')).rejects.toSatisfy(
+        (error: unknown) =>
+          error instanceof SourceIdentifierImportError
+          && error.status === 422
+          && error.code === 'paper_file_limit'
+          && error.limitValue === 20,
+      );
+      await expect(importSourceIdentifiers('PMID:101')).rejects.toSatisfy(
+        (error: unknown) =>
+          error instanceof SourceIdentifierImportError
+          && error.status === 422
+          && error.code === 'file_not_tickable'
+          && error.limitValue === null,
+      );
+      await expect(importSourceIdentifiers('PMID:101')).rejects.toSatisfy(
+        (error: unknown) =>
+          error instanceof SourceIdentifierImportError
+          && error.status === 503
+          && error.code === 'document_source_curator_token_unavailable',
+      );
+      await expect(importSourceIdentifiers('PMID:101')).rejects.toSatisfy(
+        (error: unknown) =>
+          error instanceof SourceIdentifierImportError
+          && error.status === 503
+          && error.code === 'document_source_import_disabled'
+          && error.message === 'Document-source import is disabled',
+      );
+      await expect(importSourceIdentifiers('PMID:101')).rejects.toSatisfy(
+        (error: unknown) =>
+          error instanceof SourceIdentifierImportError
+          && error.status === 503
+          && error.code === 'document_source_import_disabled'
+          && error.message === 'Document-source import is disabled.',
+      );
+      const perRow = await importSourceIdentifiers('PMID:101');
+      expect(perRow.results[0]?.errorCode).toBe('file_not_tickable');
     });
   });
 
