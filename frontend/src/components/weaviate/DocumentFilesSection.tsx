@@ -83,6 +83,12 @@ interface PendingAddJobEntry {
  * job and busts the 5-minute listing cache.
  */
 const pendingAddJobIdsByDocument = new Map<string, PendingAddJobEntry>()
+/**
+ * Documents whose active-job poll hit 404 and whose follow-up active-jobs lookup failed.
+ * Retained across dialog close/reopen within `PAPER_SOURCE_FILES_STALE_MS` so reopening
+ * still runs the deferred `/files` + `/source-files` refresh once active jobs settle empty.
+ */
+const pending404RefreshByDocument = new Map<string, number>()
 
 function pruneStalePendingAddJobs(now = Date.now()): void {
   for (const [docId, entry] of pendingAddJobIdsByDocument.entries()) {
@@ -92,9 +98,21 @@ function pruneStalePendingAddJobs(now = Date.now()): void {
   }
 }
 
+function pruneStalePending404Refreshes(now = Date.now()): void {
+  for (const [docId, recordedAt] of pending404RefreshByDocument.entries()) {
+    if (now - recordedAt > PAPER_SOURCE_FILES_STALE_MS) {
+      pending404RefreshByDocument.delete(docId)
+    }
+  }
+}
+
 function getRetainedAddJobId(documentId: string): string | null {
   pruneStalePendingAddJobs()
   return pendingAddJobIdsByDocument.get(documentId)?.jobId ?? null
+}
+
+function hasRetainedAddJobId(documentId: string, jobId: string): boolean {
+  return pendingAddJobIdsByDocument.get(documentId)?.jobId === jobId
 }
 
 function setRetainedAddJobId(documentId: string, jobId: string): void {
@@ -109,9 +127,25 @@ function deleteRetainedAddJobIdIfMatches(documentId: string, jobId: string): voi
   }
 }
 
-/** Clear retained add job ids (used for test isolation). */
+function hasPending404Refresh(documentId: string): boolean {
+  pruneStalePending404Refreshes()
+  return pending404RefreshByDocument.has(documentId)
+}
+
+function markPending404Refresh(documentId: string): void {
+  const now = Date.now()
+  pruneStalePending404Refreshes(now)
+  pending404RefreshByDocument.set(documentId, now)
+}
+
+function clearPending404Refresh(documentId: string): void {
+  pending404RefreshByDocument.delete(documentId)
+}
+
+/** Clear retained add job ids and deferred 404 refresh markers (used for test isolation). */
 export function clearPendingAddJobIds(): void {
   pendingAddJobIdsByDocument.clear()
+  pending404RefreshByDocument.clear()
 }
 
 /**
@@ -331,7 +365,9 @@ function ProviderFilesPart({
   )
   const [retainedReconcileFailed, setRetainedReconcileFailed] = useState(false)
   const [retainedRetryCount, setRetainedRetryCount] = useState(0)
-  const [pending404Refresh, setPending404Refresh] = useState(false)
+  const [pending404Refresh, setPending404Refresh] = useState(
+    () => open && hasPending404Refresh(documentId),
+  )
   const [refreshingAfterAdd, setRefreshingAfterAdd] = useState(false)
   const [pollError, setPollError] = useState<string | null>(null)
   const [pollRetryCount, setPollRetryCount] = useState(0)
@@ -362,7 +398,7 @@ function ProviderFilesPart({
     setImportDisabled(false)
     setTrackedJobState(null)
     setRetainedReconcileFailed(false)
-    setPending404Refresh(false)
+    setPending404Refresh(open && hasPending404Refresh(documentId))
     setRefreshingAfterAdd(false)
     setPollError(null)
     setPollRetryCount(0)
@@ -398,21 +434,30 @@ function ProviderFilesPart({
   )
 
   const handleTrackedJobFinished = useCallback(async (targetDocumentId: string) => {
+    clearPending404Refresh(targetDocumentId)
     if (mountedRef.current && activeDocumentIdRef.current === targetDocumentId) {
+      setPending404Refresh(false)
       setRefreshingAfterAdd(true)
     }
 
-    // Fetch fresh viewer files directly (not bound to an unmount-cancelling query observer)
-    // so closing the dialog mid-completion still populates the cache and publishes the
-    // document-scoped viewer refresh (same-tab + cross-tab).
-    const viewerRefreshPromise = fetchViewerFiles(targetDocumentId)
-      .then((payload) => {
+    // Cancel any older in-flight viewer /files query first so it cannot resolve later and
+    // overwrite the fresher completion payload while the dialog stays open, then fetch fresh
+    // viewer files directly (not bound to an unmount-cancelling query observer) so closing the
+    // dialog mid-completion still populates the cache and publishes the viewer refresh.
+    const viewerRefreshPromise = (async () => {
+      try {
+        await queryClient.cancelQueries({ queryKey: paperFilesQueryKey(targetDocumentId) })
+      } catch {
+        // Best-effort cancellation; still fetch the fresh viewer file list.
+      }
+      try {
+        const payload = await fetchViewerFiles(targetDocumentId)
         queryClient.setQueryData(paperFilesQueryKey(targetDocumentId), payload)
         showPaperFilesInViewer(targetDocumentId, payload.files, { refreshOnlyIfOpen: true })
-      })
-      .catch(() => {
+      } catch {
         // Best-effort viewer refresh; leave existing cached state intact on transient failure.
-      })
+      }
+    })()
 
     try {
       await Promise.allSettled([
@@ -423,6 +468,7 @@ function ProviderFilesPart({
     } finally {
       if (mountedRef.current && activeDocumentIdRef.current === targetDocumentId) {
         setRefreshingAfterAdd(false)
+        setReconcilingRetainedJob(false)
         setRetainedReconcileFailed(false)
         setPollError(null)
         setAddRefusal((prev) => (prev?.code === 'import_in_progress' ? null : prev))
@@ -457,7 +503,11 @@ function ProviderFilesPart({
     void (async () => {
       try {
         const latest = await fetchPdfJob(retainedJobId, { signal: controller.signal })
-        if (cancelled || controller.signal.aborted) {
+        if (
+          cancelled
+          || controller.signal.aborted
+          || !hasRetainedAddJobId(targetDocumentId, retainedJobId)
+        ) {
           return
         }
         if (latest.document_id !== targetDocumentId) {
@@ -474,7 +524,12 @@ function ProviderFilesPart({
           await handleTrackedJobFinishedRef.current(targetDocumentId)
         }
       } catch (error) {
-        if (cancelled || controller.signal.aborted || isAbortError(error)) {
+        if (
+          cancelled
+          || controller.signal.aborted
+          || isAbortError(error)
+          || !hasRetainedAddJobId(targetDocumentId, retainedJobId)
+        ) {
           return
         }
         if (error instanceof ApiHttpError && error.httpStatus === 404) {
@@ -567,7 +622,8 @@ function ProviderFilesPart({
           }
           if (refetched.isError) {
             // Active-jobs refetch failed after 404: fail closed via activeJobsQuery.isError
-            // and trigger a full refresh if a subsequent "Try again" confirms no active job remains.
+            // and trigger a full refresh if a subsequent "Try again" or reopen confirms no active job remains.
+            markPending404Refresh(polledDocumentId)
             setPending404Refresh(true)
             setTrackedJobState(null)
             setPollError(null)
@@ -660,11 +716,12 @@ function ProviderFilesPart({
     && !pending404Refresh
     && !refreshingAfterAdd
 
-  // Complete a deferred 404 reconciliation once a subsequent active-jobs retry succeeds empty.
+  // Complete a deferred 404 reconciliation once a subsequent active-jobs retry or reopen succeeds empty.
   useEffect(() => {
     if (!open || !pending404Refresh || !activeJobsSettled) {
       return
     }
+    clearPending404Refresh(documentId)
     setPending404Refresh(false)
     if (!hasActiveJobForPaper) {
       pendingAddJobIdsByDocument.delete(documentId)
