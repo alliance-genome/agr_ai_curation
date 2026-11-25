@@ -1777,13 +1777,22 @@ class ExtractionFileRead(CurationWorkspaceBaseModel):
     file_id: str = Field(description="The pdf_document_files row id")
     file_name: str = Field(description="The file's display name when it was read")
     role: Optional[str] = Field(
-        default=None, description="main or supplement; null if the file was removed before the result was saved",
+        default=None, description="main or supplement, when the file was read; null for files read before 0.12.0",
     )
     converted_artifact_id: Optional[str] = Field(
-        default=None, description="The provider's converted-text artifact id, when the file came from the provider",
+        default=None,
+        description="The provider's converted-text artifact id when the file was read, when the file came from the provider",
     )
     converted_artifact_sha256: Optional[str] = Field(
-        default=None, description="SHA-256 of the converted artifact, when recorded",
+        default=None, description="SHA-256 of the converted artifact when the file was read, when recorded",
+    )
+    removed: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether the file had been removed from the paper by the time this result was saved. The name, "
+            "role and converted-text details always describe the file as it was when the AI read it; null "
+            "for results saved before 0.12.0."
+        ),
     )
 
 

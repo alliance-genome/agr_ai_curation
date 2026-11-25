@@ -30,6 +30,8 @@ def _readable(document_id: str = DOCUMENT_ID) -> ReadableFiles:
                 kind="PDF",
                 label="main.pdf",
                 pages_trusted=True,
+                converted_artifact_id=None,
+                converted_artifact_sha256=None,
             ),
         ),
     )

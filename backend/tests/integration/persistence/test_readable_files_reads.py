@@ -77,6 +77,7 @@ def _paper(owner_id: int) -> dict[str, str]:
             document_id, role="supplement", display_name="Table S1.xlsx", status="ready", tab_order=1,
             display_mode="text", file_path=f"o/{document_id}/s1.md", page_count=None,
             chunk_index_start=3, chunk_index_end=4, chunk_count=2, text_bytes=200,
+            source_provider_converted_artifact_id="artifact-s1", source_converted_artifact_sha256="1" * 64,
         )
         adding = _file(
             document_id, role="supplement", display_name="Data S2.docx", status="pending", tab_order=2,
@@ -131,6 +132,11 @@ def test_readable_files_are_the_ready_files_in_tab_order(owner_id):
         (paper["main"], 0, 2), (paper["sheet"], 3, 4),
     ]
     assert readable.ranges_text() == "0 to 2 (main.pdf), 3 to 4 (Table S1.xlsx)"
+    # Each file's converted artifact, as the files-read rows record it at read time:
+    # none for the uploaded main PDF, the provider's for the converted supplement.
+    assert [(file.converted_artifact_id, file.converted_artifact_sha256) for file in readable.files] == [
+        (None, None), ("artifact-s1", "1" * 64),
+    ]
     with reading_scope(ReadingScope.MAIN_FILE_ONLY):
         main_only = resolve_readable_files(paper["document_id"], TEST_USER_ID)
     assert [file.file_id for file in main_only.files] == [paper["main"]]

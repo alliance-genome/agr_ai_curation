@@ -421,8 +421,9 @@ def _readable_files():
     return ReadableFiles(
         document_id="doc-1",
         files=(
-            ReadableFile(MAIN_FILE_ID, "figures.pdf", "main", 0, 9, "PDF", "figures.pdf", True),
-            ReadableFile(SUPPLEMENT_FILE_ID, "figures.pdf", "supplement", 10, 14, "PDF", "figures.pdf (2)", True),
+            ReadableFile(MAIN_FILE_ID, "figures.pdf", "main", 0, 9, "PDF", "figures.pdf", True, None, None),
+            ReadableFile(SUPPLEMENT_FILE_ID, "figures.pdf", "supplement", 10, 14, "PDF", "figures.pdf (2)", True,
+                         "artifact-supplement", "5" * 64),
         ),
     )
 
@@ -511,7 +512,7 @@ async def test_an_unreadable_files_stored_name_is_never_offered_as_a_copyable_la
     under ``file`` (passing it to a reading tool would select the main file)."""
     from src.lib.document_files.readable import ReadableFile, ReadableFiles
 
-    main_only = ReadableFiles("doc-1", (ReadableFile(MAIN_FILE_ID, "figures.pdf", "main", 0, 9, "PDF", "figures.pdf", True),))
+    main_only = ReadableFiles("doc-1", (ReadableFile(MAIN_FILE_ID, "figures.pdf", "main", 0, 9, "PDF", "figures.pdf", True, None, None),))
     monkeypatch.setattr(evidence_workspace, "resolve_readable_files", lambda document_id, user_id: main_only)
     records = [{"evidence_record_id": "ev-supplement", "entity": "a", "page": 2, "section": "Results",
                 "chunk_id": "chunk-1", "document_id": "doc-1", "verified_quote": "A quote.",

@@ -1368,6 +1368,14 @@ async def test_a_stored_page_counts_only_for_a_file_with_real_pages(store, scope
     assert summary.get("page") == shown and summary["file_name"] == "paper.pdf"
 
 
+# A files-read entry names each file as it was when read: the uploaded main PDF has
+# no converted artifact; the supplement has the provider's artifact and its sha256.
+MAIN_READ = {"file_id": "file-0", "file_name": "paper.pdf", "role": "main",
+             "converted_artifact_id": None, "converted_artifact_sha256": None}
+SHEET_READ = {"file_id": "file-1", "file_name": "Table S1.xlsx", "role": "supplement",
+              "converted_artifact_id": "artifact-1", "converted_artifact_sha256": "1" * 64}
+
+
 def _files_read_rows(store):
     from src.lib.document_files.files_read import FILES_READ_KIND
     with store.session_factory() as db:
@@ -1393,8 +1401,8 @@ async def test_reads_record_each_newly_shown_file_once_per_invocation(store, sco
         await _invoke(tools["read_chunk"], {"chunk_index": 12})
 
     assert _files_read_rows(store) == [
-        ("inv-a", [{"file_id": "file-0", "file_name": "paper.pdf"}]),
-        ("inv-a", [{"file_id": "file-1", "file_name": "Table S1.xlsx"}]),
+        ("inv-a", [MAIN_READ]),
+        ("inv-a", [SHEET_READ]),
     ]
 
 
@@ -1431,8 +1439,8 @@ async def test_a_search_hit_records_its_file_without_issuing_evidence(store, sco
     assert [hit.content for hit in result.hits] == ["| abc-1 | 3 | 5 |", "Wingless was absent."]
     # One row, written when the first search call stood; files in chunk order.
     assert _files_read_rows(store) == [
-        ("inv-a", [{"file_id": "file-0", "file_name": "paper.pdf"},
-                   {"file_id": "file-1", "file_name": "Table S1.xlsx"}]),
+        ("inv-a", [MAIN_READ,
+                   SHEET_READ]),
     ]
     kinds = {r["kind"] for r in refs._read_bindings(store, scope, "doc-a")}
     assert refs._SPAN_KIND not in kinds and refs._WINDOW_KIND not in kinds
@@ -1477,7 +1485,7 @@ async def test_a_read_scans_the_history_once_for_spans_and_files_read(store, sco
     # locked re-scan, and the commit-time locked scan that writes the files-read row.
     assert len(selects) == 3
     assert all("kind IN" in statement for statement in selects)
-    assert _files_read_rows(store)[-1] == ("inv-a", [{"file_id": "file-1", "file_name": "Table S1.xlsx"}])
+    assert _files_read_rows(store)[-1] == ("inv-a", [SHEET_READ])
 
     # A later read of a file this invocation already recorded: the records re-read under
     # the read's lock already hold it (rows are append-only), so no third scan and no row.
@@ -1505,15 +1513,15 @@ async def test_recording_evidence_on_a_span_another_agent_read_records_the_file(
 
     refused = await _invoke(tools["record_evidence"],
                             {"entity": "abc-1", "selections": [{"chunk_index": 3, "span_index": 0}]})
-    assert _files_read_rows(store) == [("inv-a", [{"file_id": "file-1", "file_name": "Table S1.xlsx"}])]
+    assert _files_read_rows(store) == [("inv-a", [SHEET_READ])]
     accepted = await _invoke(tools["record_evidence"],
                              {"entity": "abc-1", "selections": [{"chunk_index": 12, "span_index": 0}]})
 
     assert refused["saved"] is False
     assert accepted["status"] == "verified"
     assert _files_read_rows(store) == [
-        ("inv-a", [{"file_id": "file-1", "file_name": "Table S1.xlsx"}]),
-        ("inv-b", [{"file_id": "file-1", "file_name": "Table S1.xlsx"}]),
+        ("inv-a", [SHEET_READ]),
+        ("inv-b", [SHEET_READ]),
     ]
 
 

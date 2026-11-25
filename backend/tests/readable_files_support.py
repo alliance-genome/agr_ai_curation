@@ -2,7 +2,9 @@
 
 The shapes match what ``readable_files_in_session`` returns: a ready main file
 whose pieces start at 0, then supplements in tab order after it, each with its
-kind and the label the model sees.
+kind, the label the model sees, and its converted artifact. An uploaded main PDF
+has none; a supplement (always added from the provider's converted text) and a
+converted main file have the provider's artifact id and the text's sha256.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ def single_file(document_id: str, chunk_count: int = 100_000, *, name: str = "pa
     """A one-file paper (every paper before supplements): pieces 0..chunk_count-1."""
 
     return ReadableFiles(document_id, (ReadableFile(
-        "main-file", name, "main", 0, chunk_count - 1, _kind(name), name, _kind(name) == "PDF",
+        "main-file", name, "main", 0, chunk_count - 1, _kind(name), name, _kind(name) == "PDF", None, None,
     ),))
 
 
@@ -33,6 +35,15 @@ def files(document_id: str, *ranges: tuple[str, int, int], converted: tuple[str,
     labels = file_labels([name for name, _start, _end in ranges])
     return ReadableFiles(document_id, tuple(
         ReadableFile(f"file-{position}", name, "main" if position == 0 else "supplement", start, end,
-                     _kind(name), label, _kind(name) == "PDF" and name not in converted)
+                     _kind(name), label, _kind(name) == "PDF" and name not in converted,
+                     *converted_artifact(position, name, converted))
         for position, ((name, start, end), label) in enumerate(zip(ranges, labels))
     ))
+
+
+def converted_artifact(position: int, name: str, converted: tuple[str, ...] = ()) -> tuple[str | None, str | None]:
+    """The converted artifact ``files`` gives the file at ``position``: none for an uploaded main file."""
+
+    if position == 0 and name not in converted:
+        return None, None
+    return f"artifact-{position}", f"{position % 10}" * 64

@@ -1060,8 +1060,9 @@ class ExtractionTimelineAnalyzer:
             **({"files_read": {
                 "events": files_read_events,
                 "note": "For each saved extraction result, the paper files the AI was shown text from while "
-                        "producing it, with each file's name, whether it is the main paper or a supplement, and a "
-                        "fingerprint of the converted text.",
+                        "producing it. The name, main paper or supplement, and the fingerprint of the converted "
+                        "text are recorded when the AI read the file; removed means the file was no longer in "
+                        "the paper when the result was saved.",
             }} if files_read_events else {}),
             **({"dropped_evidence": {
                 "events": dropped_evidence_events,
