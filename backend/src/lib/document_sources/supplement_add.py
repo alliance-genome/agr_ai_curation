@@ -63,6 +63,7 @@ from src.lib.document_sources.file_listing import (
     converted_text_access_allowed,
     current_file_check_limits,
     download_provider_file,
+    report_download_outage,
 )
 from src.lib.document_sources.file_reasons import ADD_REFUSAL_REASONS, FileReason, SupplementState
 from src.lib.document_sources.import_selection import source_artifact_is_authorized
@@ -298,6 +299,7 @@ async def add_files_to_paper(
     paper = await _prepare_paper_for_add(document_id, owner_user_id)
     listing = await list_files_for_paper(
         document_id, owner_user_id=owner_user_id, provider=provider, context=request_context,
+        caller_reports_download_outages=True,
     )
     return await _add_files_using_listing(
         document_id,
@@ -985,6 +987,18 @@ async def _write(
             await asyncio.to_thread(mark_files_ready, sizes)
         commit_state.committed = True
         commit_state.result = committed_result
+        unavailable = sum(item.reason_code is FileReason.SOURCE_UNAVAILABLE for item in committed_result.files)
+        if unavailable:
+            report_download_outage(
+                component="document_files",
+                operation="supplement_add_download_unavailable",
+                message="Document source unavailable for some chosen supplements",
+                counts={
+                    "unavailable_count": unavailable,
+                    "added_count": len(committed_result.added),
+                    "chosen_count": len(committed_result.files),
+                },
+            )
         try:
             await _after_add(document_id, subject, weaviate_client)
         except Exception as exc:

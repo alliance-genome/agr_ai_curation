@@ -820,13 +820,29 @@ uses the usual `paper_lock_release_failed` operation. Both warnings omit HTTP
 request metadata (`include_request=False`), carry only the exception type as
 failure detail, and preserve the request's cancellation.
 
-Adding converted supplements to a paper (`supplement_add.py`) sends no event for
-a file it leaves out. When every chosen file is left out, it reports one warning
-under component `document_files` and operation `supplement_add_nothing_added`,
-with a fixed fingerprint and context holding the hashed `document_id` and, per
-file, only the reason code, the measured value, the limit and the hashed
-`artifact_id_hash`. The exception is fixed and chain-free; file names, the
-reference, the curator and any text are omitted.
+When a provider or its file storage is unavailable, supplement downloads produce
+one warning per affected operation. Each warning uses a fixed, chain-free error
+and the operation name as its single fingerprint entry. Reports omit the
+request and carry only file counts in the operation-specific context. Companion
+warnings use fixed messages and `sentry_skip_event=True`.
+
+- A file listing reports `file_listing_download_unavailable` under
+  `document_source`. `checked_count` counts checks attempted in this listing
+  and `unavailable_count` counts those that ended in a download outage.
+- A partially successful supplement add reports
+  `supplement_add_download_unavailable` under `document_files`. Its context
+  contains `chosen_count`, `added_count` and `unavailable_count`. The latter
+  counts chosen files left out after a converted-text or original-PDF outage.
+  The add reports once its ready files commit. A standalone add job owns
+  outage reporting for its internal listing.
+
+Ordinary file refusals in a listing or partial add stay quiet. When every chosen
+file is left out, the add job reports only `supplement_add_nothing_added`,
+unless cancelled or all files were already in the paper. This warning under
+`document_files` has a fixed fingerprint and carries the hashed `document_id`
+and, per file, the reason code, measured value, limit and hashed
+`artifact_id_hash`. The fixed, chain-free error omits filenames, references,
+curator information and raw text.
 
 `run_supplement_add_job` and `add_files_to_paper` own sanitized runtime
 reporting under component `document_files` (omitting request metadata, grouping

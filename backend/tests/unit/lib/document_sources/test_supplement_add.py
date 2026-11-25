@@ -797,10 +797,13 @@ async def test_a_merged_reference_stops_the_add_before_any_download(monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_when_every_file_is_left_out_the_job_fails_and_one_warning_names_no_file(monkeypatch):
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_all_refused_add_warns_once_unless_cancelled(monkeypatch, cancelled):
+    from types import SimpleNamespace
+
     left_out = AddResult(files=(
         supplement_add.FileOutcome("20", "left_out", FileReason.TOO_LARGE, limit_value=40, display_name="Secret_Name.xlsx"),
-        supplement_add.FileOutcome("30", "left_out", FileReason.TITLE_COUNT, measured_value=2, limit_value=1),
+        supplement_add.FileOutcome("30", "left_out", FileReason.SOURCE_UNAVAILABLE),
     ))
     monkeypatch.setattr(supplement_add, "add_files_to_paper", AsyncMock(return_value=left_out))
     provider = AsyncMock()
@@ -811,22 +814,25 @@ async def test_when_every_file_is_left_out_the_job_fails_and_one_warning_names_n
         "src.lib.observability.runtime.report_runtime_exception",
         lambda exc, **kwargs: reports.append((exc, kwargs)),
     )
-    failed = []
-    monkeypatch.setattr("src.lib.pdf_jobs.service.mark_failed", lambda **kwargs: failed.append(kwargs))
+    mark_failed = Mock(return_value=SimpleNamespace(status="cancelled" if cancelled else "failed"))
+    monkeypatch.setattr("src.lib.pdf_jobs.service.mark_failed", mark_failed)
 
     await supplement_add.run_supplement_add_job(supplement_add.SupplementAddJobRequest(
         job_id=JOB_ID, document_id=DOCUMENT_ID, user_id="owner-subject", owner_user_id=7, context=CONTEXT,
         files=(_chosen(20), _chosen(30)),
     ))
 
+    mark_failed.assert_called_once()
+    assert mark_failed.call_args.kwargs["metadata"]["supplements"][0]["reason_code"] == "too_large"
+    provider.aclose.assert_awaited_once()
+    if cancelled:
+        assert reports == []
+        return
     (exc, kwargs), = reports
     assert kwargs["level"] == "warning" and kwargs["operation"] == "supplement_add_nothing_added"
-    assert [item["reason_code"] for item in kwargs["context"]["refusals"]] == ["too_large", "title_count"]
+    assert [item["reason_code"] for item in kwargs["context"]["refusals"]] == ["too_large", "source_unavailable"]
     assert "Secret_Name" not in repr(kwargs) and "Secret_Name" not in str(exc)
     assert "20" not in [item["artifact_id_hash"] for item in kwargs["context"]["refusals"]]
-    (job,), = [failed]
-    assert job["metadata"]["supplements"][0]["reason_code"] == "too_large"
-    provider.aclose.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -859,6 +865,77 @@ async def test_a_completed_add_records_each_files_outcome_on_its_job(monkeypatch
     assert entries[1]["state"] == "left_out" and entries[1]["reason_code"] == "title_count"
     # The paper's later listing reads these: an add's refusal is never a provider observation.
     assert file_listing_service.provider_observations_from_jobs([job.metadata_json]) == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["outage", "reporter_failure", "ordinary_refusals"])
+async def test_partial_add_reports_only_download_outages(monkeypatch, storage, tmp_path, caplog, case):
+    from src.lib.observability import runtime
+    from tests.unit.api.test_document_source_file_listing_endpoints import _capture_sentry_events
+    from tests.unit.lib.document_sources.test_file_listing import GOOD_TABLE, _http_error
+    from tests.unit.lib.document_sources.test_supplement_add_pdf import PDF_TEXT
+    from tests.unit.lib.pdf_jobs.test_pdf_job_service import _FakeSession
+
+    monkeypatch.setattr(
+        "src.lib.observability.cost_context.execution_context",
+        lambda **_: {"activity": "background", "run_id": str(JOB_ID)},
+    )
+    job = _pending_supplement_job(status="running")
+    storage.ready_session = _FakeSession([job])
+    private_id = 987654321
+    rows = [*ROWS, *_pair(private_id, "WB", extension="pdf", content=PDF_TEXT), *_pair(60, "WB")]
+    ordinary = case == "ordinary_refusals"
+    _, provider = _provider(rows, {
+        **GOOD, "41": _http_error(404 if ordinary else 503), "61": _http_error(413),
+        str(private_id + 1): PDF_TEXT, str(private_id): _http_error(403 if ordinary else 502),
+    })
+    _paper_lookup(monkeypatch)
+    monkeypatch.setattr(supplement_add, "_spool_directory", lambda: tmp_path)
+    monkeypatch.setattr("src.lib.document_sources.registry.get_configured_document_source_provider", lambda: provider)
+    monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda **_: object())
+    monkeypatch.setattr("src.lib.pdf_jobs.service.is_cancel_requested", lambda **_: False)
+    monkeypatch.setattr("src.lib.pdf_jobs.service.update_progress", lambda **_: None)
+    reporter = Mock(wraps=runtime.report_runtime_exception)
+    if case == "reporter_failure":
+        reporter.side_effect = RuntimeError("private reporter detail")
+    monkeypatch.setattr(runtime, "report_runtime_exception", reporter)
+    request = _job_request((
+        _chosen(20), _chosen(30), _chosen(40), _chosen(60, content=GOOD_TABLE),
+        _chosen(private_id, content=PDF_TEXT),
+    ))
+    with _capture_sentry_events(monkeypatch, "/private/add/url") as events:
+        await supplement_add.run_supplement_add_job(request)
+
+    assert job.status == "completed"
+    entries = {item["provider_file_id"]: item for item in job.metadata_json["supplements"]}
+    assert entries["20"]["state"] == "added"
+    assert list(storage.ready) == [UUID(entries["20"]["file_id"])]
+    assert entries["30"]["reason_code"] == "title_count"
+    assert entries["60"]["reason_code"] == "too_large"
+    assert entries["40"]["reason_code"] == ("source_file_missing" if ordinary else "source_unavailable")
+    assert entries[str(private_id)]["reason_code"] == ("pdf_access_denied" if ordinary else "source_unavailable")
+    for secret in (str(DOCUMENT_ID), str(JOB_ID), str(private_id), "Made_up_S", "AGRKB:101",
+                   "owner-subject", "curator-token", "made-up error", "private reporter detail", "/private/add/url"):
+        assert secret not in repr(events) and secret not in caplog.text
+    if ordinary:
+        reporter.assert_not_called()
+        assert events == []
+        return
+    reporter.assert_called_once()
+    records = [r for r in caplog.records if r.levelno >= logging.WARNING and r.name.startswith("src.lib.document_sources")]
+    assert len(records) == (2 if case == "reporter_failure" else 1)
+    assert all(r.sentry_skip_event and r.exc_info is None for r in records)
+    if case == "reporter_failure":
+        assert events == []
+    else:
+        event, = events
+        assert "request" not in event
+        assert event["level"] == "warning"
+        assert event["fingerprint"] == ["supplement_add_download_unavailable"]
+        assert event["contexts"]["runtime_exception"] == {
+            "component": "document_files", "operation": "supplement_add_download_unavailable",
+            "unavailable_count": 2, "added_count": 1, "chosen_count": 5,
+        }
 
 
 @pytest.mark.asyncio

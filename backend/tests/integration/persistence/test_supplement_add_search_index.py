@@ -208,7 +208,7 @@ def _entry(original_id: int, in_paper: frozenset[str]) -> ListedFile:
     )
 
 
-async def _listing(document_id, *, owner_user_id, provider, context):
+async def _listing(document_id, *, owner_user_id, provider, context, caller_reports_download_outages=False):
     with SessionLocal() as db:
         in_paper = frozenset(
             row.source_provider_source_file_id

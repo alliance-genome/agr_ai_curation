@@ -252,6 +252,25 @@ class DownloadOutcome(Generic[R]):
 logger = logging.getLogger(__name__)
 
 
+def report_download_outage(*, component: str, operation: str, message: str, counts: Mapping[str, int]) -> None:
+    """Report one completed operation using fixed codes and file counts."""
+    from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
+
+    logger.warning(message, extra={"sentry_skip_event": True})
+    try:
+        report_runtime_exception(
+            sanitized_runtime_error(message),
+            component=component,
+            operation=operation,
+            level="warning",
+            context=counts,
+            fingerprint=[operation],
+            include_request=False,
+        )
+    except Exception:
+        logger.warning("Download outage reporting unavailable", extra={"sentry_skip_event": True})
+
+
 def _report_drained_check_failure(exc: Exception) -> None:
     """Report one unexpected sibling check failure drained alongside another error without blocking re-raise."""
     from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
@@ -484,6 +503,7 @@ async def list_reference_files(
     find_paper_in_library: Callable[[ReferenceImportDecision], Awaitable[str | None]] | None,
     artifacts: Sequence[SourceArtifact] | None = None,
     check_unchecked: bool = True,
+    caller_reports_download_outages: bool = False,
 ) -> FileListing:
     """List one resolved reference's files for one curator.
 
@@ -500,7 +520,8 @@ async def list_reference_files(
     maps a provider file id to the last observation of this paper's imports; only the
     per-paper listing has any. ``find_paper_in_library`` (identifier listing only)
     returns the curator's paper an import of this decision would answer ``duplicate``
-    with, the import's own check.
+    with, the import's own check. A supplement add owns the outage warning for its
+    final file outcomes and passes ``caller_reports_download_outages=True`` when re-listing.
     """
 
     if not isinstance(reference, SourceReference):
@@ -679,6 +700,15 @@ async def list_reference_files(
             assert not isinstance(item, BaseException)
             results.append(item)
         checks.update(zip((candidate.original.artifact_id for candidate in to_check), results))
+        if not caller_reports_download_outages:
+            unavailable = sum(check.status is ListedFileCheckStatus.TEXT_UNAVAILABLE for check in results)
+            if unavailable:
+                report_download_outage(
+                    component="document_source",
+                    operation="file_listing_download_unavailable",
+                    message="Document source unavailable during file listing checks",
+                    counts={"unavailable_count": unavailable, "checked_count": len(results)},
+                )
 
     for candidate in unique:
         original = candidate.original

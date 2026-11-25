@@ -92,7 +92,7 @@ class _ClosingProvider(_Provider):
 async def test_the_add_route_adds_a_pdf_supplement_as_its_pdf_with_the_rest(owner_id, index, monkeypatch, tmp_path):
     paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
 
-    async def listing(document_id, *, owner_user_id, provider, context):
+    async def listing(document_id, *, owner_user_id, provider, context, caller_reports_download_outages=False):
         return FileListing(
             provider="made_up_provider", reference_id="101", reference_curie="MADE:101", main_status="ready",
             files=(_entry(20, frozenset()), _pdf_entry(70)), not_shown_count=0,
