@@ -53,6 +53,7 @@ ALLOWED_PACKAGE_VENV_PTH_FILES = frozenset(
 
 _SHA256_HASH_TOKEN_PATTERN = re.compile(r"^--hash=sha256:[0-9a-f]{64}$")
 _INLINE_COMMENT_PATTERN = re.compile(r"\s+#.*$")
+_PYTHON_EXECUTABLE_NAME_PATTERN = re.compile(r"^python(?:\d+(?:\.\d+)*)?(?:\.exe)?$")
 
 
 def parse_package_env_bootstrap_mode(raw: str | None) -> str:
@@ -758,17 +759,26 @@ class PackageEnvironmentManager:
                 },
             ) from exc
 
-        if (
-            not resolved_python.is_relative_to(venv_dir)
-            and resolved_python not in self._allowed_base_pythons()
-        ):
+        if python_executable.is_symlink():
+            allowed_local_python = (
+                resolved_python.parent == resolved_bin_dir
+                and _PYTHON_EXECUTABLE_NAME_PATTERN.fullmatch(resolved_python.name)
+                is not None
+            )
+            allowed_target = (
+                resolved_python in self._allowed_base_pythons()
+                or allowed_local_python
+            )
+        else:
+            allowed_target = resolved_python.is_relative_to(venv_dir)
+
+        if not allowed_target:
             raise PackageEnvironmentBootstrapError(
                 package.package_id,
                 (
                     f"Prebuilt package environment interpreter for package "
-                    f"'{package.package_id}' resolves outside virtual environment "
-                    f"'{venv_dir}' to unexpected executable '{resolved_python}': "
-                    f"{python_executable}"
+                    f"'{package.package_id}' resolves to unexpected executable "
+                    f"'{resolved_python}': {python_executable}"
                 ),
                 details={
                     "mode": PACKAGE_ENV_BOOTSTRAP_MODE_PREBUILT,
@@ -842,10 +852,8 @@ class PackageEnvironmentManager:
                 package,
                 resolved,
                 venv_dir=venv_dir,
-                run_pip_check=has_declared_lock,
-                allowed_pth_files=(
-                    ALLOWED_PACKAGE_VENV_PTH_FILES if has_declared_lock else None
-                ),
+                run_pip_check=True,
+                allowed_pth_files=ALLOWED_PACKAGE_VENV_PTH_FILES,
             )
 
             metadata_payload = self._build_metadata_payload(

@@ -223,18 +223,36 @@ jobs:
               "distutils-precedence.pth",
               "sphinxcontrib_jsmath-1.0.1-py3.7-nspkg.pth",
           }
+          python_name_re = re.compile(r"^python(?:\d+(?:\.\d+)*)?$")
 
-          # 1. Scan /opt/venv and /opt/package-envs for unknown .pth files BEFORE
-          # invoking any venv interpreter (base python3 runs with -I -S).
-          scan_roots = [pathlib.Path("/opt/venv/lib"), pathlib.Path("/opt/package-envs")]
-          unknown_pth = [
-              str(pth)
-              for scan_root in scan_roots
-              if scan_root.is_dir()
-              for pth in sorted(scan_root.rglob("*.pth"))
-              if pth.name not in known_pth
-          ]
-          assert not unknown_pth, f"Unknown .pth file(s) detected: {unknown_pth}"
+          def scan_pth_under(lib_dir: pathlib.Path) -> None:
+              assert lib_dir.is_dir() and not lib_dir.is_symlink(), lib_dir
+              lib_resolved = lib_dir.resolve(strict=True)
+              saw_site_packages = False
+              unknown_pth = []
+              for dirpath, dirnames, filenames in os.walk(lib_dir, followlinks=False):
+                  current = pathlib.Path(dirpath)
+                  assert not current.is_symlink(), current
+                  assert current.resolve(strict=True).is_relative_to(lib_resolved), current
+                  if current.name == "site-packages":
+                      saw_site_packages = True
+                  for dirname in dirnames:
+                      subdir = current / dirname
+                      assert not subdir.is_symlink(), f"Symlinked directory under {lib_dir}: {subdir}"
+                  for filename in sorted(filenames):
+                      if filename.endswith(".pth"):
+                          pth = current / filename
+                          assert not pth.is_symlink(), f"Symlinked .pth file: {pth}"
+                          if filename not in known_pth:
+                              unknown_pth.append(str(pth))
+              assert saw_site_packages, f"Expected site-packages directory under {lib_dir}"
+              assert not unknown_pth, f"Unknown .pth file(s) detected under {lib_dir}: {unknown_pth}"
+
+          # 1. Validate directory trees and scan /opt/venv and /opt/package-envs for
+          # unknown .pth files BEFORE invoking any venv interpreter (base python3 -I -S).
+          opt_venv = pathlib.Path("/opt/venv")
+          assert opt_venv.is_dir() and not opt_venv.is_symlink(), opt_venv
+          scan_pth_under(opt_venv / "lib")
 
           root = pathlib.Path("/opt/package-envs")
           assert root.is_dir() and not root.is_symlink(), root
@@ -258,6 +276,7 @@ jobs:
               assert venv_dir.is_dir() and not venv_dir.is_symlink(), venv_dir
               venv_resolved = venv_dir.resolve(strict=True)
               assert venv_resolved.is_relative_to(env_resolved), venv_dir
+              scan_pth_under(venv_dir / "lib")
 
               meta_path = env_dir / "environment.json"
               assert meta_path.is_file() and not meta_path.is_symlink(), meta_path
@@ -279,21 +298,26 @@ jobs:
 
               py = venv_dir / "bin" / "python"
               assert py.parent.is_dir() and not py.parent.is_symlink(), py.parent
-              assert py.parent.resolve(strict=True).is_relative_to(venv_resolved), py.parent
+              py_bin_resolved = py.parent.resolve(strict=True)
+              assert py_bin_resolved.is_relative_to(venv_resolved), py.parent
               assert py.is_file() and os.access(py, os.X_OK), py
               py_resolved = py.resolve(strict=True)
-              assert py_resolved.is_relative_to(venv_resolved) or py_resolved == base_python, (
-                  py,
-                  py_resolved,
-                  base_python,
-              )
+              if py.is_symlink():
+                  allowed_local_py = (
+                      py_resolved.parent == py_bin_resolved
+                      and python_name_re.fullmatch(py_resolved.name) is not None
+                  )
+                  assert py_resolved == base_python or allowed_local_py, (
+                      py,
+                      py_resolved,
+                      base_python,
+                  )
+              else:
+                  assert py_resolved.is_relative_to(venv_resolved), (py, py_resolved)
               venv_pythons.append(py)
 
-          # 2. Only after .pth allowlist and symlink/metadata checks pass, run pip check
-          # and verify prebuilt fingerprints against the checked-out packages offline.
-          for py in venv_pythons:
-              subprocess.run([str(py), "-m", "pip", "check"], check=True)
-
+          # 2. Verify checkout-derived package set and prebuilt fingerprints for ALL
+          # environments BEFORE invoking any package interpreter.
           verify_runtime_code = textwrap.dedent(
               """
               from pathlib import Path
@@ -326,6 +350,11 @@ jobs:
               """
           )
           subprocess.run(["/opt/venv/bin/python", "-c", verify_runtime_code], check=True)
+
+          # 3. Only after .pth allowlist, symlink/metadata checks, and checkout-derived
+          # package-set/fingerprint verification pass, run pip check in each package venv.
+          for py in venv_pythons:
+              subprocess.run([str(py), "-m", "pip", "check"], check=True)
           PY
 
       - name: Verify frontend compiled mode artifact

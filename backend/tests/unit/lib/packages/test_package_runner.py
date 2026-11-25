@@ -220,6 +220,8 @@ def test_environment_manager_serializes_concurrent_bootstrap(monkeypatch, tmp_pa
             install_started.set()
             assert allow_install_to_finish.wait(timeout=5)
             return
+        if step == "verify_requirements":
+            return
         raise AssertionError(f"Unexpected step: {step}")
 
     monkeypatch.setattr(manager, "_run_command", fake_run_command)
@@ -253,6 +255,7 @@ def test_environment_manager_serializes_concurrent_bootstrap(monkeypatch, tmp_pa
     assert reused_flags == [False, True]
     assert steps.count("create_venv") == 1
     assert steps.count("install_requirements") == 1
+    assert steps.count("verify_requirements") == 1
 
 
 def _demo_package(monkeypatch, tmp_path):
@@ -296,9 +299,11 @@ def test_package_environment_installs_with_the_backend_lock_as_constraints(monke
 
     environment = manager.ensure_environment(package)
 
-    assert commands[-1][-4:] == [
+    assert len(commands) == 3
+    assert commands[1][-4:] == [
         "-r", str(environment.requirements_path), "-c", str(BACKEND_DEPENDENCY_LOCK),
     ]
+    assert commands[2][-3:] == ["-m", "pip", "check"]
     metadata = json.loads(
         get_package_runner_metadata_path(package.package_id).read_text(encoding="utf-8"))
     assert metadata["constraints_path"] == str(BACKEND_DEPENDENCY_LOCK)
@@ -1757,17 +1762,25 @@ def test_production_dockerignore_excludes_nested_secrets_and_keeps_build_inputs(
             f"Expected build input {build_input} to remain included"
         )
 
-    for tree in (REPO_ROOT / "packages", BACKEND_ROOT / "src"):
-        for file_path in tree.rglob("*"):
-            if not file_path.is_file():
-                continue
-            if any(part in {"__pycache__", ".pytest_cache"} for part in file_path.parts):
-                continue
-            if file_path.suffix in {".pyc", ".pyo", ".pyd"}:
-                continue
-            rel = file_path.relative_to(REPO_ROOT).as_posix()
+    if (REPO_ROOT / ".git").exists() and shutil.which("git"):
+        tracked_output = subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(REPO_ROOT),
+                "ls-files",
+                "-z",
+                "backend/src",
+                "backend/requirements.lock.txt",
+                "packages",
+            ],
+            text=True,
+        )
+        tracked_files = [path for path in tracked_output.split("\0") if path]
+        assert tracked_files
+        for rel in tracked_files:
             assert not _dockerignore_is_ignored(rel, rules), (
-                f"Tracked/build repo file unexpectedly excluded by dockerignore: {rel}"
+                f"Tracked repo file unexpectedly excluded by dockerignore: {rel}"
             )
 
 
@@ -2031,9 +2044,30 @@ def test_prebuilt_mode_validates_interpreter_symlinks_and_bin_containment(
     expected_local_python.symlink_to(arbitrary_exec)
     with pytest.raises(
         PackageEnvironmentBootstrapError,
-        match="resolves outside virtual environment",
+        match="resolves to unexpected executable",
     ):
         manager.ensure_environment(package)
+
+    # 2b. Symlink pointing to a non-python executable inside venv/bin is also rejected.
+    other_tool = expected_local_python.parent / "other_tool"
+    other_tool.write_text("#!/bin/sh\necho not-python\n", encoding="utf-8")
+    other_tool.chmod(0o755)
+    expected_local_python.unlink()
+    expected_local_python.symlink_to(other_tool)
+    with pytest.raises(
+        PackageEnvironmentBootstrapError,
+        match="resolves to unexpected executable",
+    ):
+        manager.ensure_environment(package)
+
+    # 2c. Symlink pointing to a python3.x binary inside venv/bin passes.
+    local_python3 = expected_local_python.parent / "python3.11"
+    local_python3.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    local_python3.chmod(0o755)
+    expected_local_python.unlink()
+    expected_local_python.symlink_to(local_python3)
+    verified_local = manager.ensure_environment(package)
+    assert verified_local.python_executable == expected_local_python
 
     # 3. Symlinked venv/bin directory escaping venv_dir is rejected.
     outside_bin = tmp_path / "outside_bin"
