@@ -21,12 +21,14 @@ import {
 import { ExpandLess, ExpandMore, FileOpen } from '@mui/icons-material';
 import PreparedReviewAndCurateButton from '@/features/curation/components/PreparedReviewAndCurateButton';
 import { PDF_JOB_WINDOW_DAYS } from '@/features/documents/documentIntakeConfig';
+import { isSupplementAddJob } from '@/features/documents/pdfTerminalNotifications';
 import {
   WAITING_FOR_SUPPLEMENTS_STAGE,
   getJobSupplementProgress,
 } from '@/features/documents/supplementProgress';
 import { useLoadDocumentForChat } from '@/features/documents/useLoadDocumentForChat';
 import type { PdfProcessingJob } from '../../services/weaviate';
+import { LIBRARY_ADD_TEXT } from './paperFileReasonText';
 import SupplementFilesList from './SupplementFilesList';
 
 export interface PdfJobsPanelProps {
@@ -288,9 +290,11 @@ const PdfJobsPanel: React.FC<PdfJobsPanelProps> = ({
             const updatedLabel = job.updated_at ? new Date(job.updated_at).toLocaleString() : 'unknown';
             const providerConversionSummary = conversionSummary(job, configuredProviderName);
             const rawSupplementProgress = getJobSupplementProgress(job);
+            const isSupplementAdd = isSupplementAddJob(job);
             const isActivelyWaitingForSupplements =
               canCancel(job)
-              && (!job.current_stage || job.current_stage === WAITING_FOR_SUPPLEMENTS_STAGE);
+              && !job.cancel_requested
+              && job.current_stage === WAITING_FOR_SUPPLEMENTS_STAGE;
             const supplementProgress = rawSupplementProgress
               ? (isActivelyWaitingForSupplements
                 ? rawSupplementProgress
@@ -307,11 +311,20 @@ const PdfJobsPanel: React.FC<PdfJobsPanelProps> = ({
                     justifyContent: "space-between"
                   }}>
                   <Box sx={{ minWidth: 0 }}>
-                    <Typography variant="body2" noWrap sx={{
-                      fontWeight: 600
-                    }}>
-                      {job.filename || job.document_id}
-                    </Typography>
+                    <Stack direction="row" spacing={1} sx={{ alignItems: 'center', minWidth: 0 }}>
+                      <Typography variant="body2" noWrap sx={{
+                        fontWeight: 600
+                      }}>
+                        {job.filename || job.document_id}
+                      </Typography>
+                      {isSupplementAdd && (
+                        <Chip
+                          label={LIBRARY_ADD_TEXT.addingFilesHeading}
+                          size="small"
+                          variant="outlined"
+                        />
+                      )}
+                    </Stack>
                     <Typography variant="caption" noWrap sx={{
                       color: "text.secondary"
                     }}>

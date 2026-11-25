@@ -618,8 +618,89 @@ describe('PdfJobsPanel', () => {
     expect(screen.getByText('main-only.pdf')).toBeInTheDocument();
     expect(screen.getByText('slot-wait.pdf')).toBeInTheDocument();
     expect(screen.getByText('Converted text available: main')).toBeInTheDocument();
+    expect(screen.queryByText('Adding files')).not.toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'Supplement files' })).not.toBeInTheDocument();
     expect(screen.queryByText(/0 files/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/has until/)).not.toBeInTheDocument();
+  });
+
+  it('omits N10 wait-end text when current_stage is null, adding_supplements, or cancel_requested is true even with waiting entries', () => {
+    const nullStageJob: PdfProcessingJob = {
+      ...buildJobs(1)[0],
+      job_id: 'job-null-stage',
+      filename: 'null-stage.pdf',
+      status: 'running',
+      current_stage: null,
+      progress_percentage: 0,
+      message: 'Waiting for ABC',
+      metadata: supplementWaitMetadataFixture.mixed_waiting,
+    };
+    const addingStageJob: PdfProcessingJob = {
+      ...buildJobs(1)[0],
+      job_id: 'job-adding-stage-waiting-meta',
+      filename: 'adding-stage.pdf',
+      status: 'running',
+      current_stage: ADDING_SUPPLEMENTS_STAGE,
+      progress_percentage: 0,
+      message: 'Adding supplements',
+      metadata: supplementWaitMetadataFixture.mixed_waiting,
+    };
+    const cancelRequestedRunningJob: PdfProcessingJob = {
+      ...buildJobs(1)[0],
+      job_id: 'job-cancel-flag-running',
+      filename: 'cancel-flag.pdf',
+      status: 'running',
+      current_stage: WAITING_FOR_SUPPLEMENTS_STAGE,
+      cancel_requested: true,
+      progress_percentage: 0,
+      message: 'Waiting for ABC',
+      metadata: supplementWaitMetadataFixture.mixed_waiting,
+    };
+
+    render(
+      <PdfJobsPanel
+        jobs={[nullStageJob, addingStageJob, cancelRequestedRunningJob]}
+        providerShortLabel="ABC"
+      />,
+    );
+
+    expect(screen.getAllByRole('list', { name: 'Supplement files' })).toHaveLength(3);
+    expect(screen.getAllByText('Pending_S2.docx')).toHaveLength(3);
+    expect(screen.queryByText(/has until/)).not.toBeInTheDocument();
+  });
+
+  it('labels a newly queued supplement_add job as Adding files even before metadata.supplements is populated', () => {
+    const onCancelJob = vi.fn().mockResolvedValue(undefined);
+    const pendingAddJob: PdfProcessingJob = {
+      ...buildJobs(1)[0],
+      job_id: 'job-add-pending',
+      filename: 'existing-paper.pdf',
+      status: 'pending',
+      current_stage: 'pending',
+      progress_percentage: 0,
+      message: 'Queued for background processing',
+      metadata: {
+        job_kind: 'supplement_add',
+      },
+    };
+
+    render(
+      <PdfJobsPanel
+        jobs={[pendingAddJob]}
+        onCancelJob={onCancelJob}
+        providerShortLabel="ABC"
+      />,
+    );
+
+    expect(screen.getByText('existing-paper.pdf')).toBeInTheDocument();
+    expect(screen.getByText('Adding files')).toBeInTheDocument();
+    expect(screen.getByText('0% • Queued for background processing')).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Supplement files' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/0 files/i)).not.toBeInTheDocument();
+
+    const cancelButton = screen.getByRole('button', { name: 'Cancel' });
+    expect(cancelButton).toBeEnabled();
+    fireEvent.click(cancelButton);
+    expect(onCancelJob).toHaveBeenCalledWith('job-add-pending');
   });
 });

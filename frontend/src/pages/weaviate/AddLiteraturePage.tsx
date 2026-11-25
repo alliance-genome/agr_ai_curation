@@ -138,6 +138,32 @@ const canOpenInDocuments = (result: LiteratureImportResult) => (
   Boolean(result.documentId) && result.status !== 'conversion_running'
 );
 
+const areJsonValuesEquivalent = (previous: unknown, next: unknown): boolean => {
+  if (Object.is(previous, next)) {
+    return true;
+  }
+  if (typeof previous !== 'object' || typeof next !== 'object' || previous === null || next === null) {
+    return false;
+  }
+  if (Array.isArray(previous) || Array.isArray(next)) {
+    if (!Array.isArray(previous) || !Array.isArray(next) || previous.length !== next.length) {
+      return false;
+    }
+    return previous.every((entry, index) => areJsonValuesEquivalent(entry, next[index]));
+  }
+  const prevRecord = previous as Record<string, unknown>;
+  const nextRecord = next as Record<string, unknown>;
+  const prevKeys = Object.keys(prevRecord);
+  const nextKeys = Object.keys(nextRecord);
+  if (prevKeys.length !== nextKeys.length) {
+    return false;
+  }
+  return prevKeys.every(
+    (key) => Object.prototype.hasOwnProperty.call(nextRecord, key)
+      && areJsonValuesEquivalent(prevRecord[key], nextRecord[key]),
+  );
+};
+
 const areJobMetadataEquivalent = (
   previous: PdfProcessingJob['metadata'],
   next: PdfProcessingJob['metadata'],
@@ -148,7 +174,7 @@ const areJobMetadataEquivalent = (
   if (!previous || !next) {
     return (previous ?? null) === (next ?? null);
   }
-  return JSON.stringify(previous) === JSON.stringify(next);
+  return areJsonValuesEquivalent(previous, next);
 };
 
 const areJobsEquivalent = (previous: PdfProcessingJob[], next: PdfProcessingJob[]): boolean => {
