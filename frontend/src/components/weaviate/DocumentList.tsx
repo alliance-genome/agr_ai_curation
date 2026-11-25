@@ -63,6 +63,10 @@ import DocumentDetailsDialog from './DocumentDetailsDialog';
 import DocumentDownloadDialog from './DocumentDownloadDialog';
 import EditDocumentDialog from './EditDocumentDialog';
 import {
+  LIBRARY_FILES_COLUMN_TEXT,
+  filesCountAriaLabel,
+} from './paperFileReasonText';
+import {
   DocumentSummary,
   isActiveDocumentStatus,
   DocumentSourceProvenance,
@@ -136,6 +140,7 @@ const DOCUMENT_COLUMN_OPTIONS = [
   { field: 'filename', label: 'Filename' },
   { field: 'title', label: 'Title' },
   { field: 'sourceProvenance', label: 'Source' },
+  { field: 'ready_file_count', label: LIBRARY_FILES_COLUMN_TEXT.header },
   { field: 'fileSize', label: 'Size' },
   { field: 'creationDate', label: 'Created' },
   { field: 'processingStatus', label: 'Status' },
@@ -147,6 +152,17 @@ const DOCUMENT_COLUMN_FIELDS = DOCUMENT_COLUMN_OPTIONS.map(({ field }) => field)
 const DOCUMENT_PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 const DOCUMENT_SELECTION_COLUMN_ID = '_selection';
 const COLUMN_RESIZE_KEYBOARD_STEP = 10;
+const VISUALLY_HIDDEN_SX = {
+  border: 0,
+  clip: 'rect(0 0 0 0)',
+  height: '1px',
+  margin: '-1px',
+  overflow: 'hidden',
+  padding: 0,
+  position: 'absolute',
+  whiteSpace: 'nowrap',
+  width: '1px',
+} as const;
 
 const DOCUMENT_TABLE_FEATURES = tableFeatures({
   columnOrderingFeature,
@@ -253,6 +269,10 @@ const isDocumentBusy = (document: DocumentSummary): boolean => {
   const embeddingStatus = String(document.embeddingStatus || '').toLowerCase();
   return isActiveDocumentStatus(processingStatus) || embeddingStatus === 'processing';
 };
+
+const isValidReadyFileCount = (value: unknown): value is number => (
+  typeof value === 'number' && Number.isInteger(value) && value >= 0
+);
 
 const formatFileSize = (bytes: number | null | undefined): string => {
   if (bytes === null || bytes === undefined) return '—';
@@ -697,6 +717,32 @@ const DocumentList: React.FC<DocumentListProps> = ({
               </Typography>
             </Tooltip>
           </Stack>
+        );
+      },
+    }),
+    documentColumnHelper.accessor('ready_file_count', {
+      id: 'ready_file_count',
+      header: LIBRARY_FILES_COLUMN_TEXT.header,
+      size: 90,
+      minSize: 80,
+      enableSorting: false,
+      cell: ({ getValue }) => {
+        const count = getValue();
+        if (!isValidReadyFileCount(count)) {
+          return (
+            <Box component="span" sx={{ color: 'text.secondary' }}>
+              —
+            </Box>
+          );
+        }
+
+        return (
+          <Box component="span" sx={{ position: 'relative', display: 'inline-block' }}>
+            <span aria-hidden="true">{count.toLocaleString('en-US')}</span>
+            <Box component="span" sx={VISUALLY_HIDDEN_SX}>
+              {filesCountAriaLabel(count)}
+            </Box>
+          </Box>
         );
       },
     }),

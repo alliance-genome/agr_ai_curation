@@ -650,12 +650,167 @@ describe('DocumentList', () => {
 
     expect(screen.getByText('Filename')).toBeInTheDocument();
     expect(screen.getByText('Title')).toBeInTheDocument();
+    expect(screen.getByText('Source')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Files' })).toBeInTheDocument();
     expect(screen.getByText('Size')).toBeInTheDocument();
     expect(screen.getByText('Created')).toBeInTheDocument();
     expect(screen.getByText('Status')).toBeInTheDocument();
     expect(screen.getByText('Vectors')).toBeInTheDocument();
     expect(screen.getByText('Chunks')).toBeInTheDocument();
     expect(screen.getByText('Actions')).toBeInTheDocument();
+  });
+
+  describe('Files column (N46–N47)', () => {
+    it('renders the Files column header and keeps it non-sortable', () => {
+      const onSortModelChange = vi.fn();
+      render(
+        <DocumentList
+          {...defaultProps}
+          documents={[createTestDocument({ id: 'doc-1', filename: 'paper.pdf', ready_file_count: 2 })]}
+          totalCount={1}
+          onSortModelChange={onSortModelChange}
+        />,
+      );
+
+      const filesHeader = screen.getByRole('columnheader', { name: 'Files' });
+      expect(filesHeader).toHaveTextContent('Files');
+      expect(filesHeader).not.toHaveAttribute('aria-sort');
+
+      fireEvent.click(within(filesHeader).getByText('Files'));
+      expect(onSortModelChange).not.toHaveBeenCalled();
+    });
+
+    it('renders single, multi, and zero ready file counts with approved screen-reader labels', () => {
+      const docs = [
+        createTestDocument({ id: 'single', filename: 'single-file.pdf', ready_file_count: 1 }),
+        createTestDocument({ id: 'multi', filename: 'multi-file.pdf', ready_file_count: 3 }),
+        createTestDocument({ id: 'zero', filename: 'zero-ready.pdf', ready_file_count: 0 }),
+      ];
+
+      render(<DocumentList {...defaultProps} documents={docs} totalCount={docs.length} />);
+
+      const singleRow = screen.getByText('single-file.pdf').closest('tr') as HTMLElement;
+      const singleCell = within(singleRow).getByRole('cell', { name: '1 file' });
+      expect(within(singleCell).getByText('1')).toHaveAttribute('aria-hidden', 'true');
+      expect(within(singleCell).getByText('1 file')).toBeInTheDocument();
+
+      const multiRow = screen.getByText('multi-file.pdf').closest('tr') as HTMLElement;
+      const multiCell = within(multiRow).getByRole('cell', { name: '3 files' });
+      expect(within(multiCell).getByText('3')).toHaveAttribute('aria-hidden', 'true');
+      expect(within(multiCell).getByText('3 files')).toBeInTheDocument();
+
+      const zeroRow = screen.getByText('zero-ready.pdf').closest('tr') as HTMLElement;
+      const zeroCell = within(zeroRow).getByRole('cell', { name: '0 files' });
+      expect(within(zeroCell).getByText('0')).toHaveAttribute('aria-hidden', 'true');
+      expect(within(zeroCell).getByText('0 files')).toBeInTheDocument();
+    });
+
+    it('renders an em-dash placeholder without fabricating counts when ready_file_count is null, omitted, or invalid', () => {
+      const docs = [
+        createTestDocument({ id: 'null-count', filename: 'processing-null.pdf', title: 'Processing Null', ready_file_count: null }),
+        createTestDocument({ id: 'undefined-count', filename: 'omitted-count.pdf', title: 'Omitted Count' }),
+        createTestDocument({ id: 'negative-count', filename: 'negative-count.pdf', title: 'Negative Count', ready_file_count: -1 }),
+        createTestDocument({ id: 'fractional-count', filename: 'fractional-count.pdf', title: 'Fractional Count', ready_file_count: 1.5 }),
+        createTestDocument({ id: 'nan-count', filename: 'nan-count.pdf', title: 'NaN Count', ready_file_count: Number.NaN }),
+      ];
+
+      render(<DocumentList {...defaultProps} documents={docs} totalCount={docs.length} />);
+
+      const headers = screen.getAllByRole('columnheader');
+      const filesColIndex = headers.findIndex((header) => header.textContent?.includes('Files'));
+      expect(filesColIndex).toBeGreaterThan(-1);
+
+      for (const filename of [
+        'processing-null.pdf',
+        'omitted-count.pdf',
+        'negative-count.pdf',
+        'fractional-count.pdf',
+        'nan-count.pdf',
+      ]) {
+        const row = screen.getByText(filename).closest('tr') as HTMLElement;
+        const filesCell = within(row).getAllByRole('cell')[filesColIndex];
+        expect(filesCell).toHaveTextContent('—');
+        expect(filesCell).toHaveAccessibleName('—');
+        expect(within(filesCell).queryByText(/\bfiles?\b/i)).not.toBeInTheDocument();
+      }
+    });
+
+    it('displays ready_file_count from normalized document list responses', () => {
+      const { documents } = normalizeDocumentListResponse({
+        documents: [
+          {
+            document_id: 'normalized-multi',
+            user_id: 'user-1',
+            filename: 'normalized-multi.pdf',
+            title: 'Multi File Paper',
+            status: 'COMPLETED',
+            upload_timestamp: '2026-11-24T00:00:00Z',
+            processing_started_at: null,
+            processing_completed_at: null,
+            file_size_bytes: 2048,
+            weaviate_tenant: 'tenant',
+            chunk_count: 12,
+            vector_count: 12,
+            ready_file_count: 4,
+            embedding_status: 'completed',
+            error_message: null,
+            source_provenance: null,
+          },
+          {
+            document_id: 'normalized-null',
+            user_id: 'user-1',
+            filename: 'normalized-null.pdf',
+            title: 'Still Processing',
+            status: 'PROCESSING',
+            upload_timestamp: '2026-11-24T00:00:00Z',
+            processing_started_at: null,
+            processing_completed_at: null,
+            file_size_bytes: 2048,
+            weaviate_tenant: 'tenant',
+            chunk_count: null,
+            vector_count: null,
+            ready_file_count: null,
+            embedding_status: 'pending',
+            error_message: null,
+            source_provenance: null,
+          },
+        ],
+        total: 2,
+        limit: 20,
+        offset: 0,
+      });
+
+      render(<DocumentList {...defaultProps} documents={documents} totalCount={2} />);
+
+      const multiRow = screen.getByText('normalized-multi.pdf').closest('tr') as HTMLElement;
+      expect(within(multiRow).getByRole('cell', { name: '4 files' })).toBeInTheDocument();
+
+      const nullRow = screen.getByText('normalized-null.pdf').closest('tr') as HTMLElement;
+      const headers = screen.getAllByRole('columnheader');
+      const filesColIndex = headers.findIndex((header) => header.textContent?.includes('Files'));
+      expect(within(nullRow).getAllByRole('cell')[filesColIndex]).toHaveTextContent('—');
+    });
+
+    it('supports hiding and restoring the Files column from Table layout', () => {
+      render(
+        <DocumentList
+          {...defaultProps}
+          documents={[createTestDocument({ id: 'doc-1', filename: 'paper.pdf', ready_file_count: 2 })]}
+          totalCount={1}
+        />,
+      );
+
+      expect(screen.getByRole('columnheader', { name: 'Files' })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Table layout' }));
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Show Files column' }));
+      fireEvent.keyDown(screen.getByRole('presentation'), { key: 'Escape' });
+      expect(screen.queryByRole('columnheader', { name: 'Files' })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Table layout' }));
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Show Files column' }));
+      fireEvent.keyDown(screen.getByRole('presentation'), { key: 'Escape' });
+      expect(screen.getByRole('columnheader', { name: 'Files' })).toBeInTheDocument();
+    });
   });
 
   it('formats dates correctly', () => {
