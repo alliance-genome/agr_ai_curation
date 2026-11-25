@@ -275,9 +275,9 @@ async def test_a_refused_second_file_of_three_is_left_out_and_the_other_two_are_
 @pytest.mark.asyncio
 async def test_unnamed_supplement_keeps_public_display_name_null_on_add_and_refusal(monkeypatch, storage):
     """Unnamed supplements keep required SQL storage names internal and emit display_name=None publicly."""
-    pair_20 = _pair(20, "WB")
+    pair_20 = _pair(20, "WB", content=GOOD["21"])
     pair_20[0]["display_name"] = ""
-    pair_30 = _pair(30, "WB")
+    pair_30 = _pair(30, "WB", content=GOOD["31"])
     pair_30[0]["display_name"] = "   "
     rows = [_abc_show_all_main_pdf(10, "WB"), *pair_20, *pair_30]
     _, provider = _provider(rows, GOOD)
