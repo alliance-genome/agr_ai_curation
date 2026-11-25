@@ -80,7 +80,8 @@ write_test_env() {
       'VITE_PDF_PROGRESS_CONNECT_TIMEOUT_MS=8000' \
       'VITE_PDF_PROGRESS_TIMEOUT_MS=7200000' \
       'VITE_PDF_PROGRESS_POLL_INTERVAL_MS=2000' \
-      'VITE_BENCHMARK_PORTAL_URL=https://benchmark.example.org'
+      'VITE_BENCHMARK_PORTAL_URL=https://benchmark.example.org' \
+      'ADMIN_EMAILS=prod-file@example.org'
   } >"${env_file}"
 
   while IFS='|' read -r category key default services; do
@@ -140,8 +141,8 @@ assert_rejected_with() {
 }
 
 write_test_env
-unset MAX_PARALLEL_VALIDATORS
-grep -Ev '^(MAX_PARALLEL_VALIDATORS=|LANGFUSE_TIMEOUT=|OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES=|WORKSPACE_REVIEW_CONCURRENCY=|VALIDATION_REVIEW_|EXTRACTION_FANOUT_|VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=|WEAVIATE_CHUNK_FETCH_PAGE_SIZE=|DOCUMENT_TABLE_HEADER_|DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES=|DOCUMENT_FILE_DOWNLOAD_CONCURRENCY=|DOCUMENT_FILE_LISTING_CHECK_LIMIT=|DOCUMENT_MAX_FILES_PER_PAPER=|DOCUMENT_PAPER_MAX_TEXT_BYTES=|DOCUMENT_FILE_MAX_PDF_BYTES=|DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW=|DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=|DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=|DOCUMENT_SOURCE_DEAD_WAIT_POLLS=|DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS=|DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS=|DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS=|DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT=|DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS=|DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS=)' "${env_file}" >"${default_env_file}"
+unset MAX_PARALLEL_VALIDATORS ADMIN_EMAILS
+grep -Ev '^(ADMIN_EMAILS=|MAX_PARALLEL_VALIDATORS=|LANGFUSE_TIMEOUT=|OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES=|WORKSPACE_REVIEW_CONCURRENCY=|VALIDATION_REVIEW_|EXTRACTION_FANOUT_|VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=|WEAVIATE_CHUNK_FETCH_PAGE_SIZE=|DOCUMENT_TABLE_HEADER_|DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES=|DOCUMENT_FILE_DOWNLOAD_CONCURRENCY=|DOCUMENT_FILE_LISTING_CHECK_LIMIT=|DOCUMENT_MAX_FILES_PER_PAPER=|DOCUMENT_PAPER_MAX_TEXT_BYTES=|DOCUMENT_FILE_MAX_PDF_BYTES=|DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW=|DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=|DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=|DOCUMENT_SOURCE_DEAD_WAIT_POLLS=|DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS=|DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS=|DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS=|DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT=|DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS=|DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS=)' "${env_file}" >"${default_env_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":false,"git_sha":"abcdef1"}' \
   >"${frontend_build_metadata_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":true,"git_sha":"abcdef1"}' \
@@ -187,6 +188,7 @@ assert str(config["services"]["backend"]["environment"]["DOCUMENT_SOURCE_MAX_POL
 assert str(config["services"]["backend"]["environment"]["DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS"]) == "900"
 assert str(config["services"]["backend"]["environment"]["DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS"]) == "10"
 backend_env = config["services"]["backend"]["environment"]
+assert backend_env["ADMIN_EMAILS"] == ""
 assert str(backend_env["VALIDATION_HISTORY_PAGE_SIZE"]) == "5"
 assert str(backend_env["WORKSPACE_REVIEW_CONCURRENCY"]) == "1"
 for service in ("backend", "benchmark_worker"):
@@ -259,10 +261,21 @@ env \
   --env-file "${development_env_file}" \
   -f "${repo_root}/docker-compose.yml" \
   config --format json >"${development_rendered_file}"
-# The host capacity and admin allowlist override must win over the service env file.
-ADMIN_EMAILS=override@example.org MAX_PARALLEL_VALIDATORS=2 AGR_DEV_ENV_FILE="${env_file}" docker compose --env-file "${env_file}" \
+# The host capacity must win over the service env file's value of 3.
+MAX_PARALLEL_VALIDATORS=2 AGR_DEV_ENV_FILE="${env_file}" docker compose --env-file "${env_file}" \
   -f "${repo_root}/docker-compose.yml" config --format json >"${development_override_file}"
-python3 - "${development_rendered_file}" "${development_override_file}" <<'PY'
+# AGR_DEV_ENV_FILE must preserve ADMIN_EMAILS even when --env-file omits it and
+# ADMIN_EMAILS is unset in the shell.
+empty_env_file="${temp_dir}/empty.env"
+development_envfile_only_file="${temp_dir}/development-envfile-only.json"
+: >"${empty_env_file}"
+env -u ADMIN_EMAILS \
+  AGR_DEV_ENV_FILE="${development_env_file}" \
+  docker compose \
+  --env-file "${empty_env_file}" \
+  -f "${repo_root}/docker-compose.yml" \
+  config --format json >"${development_envfile_only_file}"
+python3 - "${development_rendered_file}" "${development_override_file}" "${development_envfile_only_file}" <<'PY'
 import json
 import sys
 
@@ -270,6 +283,7 @@ config = json.load(open(sys.argv[1], encoding="utf-8"))
 services = config["services"]
 backend_env = services["backend"]["environment"]
 override_services = json.load(open(sys.argv[2], encoding="utf-8"))["services"]
+envfile_only_backend_env = json.load(open(sys.argv[3], encoding="utf-8"))["services"]["backend"]["environment"]
 for service in ("backend", "benchmark_worker"):
     assert str(services[service]["environment"]["MAX_PARALLEL_VALIDATORS"]) == "8"
     assert str(override_services[service]["environment"]["MAX_PARALLEL_VALIDATORS"]) == "2"
@@ -310,7 +324,7 @@ assert str(backend_env["SENTRY_TRACES_SAMPLE_RATE"]) == "1.0"
 assert backend_env["SENTRY_PROFILES_SAMPLE_RATE"] == ""
 assert str(backend_env["SENTRY_ALLOW_INSECURE_DSN"]).lower() == "true"
 assert backend_env["ADMIN_EMAILS"] == "dev@example.org"
-assert override_backend_env["ADMIN_EMAILS"] == "override@example.org"
+assert envfile_only_backend_env["ADMIN_EMAILS"] == "dev@example.org"
 assert str(backend_env["SENTRY_SYNTHETIC_TEST_ENDPOINTS_ENABLED"]).lower() == "false"
 assert str(backend_env["SENTRY_AI_AGENTS_MONITORING_ENABLED"]).lower() == "true"
 assert str(backend_env["SENTRY_OPENAI_AGENTS_INTEGRATION_ENABLED"]).lower() == "false"
@@ -355,17 +369,23 @@ for path in sys.argv[1:]:
 PY
 
 docker compose --env-file "${env_file}" -f "${compose_file}" config --format json >"${rendered_file}"
+prod_admin_override_file="${temp_dir}/rendered-admin-override.json"
+ADMIN_EMAILS=prod-override@example.org docker compose --env-file "${env_file}" -f "${compose_file}" \
+  config --format json >"${prod_admin_override_file}"
 # Exercise the same validator with deterministic image metadata while the
 # installer tests cover its real image-inspection invocation.
 "${preflight}" --env-file "${env_file}" --config-json "${rendered_file}" \
   --frontend-build-metadata-json "${frontend_build_metadata_file}"
-python3 - "${rendered_file}" "${provider_boundary_contract}" <<'PY'
+python3 - "${rendered_file}" "${provider_boundary_contract}" "${prod_admin_override_file}" <<'PY'
 import json
 from pathlib import Path
 import sys
 
 config = json.load(open(sys.argv[1], encoding="utf-8"))
+prod_admin_override_env = json.load(open(sys.argv[3], encoding="utf-8"))["services"]["backend"]["environment"]
 backend_env = config["services"]["backend"]["environment"]
+assert backend_env["ADMIN_EMAILS"] == "prod-file@example.org"
+assert prod_admin_override_env["ADMIN_EMAILS"] == "prod-override@example.org"
 assert str(backend_env["VALIDATION_HISTORY_PAGE_SIZE"]) == "17"
 assert str(backend_env["WORKSPACE_REVIEW_CONCURRENCY"]) == "3"
 for service in ("backend", "benchmark_worker"):

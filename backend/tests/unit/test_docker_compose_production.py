@@ -126,9 +126,10 @@ def test_compose_forwards_admin_emails_to_backend():
     production = _load_compose()["services"]["backend"]["environment"]
     development_entries = _load_dev_compose()["services"]["backend"]["environment"]
     assert production["ADMIN_EMAILS"] == "${ADMIN_EMAILS:-}"
-    # Passthrough form forwards shell ADMIN_EMAILS when set without erasing
-    # ADMIN_EMAILS loaded from AGR_DEV_ENV_FILE (.env) when unset in the shell.
-    assert "ADMIN_EMAILS" in development_entries
+    # Development Compose relies on AGR_DEV_ENV_FILE (.env) for ADMIN_EMAILS;
+    # omitting it from backend.environment ensures Compose v2 never overwrites
+    # env_file values with null/empty when unset in the shell or --env-file.
+    assert "ADMIN_EMAILS" not in development_entries
     assert not any(entry.startswith("ADMIN_EMAILS=") for entry in development_entries)
 
 

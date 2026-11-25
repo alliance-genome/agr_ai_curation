@@ -123,17 +123,34 @@ cleanup_smoke_compose_override() {
 }
 
 ensure_smoke_compose_override_file() {
-  if [[ -n "${SMOKE_COMPOSE_OVERRIDE_FILE:-}" || -z "${RERANKER_URL:-}" ]]; then
+  if [[ -n "${SMOKE_COMPOSE_OVERRIDE_FILE:-}" ]]; then
+    return 0
+  fi
+
+  local has_reranker_url=0
+  local has_admin_emails=0
+  if [[ -n "${RERANKER_URL:-}" ]]; then
+    has_reranker_url=1
+  fi
+  if [[ -n "${ADMIN_EMAILS+set}" ]]; then
+    has_admin_emails=1
+  fi
+  if [[ "${has_reranker_url}" -eq 0 && "${has_admin_emails}" -eq 0 ]]; then
     return 0
   fi
 
   SMOKE_COMPOSE_OVERRIDE_FILE="$(mktemp)"
-  cat > "${SMOKE_COMPOSE_OVERRIDE_FILE}" <<EOF
-services:
-  backend:
-    environment:
-      RERANKER_URL: $(json_escape "${RERANKER_URL}")
-EOF
+  {
+    echo "services:"
+    echo "  backend:"
+    echo "    environment:"
+    if [[ "${has_reranker_url}" -eq 1 ]]; then
+      echo "      RERANKER_URL: $(json_escape "${RERANKER_URL}")"
+    fi
+    if [[ "${has_admin_emails}" -eq 1 ]]; then
+      echo "      ADMIN_EMAILS: $(json_escape "${ADMIN_EMAILS}")"
+    fi
+  } > "${SMOKE_COMPOSE_OVERRIDE_FILE}"
 }
 
 source_smoke_extra_env_file() {
@@ -574,6 +591,8 @@ read_env_file_value() {
     return 0
   fi
 
+  local found=0
+  local matched_value=""
   local raw_line line value
   while IFS= read -r raw_line || [[ -n "${raw_line}" ]]; do
     line="${raw_line%$'\r'}"
@@ -584,24 +603,37 @@ read_env_file_value() {
       if [[ "${BASH_REMATCH[2]}" == "${key}" ]]; then
         value="${BASH_REMATCH[3]}"
         value="${value#"${value%%[![:space:]]*}"}"
-        if [[ "${value}" =~ ^\"(.*)\"[[:space:]]*$ ]]; then
+        if [[ "${value}" =~ ^\"([^\"]*)\"([[:space:]]*(#.*)?)?$ ]]; then
           value="${BASH_REMATCH[1]}"
-        elif [[ "${value}" =~ ^\'(.*)\'[[:space:]]*$ ]]; then
+        elif [[ "${value}" =~ ^\'([^\']*)\'([[:space:]]*(#.*)?)?$ ]]; then
           value="${BASH_REMATCH[1]}"
         else
-          value="${value%%[[:space:]]#*}"
-          value="${value%"${value##*[![:space:]]}"}"
+          if [[ "${value}" =~ ^# ]]; then
+            value=""
+          else
+            value="${value%%[[:space:]]#*}"
+            value="${value%"${value##*[![:space:]]}"}"
+          fi
         fi
-        printf "%s" "${value}"
-        return 0
+        matched_value="${value}"
+        found=1
       fi
     fi
   done < "${env_file}"
+
+  if [[ "${found}" -eq 1 ]]; then
+    printf "%s" "${matched_value}"
+  fi
 }
 
 load_smoke_environment() {
   local caller_testing_api_key="${TESTING_API_KEY:-}"
-  local caller_admin_emails="${ADMIN_EMAILS:-}"
+  local caller_admin_emails_set=0
+  local caller_admin_emails=""
+  if [[ -n "${ADMIN_EMAILS+set}" ]]; then
+    caller_admin_emails_set=1
+    caller_admin_emails="${ADMIN_EMAILS}"
+  fi
 
   # shellcheck disable=SC1091
   . "${SCRIPT_DIR}/load-home-test-env.sh"
@@ -618,8 +650,12 @@ load_smoke_environment() {
     fi
   fi
 
-  if [[ -n "${caller_admin_emails}" ]]; then
+  if [[ "${caller_admin_emails_set}" -eq 1 ]]; then
     export ADMIN_EMAILS="${caller_admin_emails}"
+  elif [[ -n "${ADMIN_EMAILS+set}" && -z "${ADMIN_EMAILS}" ]]; then
+    # A blank ADMIN_EMAILS= in home/extra env must not erase a real value from
+    # AGR_DEV_ENV_FILE when the caller did not explicitly set ADMIN_EMAILS.
+    unset ADMIN_EMAILS
   fi
 }
 
