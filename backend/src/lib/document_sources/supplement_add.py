@@ -25,8 +25,7 @@ own job) calls ``add_files_to_paper``. The paper stays usable throughout.
   and the write an accepted PDF waits in an unnamed temporary file on the document
   storage volume, never in memory.
 
-Each file's outcome is a code. The four job messages near the end of this module
-are proposals awaiting sign-off.
+Each file's outcome is a code.
 """
 
 from __future__ import annotations
@@ -990,7 +989,7 @@ async def _after_add(document_id: UUID, subject: str, weaviate_client: Any) -> N
 # The curator's "add files" request: one job, run in the background.
 # ---------------------------------------------------------------------------
 
-# Job messages the jobs panel shows. Proposals awaiting Chris's sign-off (P7c1 PR).
+# Curator-facing job messages shown in the jobs panel (approved wording, N30).
 _NOT_LIVE = (FILE_STATUS_FAILED, FILE_STATUS_REMOVED)
 _MESSAGE_ADDED = "Added {added} of {chosen} files."
 _MESSAGE_NONE_ADDED = "None of the chosen files could be added."

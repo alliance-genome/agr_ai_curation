@@ -387,7 +387,10 @@ async def test_a_failed_clean_up_step_leaves_a_removed_row_that_a_retry_or_the_p
     monkeypatch.setattr(module, name, real)
 
     assert answer["removed"] is True and answer["cleanup_finished"] is False
-    assert [(r["operation"], r["context"]["step"]) for r in reports] == [("file_removal_cleanup_failed", step)]
+    assert [
+        (r["operation"], r["level"], r["include_request"], r["context"]["step"])
+        for r in reports
+    ] == [("file_removal_cleanup_failed", "error", False, step)]
     (_, lingering) = _rows(paper)
     assert lingering.id == supplement.id and lingering.status == "removed"
     assert (lingering.chunk_index_start, lingering.source_markdown_path) == (
@@ -479,7 +482,9 @@ async def test_a_failing_cache_clear_is_reported_and_the_removal_stands(owner_id
     answer = await _remove(paper, supplement.id)
     assert answer["removed"] is True and answer["cleanup_finished"] is True
     assert [row.id for row in _rows(paper)] == [main.id]
-    assert [r["context"]["step"] for r in reports] == ["cache"]
+    assert [(r["level"], r["include_request"], r["context"]["step"]) for r in reports] == [
+        ("warning", False, "cache")
+    ]
 
 
 @pytest.mark.asyncio

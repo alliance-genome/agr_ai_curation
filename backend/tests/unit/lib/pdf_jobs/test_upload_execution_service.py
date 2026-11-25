@@ -1995,6 +1995,15 @@ async def test_execute_provider_conversion_times_out_and_syncs_sql_failure(monke
     )
 
     monkeypatch.setattr(service_module, "get_document_source_import_timeout_seconds", lambda: 0.01)
+    monkeypatch.setattr(
+        service_module,
+        "get_document_source_provider_metadata",
+        lambda provider_id: (
+            {"display_label": "ABC Literature", "short_label": "ABC"}
+            if provider_id == "abc_literature"
+            else None
+        ),
+    )
     monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
     monkeypatch.setattr(
         UploadExecutionService,
@@ -2029,14 +2038,16 @@ async def test_execute_provider_conversion_times_out_and_syncs_sql_failure(monke
         )
     )
 
+    expected_timeout = (
+        "ABC had not converted this paper 1 second after the import started, "
+        "so the import stopped. The time includes any wait behind other imports."
+    )
     assert status_updates == [("doc-conversion", "user-provider", "failed")]
-    assert sql_failures == [
-        ("doc-conversion", "Provider conversion exceeded 0.01 seconds")
-    ]
+    assert sql_failures == [("doc-conversion", expected_timeout)]
     assert failed_events == [
         {
             "job_id": "job-conversion",
-            "message": "Provider conversion exceeded 0.01 seconds",
+            "message": expected_timeout,
             "stage": ProcessingStage.FAILED.value,
         }
     ]
@@ -3326,6 +3337,15 @@ async def test_main_import_still_waiting_after_an_hour_fails_and_the_paper_is_fa
     outcomes = _record_job_outcomes(monkeypatch)
     monkeypatch.setattr(service_module, "asyncio", clock)
     monkeypatch.setattr(service_module, "time", SimpleNamespace(time=lambda: clock.now))
+    monkeypatch.setattr(
+        service_module,
+        "get_document_source_provider_metadata",
+        lambda provider_id: (
+            {"display_label": "ABC Literature", "short_label": "ABC"}
+            if provider_id == "abc_literature"
+            else None
+        ),
+    )
     service = UploadExecutionService(
         pipeline_tracker=_Tracker(),
         document_source_provider_factory=lambda: provider,
@@ -3333,16 +3353,20 @@ async def test_main_import_still_waiting_after_an_hour_fails_and_the_paper_is_fa
 
     await service.execute_provider_conversion(_wait_request())
 
+    expected_timeout = (
+        "ABC had not converted this paper 1 hour after the import started, "
+        "so the import stopped. The time includes any wait behind other imports."
+    )
     assert outcomes["completed"] == []
     assert outcomes["failed"] == [
         {
             "job_id": "job-conversion",
-            "message": "Provider conversion exceeded 3600 seconds",
+            "message": expected_timeout,
             "stage": ProcessingStage.FAILED.value,
         }
     ]
     assert outcomes["status"] == [("doc-conversion", "failed")]
-    assert outcomes["sql_failures"] == ["Provider conversion exceeded 3600 seconds"]
+    assert outcomes["sql_failures"] == [expected_timeout]
     # KANBAN-2191 / ALL-1725: the on-demand request, then only listing reads, then one
     # request at the start of the end window (3600 - (30 + 10) s = 3560 s; a read is
     # made to land there).
@@ -3645,7 +3669,14 @@ def _plan(**overrides):
     from src.lib.document_sources.supplement_plan import ChosenSupplement, SupplementPlan
 
     values = dict(
-        chosen=(ChosenSupplement(provider_file_id="40", md5="md5-40", converted_md5="md5-41"),),
+        chosen=(
+            ChosenSupplement(
+                provider_file_id="40",
+                md5="md5-40",
+                converted_md5="md5-41",
+                display_name="Made_up_S40.xlsx",
+            ),
+        ),
         request_context=DocumentSourceRequestContext(
             provider_groups=("made-up-staff",), authorized_group_ids=("made-up-group",),
             bearer_kind=ProviderBearerKind.CURATOR, curator_token="curator-token",
@@ -3717,7 +3748,26 @@ async def test_a_ready_main_paper_completes_its_import_job_and_its_supplements_g
     await service.execute_provider_markdown(_markdown_request(supplements=_plan()))
 
     assert completed == [{"job_id": "job-provider", "message": "Processing completed"}]
-    assert created == [{"document_id": "doc-job-provider", "user_id": 42, "filename": "paper.pdf"}]
+    assert created == [
+        {
+            "document_id": "doc-job-provider",
+            "user_id": 42,
+            "filename": "paper.pdf",
+            "supplements": [
+                {
+                    "provider_file_id": "40",
+                    "display_name": "Made_up_S40.xlsx",
+                    "state": "queued",
+                    "reason_code": None,
+                    "observed_at": None,
+                    "file_id": None,
+                    "measured_value": None,
+                    "limit_value": None,
+                }
+            ],
+            "source_job_id": "job-provider",
+        }
+    ]
     assert [job_id for job_id, _run, _outcomes in started] == ["stage-job-1"]
     await started[0][2].completed()
     assert completed[-1] == {"job_id": "stage-job-1", "message": "Supplements finished"}
@@ -3755,13 +3805,80 @@ async def test_no_stage_starts_when_the_paper_became_busy_or_was_deleted_meanwhi
 
     assert completed == [{"job_id": "job-provider", "message": "Processing completed"}]
     assert started == []
-    # The import's own job says what happened to each chosen file.
+    # The import's own job says what happened to each chosen file, with real display_name (never raw id).
     ((job_id, entries),) = recorded
     assert job_id == "job-provider"
-    assert [(entry["provider_file_id"], entry["state"], entry["reason_code"]) for entry in entries] == [
-        ("40", "left_out", "paper_busy_when_ready"),
+    assert [
+        (entry["provider_file_id"], entry["display_name"], entry["state"], entry["reason_code"])
+        for entry in entries
+    ] == [
+        ("40", "Made_up_S40.xlsx", "left_out", "paper_busy_when_ready"),
     ]
+    assert entries[0]["display_name"] != entries[0]["provider_file_id"]
     assert entries[0]["observed_at"]
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        (0.01, "1 second"),
+        (1, "1 second"),
+        (12, "12 seconds"),
+        (60, "1 minute"),
+        (90, "90 seconds"),
+        (120, "2 minutes"),
+        (150, "2 minutes 30 seconds"),
+        (2700, "45 minutes"),
+        (3600, "1 hour"),
+        (5400, "1 hour 30 minutes"),
+        (10800, "3 hours"),
+    ],
+)
+def test_format_conversion_wait_duration_uses_plain_english(seconds, expected):
+    assert service_module._format_conversion_wait_duration(seconds) == expected
+
+
+def test_conversion_timeout_message_resolves_provider_label_without_hardcoding(monkeypatch):
+    monkeypatch.setattr(
+        service_module,
+        "get_document_source_provider_metadata",
+        lambda provider_id: {
+            "short_only": {"display_label": "Example Literature", "short_label": "EXL"},
+            "display_only": {"display_label": "Example Literature"},
+        }.get(provider_id),
+    )
+
+    short_msg = service_module._conversion_timeout_message(
+        10800, source_provenance={"provider": "short_only"},
+    )
+    assert short_msg == (
+        "EXL had not converted this paper 3 hours after the import started, "
+        "so the import stopped. The time includes any wait behind other imports."
+    )
+
+    display_msg = service_module._conversion_timeout_message(
+        5400, source_provenance={"provider": "display_only"},
+    )
+    assert display_msg == (
+        "Example Literature had not converted this paper 1 hour 30 minutes after the import started, "
+        "so the import stopped. The time includes any wait behind other imports."
+    )
+
+    provider_short_msg = service_module._conversion_timeout_message(
+        2700,
+        source_provenance={"provider": "display_only"},
+        provider=SimpleNamespace(provider_id="display_only", short_label="EXL"),
+    )
+    assert provider_short_msg == (
+        "EXL had not converted this paper 45 minutes after the import started, "
+        "so the import stopped. The time includes any wait behind other imports."
+    )
+
+    fallback_msg = service_module._conversion_timeout_message(90)
+    assert fallback_msg == (
+        "The document source had not converted this paper 90 seconds after the import started, "
+        "so the import stopped. The time includes any wait behind other imports."
+    )
 
 
 def _late_conversion_request(**overrides):

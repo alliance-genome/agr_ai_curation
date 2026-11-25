@@ -247,7 +247,13 @@ async def test_a_paper_abc_never_converts_times_out_after_one_request_at_the_end
     await _service(abc, []).execute_provider_conversion(_request())
 
     assert abc.conversion_requests == 1
-    assert job.ended == [("failed", "Provider conversion exceeded 3 seconds")]
+    assert job.ended == [
+        (
+            "failed",
+            "ABC had not converted this paper 3 seconds after the import started, "
+            "so the import stopped. The time includes any wait behind other imports.",
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -417,7 +423,13 @@ async def test_a_wait_that_starts_after_its_deadline_reads_once_and_never_asks_a
 
     assert (abc.conversion_requests, abc.show_all_reads) == (0, 1)
     # The time actually waited since the paper's own request.
-    assert job.ended == [("failed", "Provider conversion exceeded 4 seconds")]
+    assert job.ended == [
+        (
+            "failed",
+            "ABC had not converted this paper 4 seconds after the import started, "
+            "so the import stopped. The time includes any wait behind other imports.",
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -554,7 +566,12 @@ async def test_the_end_request_is_sent_only_while_it_can_be_answered_before_the_
     assert abc.conversion_requests == 0
     # The whole seconds actually waited since the request (2.7 s and up, depending on the case).
     assert [status for status, _ in job.ended] == ["failed"]
-    assert job.ended[0][1] in {"Provider conversion exceeded 2 seconds", "Provider conversion exceeded 3 seconds"}
+    assert job.ended[0][1] in {
+        "ABC had not converted this paper 2 seconds after the import started, "
+        "so the import stopped. The time includes any wait behind other imports.",
+        "ABC had not converted this paper 3 seconds after the import started, "
+        "so the import stopped. The time includes any wait behind other imports.",
+    }
 
 
 

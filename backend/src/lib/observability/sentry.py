@@ -140,6 +140,7 @@ _RUNTIME_TEXT_CONTEXT_KEYS = {
     "level_name",
     "logger_name",
     "operation",
+    "step",
     "type",
 }
 

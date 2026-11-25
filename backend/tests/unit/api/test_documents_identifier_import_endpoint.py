@@ -264,7 +264,7 @@ async def test_import_forwards_the_chosen_supplements(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("code", ["supplement_identifier_unknown", "file_chosen_twice", "paper_file_limit"])
+@pytest.mark.parametrize("code", ["supplement_identifier_unknown", "file_chosen_twice"])
 async def test_a_selection_that_cannot_be_imported_is_a_422_with_its_code(monkeypatch, code):
     from src.lib.document_sources.identifier_import import SupplementSelectionError
 
@@ -284,10 +284,42 @@ async def test_a_selection_that_cannot_be_imported_is_a_422_with_its_code(monkey
     assert (exc.value.status_code, exc.value.detail) == (422, {"code": code})
 
 
-def test_a_supplement_choice_rejects_unknown_fields():
+@pytest.mark.asyncio
+async def test_paper_file_limit_selection_refusal_includes_limit_value(monkeypatch):
+    from src.lib.document_sources.identifier_import import SupplementSelectionError
+
+    class _FakeIdentifierImportService:
+        async def import_identifiers(self, **_kwargs):
+            raise SupplementSelectionError("paper_file_limit", limit_value=20)
+
+    monkeypatch.setattr(documents, "identifier_import_service", _FakeIdentifierImportService())
+    monkeypatch.setattr(documents, "external_document_source_import_enabled", lambda: True)
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.import_documents_by_source_identifiers(
+            payload=DocumentSourceIdentifierImportRequest(identifiers="123"),
+            background_tasks=BackgroundTasks(), request=_request(), user={"sub": "user-1"},
+        )
+
+    assert (exc.value.status_code, exc.value.detail) == (
+        422,
+        {"code": "paper_file_limit", "limit_value": 20},
+    )
+
+
+def test_a_supplement_choice_accepts_optional_display_name_and_rejects_unknown_fields():
     from pydantic import ValidationError
 
     from src.models.api_schemas import DocumentSourceSupplementChoice
+
+    choice = DocumentSourceSupplementChoice(
+        identifier="123",
+        provider_file_id="30",
+        md5="md5-30",
+        converted_md5=None,
+        display_name="Table_S1.xlsx",
+    )
+    assert choice.display_name == "Table_S1.xlsx"
 
     with pytest.raises(ValidationError):
         DocumentSourceSupplementChoice(identifier="123", provider_file_id="30", file_id="x")

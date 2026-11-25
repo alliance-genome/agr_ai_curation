@@ -177,9 +177,12 @@ def _context():
 GOOD_TABLE_MD5 = hashlib.md5(GOOD_TABLE).hexdigest()
 
 
-def _chosen(provider_file_id, *, converted_md5=None):
+def _chosen(provider_file_id, *, converted_md5=None, display_name=None):
     return ChosenSupplement(
-        provider_file_id=provider_file_id, md5=f"md5-{provider_file_id}", converted_md5=converted_md5,
+        provider_file_id=provider_file_id,
+        md5=f"md5-{provider_file_id}",
+        converted_md5=converted_md5,
+        display_name=display_name,
     )
 
 
@@ -1066,3 +1069,55 @@ async def test_a_sweep_of_legal_settings_never_exceeds_the_supplement_waits_cap(
         assert total >= polls
         equal += polls == bound
     assert equal > 0
+
+
+def test_not_started_entries_and_queued_entries_use_real_display_name_never_provider_id():
+    plan = SupplementPlan(
+        chosen=(
+            _chosen("30", display_name="Table_S1.xlsx"),
+            _chosen("40", converted_md5="md5-41", display_name=None),
+        ),
+        request_context=_context(),
+        login_expires_at=None,
+        owner_user_id=7,
+        reference="AGRKB:101",
+    )
+
+    queued = stage.queued_entries(plan)
+    assert [(entry["provider_file_id"], entry["display_name"], entry["state"]) for entry in queued] == [
+        ("30", "Table_S1.xlsx", "queued"),
+        ("40", None, "queued"),
+    ]
+
+    busy = stage.not_started_entries(plan, now=1_000_000.0)
+    assert [
+        (entry["provider_file_id"], entry["display_name"], entry["state"], entry["reason_code"])
+        for entry in busy
+    ] == [
+        ("30", "Table_S1.xlsx", "left_out", "paper_busy_when_ready"),
+        ("40", None, "left_out", "paper_busy_when_ready"),
+    ]
+    assert all(entry["display_name"] != entry["provider_file_id"] for entry in busy)
+
+
+@pytest.mark.asyncio
+async def test_login_expired_before_listing_keeps_chosen_display_name_never_provider_id(job):
+    clock = _Clock()
+    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB")], payloads={"21": GOOD_TABLE})
+    _client, provider = _plain_provider()
+
+    await _stage(
+        job,
+        chosen=[_chosen("20", converted_md5="md5-21", display_name="Table_S20.xlsx"), _chosen("30")],
+        paper=paper,
+        main_ready_at=clock(),
+        clock=clock,
+        provider=provider,
+        login_expires_at=clock() + 300,
+    )
+
+    entries = job.progress[-1]["metadata"]["supplements"]
+    assert [(e["provider_file_id"], e["display_name"], e["reason_code"]) for e in entries] == [
+        ("20", "Table_S20.xlsx", "login_expired"),
+        ("30", None, "login_expired"),
+    ]

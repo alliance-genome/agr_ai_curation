@@ -36,7 +36,10 @@ from src.lib.document_sources.models import (
     SourceConversionResult,
     SourceConversionStatus,
 )
-from src.lib.document_sources.registry import get_configured_document_source_provider
+from src.lib.document_sources.registry import (
+    get_configured_document_source_provider,
+    get_document_source_provider_metadata,
+)
 from src.lib.exceptions import PDFCancellationError
 from src.lib.observability.background_tasks import (
     add_observed_background_task,
@@ -230,9 +233,91 @@ class _JobFinalizedElsewhere(Exception):
     """The job was made terminal outside this task (a cancel of a wait taken for dead)."""
 
 
-def _conversion_exceeded_message(requested_at: float) -> str:
-    """The existing timeout message, with the whole seconds actually waited since the request."""
-    return f"Provider conversion exceeded {math.floor(time.time() - requested_at):g} seconds"
+def _format_conversion_wait_duration(seconds: float) -> str:
+    """Format a conversion wait duration in plain English (e.g., ``3 hours``, ``1 hour 30 minutes``, ``90 seconds``)."""
+    total_seconds = max(1, math.floor(seconds))
+    if total_seconds < 60:
+        unit = "second" if total_seconds == 1 else "seconds"
+        return f"{total_seconds} {unit}"
+    if total_seconds < 120 and total_seconds % 60 != 0:
+        return f"{total_seconds} seconds"
+    if total_seconds < 3600:
+        minutes, rem_seconds = divmod(total_seconds, 60)
+        minute_part = f"{minutes} {'minute' if minutes == 1 else 'minutes'}"
+        if rem_seconds == 0:
+            return minute_part
+        second_part = f"{rem_seconds} {'second' if rem_seconds == 1 else 'seconds'}"
+        return f"{minute_part} {second_part}"
+    hours, rem = divmod(total_seconds, 3600)
+    minutes = rem // 60
+    hour_part = f"{hours} {'hour' if hours == 1 else 'hours'}"
+    if minutes == 0:
+        return hour_part
+    minute_part = f"{minutes} {'minute' if minutes == 1 else 'minutes'}"
+    return f"{hour_part} {minute_part}"
+
+
+def _conversion_provider_label(
+    *,
+    source_provenance: Mapping[str, Any] | None = None,
+    provider: DocumentSourceProvider | None = None,
+) -> str:
+    """Resolve the provider's short label from registration metadata without hardcoding a package in core."""
+    metadata: Mapping[str, Any] | None = None
+    for candidate_id in (
+        _non_empty_string(getattr(provider, "provider_id", None)),
+        _non_empty_string(
+            source_provenance.get("provider") if isinstance(source_provenance, Mapping) else None
+        ),
+    ):
+        if candidate_id:
+            metadata = get_document_source_provider_metadata(candidate_id)
+            if isinstance(metadata, Mapping):
+                break
+    if isinstance(metadata, Mapping):
+        short_label = metadata.get("short_label")
+        if isinstance(short_label, str) and short_label.strip():
+            return short_label.strip()
+    provider_short = getattr(provider, "short_label", None)
+    if isinstance(provider_short, str) and provider_short.strip():
+        return provider_short.strip()
+    if isinstance(metadata, Mapping):
+        display_label = metadata.get("display_label")
+        if isinstance(display_label, str) and display_label.strip():
+            return display_label.strip()
+    return "The document source"
+
+
+def _conversion_timeout_message(
+    elapsed_seconds: float,
+    *,
+    source_provenance: Mapping[str, Any] | None = None,
+    provider: DocumentSourceProvider | None = None,
+) -> str:
+    """Approved N32 timeout wording (Card 7, 24 Nov 2026)."""
+    provider_label = _conversion_provider_label(
+        source_provenance=source_provenance,
+        provider=provider,
+    )
+    duration = _format_conversion_wait_duration(elapsed_seconds)
+    return (
+        f"{provider_label} had not converted this paper {duration} after the import started, "
+        "so the import stopped. The time includes any wait behind other imports."
+    )
+
+
+def _conversion_exceeded_message(
+    requested_at: float,
+    *,
+    source_provenance: Mapping[str, Any] | None = None,
+    provider: DocumentSourceProvider | None = None,
+) -> str:
+    """The timeout message for the time waited since the paper's own import request."""
+    return _conversion_timeout_message(
+        time.time() - requested_at,
+        source_provenance=source_provenance,
+        provider=provider,
+    )
 
 
 def _raise_if_conversion_ended(
@@ -290,6 +375,7 @@ class UploadExecutionService:
         self._queues_by_job: weakref.WeakValueDictionary[str, _RequestJobQueue] = (
             weakref.WeakValueDictionary()
         )
+        self._conversion_providers_by_job: dict[str, DocumentSourceProvider] = {}
 
     def _record_queued_job(self, background_tasks: BackgroundTasks, job_id: str) -> None:
         queue = self._queues_by_request.setdefault(background_tasks, _RequestJobQueue())
@@ -582,7 +668,11 @@ class UploadExecutionService:
                 )
                 return
             timeout_error = RuntimeError(
-                f"Provider conversion exceeded {timeout_seconds:g} seconds"
+                _conversion_timeout_message(
+                    timeout_seconds,
+                    source_provenance=getattr(request, "source_provenance", None),
+                    provider=self._conversion_providers_by_job.get(request.job_id),
+                )
             )
             logger.error(
                 "Provider conversion timed out for document %s after %s seconds",
@@ -614,6 +704,8 @@ class UploadExecutionService:
                 message=str(timeout_error),
                 stage=ProcessingStage.FAILED.value,
             )
+        finally:
+            self._conversion_providers_by_job.pop(request.job_id, None)
 
     async def _execute_provider_conversion_unbounded(
         self,
@@ -656,6 +748,7 @@ class UploadExecutionService:
             _refuse_if_login_expired(request)
 
             provider = self._document_source_provider_factory()
+            self._conversion_providers_by_job[request.job_id] = provider
             # The provider's on-demand request is sent once per import: by the import
             # itself (recorded on the job), or here when the import did not need to.
             # Each request is recorded before it is sent, so it is never repeated.
@@ -696,7 +789,13 @@ class UploadExecutionService:
                     if failed_reads >= max_failed_reads:
                         raise
                     if time.time() >= wait_ends_at:
-                        raise RuntimeError(_conversion_exceeded_message(requested_at)) from None
+                        raise RuntimeError(
+                            _conversion_exceeded_message(
+                                requested_at,
+                                source_provenance=getattr(request, "source_provenance", None),
+                                provider=provider,
+                            )
+                        ) from None
                     if _job_was_finalized_elsewhere(request.job_id):
                         raise _JobFinalizedElsewhere()
                     pdf_job_service.update_progress(
@@ -777,12 +876,24 @@ class UploadExecutionService:
                 if now >= wait_ends_at:
                     # Includes a paper queued behind others past its own deadline:
                     # it was read once above, and nothing is asked outside the hold.
-                    raise RuntimeError(_conversion_exceeded_message(requested_at))
+                    raise RuntimeError(
+                        _conversion_exceeded_message(
+                            requested_at,
+                            source_provenance=getattr(request, "source_provenance", None),
+                            provider=provider,
+                        )
+                    )
                 if not sent.get("end_sent_at") and now >= end_request_at:
                     if now + request_timeout_seconds >= wait_ends_at:
                         # No room left to send and be answered before the deadline:
                         # end as a paper past its deadline does, asking nothing.
-                        raise RuntimeError(_conversion_exceeded_message(requested_at))
+                        raise RuntimeError(
+                            _conversion_exceeded_message(
+                                requested_at,
+                                source_provenance=getattr(request, "source_provenance", None),
+                                provider=provider,
+                            )
+                        )
                     # Nothing appeared in time: ask the provider once more, only to
                     # learn why. Sent within the deadline of the paper's own request,
                     # so at a deadline of at most an hour it falls inside ABC's
@@ -795,7 +906,13 @@ class UploadExecutionService:
                     sent["end_sent_at"] = "sent"
                     if time.time() + request_timeout_seconds >= wait_ends_at:
                         # The record write took the room: recorded, never sent.
-                        raise RuntimeError(_conversion_exceeded_message(requested_at))
+                        raise RuntimeError(
+                            _conversion_exceeded_message(
+                                requested_at,
+                                source_provenance=getattr(request, "source_provenance", None),
+                                provider=provider,
+                            )
+                        )
                     last_result = await provider.request_conversion(
                         request.reference, wait=False, request_bearer_token=curator_token,
                     )
@@ -1262,6 +1379,8 @@ class UploadExecutionService:
                 document_id=request.document_id,
                 user_id=plan.owner_user_id,
                 filename=getattr(request, "filename", None),
+                supplements=supplement_wait.queued_entries(plan),
+                source_job_id=request.job_id,
             )
         except pdf_job_service.ActiveJobExistsError:
             # The curator deleted the paper, or started an add or a delete on it,

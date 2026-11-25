@@ -295,18 +295,22 @@ _FINAL_SUPPLEMENT_STATES = frozenset({"added", "left_out"})
 
 
 def _close_open_supplement_entries(job: PdfProcessingJob, *, reason: str, now: datetime) -> None:
-    """A supplement wait finalized from outside its stage (its task is gone) leaves no
-    file open: each entry not yet ended becomes ``left_out`` with ``reason``.
+    """Close any unfinished ``metadata.supplements`` entries when a job ends outside its stage.
+
+    Applies to both an accepted import job cancelled or failed before its supplement stage
+    and a queued or running ``supplement_wait`` job finalized outside its stage. Ended
+    entries (``added`` / ``left_out``) are preserved untouched.
 
     Called inside the transaction that finalizes the job, under its row lock.
     """
     metadata = dict(job.metadata_json or {})
-    if metadata.get(JOB_KIND_KEY) != SUPPLEMENT_WAIT_JOB_KIND or not metadata.get("supplements"):
+    raw_entries = metadata.get("supplements")
+    if not isinstance(raw_entries, list) or not raw_entries:
         return
     observed_at = now.isoformat()
     entries = []
-    for entry in metadata["supplements"]:
-        if entry.get("state") not in _FINAL_SUPPLEMENT_STATES:
+    for entry in raw_entries:
+        if isinstance(entry, dict) and entry.get("state") not in _FINAL_SUPPLEMENT_STATES:
             entry = {**entry, "state": "left_out", "reason_code": reason, "observed_at": observed_at}
         entries.append(entry)
     metadata["supplements"] = entries
@@ -704,12 +708,21 @@ def is_supplement_add_job(job: PdfJobResponse | PdfProcessingJob) -> bool:
     return bool(metadata) and metadata.get(JOB_KIND_KEY) in _FILE_JOB_KINDS
 
 
-def start_supplement_wait_job(*, document_id: UUID | str, user_id: int, filename: Optional[str]) -> PdfJobResponse:
+def start_supplement_wait_job(
+    *,
+    document_id: UUID | str,
+    user_id: int,
+    filename: Optional[str],
+    supplements: Optional[list[dict]] = None,
+    source_job_id: Optional[UUID | str] = None,
+) -> PdfJobResponse:
     """Create the job of a new paper's supplement stage, once its import job has completed.
 
     Ordered against a delete of the same paper by the paper's lock (never waiting
     for it). Raises ``ActiveJobExistsError`` when the paper already has an active
-    job, or a delete or an add holds its lock.
+    job, or a delete or an add holds its lock. When ``source_job_id`` is provided,
+    any queued ``supplements`` entries on the completed import job are cleared in
+    the same transaction so the chosen files appear on only one job.
     """
     from src.lib.document_files.paper_lock import try_lock_paper_for_add
 
@@ -724,11 +737,24 @@ def start_supplement_wait_job(*, document_id: UUID | str, user_id: int, filename
         if paper is None:
             session.rollback()
             raise ActiveJobExistsError(document_id)
+        if source_job_id is not None:
+            source_job = session.execute(
+                select(PdfProcessingJob)
+                .where(PdfProcessingJob.id == _to_uuid(source_job_id))
+                .with_for_update()
+            ).scalar_one_or_none()
+            if source_job is not None and isinstance(source_job.metadata_json, dict) and "supplements" in source_job.metadata_json:
+                updated_source_metadata = dict(source_job.metadata_json)
+                updated_source_metadata.pop("supplements", None)
+                source_job.metadata_json = updated_source_metadata or None
+        metadata: dict = {JOB_KIND_KEY: SUPPLEMENT_WAIT_JOB_KIND}
+        if supplements:
+            metadata["supplements"] = list(supplements)
         # Born in the waiting stage, so a delete can end it from its first moment
         # (queued or not), never only after its first poll.
         return create_job_in_session(
             session, document_id=document_id, user_id=user_id, filename=filename,
-            metadata={JOB_KIND_KEY: SUPPLEMENT_WAIT_JOB_KIND},
+            metadata=metadata,
             current_stage=WAITING_FOR_SUPPLEMENTS_STAGE,
         )
     finally:
@@ -1305,6 +1331,11 @@ def mark_failed(
             outcome="failed",
             completed_at=now,
         )
+        _close_open_supplement_entries(
+            job,
+            reason=FileReason.SUPPLEMENT_STAGE_FAILED.value,
+            now=now,
+        )
 
         _reconcile_terminal_document(session, job)
         session.commit()
@@ -1351,6 +1382,11 @@ def mark_cancelled(
             metadata=metadata,
             outcome="cancelled",
             completed_at=now,
+        )
+        _close_open_supplement_entries(
+            job,
+            reason=FileReason.IMPORT_CANCELLED.value,
+            now=now,
         )
 
         _reconcile_terminal_document(session, job)

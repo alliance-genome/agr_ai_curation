@@ -137,3 +137,87 @@ def test_the_sweep_of_a_wait_asked_to_stop_closes_every_open_entry_as_cancelled(
         "40": ("left_out", "import_cancelled"),
     }
 
+
+def test_cancelling_an_accepted_import_while_queued_closes_every_queued_supplement(owner):
+    owner_id, _ = owner
+    paper = _ready_paper(owner_id)
+    queued = [_entry("30", "queued"), _entry("40", "queued")]
+    import_job = job_service.create_job(
+        document_id=paper.id,
+        user_id=owner_id,
+        filename=paper.filename,
+        metadata={"supplements": queued},
+    )
+
+    job_service.mark_cancelled(job_id=import_job.job_id, reason="Cancelled before processing started")
+
+    status, entries, observed = _entries(import_job.job_id)
+    assert status == "cancelled"
+    assert entries == {
+        "30": ("left_out", "import_cancelled"),
+        "40": ("left_out", "import_cancelled"),
+    }
+    assert all(observed)
+    with SessionLocal() as db:
+        saved = db.get(PdfProcessingJob, import_job.job_id).metadata_json["supplements"]
+    assert [entry["display_name"] for entry in saved] == ["Made_up_S30", "Made_up_S40"]
+
+
+def test_failing_an_accepted_import_before_supplement_stage_closes_queued_supplements(owner):
+    owner_id, _ = owner
+    paper = _ready_paper(owner_id)
+    import_job = job_service.create_job(
+        document_id=paper.id,
+        user_id=owner_id,
+        filename=paper.filename,
+        metadata={"supplements": [_entry("30", "queued")]},
+    )
+
+    job_service.mark_failed(job_id=import_job.job_id, message="Main import failed", stage="failed")
+
+    status, entries, observed = _entries(import_job.job_id)
+    assert status == "failed"
+    assert entries == {"30": ("left_out", "supplement_stage_failed")}
+    assert all(observed)
+
+
+def test_handoff_transfers_queued_entries_atomically_and_cancel_while_queued_closes_them(owner):
+    owner_id, _ = owner
+    paper = _ready_paper(owner_id)
+    queued = [_entry("30", "queued"), _entry("40", "queued")]
+    main_job = job_service.create_job(
+        document_id=paper.id,
+        user_id=owner_id,
+        filename=paper.filename,
+        metadata={"supplements": queued},
+    )
+    job_service.mark_completed(job_id=main_job.job_id, message="Processing completed")
+
+    stage_job = job_service.start_supplement_wait_job(
+        document_id=paper.id,
+        user_id=owner_id,
+        filename=paper.filename,
+        supplements=queued,
+        source_job_id=main_job.job_id,
+    )
+
+    with SessionLocal() as db:
+        main_meta = db.get(PdfProcessingJob, main_job.job_id).metadata_json or {}
+        stage_meta = db.get(PdfProcessingJob, stage_job.job_id).metadata_json or {}
+    # Handed-off entries are removed from the completed main job (no duplicate display).
+    assert "supplements" not in main_meta
+    assert [(e["provider_file_id"], e["display_name"], e["state"]) for e in stage_meta["supplements"]] == [
+        ("30", "Made_up_S30", "queued"),
+        ("40", "Made_up_S40", "queued"),
+    ]
+
+    # Cancelling the queued stage before run_supplement_stage starts closes every queued entry.
+    assert job_service.end_supplement_wait_for_delete(document_id=paper.id, user_id=owner_id) is True
+    status, entries, observed = _entries(stage_job.job_id)
+    assert status == "cancelled"
+    assert entries == {
+        "30": ("left_out", "import_cancelled"),
+        "40": ("left_out", "import_cancelled"),
+    }
+    assert all(observed)
+

@@ -114,7 +114,7 @@ def classify_conversion_answer(
 # --- The supplement stage -----------------------------------------------------
 
 # Curator-facing job message when the stage itself fails unexpectedly; the main
-# paper stays usable. Proposed wording awaiting the owner's sign-off.
+# paper stays usable. Approved wording (Chris, 23 Nov 2026, card 39).
 SUPPLEMENT_STAGE_FAILED_MESSAGE = "The main paper is ready, but its supplements could not be added."
 
 
@@ -138,7 +138,7 @@ _FINAL_STATES = frozenset({SupplementState.ADDED, SupplementState.LEFT_OUT})
 @dataclass(slots=True)
 class _Entry:
     provider_file_id: str
-    display_name: str
+    display_name: str | None
     state: SupplementState
     reason_code: str | None = None
     observed_at: str | None = None
@@ -165,6 +165,21 @@ def _iso(epoch_seconds: float) -> str:
     return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc).isoformat()
 
 
+def queued_entries(plan: SupplementPlan) -> list[dict[str, Any]]:
+    """Initial per-file entries recorded when an import with supplements is accepted."""
+
+    return [
+        _Entry(
+            provider_file_id=chosen.provider_file_id,
+            display_name=chosen.display_name,
+            state=SupplementState.QUEUED,
+            reason_code=None,
+            observed_at=None,
+        ).as_metadata()
+        for chosen in plan.chosen
+    ]
+
+
 def not_started_entries(plan: SupplementPlan, *, now: float | None = None) -> list[dict[str, Any]]:
     """Per-file outcomes when no supplement stage could start (the paper was busy or gone)."""
 
@@ -172,7 +187,7 @@ def not_started_entries(plan: SupplementPlan, *, now: float | None = None) -> li
     return [
         _Entry(
             provider_file_id=chosen.provider_file_id,
-            display_name=chosen.provider_file_id,
+            display_name=chosen.display_name,
             state=SupplementState.LEFT_OUT,
             reason_code=FileReason.PAPER_BUSY_WHEN_READY.value,
             observed_at=observed,
@@ -301,7 +316,7 @@ async def run_supplement_stage(
     for chosen in plan.chosen:
         stage.entries[chosen.provider_file_id] = _Entry(
             provider_file_id=chosen.provider_file_id,
-            display_name=chosen.provider_file_id,
+            display_name=chosen.display_name,
             state=(
                 SupplementState.QUEUED
                 if chosen.converted_md5 is not None
@@ -336,7 +351,7 @@ async def run_supplement_stage(
         if listing is not None:
             names = {item.provider_file_id: item.display_name for item in listing.files}
             for entry in stage.entries.values():
-                entry.display_name = names.get(entry.provider_file_id) or entry.provider_file_id
+                entry.display_name = names.get(entry.provider_file_id) or entry.display_name
         if stage.ids_in(SupplementState.WAITING):
             await stage.record(pdf_job_service.WAITING_FOR_SUPPLEMENTS_STAGE, _waiting_message(stage))
 

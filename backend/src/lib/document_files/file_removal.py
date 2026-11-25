@@ -32,6 +32,7 @@ Two phases (decided 23 Nov 2026, option A):
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
@@ -47,6 +48,8 @@ from src.models.sql.pdf_document import (
     PDFDocumentFile,
 )
 from src.models.sql.pdf_processing_job import PdfJobStatus, PdfProcessingJob
+
+logger = logging.getLogger(__name__)
 
 PAPER_STATUS_COMPLETED = "completed"
 _ACTIVE_JOB_STATUSES = (
@@ -373,24 +376,61 @@ async def remove_paper_file(
         invalidate_cache(subject, str(document_id))
     except Exception as exc:
         # The outline cache is keyed to the readable files, so a stale entry never matches.
-        _report_cleanup_failure(exc, document_id, "cache")
+        _report_cleanup_failure(exc, document_id, "cache", unfinished=False)
     return removed
 
 
-def _report_cleanup_failure(exc: Exception, document_id: UUID, step: str) -> None:
+def _sanitized_cleanup_error(step: str, exc_type_name: str) -> FileRemovalCleanupFailed:
+    """Build a traceback-bearing, chain-free cleanup error safe for logs and Sentry."""
+    try:
+        raise FileRemovalCleanupFailed(
+            f"Clearing a removed file's {step} failed ({exc_type_name})"
+        ) from None
+    except FileRemovalCleanupFailed as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        return sanitized
+
+
+def _report_cleanup_failure(
+    exc: Exception,
+    document_id: UUID,
+    step: str,
+    *,
+    unfinished: bool = True,
+) -> None:
     """The file is removed and unreadable; something it left behind could not be cleared yet.
 
     The row stays ``removed`` with its range and paths. Operators find such rows with
     ``SELECT id, document_id FROM pdf_document_files WHERE status = 'removed'``.
+    Unfinished cleanup steps (``cleanup_finished=False``) report at ``error`` level;
+    outline-cache invalidation reports at ``warning`` level.
     """
 
     from src.lib.observability.runtime import report_runtime_exception
 
-    report_runtime_exception(
-        FileRemovalCleanupFailed(f"Clearing a removed file's {step} failed ({type(exc).__name__})"),
-        component="document_files",
-        operation="file_removal_cleanup_failed",
-        level="warning",
-        context={"document_id": str(document_id), "step": step},
-        fingerprint=["file_removal_cleanup_failed", step],
+    exc_type_name = type(exc).__name__
+    sanitized = _sanitized_cleanup_error(step, exc_type_name)
+    log_fn = logger.error if unfinished else logger.warning
+    log_fn(
+        "Clearing a removed file's %s failed (%s)",
+        step,
+        exc_type_name,
+        extra={"sentry_skip_event": True},
     )
+    try:
+        report_runtime_exception(
+            sanitized,
+            component="document_files",
+            operation="file_removal_cleanup_failed",
+            level="error" if unfinished else "warning",
+            context={"document_id": str(document_id), "step": step},
+            fingerprint=["file_removal_cleanup_failed", step],
+            include_request=False,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to report file removal cleanup failure (%s)",
+            step,
+            extra={"sentry_skip_event": True},
+        )

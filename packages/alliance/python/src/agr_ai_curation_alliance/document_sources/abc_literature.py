@@ -125,6 +125,7 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
     """Map ABC Literature REST payloads into provider-neutral source objects."""
 
     provider_id = ABC_LITERATURE_PROVIDER_ID
+    short_label = "ABC"
 
     def __init__(self, client: ABCLiteratureClient):
         self._client = client

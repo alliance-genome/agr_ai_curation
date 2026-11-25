@@ -19,6 +19,8 @@ class ChosenSupplement:
     md5: str | None
     # ``None`` for a file the provider had not converted when it was listed.
     converted_md5: str | None
+    # Human-readable display name from the listing; ``None`` when unnamed (never the raw id).
+    display_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
