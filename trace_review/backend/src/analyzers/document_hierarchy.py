@@ -130,8 +130,7 @@ class DocumentHierarchyAnalyzer:
             "files": [],
             "files_being_added": False,
             "supplements_converting": False,
-            "raw_text": None,
-            "chunk_count_total": 0
+            "raw_text": None
         }
 
         # The outline is listed file by file (0.12.0): "This paper has N files." then,
@@ -209,11 +208,8 @@ class DocumentHierarchyAnalyzer:
             result["sections"] = cls._parse_flat_sections(raw_text)
             result["top_level_sections"] = [s["name"] for s in result["sections"]]
 
-        # Calculate total chunks
-        for section in result.get("sections", []):
-            result["chunk_count_total"] += section.get("chunk_count", 0)
-            for sub in section.get("subsections", []):
-                result["chunk_count_total"] += sub.get("chunk_count", 0)
+        # Each parent count already includes its subsection chunks.
+        result["chunk_count_total"] = sum(section["chunk_count"] for section in result["sections"])
 
         return result
 
@@ -224,7 +220,7 @@ class DocumentHierarchyAnalyzer:
     )
 
     _FILE_LINE = re.compile(
-        r'^File (\d+) of (\d+): (.+) \((main paper|supplement), ([^,]+), (\d+) chunks, chunks (\d+) to (\d+)\)$'
+        r'^File (\d+) of (\d+): (?P<name>.*) \((main paper|supplement), ([^,]+), (\d+) chunks, chunks (\d+) to (\d+)\)$'
     )
 
     @classmethod
@@ -244,7 +240,7 @@ class DocumentHierarchyAnalyzer:
                 lines = []
                 files.append({
                     "number": int(match.group(1)),
-                    "name": match.group(3),
+                    "name": match.group("name"),
                     "role": match.group(4),
                     "kind": match.group(5),
                     "chunk_count": int(match.group(6)),
