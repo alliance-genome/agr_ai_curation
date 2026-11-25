@@ -1230,8 +1230,15 @@ async def _one_supplement_wait(
 
 
 @pytest.mark.asyncio
-async def test_import_reports_one_add_outage_across_initial_and_poll_listings(job, monkeypatch, tmp_path):
-    from unittest.mock import AsyncMock
+@pytest.mark.parametrize(
+    ("second_file_unavailable", "reporter_fails"),
+    [(False, False), (True, False), (True, True)],
+    ids=["partial-outage", "all-outage", "all-outage-reporter-fails"],
+)
+async def test_import_reports_one_add_outage_across_initial_and_poll_listings(
+    job, monkeypatch, tmp_path, caplog, second_file_unavailable, reporter_fails,
+):
+    from unittest.mock import AsyncMock, Mock
 
     from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
     from src.lib.document_sources import file_listing_service, supplement_add
@@ -1241,7 +1248,7 @@ async def test_import_reports_one_add_outage_across_initial_and_poll_listings(jo
     _install_fake_add_storage(monkeypatch, _Store(), tmp_path)
     paper = _Paper(
         [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), _unconverted(30, "xlsx")],
-        payloads={"21": _http_error(503), "31": GOOD_TABLE},
+        payloads={"21": _http_error(503), "31": _http_error(503) if second_file_unavailable else GOOD_TABLE},
     )
 
     def convert_second_file():
@@ -1251,8 +1258,8 @@ async def test_import_reports_one_add_outage_across_initial_and_poll_listings(jo
     downloads = AsyncMock(wraps=client.download_referencefile)
     monkeypatch.setattr(client, "download_referencefile", downloads)
     provider = provider_from_fake(client)
-    reports = []
-    monkeypatch.setattr(runtime, "report_runtime_exception", lambda exc, **kwargs: reports.append(kwargs))
+    reporter = Mock(side_effect=RuntimeError("private reporter detail") if reporter_fails else None)
+    monkeypatch.setattr(runtime, "report_runtime_exception", reporter)
     clock = _Clock()
     outcomes = _Outcomes()
     await stage.run_supplement_stage(
@@ -1272,9 +1279,26 @@ async def test_import_reports_one_add_outage_across_initial_and_poll_listings(jo
     # The unavailable text was checked at startup, checked again on the poll, and tried at add.
     assert [call.args[0] for call in downloads.await_args_list].count("21") == 3
     assert outcomes.ended == ["completed"]
-    assert _final_entries(job) == {"20": ("left_out", "source_unavailable"), "30": ("added", None)}
-    assert [report["operation"] for report in reports] == ["supplement_add_download_unavailable"]
-    assert reports[0]["context"] == {"unavailable_count": 1, "added_count": 1, "chosen_count": 2}
+    unavailable = ("left_out", "source_unavailable")
+    assert _final_entries(job) == {
+        "20": unavailable,
+        "30": unavailable if second_file_unavailable else ("added", None),
+    }
+    reporter.assert_called_once()
+    operation = "supplement_add_download_unavailable"
+    assert reporter.call_args.kwargs == {
+        "operation": operation, "component": "document_files", "level": "warning",
+        "context": {
+            "unavailable_count": 2 if second_file_unavailable else 1,
+            "added_count": 0 if second_file_unavailable else 1,
+            "chosen_count": 2,
+        },
+        "fingerprint": [operation], "include_request": False,
+    }
+    for private_value in (DOCUMENT_ID, "AGRKB:101", "Made_up_S", "curator-token", "made-up error",
+                          "private reporter detail"):
+        assert private_value not in repr(reporter.call_args)
+        assert private_value not in caplog.text
 
 
 @pytest.mark.asyncio

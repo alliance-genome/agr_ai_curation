@@ -899,13 +899,14 @@ warnings use fixed messages and `sentry_skip_event=True`.
 - A file listing reports `file_listing_download_unavailable` under
   `document_source`. `checked_count` counts checks attempted in this listing
   and `unavailable_count` counts those that ended in a download outage.
-- A partially successful supplement add reports
-  `supplement_add_download_unavailable` under `document_files`. Its context
-  contains `chosen_count`, `added_count` and `unavailable_count`. The latter
-  counts chosen files left out after a converted-text or original-PDF outage.
-  The add reports once its ready files commit. Both the standalone add job
-  and the identifier import delegate reporting for their internal file checks
-  to the add, including checks during conversion polling.
+- A supplement add reports `supplement_add_download_unavailable` under
+  `document_files` after ready files commit if a converted-text or original-PDF
+  download outage left out at least one chosen file. An identifier import also
+  reports this warning when it finishes the add with zero files added and at
+  least one download outage. Its context contains `chosen_count`, `added_count`
+  and `unavailable_count` (chosen files left out due to an outage). Both the
+  standalone add job and the identifier import delegate reporting for their
+  internal file checks to the add, including checks during conversion polling.
 
 Ordinary file refusals in a listing or partial add stay quiet. When every chosen
 file is left out, the standalone add job reports only `supplement_add_nothing_added`,
