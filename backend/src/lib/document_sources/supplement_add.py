@@ -1371,6 +1371,31 @@ def _delete_rows(document_id: UUID, file_ids: Sequence[UUID]) -> None:
         ))
 
 
+def _mark_pending_rows_failed(document_id: UUID, file_ids: Sequence[UUID]) -> None:
+    """Demote only this add's surviving pending rows to failed so a retry can clear them."""
+    if not file_ids:
+        return
+    from sqlalchemy import update
+
+    from src.models.sql.database import SessionLocal
+
+    with SessionLocal() as session, session.begin():
+        session.execute(
+            update(PDFDocumentFile)
+            .where(
+                PDFDocumentFile.document_id == document_id,
+                PDFDocumentFile.id.in_(file_ids),
+                PDFDocumentFile.role == FILE_ROLE_SUPPLEMENT,
+                PDFDocumentFile.status == FILE_STATUS_PENDING,
+            )
+            .values(
+                status=FILE_STATUS_FAILED,
+                source_import_status="failed",
+                error_message=_MESSAGE_FAILED,
+            )
+        )
+
+
 def _rollback_files(document_id: UUID, file_ids: Sequence[UUID]) -> list[_Leftover] | None:
     """Read both sides of a possible paper deletion in one snapshot. None means the parent is gone."""
     from src.models.sql.database import SessionLocal
@@ -1425,18 +1450,34 @@ async def _undo(
     When the paper itself was deleted while the add ran, its rows (and so the ranges)
     are gone with it: every piece still filed under the paper's id is deleted instead,
     since no other file can own them.
+
+    If rollback fails before deleting this add's rows, demote only this add's surviving
+    ``pending`` rows to ``failed`` so a later retry clears them via ``leftovers`` without
+    disturbing any concurrent writer's ``pending`` rows.
     """
 
-    leftovers = await asyncio.to_thread(_rollback_files, document_id, file_ids)
-    if leftovers is not None:
-        await _remove_leftovers(
-            document_id, subject, leftovers, caller_reports_failure=caller_reports_failure,
+    try:
+        leftovers = await asyncio.to_thread(_rollback_files, document_id, file_ids)
+        if leftovers is not None:
+            await _remove_leftovers(
+                document_id, subject, leftovers, caller_reports_failure=caller_reports_failure,
+            )
+            return
+        await _delete_pieces_of_deleted_paper(
+            document_id, subject, caller_reports_failure=caller_reports_failure,
         )
-        return
-    await _delete_pieces_of_deleted_paper(
-        document_id, subject, caller_reports_failure=caller_reports_failure,
-    )
-    await asyncio.to_thread(_remove_stored_files, planned_paths, subject)
+        await asyncio.to_thread(_remove_stored_files, planned_paths, subject)
+    except Exception:
+        if file_ids:
+            try:
+                await asyncio.to_thread(_mark_pending_rows_failed, document_id, file_ids)
+            except Exception as mark_exc:
+                _report_supplement_failure(
+                    mark_exc,
+                    operation="supplement_add_rollback_row_fail_failed",
+                    message="Supplement add rollback could not mark surviving rows failed",
+                )
+        raise
 
 
 async def _delete_pieces_of_deleted_paper(

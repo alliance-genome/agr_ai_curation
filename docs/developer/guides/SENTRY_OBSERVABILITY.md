@@ -875,6 +875,10 @@ leftover cleanup during that wait reports
 `supplement_add_cancelled_leftover_cleanup_failed`. A failed row or artifact write during
 that wait reports `supplement_add_cancelled_mutation_failed`. The pipeline owns
 chunk write failures once range reservation finishes. If rollback of an uncommitted
+add fails before deleting its rows, only that add's surviving `pending` rows are
+demoted to `failed` so a retry can clear them (if that fallback demotion fails, it
+reports `supplement_add_rollback_row_fail_failed` without masking the original
+rollback error). If rollback of an uncommitted
 add fails while handling cancellation, it reports
 `supplement_add_cancelled_rollback_failed`, including Weaviate reconnect failures
 whose connection reporting is delegated to the caller so no duplicate error log is

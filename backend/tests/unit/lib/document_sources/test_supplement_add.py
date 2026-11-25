@@ -153,6 +153,13 @@ def storage(monkeypatch):
 
     monkeypatch.setattr(supplement_add, "_delete_pieces_of_deleted_paper", delete_all)
     monkeypatch.setattr(supplement_add, "_delete_rows", lambda _doc, ids: record.deleted_rows.extend(ids))
+
+    def mark_pending_failed(_doc, ids):
+        for row in record.inserted:
+            if row.id in ids and row.status == "pending":
+                row.status = "failed"
+
+    monkeypatch.setattr(supplement_add, "_mark_pending_rows_failed", mark_pending_failed)
     monkeypatch.setattr(supplement_add, "_remove_stored_files", lambda paths, subject: record.removed_paths.extend(paths))
 
     async def after_add(*_):

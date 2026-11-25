@@ -1428,3 +1428,118 @@ async def test_zero_write_all_skipped_job_respects_cancel_requested_under_row_lo
     assert fresh_job.error_message is None
     assert provider.closed == 1
     report.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_failed_rollback_marks_only_own_pending_row_failed_and_retry_recovers(paper, monkeypatch):
+    """When writer B's rollback fails during stored-file removal, only writer B's surviving
+    pending row is demoted to failed (never writer A's concurrent pending row), and a
+    subsequent retry cleans up writer B's failed leftover and adds file 40 cleanly."""
+    import asyncio
+    from unittest.mock import Mock
+
+    document_id, owner_id, subject, storage = paper
+    index = _Index().install(monkeypatch)
+
+    writer_a_inserted = asyncio.Event()
+    release_writer_a = asyncio.Event()
+
+    async def _writer_a_checkpoint(stage: str) -> None:
+        if stage == "vector_storage":
+            writer_a_inserted.set()
+            await asyncio.wait_for(release_writer_a.wait(), timeout=10)
+
+    writer_a_task = asyncio.create_task(
+        supplement_add.add_files_to_paper_with_listing(
+            document_id, owner_id, CONTEXT, [_chosen(20)],
+            listing=_bound_listing(20), job_id=uuid4(), provider=_AbcBoundProvider(WORKBOOKS),
+            weaviate_client=object(), stage_checkpoint=_writer_a_checkpoint,
+        )
+    )
+    try:
+        await asyncio.wait_for(writer_a_inserted.wait(), timeout=10)
+
+        # Writer B fails during chunk storage and its rollback fails while removing stored files.
+        job_b = supplement_add.start_supplement_add(document_id, owner_id, [_chosen(40)])
+        provider_b = _ClosableProvider(WORKBOOKS)
+        monkeypatch.setattr(
+            "src.lib.document_sources.registry.get_configured_document_source_provider",
+            lambda: provider_b,
+        )
+        monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda **_kwargs: object())
+        report = Mock(return_value=True)
+        monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+
+        real_store = supplement_add._store_supplement_pieces
+        real_remove_stored = supplement_add._remove_stored_files
+
+        async def _fail_writer_b_store(item, doc_id, subj, client):
+            if item.listed.provider_file_id == "40":
+                raise RuntimeError("simulated writer B chunk write failure")
+            await real_store(item, doc_id, subj, client)
+
+        def _fail_remove_stored(paths, subj):
+            raise OSError("simulated rollback file unlink failure")
+
+        monkeypatch.setattr(supplement_add, "_store_supplement_pieces", _fail_writer_b_store)
+        monkeypatch.setattr(supplement_add, "_remove_stored_files", _fail_remove_stored)
+
+        await supplement_add.run_supplement_add_job(supplement_add.SupplementAddJobRequest(
+            job_id=UUID(job_b.job_id),
+            document_id=document_id,
+            user_id=subject,
+            owner_user_id=owner_id,
+            context=CONTEXT,
+            files=(_chosen(40),),
+        ))
+
+        assert _fresh_job(job_b.job_id).status == PdfJobStatus.FAILED.value
+        assert [(row.source_provider_source_file_id, row.status) for row in _files(document_id)] == [
+            ("10", "ready"),
+            ("20", "pending"),
+            ("40", "failed"),
+        ]
+        failed_b_row = next(row for row in _files(document_id) if row.source_provider_source_file_id == "40")
+        assert failed_b_row.source_import_status == "failed"
+
+        # Restore normal storage/unlink and retry file 40 while writer A is STILL pending:
+        # retry cleans up writer B's failed leftover and commits file 40 cleanly without touching writer A.
+        monkeypatch.setattr(supplement_add, "_store_supplement_pieces", real_store)
+        monkeypatch.setattr(supplement_add, "_remove_stored_files", real_remove_stored)
+        job_b_retry = supplement_add.start_supplement_add(document_id, owner_id, [_chosen(40)])
+        provider_b_retry = _ClosableProvider(WORKBOOKS)
+        monkeypatch.setattr(
+            "src.lib.document_sources.registry.get_configured_document_source_provider",
+            lambda: provider_b_retry,
+        )
+
+        await supplement_add.run_supplement_add_job(supplement_add.SupplementAddJobRequest(
+            job_id=UUID(job_b_retry.job_id),
+            document_id=document_id,
+            user_id=subject,
+            owner_user_id=owner_id,
+            context=CONTEXT,
+            files=(_chosen(40),),
+        ))
+
+        fresh_retry = _fresh_job(job_b_retry.job_id)
+        assert fresh_retry.status == PdfJobStatus.COMPLETED.value
+        assert fresh_retry.metadata_json["supplements"][0]["state"] == "added"
+        assert [(row.source_provider_source_file_id, row.status) for row in _files(document_id)] == [
+            ("10", "ready"),
+            ("20", "pending"),
+            ("40", "ready"),
+        ]
+    finally:
+        release_writer_a.set()
+
+    result_a = await writer_a_task
+    (outcome_a,) = result_a.files
+    assert outcome_a.outcome == "added" and outcome_a.file_id is not None
+    assert [(row.source_provider_source_file_id, row.status) for row in _files(document_id)] == [
+        ("10", "ready"),
+        ("20", "ready"),
+        ("40", "ready"),
+    ]
+    assert (storage / f"{subject}/source_markdown/{outcome_a.file_id}.md").is_file()
+    assert len(index.stored) >= 2
