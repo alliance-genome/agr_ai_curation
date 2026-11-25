@@ -44,7 +44,8 @@ def mock_connections_loaded():
     test_connections = {
         "test_db": ConnectionDefinition(
             service_id="test_db",
-            description="Test database",
+            description="Test database at db-private.local:5432",
+            public_label="Application database",
             url="testdb://dbuser:dbsecretpass@db-private.local:5432/testdb",
             health_check=HealthCheck(method="CONNECT"),
             required=True,
@@ -53,16 +54,28 @@ def mock_connections_loaded():
         ),
         "test_cache": ConnectionDefinition(
             service_id="test_cache",
-            description="Test cache",
+            description="Test cache at cache-private.local:6379",
+            public_label="Session cache",
             url="testcache://cacheuser:cachesecretpw@cache-private.local:6379",
             health_check=HealthCheck(method="PING"),
             required=False,
             is_healthy=False,
             last_error="Connection refused to cache-private.local:6379",
         ),
+        "test_overlay_unlabeled": ConnectionDefinition(
+            service_id="test_overlay_unlabeled",
+            description="Internal overlay at overlay-private.local:9443",
+            public_label=None,
+            url="https://overlay-private.local:9443",
+            health_check=HealthCheck(endpoint="/health", method="GET"),
+            required=False,
+            is_healthy=False,
+            last_error="timeout from overlay-private.local:9443",
+        ),
         "test_api": ConnectionDefinition(
             service_id="test_api",
             description="Test API (no credentials)",
+            public_label="External API",
             url="http://api-private.local:8080/api",
             health_check=HealthCheck(endpoint="/health", method="GET"),
             required=False,
@@ -128,31 +141,32 @@ class TestConnectionsHealthEndpointSecurity:
 
             assert response.status_code == 200
             data = response.json()
-            assert set(data.keys()) == {
-                "observed_at",
-                "status",
-                "required_healthy",
-                "unhealthy_services",
+            assert set(data.keys()) == {"status", "unhealthy_services"}
+            assert data == {
+                "status": "degraded",
+                "unhealthy_services": ["Session cache"],
             }
-            assert data["status"] == "degraded"
-            assert data["required_healthy"] is True
-            assert data["unhealthy_services"] == [
-                {"description": "Test cache", "required": False}
-            ]
 
             raw = response.text
             for forbidden in (
+                "observed_at",
+                "required_healthy",
+                "required",
+                "description",
                 "url",
                 "last_error",
                 "service_id",
                 "test_db",
                 "test_cache",
+                "test_overlay_unlabeled",
                 "test_api",
                 "db-private.local",
                 "cache-private.local",
+                "overlay-private.local",
                 "api-private.local",
                 "5432",
                 "6379",
+                "9443",
                 "8080",
                 "dbsecretpass",
                 "cachesecretpw",

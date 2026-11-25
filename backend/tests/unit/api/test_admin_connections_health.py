@@ -359,6 +359,30 @@ def test_admin_connection_routes_reject_non_admin_curators_with_403_before_monit
 
 
 @pytest.mark.parametrize("path", _ADMIN_CONNECTION_ROUTES)
+def test_admin_connection_routes_deny_when_dev_mode_env_true_but_blocked_by_is_dev_mode(
+    monkeypatch, path
+):
+    headers = _configure_api_key_identity(monkeypatch, email="curator@example.org")
+    monkeypatch.setenv("DEV_MODE", "true")
+    monkeypatch.setattr(admin_auth, "get_admin_emails", lambda: set())
+    monkeypatch.setattr(admin_auth, "is_dev_mode", lambda: False)
+    monkeypatch.setattr(auth_api, "is_dev_mode", lambda: False)
+
+    def _must_not_run(*_args, **_kwargs):
+        raise AssertionError("blocked dev-mode request reached connections health handler")
+
+    monkeypatch.setattr("src.lib.config.connections_loader.is_initialized", _must_not_run)
+
+    app = FastAPI()
+    app.include_router(admin_connections.router)
+    app.state.connections_health_monitor = SimpleNamespace(get=AsyncMock(side_effect=_must_not_run))
+
+    response = TestClient(app).get(path, headers=headers)
+
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize("path", _ADMIN_CONNECTION_ROUTES)
 def test_admin_connection_routes_allow_admin_users(monkeypatch, path):
     headers = _configure_api_key_identity(monkeypatch, email="Admin@Example.org")
     monkeypatch.setattr(admin_auth, "get_admin_emails", lambda: {"admin@example.org"})
@@ -396,7 +420,8 @@ def test_public_connections_route_allows_anonymous_and_redacts_internal_details(
             services={
                 "internal_postgres_primary": {
                     "service_id": "internal_postgres_primary",
-                    "description": "Application database",
+                    "description": "Primary Postgres at db-internal.corp.local:5432",
+                    "public_label": "Application database",
                     "url": "postgres://***@db-internal.corp.local:5432/prod_db",
                     "required": True,
                     "is_healthy": False,
@@ -404,15 +429,26 @@ def test_public_connections_route_allows_anonymous_and_redacts_internal_details(
                 },
                 "internal_langfuse": {
                     "service_id": "internal_langfuse",
-                    "description": "LLM observability and tracing",
+                    "description": "Langfuse at langfuse-internal:3000",
+                    "public_label": "Observability and tracing",
                     "url": "http://langfuse-internal:3000",
                     "required": False,
                     "is_healthy": False,
                     "last_error": "502 Bad Gateway from langfuse-internal:3000",
                 },
+                "private_overlay_service": {
+                    "service_id": "private_overlay_service",
+                    "description": "Private overlay endpoint proxy-secret.corp.internal:9443",
+                    "public_label": None,
+                    "url": "https://proxy-secret.corp.internal:9443",
+                    "required": False,
+                    "is_healthy": False,
+                    "last_error": "timeout connecting to proxy-secret.corp.internal:9443",
+                },
                 "internal_weaviate": {
                     "service_id": "internal_weaviate",
                     "description": "Vector database",
+                    "public_label": "Document search",
                     "url": "http://weaviate-internal:8080",
                     "required": True,
                     "is_healthy": True,
@@ -421,6 +457,7 @@ def test_public_connections_route_allows_anonymous_and_redacts_internal_details(
                 "internal_curation_db": {
                     "service_id": "internal_curation_db",
                     "description": "Optional curation database",
+                    "public_label": "Curation database",
                     "url": "",
                     "required": False,
                     "is_healthy": None,
@@ -437,43 +474,80 @@ def test_public_connections_route_allows_anonymous_and_redacts_internal_details(
 
     assert response.status_code == 200
     data = response.json()
-    assert set(data.keys()) == {"observed_at", "status", "required_healthy", "unhealthy_services"}
+    assert set(data.keys()) == {"status", "unhealthy_services"}
     assert data == {
-        "observed_at": "2026-11-25T00:00:00+00:00",
         "status": "unhealthy",
-        "required_healthy": False,
         "unhealthy_services": [
-            {"description": "Application database", "required": True},
-            {"description": "LLM observability and tracing", "required": False},
+            "Application database",
+            "Observability and tracing",
         ],
     }
 
-    for item in data["unhealthy_services"]:
-        assert set(item.keys()) == {"description", "required"}
-
     raw_text = response.text
     for forbidden in (
+        "observed_at",
+        "required_healthy",
+        "required",
+        "description",
         "url",
         "last_error",
         "service_id",
         "internal_postgres_primary",
         "internal_langfuse",
+        "private_overlay_service",
         "internal_weaviate",
         "internal_curation_db",
         "db-internal.corp.local",
         "langfuse-internal",
+        "proxy-secret.corp.internal",
         "weaviate-internal",
         "5432",
         "3000",
+        "9443",
         "8080",
         "postgres://",
         "http://",
+        "https://",
         "connection refused",
         "Bad Gateway",
-        "Vector database",
-        "Optional curation database",
+        "Document search",
+        "Curation database",
     ):
         assert forbidden not in raw_text
+
+
+def test_public_connections_route_omits_unlabeled_overlay_service_but_updates_status(monkeypatch):
+    monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.delenv("TESTING_API_KEY", raising=False)
+    monkeypatch.setattr("src.lib.config.connections_loader.is_initialized", lambda: True)
+
+    async def snapshot():
+        return SimpleNamespace(
+            observed_at="2026-11-25T00:00:00+00:00",
+            services={
+                "overlay_only": {
+                    "service_id": "overlay_only",
+                    "description": "Internal corp host secret-overlay.vpc.local:15432",
+                    "public_label": None,
+                    "url": "postgres://***@secret-overlay.vpc.local:15432/db",
+                    "required": False,
+                    "is_healthy": False,
+                    "last_error": "dial tcp secret-overlay.vpc.local:15432: refused",
+                },
+            },
+        )
+
+    app = FastAPI()
+    app.include_router(admin_connections.public_router)
+    app.state.connections_health_monitor = SimpleNamespace(get=snapshot)
+
+    response = TestClient(app).get("/api/health/connections")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "degraded", "unhealthy_services": []}
+    assert "secret-overlay.vpc.local" not in response.text
+    assert "15432" not in response.text
+    assert "overlay_only" not in response.text
 
 
 @pytest.fixture
@@ -504,14 +578,16 @@ async def test_public_and_admin_http_snapshots_share_cache_status_and_timestamp(
     connections = {
         "required_svc": ConnectionDefinition(
             service_id="required_svc",
-            description="Primary database",
+            description="Primary database at internal-db.local:5432",
+            public_label="Primary database",
             required=True,
             url=secret_url,
             health_check=HealthCheck(endpoint="/health"),
         ),
         "optional_svc": ConnectionDefinition(
             service_id="optional_svc",
-            description="Optional telemetry",
+            description="Optional telemetry at optional-host.local:9000",
+            public_label="Optional telemetry",
             required=False,
             url="http://optional-host.local:9000",
             health_check=HealthCheck(endpoint="/health"),
@@ -538,10 +614,11 @@ async def test_public_and_admin_http_snapshots_share_cache_status_and_timestamp(
             assert public_first.status_code == public_second.status_code == 200
             public_data = public_first.json()
             assert public_data == public_second.json()
-            assert set(public_data.keys()) == {"observed_at", "status", "required_healthy", "unhealthy_services"}
+            assert set(public_data.keys()) == {"status", "unhealthy_services"}
             assert public_data["status"] == expected
-            assert public_data["observed_at"]
             for forbidden in (
+                "observed_at",
+                "required_healthy",
                 "secret",
                 "internal-db.local",
                 "optional-host.local",
@@ -559,9 +636,8 @@ async def test_public_and_admin_http_snapshots_share_cache_status_and_timestamp(
             admin_first = await client.get("/api/admin/health/connections", headers=admin_headers)
             assert admin_first.status_code == 200
             admin_data = admin_first.json()
-            assert admin_data["observed_at"] == public_data["observed_at"]
+            assert admin_data["observed_at"]
             assert admin_data["status"] == expected
-            assert admin_data["required_healthy"] is public_data["required_healthy"]
             assert admin_data["total_services"] == 2
             assert admin_data["healthy_count"] + admin_data["unhealthy_count"] + admin_data["unknown_count"] == 2
             assert "secret" not in admin_first.text
@@ -607,7 +683,8 @@ async def test_probe_failure_remains_public_health_observation(monkeypatch, requ
     secret_url = f"http://user:{secret}@probe-host.internal:7443"
     conn = ConnectionDefinition(
         service_id="failing_svc",
-        description="Failing dependency",
+        description="Failing dependency at probe-host.internal:7443",
+        public_label="Failing dependency",
         required=required,
         url=secret_url,
         timeout_seconds=1,
@@ -619,6 +696,7 @@ async def test_probe_failure_remains_public_health_observation(monkeypatch, requ
     healthy = ConnectionDefinition(
         service_id="healthy_svc",
         description="Healthy dependency",
+        public_label="Healthy dependency",
         required=True,
         url="http://healthy-host.internal:8080",
     )
@@ -663,12 +741,21 @@ async def test_probe_failure_remains_public_health_observation(monkeypatch, requ
         assert public_first.status_code == public_cached.status_code == admin_cached.status_code == 200
         assert public_first.json() == public_cached.json()
         public_data = public_first.json()
-        assert public_data["status"] == ("unhealthy" if required else "degraded")
-        assert public_data["required_healthy"] is (not required)
-        assert public_data["unhealthy_services"] == [
-            {"description": "Failing dependency", "required": required}
-        ]
-        for forbidden in (secret, "probe-host.internal", "7443", "failing_svc", "healthy_svc", "url", "last_error"):
+        assert public_data == {
+            "status": "unhealthy" if required else "degraded",
+            "unhealthy_services": ["Failing dependency"],
+        }
+        for forbidden in (
+            secret,
+            "observed_at",
+            "required_healthy",
+            "probe-host.internal",
+            "7443",
+            "failing_svc",
+            "healthy_svc",
+            "url",
+            "last_error",
+        ):
             assert forbidden not in public_first.text
 
         admin_data = admin_cached.json()

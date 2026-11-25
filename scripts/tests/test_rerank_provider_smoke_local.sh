@@ -220,11 +220,17 @@ EOF
 
     run_http_check "none" "NONE_CONNECTIONS" "/api/admin/health/connections" "200" >/dev/null
     [[ "$(cat "${temp_dir}/stdin_header.txt")" == "X-API-Key: smoke-secret-value" ]]
-    ! grep -F "smoke-secret-value" "${temp_dir}/args.txt" >/dev/null
+    if grep -F "smoke-secret-value" "${temp_dir}/args.txt" >/dev/null; then
+      echo "TESTING_API_KEY leaked into curl argv for admin path" >&2
+      exit 1
+    fi
 
     run_http_check "none" "NONE_HEALTH" "/health" "200" >/dev/null
     [[ -z "$(cat "${temp_dir}/stdin_header.txt")" ]]
-    ! grep -F "smoke-secret-value" "${temp_dir}/args.txt" >/dev/null
+    if grep -F "smoke-secret-value" "${temp_dir}/args.txt" >/dev/null; then
+      echo "TESTING_API_KEY leaked into curl argv for non-admin path" >&2
+      exit 1
+    fi
     [[ "${PASS_COUNT}" -eq 2 ]]
     [[ "${FAIL_COUNT}" -eq 0 ]]
   )

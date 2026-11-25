@@ -33,20 +33,14 @@ function buildHealth(
   overrides: Partial<ConnectionsHealthResponse> = {},
 ): ConnectionsHealthResponse {
   return {
-    observed_at: '2026-11-25T00:00:00+00:00',
     status,
-    required_healthy: status !== 'unhealthy',
     unhealthy_services:
       status === 'healthy'
         ? []
         : [
-            {
-              description:
-                status === 'unhealthy'
-                  ? 'Vector database for document search and RAG'
-                  : 'LLM observability and tracing',
-              required: status === 'unhealthy',
-            },
+            status === 'unhealthy'
+              ? 'Document search'
+              : 'Observability and tracing',
           ],
     ...overrides,
   }
@@ -103,7 +97,7 @@ describe('ConnectionsHealthBanner', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
-  it('shows degraded service descriptions and lets users dismiss that status level', async () => {
+  it('shows degraded service labels and lets users dismiss that status level', async () => {
     mockUseConnectionsHealth.mockReturnValue({
       data: buildHealth('degraded'),
       isLoading: false,
@@ -115,7 +109,7 @@ describe('ConnectionsHealthBanner', () => {
     expect(screen.getByText('Service Degraded')).toBeInTheDocument()
     expect(screen.getByText('Some optional services are unavailable. Core features still work.')).toBeInTheDocument()
     expect(screen.getByText('Affected services:')).toBeInTheDocument()
-    expect(screen.getByText('LLM observability and tracing')).toBeInTheDocument()
+    expect(screen.getByText('Observability and tracing')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
 
@@ -148,18 +142,18 @@ describe('ConnectionsHealthBanner', () => {
     expect(screen.getByRole('status')).toBeInTheDocument()
     expect(screen.getByText('Service Unavailable')).toBeInTheDocument()
     expect(screen.getByText('Required services are unavailable. Some features may not work.')).toBeInTheDocument()
-    expect(screen.getByText('Vector database for document search and RAG (required)')).toBeInTheDocument()
+    expect(screen.getByText('Document search')).toBeInTheDocument()
   })
 
   it('truncates lists longer than four affected services', () => {
     mockUseConnectionsHealth.mockReturnValue({
       data: buildHealth('degraded', {
         unhealthy_services: [
-          { description: 'Service One', required: false },
-          { description: 'Service Two', required: false },
-          { description: 'Service Three', required: false },
-          { description: 'Service Four', required: false },
-          { description: 'Service Five', required: false },
+          'Service One',
+          'Service Two',
+          'Service Three',
+          'Service Four',
+          'Service Five',
         ],
       }),
       isLoading: false,

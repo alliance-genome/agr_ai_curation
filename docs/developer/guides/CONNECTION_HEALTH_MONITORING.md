@@ -2,10 +2,13 @@
 
 The public `GET /api/health/connections` endpoint shares a demand-triggered
 sweep among dashboard viewers within one application worker and returns only
-the minimal non-sensitive status fields needed by the curator banner
-(`observed_at`, `status`, `required_healthy`, and `unhealthy_services` entries
-containing only `description` and `required` — never URLs, hostnames, ports,
-raw errors, or internal `service_id`s).
+the minimal non-sensitive status fields needed by the curator banner:
+`status` (`healthy`, `degraded`, or `unhealthy`) and `unhealthy_services`
+(a list of explicit benign `public_label` strings configured on unhealthy
+services — never free-form diagnostic `description` strings, URLs, hostnames,
+ports, raw errors, internal `service_id`s, or sweep timestamps). Unhealthy
+services without an explicit `public_label` still affect overall `status`
+without being named publicly.
 
 The detailed diagnostic routes `GET /api/admin/health/connections` and
 `GET /api/admin/health/connections/{service_id}` require admin authorization

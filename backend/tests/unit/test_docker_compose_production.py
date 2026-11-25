@@ -124,6 +124,15 @@ def test_compose_forwards_table_header_rule_to_every_chunking_service(
     assert getter() == expected
 
 
+def test_compose_forwards_admin_emails_to_backend():
+    production = _load_compose()["services"]["backend"]["environment"]
+    development = dict(
+        item.split("=", 1) for item in _load_dev_compose()["services"]["backend"]["environment"]
+    )
+    assert production["ADMIN_EMAILS"] == "${ADMIN_EMAILS:-}"
+    assert development["ADMIN_EMAILS"] == "${ADMIN_EMAILS:-}"
+
+
 def _load_dev_compose() -> dict:
     return yaml.safe_load(DEV_COMPOSE_PATH.read_text(encoding="utf-8"))
 

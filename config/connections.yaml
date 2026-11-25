@@ -7,7 +7,10 @@
 # IMPORTANT: This file is the source of truth for service connections.
 #
 # Fields for each service:
-#   - description: Human-readable description
+#   - description: Human-readable diagnostic description (admin-only routes)
+#   - public_label: Optional benign curator-facing label exposed on the
+#       unauthenticated /api/health/connections banner route when unhealthy.
+#       Omit or leave null if a service should not be named publicly.
 #   - url: Service URL (supports ${ENV_VAR:-default} syntax)
 #   - health_check: How to verify the service is available
 #       - endpoint: Path to health check endpoint
@@ -29,6 +32,7 @@ services:
   # ---------------------------------------------------------------------------
   weaviate:
     description: "Vector database for document search and RAG"
+    public_label: "Document search"
     url: "${WEAVIATE_SCHEME:-http}://${WEAVIATE_HOST:-weaviate}:${WEAVIATE_PORT:-8080}"
     health_check:
       endpoint: "/v1/.well-known/ready"
@@ -42,6 +46,7 @@ services:
   # ---------------------------------------------------------------------------
   agr_curation_api:
     description: "Alliance Genome Resources curation database"
+    public_label: "Curation database API"
     url: "${AGR_CURATION_API_URL:-https://curation.alliancegenome.org}"
     health_check:
       endpoint: "/health"
@@ -55,6 +60,7 @@ services:
   # ---------------------------------------------------------------------------
   openai:
     description: "OpenAI API for LLM inference"
+    public_label: "LLM inference service"
     url: "https://api.openai.com"
     health_check:
       endpoint: "/v1/models"
@@ -70,6 +76,7 @@ services:
   # ---------------------------------------------------------------------------
   redis:
     description: "Redis for session storage and caching"
+    public_label: "Session cache"
     url: "${REDIS_URL:-redis://redis:6379}"
     health_check:
       endpoint: null  # Redis uses PING command, not HTTP
@@ -87,6 +94,7 @@ services:
   # (relies on trust auth for local connections in docker-compose setup)
   postgres:
     description: "PostgreSQL database for application data"
+    public_label: "Application database"
     url: "${DATABASE_URL:-postgresql://postgres@postgres:5432/ai_curation}"
     health_check:
       endpoint: null  # PostgreSQL uses connection test, not HTTP
@@ -100,6 +108,7 @@ services:
   # ---------------------------------------------------------------------------
   langfuse:
     description: "LLM observability and tracing"
+    public_label: "Observability and tracing"
     url: "${LANGFUSE_HOST:-http://langfuse:3000}"
     health_check:
       endpoint: "/api/public/health"
@@ -113,6 +122,7 @@ services:
   # ---------------------------------------------------------------------------
   reranker:
     description: "Cross-encoder reranking service for improved search"
+    public_label: "Search reranking service"
     url: "${RERANKER_URL:-http://reranker-transformers:8080}"
     health_check:
       endpoint: "/.well-known/ready"
@@ -127,6 +137,7 @@ services:
 
   bedrock_reranker:
     description: "Amazon Bedrock Cohere reranking provider"
+    public_label: "Cloud search reranking service"
     url: "aws://${AWS_REGION:-us-east-1}/bedrock-agent-runtime"
     health_check:
       endpoint: null
@@ -152,6 +163,7 @@ services:
   #   3. credentials.source config below (env/aws_secrets/url)
   curation_db:
     description: "AGR Curation PostgreSQL database (direct connection)"
+    public_label: "Curation database"
     url: ""
     health_check:
       endpoint: null

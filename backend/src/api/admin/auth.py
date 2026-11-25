@@ -6,6 +6,7 @@ import os
 from fastapi import HTTPException
 
 from src.api.auth import get_auth_dependency
+from src.config import is_dev_mode
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ async def require_admin(user: dict = get_auth_dependency()) -> dict:
     """Require the authenticated user's email to be on the admin allowlist."""
     admin_emails = get_admin_emails()
     if not admin_emails:
-        if os.getenv("DEV_MODE", "false").lower() == "true":
+        if is_dev_mode():
             logger.warning("ADMIN_EMAILS not set, allowing access in DEV_MODE")
             return user
         raise HTTPException(

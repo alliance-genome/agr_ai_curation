@@ -22,7 +22,7 @@ type HealthStatusLevel = 'healthy' | 'degraded' | 'unhealthy';
  * - Shows error for unhealthy status (required services down)
  * - Dismissible with X button
  * - Reappears if status worsens after being dismissed
- * - Lists affected service descriptions without exposing URLs or raw errors
+ * - Lists affected public service labels without exposing URLs or raw errors
  */
 const ConnectionsHealthBanner: React.FC = () => {
   const theme = useTheme();
@@ -63,7 +63,7 @@ const ConnectionsHealthBanner: React.FC = () => {
   }
 
   const unhealthyServices = health.unhealthy_services.filter(
-    (service) => service.description.trim().length > 0
+    (label) => label.trim().length > 0
   );
 
   // Choose styling based on severity
@@ -145,10 +145,9 @@ const ConnectionsHealthBanner: React.FC = () => {
                 Affected services:
               </Typography>
               <Box component="ul" sx={{ m: 0, pl: '1.25rem' }}>
-                {unhealthyServices.slice(0, 4).map((service, index) => (
-                  <li key={`${service.description}-${service.required}-${index}`}>
-                    {service.description}
-                    {service.required && ' (required)'}
+                {unhealthyServices.slice(0, 4).map((label, index) => (
+                  <li key={`${label}-${index}`}>
+                    {label}
                   </li>
                 ))}
                 {unhealthyServices.length > 4 && (

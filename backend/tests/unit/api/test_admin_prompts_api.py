@@ -69,7 +69,7 @@ def test_parse_admin_emails_normalizes(monkeypatch):
 
 def test_require_admin_allows_in_dev_mode_when_unconfigured(monkeypatch):
     monkeypatch.setattr(admin_auth, "get_admin_emails", lambda: set())
-    monkeypatch.setattr(admin_auth.os, "getenv", lambda key, default="": "true" if key == "DEV_MODE" else default)
+    monkeypatch.setattr(admin_auth, "is_dev_mode", lambda: True)
 
     user = {"email": "anyone@example.org"}
     result = asyncio.run(admin_auth.require_admin(user))
@@ -78,10 +78,20 @@ def test_require_admin_allows_in_dev_mode_when_unconfigured(monkeypatch):
 
 def test_require_admin_denies_when_unconfigured_outside_dev(monkeypatch):
     monkeypatch.setattr(admin_auth, "get_admin_emails", lambda: set())
-    monkeypatch.setattr(admin_auth.os, "getenv", lambda key, default="": "false" if key == "DEV_MODE" else default)
+    monkeypatch.setattr(admin_auth, "is_dev_mode", lambda: False)
 
     with pytest.raises(HTTPException) as exc:
         asyncio.run(admin_auth.require_admin({"email": "anyone@example.org"}))
+    assert exc.value.status_code == 403
+
+
+def test_require_admin_denies_when_dev_mode_env_true_but_is_dev_mode_blocked(monkeypatch):
+    monkeypatch.setenv("DEV_MODE", "true")
+    monkeypatch.setattr(admin_auth, "get_admin_emails", lambda: set())
+    monkeypatch.setattr(admin_auth, "is_dev_mode", lambda: False)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(admin_auth.require_admin({"email": "curator@example.org"}))
     assert exc.value.status_code == 403
 
 

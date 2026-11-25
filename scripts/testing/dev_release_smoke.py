@@ -474,12 +474,18 @@ def run_local_rerank_provider_smoke(
     *,
     script_path: Path,
     base_url: str,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     require(script_path.exists(), f"Rerank provider smoke script not found: {script_path}")
+
+    subprocess_env = dict(os.environ)
+    if api_key:
+        subprocess_env["TESTING_API_KEY"] = api_key
 
     result = subprocess.run(
         ["bash", str(script_path), base_url],
         cwd=resolve_repo_root(),
+        env=subprocess_env,
         capture_output=True,
         text=True,
         check=False,
@@ -3495,9 +3501,11 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
 
         if args.include_rerank_provider_smoke:
             print_step("Running optional local rerank provider smoke")
+            rerank_api_key = headers.get("X-API-Key") or resolve_api_key(args.api_key, env_file)
             rerank_provider_smoke = run_local_rerank_provider_smoke(
                 script_path=resolve_rerank_provider_smoke_script(args.rerank_provider_smoke_script),
                 base_url=args.rerank_provider_smoke_base_url.rstrip("/"),
+                api_key=rerank_api_key,
             )
             evidence["rerank_provider_smoke"] = {
                 "included": True,

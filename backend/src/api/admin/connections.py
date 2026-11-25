@@ -9,10 +9,10 @@ Provides endpoints for checking external service and runtime health:
 
 Authorization:
 - GET /api/health/connections is public and returns only non-sensitive overall
-  status and plain unhealthy service descriptions for the curator banner.
+  status and explicit benign `public_label` strings for unhealthy services.
 - GET /api/admin/health/connections and /connections/{service_id} expose service
-  URLs, internal service IDs, and sanitized error text, so they require admin
-  authorization via ADMIN_EMAILS (`require_admin`).
+  URLs, diagnostic descriptions, internal service IDs, and sanitized error text,
+  so they require admin authorization via ADMIN_EMAILS (`require_admin`).
 - All three connection routes answer from the same bounded-age, per-worker
   snapshot; none starts an uncached probe per request.
 - The llm-providers and packages routes describe how the system is configured
@@ -38,20 +38,11 @@ public_router = APIRouter(prefix="/api/health", tags=["Health"])
 # =============================================================================
 
 
-class PublicUnhealthyServiceStatus(BaseModel):
-    """Minimal non-sensitive status for one unhealthy service."""
-
-    description: str
-    required: bool
-
-
 class PublicConnectionsHealthResponse(BaseModel):
     """Minimal public connection health status for the curator banner."""
 
-    observed_at: str  # UTC sweep start; unchanged on cache hits
     status: str  # "healthy", "degraded", "unhealthy"
-    required_healthy: bool
-    unhealthy_services: List[PublicUnhealthyServiceStatus]
+    unhealthy_services: List[str]
 
 
 class ServiceHealthResponse(BaseModel):
@@ -233,9 +224,11 @@ def _summarize_connections_status(
     response_model=PublicConnectionsHealthResponse,
     summary="Public minimal connection status for the curator banner",
     description="""
-    Returns minimal, non-sensitive connection health status from the shared
-    bounded-age, per-worker cached observation. Never starts an uncached probe
-    and never exposes URLs, hostnames, ports, raw errors, or internal service IDs.
+    Returns minimal, non-sensitive connection health status (`status` and
+    explicit benign `public_label` strings for unhealthy services) from the
+    shared bounded-age, per-worker cached observation. Never starts an uncached
+    probe and never exposes diagnostic descriptions, URLs, hostnames, ports,
+    raw errors, or internal service IDs.
     """,
 )
 async def check_public_connections_status(
@@ -244,22 +237,25 @@ async def check_public_connections_status(
     """Return minimal public connection health status for the curator banner."""
     snapshot = await _get_connections_snapshot(request)
     status_dict = snapshot.services
-    overall_status, required_healthy = _summarize_connections_status(status_dict)
+    overall_status, _required_healthy = _summarize_connections_status(status_dict)
 
-    unhealthy_services = [
-        PublicUnhealthyServiceStatus(
-            description=str(service.get("description") or "").strip(),
-            required=bool(service.get("required")),
+    unhealthy_services: List[str] = []
+    seen_labels: set[str] = set()
+    for service in status_dict.values():
+        is_unhealthy = service.get("is_healthy") is False or (
+            bool(service.get("required")) and service.get("is_healthy") is not True
         )
-        for service in status_dict.values()
-        if service.get("is_healthy") is False
-        or (bool(service.get("required")) and service.get("is_healthy") is not True)
-    ]
+        if not is_unhealthy:
+            continue
+        raw_label = service.get("public_label")
+        if isinstance(raw_label, str):
+            label = raw_label.strip()
+            if label and label not in seen_labels:
+                seen_labels.add(label)
+                unhealthy_services.append(label)
 
     return PublicConnectionsHealthResponse(
-        observed_at=snapshot.observed_at,
         status=overall_status,
-        required_healthy=required_healthy,
         unhealthy_services=unhealthy_services,
     )
 

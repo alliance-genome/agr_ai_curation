@@ -36,16 +36,9 @@ const HEALTH_STALE_TIME_MS = parseInt(
 // Types
 // =============================================================================
 
-export interface UnhealthyServiceStatus {
-  description: string;
-  required: boolean;
-}
-
 export interface ConnectionsHealthResponse {
-  observed_at: string;
   status: 'healthy' | 'degraded' | 'unhealthy';
-  required_healthy: boolean;
-  unhealthy_services: UnhealthyServiceStatus[];
+  unhealthy_services: string[];
 }
 
 // =============================================================================

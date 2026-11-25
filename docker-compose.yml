@@ -222,6 +222,7 @@ services:
       - PYTHONUNBUFFERED=1
       - AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START=${AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START:-true}
       - DEV_MODE=${DEV_MODE:-false}  # Set to true to bypass Cognito auth for local development
+      - ADMIN_EMAILS=${ADMIN_EMAILS:-}
       # Never let generic production-shaped shell exports choose the dev DSN.
       - SENTRY_DSN=${SENTRY_DEV_DSN:-}
       # Keep the Compose-only alias out of the running container.
