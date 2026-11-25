@@ -72,9 +72,20 @@ def mark_destructive_delete_started() -> None:
 
 
 def is_cancelled_delete_drain() -> bool:
-    """Return whether the active paper delete is draining after caller cancellation."""
+    """Return whether the active paper delete is draining after caller cancellation.
+
+    Checks both ``state.cancelled`` and the owning task's cancellation count so a child
+    resuming ahead of the owner's ``on_cancel`` handler still delegates reporting.
+    """
     state = _DELETE_DRAIN_STATE.get()
-    return bool(state is not None and state.cancelled)
+    if state is None:
+        return False
+    if state.cancelled:
+        return True
+    return (
+        state.owner_task is not None
+        and state.owner_task.cancelling() > state.owner_initial_cancels
+    )
 
 
 def is_delete_cancelled_before_start() -> bool:

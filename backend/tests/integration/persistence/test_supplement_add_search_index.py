@@ -1440,3 +1440,100 @@ async def test_competing_supplement_add_and_committed_upload_compensation_never_
     with SessionLocal() as db:
         job_row = db.get(PdfProcessingJob, UUID(add_job.job_id))
         assert job_row is not None and job_row.status == PdfJobStatus.PENDING.value
+
+
+@pytest.mark.asyncio
+async def test_committed_compensation_and_undispatched_job_fail_work_under_one_connection_pool(
+    owner_id, index, tmp_path, monkeypatch,
+):
+    """Upload and identifier-import compensation reuse the advisory-lock connection cleanly under a 1-slot pool."""
+    from unittest.mock import MagicMock
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from src.lib.document_sources.identifier_import import IdentifierImportService
+    from src.lib.pdf_jobs import service as pdf_job_service
+    from src.lib.pdf_jobs.upload_intake_service import UploadIntakeService
+    from src.lib.weaviate_client import documents as weaviate_docs
+    from src.models.sql import database
+
+    one_conn_engine = create_engine(database.engine.url, pool_size=1, max_overflow=0, pool_timeout=1)
+    one_conn_session_local = sessionmaker(
+        bind=one_conn_engine, autocommit=False, autoflush=False, expire_on_commit=False,
+    )
+    monkeypatch.setattr(database, "engine", one_conn_engine)
+    monkeypatch.setattr(database, "SessionLocal", one_conn_session_local)
+    monkeypatch.setattr(pdf_job_service, "SessionLocal", one_conn_session_local)
+
+    def _one_conn_get_db():
+        db = one_conn_session_local()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    monkeypatch.setattr(weaviate_docs, "get_db", _one_conn_get_db)
+
+    try:
+        # 1. Committed upload compensation with a concurrently renamed live SQL file path.
+        paper_u = await asyncio.to_thread(_paper, owner_id, index, main_end=1)
+        renamed_rel = f"{TEST_USER_ID}/renamed_pool1/{paper_u}.pdf"
+        renamed_path = tmp_path / renamed_rel
+        renamed_path.parent.mkdir(parents=True, exist_ok=True)
+        renamed_path.write_bytes(b"%PDF-1.7 renamed\n")
+        stale_staged = tmp_path / TEST_USER_ID / str(paper_u) / "stale_original.pdf"
+        with one_conn_session_local.begin() as db:
+            doc_row = db.get(PDFDocument, paper_u)
+            assert doc_row is not None
+            doc_row.files[0].file_path = renamed_rel
+
+        upload_service = UploadIntakeService(
+            upload_execution_service=MagicMock(),
+            session_factory=one_conn_session_local,
+            storage_path_provider=lambda: tmp_path,
+            delete_document_fn=weaviate_docs.delete_document,
+        )
+        await upload_service._compensate_job_creation_failure(
+            user_sub=TEST_USER_ID,
+            document_id=str(paper_u),
+            saved_path=stale_staged,
+            weaviate_document_created=True,
+        )
+        assert not renamed_path.exists()
+        assert _rows(paper_u) == [] and _indexes(index, str(paper_u)) == []
+
+        # 2. Committed identifier-import compensation with an undispatched pending job
+        #    completes end-to-end under the 1-connection pool without self-starving.
+        paper_i = await asyncio.to_thread(_paper, owner_id, index, main_end=1)
+        import_rel = f"{TEST_USER_ID}/{paper_i}/import.pdf"
+        import_path = tmp_path / import_rel
+        import_path.parent.mkdir(parents=True, exist_ok=True)
+        import_path.write_bytes(b"%PDF-1.7 import\n")
+        with one_conn_session_local.begin() as db:
+            doc_row = db.get(PDFDocument, paper_i)
+            assert doc_row is not None
+            doc_row.files[0].file_path = import_rel
+        undispatched_job = pdf_job_service.create_job(
+            document_id=paper_i,
+            user_id=owner_id,
+            filename="import.pdf",
+        )
+
+        import_service = IdentifierImportService(
+            upload_execution_service=MagicMock(),
+            session_factory=one_conn_session_local,
+            storage_path_provider=lambda: tmp_path,
+            delete_document_fn=weaviate_docs.delete_document,
+        )
+        await import_service._compensate_partial_import(
+            user_sub=TEST_USER_ID,
+            document_id=str(paper_i),
+            saved_path=import_path,
+            weaviate_document_created=True,
+            sql_record_committed=True,
+            created_job_id=undispatched_job.job_id,
+        )
+        assert not import_path.exists()
+        assert _rows(paper_i) == [] and _indexes(index, str(paper_i)) == []
+    finally:
+        one_conn_engine.dispose()

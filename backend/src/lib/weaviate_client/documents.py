@@ -930,13 +930,22 @@ async def delete_paper_search_entries(user_id: str, document_id: str) -> Dict[st
     return await drain_shielded(finish_coro)
 
 
-def _delete_sql_row(user_id: str, document_id: str) -> bool:
-    """Remove the owned paper and its curation dependencies in one transaction."""
+def _delete_sql_row(user_id: str, document_id: str, *, connection: Any = None) -> bool:
+    """Remove the owned paper and its curation dependencies in one transaction.
+
+    Reuses the active paper advisory-lock connection when one is held so deletion
+    never checks out a second pooled connection while holding the lock.
+    """
     from sqlalchemy import select
+    from src.lib.document_files.paper_lock import open_paper_lock_session
     from src.models.sql.user import User
 
-    db_gen = get_db()
-    db = next(db_gen)
+    bound_session = open_paper_lock_session(connection)
+    if bound_session is not None:
+        db = bound_session
+    else:
+        db_gen = get_db()
+        db = next(db_gen)
     try:
         db_user = db.execute(select(User).where(User.auth_sub == user_id)).scalar_one_or_none()
         if not db_user:
@@ -957,6 +966,9 @@ def _delete_sql_row(user_id: str, document_id: str) -> bool:
         db.commit()
         logger.info("Deleted document %s from PostgreSQL (user_id=%s)", document_id, db_user.id)
         return True
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 

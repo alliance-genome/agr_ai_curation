@@ -378,6 +378,45 @@ def remove_paper_stored_files(
             folder.rmdir()
 
 
+def remove_committed_paper_stored_files(
+    session: Session,
+    *,
+    document_id: str,
+    user_sub: str,
+    base_storage: Path,
+    fallback_cleanup: Callable[[], bool],
+) -> bool:
+    """Lock the committed paper row, snapshot its live PDFDocumentFile rows, and remove them.
+
+    Falls back to ``fallback_cleanup`` for any remaining staged artifact (or when a unit test
+    stub has no ``files`` attribute). Returns False without raising on path/unlink failures.
+    """
+    from src.lib.document_files.storage_paths import StoredPathOutsideOwnerStorage
+
+    persisted = (
+        session.execute(
+            select(PDFDocument)
+            .where(PDFDocument.id == UUID(document_id))
+            .with_for_update()
+        )
+        .scalars()
+        .first()
+    )
+    files = getattr(persisted, "files", None) if persisted is not None else None
+    if persisted is not None and files:
+        try:
+            cleanup_values = paper_cleanup_snapshot(persisted)
+            remove_paper_stored_files(
+                cleanup_values,
+                base_storage=base_storage,
+                user_sub=user_sub,
+                document_id=document_id,
+            )
+        except (StoredPathOutsideOwnerStorage, StoredFilesNotRemoved, OSError):
+            return False
+    return fallback_cleanup()
+
+
 def ready_file_count(paper: PDFDocument) -> int:
     """How many of the paper's files are ready: the files a curator can open and the AI reads.
 

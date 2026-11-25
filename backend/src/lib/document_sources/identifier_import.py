@@ -25,9 +25,18 @@ from sqlalchemy.orm import Session
 from src.config import get_pdf_storage_path
 from src.lib.document_cleanup import (
     cleanup_document_curation_dependencies,
+    drain_shielded,
     report_compensation_file_cleanup_failure,
 )
-from src.lib.document_files.paper_lock import PaperOperationInProgress, paper_operation_lock
+from src.lib.document_files.paper_lock import (
+    PaperOperationInProgress,
+    open_paper_lock_session,
+    paper_operation_lock,
+)
+from src.lib.document_files.service import (
+    owned_paper_by_main_file_hash,
+    remove_committed_paper_stored_files,
+)
 from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.supplement_plan import ChosenSupplement, SupplementPlan
 from src.lib.document_sources.import_selection import (
@@ -95,7 +104,6 @@ from src.models.sql.pdf_document import (
     PDFDocument as ViewerPDFDocument,
     PDFDocumentFile,
 )
-from src.lib.document_files.service import owned_paper_by_main_file_hash
 from src.services.user_service import principal_from_claims, provision_user_async, ProvisionedUser
 
 logger = logging.getLogger(__name__)
@@ -1509,6 +1517,71 @@ class IdentifierImportService:
             )
             return False
 
+    def _remove_committed_paper_files(
+        self,
+        *,
+        document_id: str,
+        user_sub: str,
+        saved_path: Path,
+        lock_conn: Any,
+        document_id_hash: str | None,
+    ) -> bool:
+        bound_session = open_paper_lock_session(lock_conn)
+        session = bound_session if bound_session is not None else self._session_factory()
+        try:
+            return remove_committed_paper_stored_files(
+                session,
+                document_id=document_id,
+                user_sub=user_sub,
+                base_storage=self._storage_path_provider(),
+                fallback_cleanup=lambda: _cleanup_saved_pdf(saved_path),
+            )
+        except Exception as cleanup_err:
+            session.rollback()
+            logger.warning(
+                "Failed to snapshot/remove committed import PDF artifacts (%s, document_id_hash=%s)",
+                type(cleanup_err).__name__,
+                document_id_hash,
+                extra={"sentry_skip_event": True},
+            )
+            return False
+        finally:
+            session.close()
+
+    def _delete_committed_sql_row(
+        self,
+        *,
+        document_id: str,
+        lock_conn: Any,
+        document_id_hash: str | None,
+    ) -> None:
+        bound_session = open_paper_lock_session(lock_conn)
+        session = bound_session if bound_session is not None else self._session_factory()
+        try:
+            persisted = (
+                session.execute(
+                    select(ViewerPDFDocument).where(
+                        ViewerPDFDocument.id == uuid.UUID(document_id),
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if persisted:
+                session.delete(persisted)
+                session.commit()
+        except Exception as cleanup_err:
+            session.rollback()
+            logger.warning(
+                "Best-effort SQL cleanup failed during identifier import compensation "
+                "(%s, document_id_hash=%s)",
+                type(cleanup_err).__name__,
+                document_id_hash,
+                extra={"sentry_skip_event": True},
+            )
+        finally:
+            session.close()
+
     async def _compensate_partial_import(
         self,
         *,
@@ -1543,25 +1616,29 @@ class IdentifierImportService:
                     )
             return
 
+        # Fail any undispatched pending job created by this import BEFORE acquiring
+        # paper_operation_lock (shielded across cancellation) so neither a 1-connection
+        # DB pool nor cancellation during lock acquisition can leave a 2-hour pending job.
+        if created_job_id is not None:
+            job_failed = await drain_shielded(
+                self._fail_undispatched_import_job(
+                    job_id=created_job_id,
+                    document_id_hash=document_id_hash,
+                )
+            )
+            if not job_failed:
+                return
+
         lock_fn = self._paper_operation_lock_fn or paper_operation_lock
         get_active_job = self._get_active_job_fn or pdf_job_service.get_active_job_for_document
         try:
-            async with lock_fn(document_id):
-                # Fail any undispatched pending job created by this import first so a
-                # retained paper is never stuck behind a 2-hour zombie pending job.
-                if created_job_id is not None:
-                    job_failed = await self._fail_undispatched_import_job(
-                        job_id=created_job_id,
-                        document_id_hash=document_id_hash,
-                    )
-                    if not job_failed:
-                        return
-
+            async with lock_fn(document_id) as lock_conn:
                 try:
                     active_job = await asyncio.to_thread(
                         get_active_job,
                         document_id=document_id,
                         reconcile_stale=False,
+                        connection=lock_conn,
                     )
                 except Exception as job_check_err:
                     logger.warning(
@@ -1581,9 +1658,17 @@ class IdentifierImportService:
                     )
                     return
 
-                # Remove the staged PDF first and verify it is gone. When staged file
-                # cleanup fails, retain both Weaviate and SQL ownership so retry can clean up.
-                if not _cleanup_saved_pdf(saved_path):
+                # Snapshot and remove live SQL-owned stored files under the paper row lock
+                # first; if cleanup fails, retain both Weaviate and SQL ownership for retry.
+                files_removed = await asyncio.to_thread(
+                    self._remove_committed_paper_files,
+                    document_id=document_id,
+                    user_sub=user_sub,
+                    saved_path=saved_path,
+                    lock_conn=lock_conn,
+                    document_id_hash=document_id_hash,
+                )
+                if not files_removed:
                     report_compensation_file_cleanup_failure(
                         component="document_sources",
                         document_id=document_id,
@@ -1595,10 +1680,10 @@ class IdentifierImportService:
                 # Let the Weaviate wipe outcome govern SQL owner deletion: if delete_document
                 # reports an error or incomplete chunk wipe (or raises CancelledError after an
                 # incomplete/unstarted wipe), retain the SQL owner alongside the Weaviate parent.
-                # On a cancelled drain where the wipe succeeded, delete_document itself already
-                # deleted the SQL owner before delivering CancelledError.
+                # When delete_document owns SQL deletion (reporting "postgres_deleted"), do not
+                # issue a second SQL delete pass.
                 weaviate_cleanup_ok = True
-                postgres_already_deleted = False
+                sql_owned_by_delete_document = False
                 if weaviate_document_created:
                     try:
                         delete_result = await self._delete_document(user_sub, document_id)
@@ -1613,36 +1698,19 @@ class IdentifierImportService:
                         if isinstance(delete_result, dict):
                             if "error" in delete_result or "chunks_failed" in delete_result:
                                 weaviate_cleanup_ok = False
-                            elif delete_result.get("postgres_deleted") is True:
-                                postgres_already_deleted = True
+                            elif "postgres_deleted" in delete_result:
+                                sql_owned_by_delete_document = True
 
-                if not weaviate_cleanup_ok or postgres_already_deleted:
+                if not weaviate_cleanup_ok or sql_owned_by_delete_document:
                     return
 
-                session = self._session_factory()
-                try:
-                    persisted = (
-                        session.execute(
-                            select(ViewerPDFDocument).where(
-                                ViewerPDFDocument.id == uuid.UUID(document_id),
-                            )
-                        )
-                        .scalars()
-                        .first()
-                    )
-                    if persisted:
-                        session.delete(persisted)
-                        session.commit()
-                except Exception:
-                    session.rollback()
-                finally:
-                    session.close()
-        except PaperOperationInProgress:
-            if created_job_id is not None:
-                await self._fail_undispatched_import_job(
-                    job_id=created_job_id,
+                await asyncio.to_thread(
+                    self._delete_committed_sql_row,
+                    document_id=document_id,
+                    lock_conn=lock_conn,
                     document_id_hash=document_id_hash,
                 )
+        except PaperOperationInProgress:
             logger.warning(
                 "Skipping import compensation because another operation holds the paper lock "
                 "(document_id_hash=%s)",
@@ -1650,11 +1718,6 @@ class IdentifierImportService:
                 extra={"sentry_skip_event": True},
             )
         except Exception as lock_err:
-            if created_job_id is not None:
-                await self._fail_undispatched_import_job(
-                    job_id=created_job_id,
-                    document_id_hash=document_id_hash,
-                )
             logger.warning(
                 "Skipping import compensation because acquiring the paper lock failed "
                 "(%s, document_id_hash=%s)",
@@ -2028,12 +2091,14 @@ def _write_source_pdf(
 
 
 def _cleanup_saved_pdf(saved_path: Path) -> bool:
-    if not saved_path.exists() and not saved_path.is_symlink():
-        return True
     try:
-        shutil.rmtree(saved_path.parent)
-    except FileNotFoundError:
-        pass
+        if not saved_path.exists() and not saved_path.is_symlink():
+            return True
+        try:
+            shutil.rmtree(saved_path.parent)
+        except FileNotFoundError:
+            pass
+        return not saved_path.exists() and not saved_path.is_symlink()
     except OSError as exc:
         logger.warning(
             "Failed to remove staged PDF artifacts (%s)",
@@ -2041,4 +2106,3 @@ def _cleanup_saved_pdf(saved_path: Path) -> bool:
             extra={"sentry_skip_event": True},
         )
         return False
-    return not saved_path.exists() and not saved_path.is_symlink()

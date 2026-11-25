@@ -1156,6 +1156,226 @@ async def test_cli_delete_enforces_lock_active_job_and_files_before_owner(monkey
 
 
 @pytest.mark.asyncio
+async def test_cli_delete_ownership_preflight_runs_before_active_job_reconciliation(monkeypatch, tmp_path):
+    from uuid import uuid4
+    from src.lib.weaviate_client import cli as weaviate_cli
+
+    doc_id = str(uuid4())
+    held: set[int] = set()
+
+    class _FakeLockConn:
+        def execute(self, statement, params):
+            sql = str(statement)
+            key = params["key"]
+            if "pg_try_advisory_lock" in sql:
+                taken = key not in held
+                held.add(key)
+                return SimpleNamespace(scalar_one=lambda: taken)
+            if "pg_advisory_unlock" in sql:
+                held.discard(key)
+                return SimpleNamespace(scalar_one=lambda: True)
+            raise AssertionError(sql)
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+        def invalidate(self):
+            pass
+
+    monkeypatch.setattr(
+        "src.models.sql.database.engine",
+        SimpleNamespace(connect=lambda: _FakeLockConn()),
+        raising=False,
+    )
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
+
+    # Document belongs to user_id=99, caller is wrong user (user_id=42).
+    pdf_doc = SimpleNamespace(id=UUID(doc_id), user_id=99, files=[])
+    wrong_user = SimpleNamespace(id=42, auth_sub="wrong-user")
+
+    class _FakeDb:
+        def get(self, _model, _pk):
+            return pdf_doc
+
+        def execute(self, _stmt):
+            return SimpleNamespace(scalar_one_or_none=lambda: wrong_user)
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("src.models.sql.database.get_db", lambda: iter([_FakeDb()]))
+    active_job_spy = MagicMock(side_effect=AssertionError("must not query/reconcile another owner's jobs"))
+    monkeypatch.setattr("src.lib.pdf_jobs.service.get_active_job_for_document", active_job_spy)
+    chunks_spy = MagicMock()
+    monkeypatch.setattr(weaviate_cli, "delete_paper_chunks", chunks_spy)
+
+    result = await weaviate_cli._delete_document_for_cli("wrong-user", doc_id)
+    assert result["success"] is False
+    assert "ownership mismatch" in result["message"].lower()
+    active_job_spy.assert_not_called()
+    chunks_spy.assert_not_called()
+    assert held == set()
+
+
+@pytest.mark.asyncio
+async def test_cli_delete_refuses_orphan_weaviate_delete_when_tenant_dir_has_artifacts(monkeypatch, tmp_path):
+    from uuid import uuid4
+    from src.lib.weaviate_client import cli as weaviate_cli
+
+    doc_id = str(uuid4())
+    user_id = "user-orphan-1"
+    pdf_dir = tmp_path / user_id / doc_id
+    pdf_dir.mkdir(parents=True)
+    pdf_file = pdf_dir / "stranded.pdf"
+    pdf_file.write_bytes(b"%PDF-1.7\n")
+
+    held: set[int] = set()
+
+    class _FakeLockConn:
+        def execute(self, statement, params):
+            sql = str(statement)
+            key = params["key"]
+            if "pg_try_advisory_lock" in sql:
+                taken = key not in held
+                held.add(key)
+                return SimpleNamespace(scalar_one=lambda: taken)
+            if "pg_advisory_unlock" in sql:
+                held.discard(key)
+                return SimpleNamespace(scalar_one=lambda: True)
+            raise AssertionError(sql)
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+        def invalidate(self):
+            pass
+
+    monkeypatch.setattr(
+        "src.models.sql.database.engine",
+        SimpleNamespace(connect=lambda: _FakeLockConn()),
+        raising=False,
+    )
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
+
+    # No SQL row exists (e.g., after a pre-commit unlink failure retained Weaviate + PDF).
+    class _FakeDb:
+        def get(self, _model, _pk):
+            return None
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("src.models.sql.database.get_db", lambda: iter([_FakeDb()]))
+    chunks_spy = MagicMock()
+    parent_spy = MagicMock()
+    monkeypatch.setattr(weaviate_cli, "delete_paper_chunks", chunks_spy)
+    monkeypatch.setattr(weaviate_cli, "delete_paper_object", parent_spy)
+
+    result = await weaviate_cli._delete_document_for_cli(user_id, doc_id)
+    assert result["success"] is False
+    assert "stored files" in result["message"].lower()
+    assert pdf_file.exists()
+    chunks_spy.assert_not_called()
+    parent_spy.assert_not_called()
+    assert held == set()
+
+
+def test_cli_delete_cmd_exits_nonzero_when_sql_owner_delete_fails(monkeypatch, tmp_path):
+    from click.testing import CliRunner
+    from uuid import uuid4
+    from src.lib.weaviate_client import cli as weaviate_cli
+
+    doc_id = str(uuid4())
+    user_id = "user-sqlfail-1"
+    held: set[int] = set()
+
+    class _FakeLockConn:
+        def execute(self, statement, params):
+            sql = str(statement)
+            key = params["key"]
+            if "pg_try_advisory_lock" in sql:
+                taken = key not in held
+                held.add(key)
+                return SimpleNamespace(scalar_one=lambda: taken)
+            if "pg_advisory_unlock" in sql:
+                held.discard(key)
+                return SimpleNamespace(scalar_one=lambda: True)
+            raise AssertionError(sql)
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+        def invalidate(self):
+            pass
+
+    monkeypatch.setattr(
+        "src.models.sql.database.engine",
+        SimpleNamespace(connect=lambda: _FakeLockConn()),
+        raising=False,
+    )
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
+
+    pdf_doc = SimpleNamespace(id=UUID(doc_id), user_id=42, files=[])
+    db_user = SimpleNamespace(id=42, auth_sub=user_id)
+
+    class _FakeDb:
+        def get(self, _model, _pk):
+            return pdf_doc
+
+        def execute(self, statement):
+            if "pdf_documents" in str(statement):
+                return SimpleNamespace(scalar_one_or_none=lambda: pdf_doc)
+            return SimpleNamespace(scalar_one_or_none=lambda: db_user)
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("src.models.sql.database.get_db", lambda: iter([_FakeDb()]))
+    monkeypatch.setattr("src.lib.pdf_jobs.service.get_active_job_for_document", lambda **_kw: None)
+
+    async def _ok_chunks(_uid, _did):
+        return {"success": True, "chunks_deleted": 0, "chunks_matched": 0}
+
+    async def _ok_parent(_uid, _did, *, allow_missing=False):
+        return {"success": True, "deleted": True}
+
+    monkeypatch.setattr(weaviate_cli, "delete_paper_chunks", _ok_chunks)
+    monkeypatch.setattr(weaviate_cli, "delete_paper_object", _ok_parent)
+    monkeypatch.setattr(
+        weaviate_cli,
+        "_delete_sql_row",
+        MagicMock(side_effect=RuntimeError("postgres delete failed")),
+    )
+
+    runner = CliRunner()
+    cli_result = runner.invoke(
+        weaviate_cli.delete_document_cmd,
+        [doc_id, "--user-id", user_id, "--yes"],
+    )
+    assert cli_result.exit_code == 1
+    assert "postgresql" in cli_result.output.lower()
+    assert held == set()
+
+
+@pytest.mark.asyncio
 async def test_get_document_handles_no_chunks_after_uuid_filter_failure():
     doc_uuid = "00000000-0000-0000-0000-000000000999"
     doc_response = SimpleNamespace(

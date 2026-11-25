@@ -1046,9 +1046,13 @@ def get_active_job_for_document(
     *,
     document_id: UUID | str,
     reconcile_stale: bool = False,
+    connection: object | None = None,
 ) -> Optional[PdfJobResponse]:
     """Return the active job (pending/running/cancel_requested) for a document, if any."""
-    session = SessionLocal()
+    from src.lib.document_files.paper_lock import open_paper_lock_session
+
+    bound_session = open_paper_lock_session(connection)
+    session = bound_session if bound_session is not None else SessionLocal()
     try:
         statement = select(PdfProcessingJob).where(
             PdfProcessingJob.document_id == _to_uuid(document_id),

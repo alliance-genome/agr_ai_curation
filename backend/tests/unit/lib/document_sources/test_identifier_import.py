@@ -2131,7 +2131,9 @@ async def test_post_commit_import_compensation_fails_undispatched_job_and_holds_
     failed_jobs: list[dict] = []
 
     def _mark_failed(**kwargs):
-        assert _FakePaperLockConnection.held, "undispatched job should be failed under paper lock"
+        assert not _FakePaperLockConnection.held, (
+            "undispatched job must be failed BEFORE acquiring paper_operation_lock"
+        )
         failed_jobs.append(kwargs)
         order.append("mark_failed")
 
@@ -2254,3 +2256,214 @@ async def test_post_commit_import_compensation_skips_when_competing_supplement_a
     assert list(tmp_path.rglob("*.pdf"))
     delete_document_mock.assert_not_awaited()
     assert not any(session.deleted for session in sessions)
+
+
+@pytest.mark.asyncio
+async def test_post_commit_import_compensation_drains_undispatched_job_failure_on_cancel_before_lock(
+    monkeypatch, tmp_path,
+):
+    import asyncio
+    import threading
+
+    sessions: list[_FakeSession] = []
+    persisted_row_holder: list[object] = []
+
+    class _TrackingSession(_FakeSession):
+        def add(self, row):
+            super().add(row)
+            persisted_row_holder.append(row)
+
+        def execute(self, *_args, **_kwargs):
+            return _ExecuteResult(persisted_row_holder[0] if persisted_row_holder else None)
+
+    class _FailingDispatch(_DispatchRecorder):
+        async def dispatch_provider_markdown_execution(self, *, background_tasks, request):
+            raise RuntimeError("dispatch boom after commit")
+
+        async def dispatch_upload_execution(self, *, background_tasks, request):
+            raise RuntimeError("dispatch boom after commit")
+
+    mark_entered = threading.Event()
+    resume_mark = threading.Event()
+    marked_jobs: list[str] = []
+    lock_acquired = False
+
+    def _blocking_mark_failed(**kwargs):
+        mark_entered.set()
+        assert resume_mark.wait(timeout=5)
+        marked_jobs.append(kwargs["job_id"])
+
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _recording_lock(_doc_id):
+        nonlocal lock_acquired
+        lock_acquired = True
+        yield None
+
+    service = IdentifierImportService(
+        upload_execution_service=_FailingDispatch(),
+        session_factory=lambda: _TrackingSession(sessions),
+        storage_path_provider=lambda: tmp_path,
+        principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        provider_factory=_FakeProvider,
+        create_document_fn=AsyncMock(return_value={"success": True}),
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-cancel-before-lock"),
+        get_document_fn=AsyncMock(return_value=None),
+        delete_document_fn=AsyncMock(),
+        find_existing_source_document_fn=lambda *_args, **_kwargs: None,
+        import_batch_limit_provider=lambda: 10,
+        mark_job_failed_fn=_blocking_mark_failed,
+        paper_operation_lock_fn=_recording_lock,
+    )
+
+    task = asyncio.create_task(
+        service.import_identifiers(
+            background_tasks=BackgroundTasks(),
+            identifiers="PMID:123",
+            user={"sub": "user-1"},
+            document_source_context=DocumentSourceRequestContext(
+                bearer_kind=ProviderBearerKind.CURATOR,
+                provider_groups=("FBStaff",),
+                authorized_group_ids=("FB",),
+                curator_token="curator-token",
+            ),
+        )
+    )
+    try:
+        assert await asyncio.to_thread(mark_entered.wait, 5)
+        task.cancel("cancelled while failing undispatched job")
+        await asyncio.sleep(0.02)
+        assert not task.done()
+    finally:
+        resume_mark.set()
+
+    with pytest.raises(asyncio.CancelledError, match="cancelled while failing undispatched job"):
+        await asyncio.wait_for(task, timeout=5)
+
+    assert marked_jobs == ["job-cancel-before-lock"]
+    assert lock_acquired is False
+
+
+@pytest.mark.asyncio
+async def test_pre_commit_import_compensation_handles_stat_permission_error(monkeypatch, tmp_path):
+    from pathlib import Path as RealPath
+    from unittest.mock import Mock
+    from src.lib.document_cleanup import runtime as cleanup_runtime
+
+    sessions: list[_FakeSession] = []
+
+    class _CommitFailingSession(_FakeSession):
+        def commit(self):
+            raise RuntimeError("sql commit failed")
+
+    delete_document_mock = AsyncMock()
+    report_mock = Mock()
+    monkeypatch.setattr(cleanup_runtime, "report_runtime_exception", report_mock)
+
+    orig_exists = RealPath.exists
+
+    def _deny_pdf_exists(self):
+        if self.suffix == ".pdf":
+            raise PermissionError("cannot stat pdf parent")
+        return orig_exists(self)
+
+    monkeypatch.setattr(RealPath, "exists", _deny_pdf_exists)
+
+    service = IdentifierImportService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: _CommitFailingSession(sessions),
+        storage_path_provider=lambda: tmp_path,
+        principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        provider_factory=_FakeProvider,
+        create_document_fn=AsyncMock(return_value={"success": True}),
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        get_document_fn=AsyncMock(return_value=None),
+        delete_document_fn=delete_document_mock,
+        find_existing_source_document_fn=lambda *_args, **_kwargs: None,
+        import_batch_limit_provider=lambda: 10,
+    )
+
+    with pytest.raises(RuntimeError, match="sql commit failed"):
+        await service.import_identifiers(
+            background_tasks=BackgroundTasks(),
+            identifiers="PMID:123",
+            user={"sub": "user-1"},
+            document_source_context=DocumentSourceRequestContext(
+                bearer_kind=ProviderBearerKind.CURATOR,
+                provider_groups=("FBStaff",),
+                authorized_group_ids=("FB",),
+                curator_token="curator-token",
+            ),
+        )
+
+    delete_document_mock.assert_not_awaited()
+    report_mock.assert_called_once()
+    assert report_mock.call_args.kwargs["operation"] == "intake_compensation_file_cleanup_failed"
+    assert report_mock.call_args.kwargs["include_request"] is False
+
+
+@pytest.mark.asyncio
+async def test_post_commit_import_compensation_removes_live_renamed_sql_file_snapshot(tmp_path):
+    sessions: list[_FakeSession] = []
+    persisted_row_holder: list[object] = []
+
+    class _TrackingSession(_FakeSession):
+        def add(self, row):
+            super().add(row)
+            persisted_row_holder.append(row)
+
+        def execute(self, *_args, **_kwargs):
+            return _ExecuteResult(persisted_row_holder[0] if persisted_row_holder else None)
+
+    renamed_rel = "user-1/renamed_dir/renamed_paper.pdf"
+
+    class _RenamingFailingDispatch(_DispatchRecorder):
+        async def _rename_and_fail(self, request):
+            # Simulate a concurrent rename updating the live PDFDocumentFile row & path on disk.
+            target = tmp_path / renamed_rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            request.file_path.replace(target)
+            persisted_row_holder[0].files[0].file_path = renamed_rel
+            raise RuntimeError("dispatch boom after rename")
+
+        async def dispatch_provider_markdown_execution(self, *, background_tasks, request):
+            await self._rename_and_fail(request)
+
+        async def dispatch_upload_execution(self, *, background_tasks, request):
+            await self._rename_and_fail(request)
+
+    delete_document_mock = AsyncMock(return_value={"success": True, "postgres_deleted": True})
+    service = IdentifierImportService(
+        upload_execution_service=_RenamingFailingDispatch(),
+        session_factory=lambda: _TrackingSession(sessions),
+        storage_path_provider=lambda: tmp_path,
+        principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        provider_factory=_FakeProvider,
+        create_document_fn=AsyncMock(return_value={"success": True}),
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        get_document_fn=AsyncMock(return_value=None),
+        delete_document_fn=delete_document_mock,
+        find_existing_source_document_fn=lambda *_args, **_kwargs: None,
+        import_batch_limit_provider=lambda: 10,
+    )
+
+    with pytest.raises(RuntimeError, match="dispatch boom after rename"):
+        await service.import_identifiers(
+            background_tasks=BackgroundTasks(),
+            identifiers="PMID:123",
+            user={"sub": "user-1"},
+            document_source_context=DocumentSourceRequestContext(
+                bearer_kind=ProviderBearerKind.CURATOR,
+                provider_groups=("FBStaff",),
+                authorized_group_ids=("FB",),
+                curator_token="curator-token",
+            ),
+        )
+
+    assert not (tmp_path / renamed_rel).exists()
+    assert not list(tmp_path.rglob("*.pdf"))
+    delete_document_mock.assert_awaited_once()

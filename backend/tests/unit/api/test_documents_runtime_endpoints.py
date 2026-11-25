@@ -2127,7 +2127,13 @@ async def test_delete_document_endpoint_cancel_at_chunk_wipe_yield_before_submit
 
 @pytest.mark.parametrize(
     "failure_mode",
-    ["chunk_error", "parent_error", "parent_reconnect_error", "incomplete_wipe"],
+    [
+        "chunk_error",
+        "parent_error",
+        "parent_reconnect_error",
+        "parent_reconnect_cancel_at_yield",
+        "incomplete_wipe",
+    ],
 )
 def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_without_request_url(
     failure_mode,
@@ -2223,8 +2229,10 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
         wipe_entered = threading.Event()
         resume_wipe = threading.Event()
         ready_state = {{"ready": True}}
+        wipe_state = {{"done": False, "cancelled_at_parent": False}}
+        is_reconnect_mode = {failure_mode!r} in {{"parent_reconnect_error", "parent_reconnect_cancel_at_yield"}}
 
-        if {failure_mode!r} == "parent_reconnect_error":
+        if is_reconnect_mode:
             WeaviateConnection._instance = None
             conn = WeaviateConnection(url="http://localhost:8080")
             fake_client = MagicMock()
@@ -2252,8 +2260,9 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
                 raise RuntimeError(f"{{secret_detail}} {{doc_id}}")
             if {failure_mode!r} == "incomplete_wipe":
                 return SimpleNamespace(successful=1, matches=2, failed=1)
-            if {failure_mode!r} == "parent_reconnect_error":
+            if is_reconnect_mode:
                 ready_state["ready"] = False
+            wipe_state["done"] = True
             return SimpleNamespace(successful=2, matches=2, failed=0)
 
         def _delete_by_id(_doc_id):
@@ -2267,13 +2276,36 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
         weaviate_docs.get_user_collections = lambda *_a: (chunks, papers)
 
         async def _exercise():
+            task_holder = []
+            if {failure_mode!r} == "parent_reconnect_cancel_at_yield":
+                # Cancel the owning request task right as delete_paper_object's own sleep(0)
+                # resumes, before request_task runs on_cancel (so state.cancelled is still False
+                # while owner_task.cancelling() > owner_initial_cancels is already True).
+                real_sleep = weaviate_docs.asyncio.sleep
+
+                async def _cancel_at_parent_yield(delay, *args, **kwargs):
+                    res = await real_sleep(delay, *args, **kwargs)
+                    if (
+                        delay == 0
+                        and wipe_state["done"]
+                        and not wipe_state["cancelled_at_parent"]
+                        and task_holder
+                    ):
+                        wipe_state["cancelled_at_parent"] = True
+                        task_holder[0].cancel("client disconnected at parent yield")
+                    return res
+
+                weaviate_docs.asyncio.sleep = _cancel_at_parent_yield
+
             with tempfile.TemporaryDirectory() as tmp:
                 documents.get_pdf_storage_path = lambda: tmp
                 task = asyncio.create_task(documents.delete_document_endpoint(doc_id, {{"sub": "user-1"}}))
+                task_holder.append(task)
                 try:
                     assert await asyncio.to_thread(wipe_entered.wait, 5)
-                    task.cancel("client disconnected")
-                    await asyncio.sleep(0.02)
+                    if {failure_mode!r} != "parent_reconnect_cancel_at_yield":
+                        task.cancel("client disconnected")
+                        await asyncio.sleep(0.02)
                 finally:
                     resume_wipe.set()
                 try:
@@ -2284,6 +2316,9 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
                     raise AssertionError("expected CancelledError")
 
         asyncio.run(_exercise())
+
+        if {failure_mode!r} == "parent_reconnect_cancel_at_yield":
+            assert wipe_state["cancelled_at_parent"] is True
 
         assert len(events) == 1, f"expected 1 Sentry event, got {{len(events)}}: {{events!r}}"
         event = events[0]
@@ -2298,7 +2333,7 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
             expected_step = "chunk_wipe" if {failure_mode!r} == "chunk_error" else "parent_object"
             expected_exc_type = (
                 "ConnectionRefusedError"
-                if {failure_mode!r} == "parent_reconnect_error"
+                if is_reconnect_mode
                 else "HTTPException"
             )
             assert runtime_ctx == {{

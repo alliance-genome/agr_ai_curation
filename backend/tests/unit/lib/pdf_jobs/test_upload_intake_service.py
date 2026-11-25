@@ -1733,8 +1733,10 @@ async def test_intake_upload_non_integrity_persistence_error_rolls_back_and_clea
 async def test_intake_upload_job_creation_failure_compensates_sql_weaviate_and_files(tmp_path):
     initial_session = _FakeSession()
     persisted_record = SimpleNamespace(id=uuid4())
+    snapshot_session = _FakeSession(execute_row=persisted_record)
     cleanup_session = _FakeSession(execute_row=persisted_record)
-    sessions = [initial_session, cleanup_session]
+    # 1: persist document, 2: snapshot live SQL files before Weaviate delete, 3: SQL delete fallback
+    sessions = [initial_session, snapshot_session, cleanup_session]
     dispatch = _DispatchRecorder()
     delete_document_calls = []
 
@@ -1935,8 +1937,9 @@ async def test_intake_upload_job_creation_compensation_cancelled_during_chunk_wi
 
     initial_session = _FakeSession()
     persisted_record = SimpleNamespace(id=uuid4())
+    snapshot_session = _FakeSession(execute_row=persisted_record)
     cleanup_session = _FakeSession(execute_row=persisted_record)
-    sessions = [initial_session, cleanup_session]
+    sessions = [initial_session, snapshot_session, cleanup_session]
 
     service = UploadIntakeService(
         upload_execution_service=_DispatchRecorder(),
@@ -1984,8 +1987,9 @@ async def test_intake_upload_job_creation_compensation_retains_owner_on_persiste
 
     initial_session = _FakeSession()
     persisted_record = SimpleNamespace(id=uuid4())
+    snapshot_session = _FakeSession(execute_row=persisted_record)
     cleanup_session = _FakeSession(execute_row=persisted_record)
-    sessions = [initial_session, cleanup_session]
+    sessions = [initial_session, snapshot_session, cleanup_session]
     delete_document_mock = AsyncMock()
     monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("locked")))
 
@@ -2186,8 +2190,9 @@ async def test_intake_upload_job_creation_compensation_retains_owner_on_incomple
 
     initial_session = _FakeSession()
     persisted_record = SimpleNamespace(id=uuid4())
+    snapshot_session = _FakeSession(execute_row=persisted_record)
     cleanup_session = _FakeSession(execute_row=persisted_record)
-    sessions = [initial_session, cleanup_session]
+    sessions = [initial_session, snapshot_session, cleanup_session]
 
     service = UploadIntakeService(
         upload_execution_service=_DispatchRecorder(),
@@ -2227,3 +2232,103 @@ async def test_intake_upload_job_creation_compensation_retains_owner_on_incomple
     delete_sql_row.assert_not_called()
     assert cleanup_session.deleted == []
     assert cleanup_session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_intake_upload_pre_commit_compensation_handles_stat_permission_error(monkeypatch, tmp_path):
+    from pathlib import Path as RealPath
+    from src.lib.document_cleanup import runtime as cleanup_runtime
+
+    session = _FakeSession(
+        fail_commit_on_call=1,
+        commit_error=RuntimeError("database unavailable"),
+    )
+    delete_document_mock = AsyncMock()
+    report_mock = Mock()
+    monkeypatch.setattr(cleanup_runtime, "report_runtime_exception", report_mock)
+
+    orig_exists = RealPath.exists
+
+    def _deny_pdf_exists(self):
+        if self.suffix == ".pdf":
+            raise PermissionError("cannot stat pdf parent")
+        return orig_exists(self)
+
+    monkeypatch.setattr(RealPath, "exists", _deny_pdf_exists)
+
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: session,
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        create_document_fn=AsyncMock(return_value={"success": True}),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=delete_document_mock,
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
+    delete_document_mock.assert_not_awaited()
+    report_mock.assert_called_once()
+    assert report_mock.call_args.kwargs["operation"] == "intake_compensation_file_cleanup_failed"
+    assert report_mock.call_args.kwargs["include_request"] is False
+
+
+@pytest.mark.asyncio
+async def test_intake_upload_committed_compensation_removes_live_renamed_sql_file_snapshot(tmp_path):
+    persisted_records: list[object] = []
+
+    class _TrackingSession(_FakeSession):
+        def add(self, row):
+            super().add(row)
+            persisted_records.append(row)
+
+        def execute(self, *_args, **_kwargs):
+            return _ExecuteResult(persisted_records[0] if persisted_records else None)
+
+    renamed_rel = "user-1/renamed_upload/renamed_paper.pdf"
+
+    def _rename_and_fail_create_job(**_kwargs):
+        # Simulate a concurrent rename moving the PDF and updating live PDFDocumentFile.file_path.
+        original_pdfs = list(tmp_path.rglob("*.pdf"))
+        assert len(original_pdfs) == 1
+        target = tmp_path / renamed_rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        original_pdfs[0].replace(target)
+        persisted_records[0].files[0].file_path = renamed_rel
+        raise RuntimeError("job row failed after rename")
+
+    delete_document_mock = AsyncMock(return_value={"success": True, "postgres_deleted": True})
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: _TrackingSession(),
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        create_document_fn=AsyncMock(return_value={"success": True}),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=delete_document_mock,
+        create_job_fn=_rename_and_fail_create_job,
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    with pytest.raises(RuntimeError, match="job row failed after rename"):
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
+    assert not (tmp_path / renamed_rel).exists()
+    assert not list(tmp_path.rglob("*.pdf"))
+    delete_document_mock.assert_awaited_once()

@@ -232,3 +232,103 @@ async def test_cancel_during_release_drains_and_preserves_cancellation(
     else:
         connection.invalidate.assert_not_called()
         report.assert_not_called()
+
+
+@pytest.mark.parametrize("failure_mode", ["acquire_after_cancel", "release"])
+def test_paper_lock_failure_reports_omit_request_url_and_raw_document_id(failure_mode):
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent(f"""
+        import asyncio
+        import logging
+        import os
+        from unittest.mock import Mock
+        from uuid import UUID
+
+        os.environ["SENTRY_CONTENT_REDACTION_ENABLED"] = "false"
+
+        import sentry_sdk
+        from sentry_sdk.integrations.logging import LoggingIntegration
+
+        from src.lib.document_files import paper_lock
+        from src.lib.observability.sentry import before_send
+        import src.models.sql.database as sql_db
+
+        doc_id = "22222222-3333-4444-5555-666666666666"
+        secret_detail = "private-lock-sql-parameter-value"
+        events = []
+
+        logging.basicConfig(level=logging.INFO)
+        sentry_sdk.init(
+            dsn="http://public@example.invalid/1",
+            transport=events.append,
+            before_send=before_send,
+            include_local_variables=False,
+            default_integrations=False,
+            integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+        )
+
+        def _attach_request_url(event, _hint):
+            event["request"] = {{"url": f"https://example.invalid/weaviate/documents/{{doc_id}}"}}
+            return event
+
+        sentry_sdk.get_global_scope().add_event_processor(_attach_request_url)
+
+        async def _exercise():
+            connection = Mock()
+            taken = Mock()
+            taken.scalar_one.return_value = True
+            db_error = RuntimeError(f"{{secret_detail}} {{doc_id}}")
+            if {failure_mode!r} == "acquire_after_cancel":
+                connection.execute.side_effect = db_error
+            else:
+                connection.execute.side_effect = [taken, db_error]
+            sql_db.engine = Mock(connect=lambda: connection)
+
+            if {failure_mode!r} == "acquire_after_cancel":
+                resume_acquire = asyncio.Event()
+                workers = asyncio.Queue()
+
+                async def run_worker(func, *args):
+                    workers.put_nowait(asyncio.current_task())
+                    if func is paper_lock._acquire:
+                        await resume_acquire.wait()
+                    return func(*args)
+
+                paper_lock.asyncio.to_thread = run_worker
+
+                async def req():
+                    async with paper_lock.paper_operation_lock(UUID(doc_id)):
+                        raise AssertionError("cancelled acquire entered lock")
+
+                t = asyncio.create_task(req())
+                acquiring = await asyncio.wait_for(workers.get(), timeout=2)
+                t.cancel("cancelled")
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
+                resume_acquire.set()
+                await asyncio.wait({{acquiring}})
+            else:
+                async with paper_lock.paper_operation_lock(UUID(doc_id)):
+                    pass
+
+        asyncio.run(_exercise())
+
+        assert len(events) == 1, f"expected 1 Sentry event, got {{len(events)}}: {{events!r}}"
+        event = events[0]
+        assert "request" not in event, f"request leaked: {{event.get('request')!r}}"
+        assert doc_id not in repr(event), f"raw doc_id leaked: {{event!r}}"
+        assert secret_detail not in repr(event), f"secret leaked: {{event!r}}"
+        expected_op = (
+            "paper_lock_acquire_failed_after_cancel"
+            if {failure_mode!r} == "acquire_after_cancel"
+            else "paper_lock_release_failed"
+        )
+        assert event["contexts"]["runtime_exception"]["operation"] == expected_op
+    """)
+    result = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stdout + result.stderr

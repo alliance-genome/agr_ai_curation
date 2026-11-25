@@ -31,6 +31,7 @@ worker thread, never on the event loop.
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -38,6 +39,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
+from sqlalchemy.engine import Connection as SqlAlchemyConnection
 from sqlalchemy.orm import Session
 
 from src.lib.observability import runtime
@@ -45,6 +47,28 @@ from src.lib.observability import runtime
 
 logger = logging.getLogger(__name__)
 _detached_releases: set[asyncio.Task[None]] = set()
+_ACTIVE_LOCK_CONNECTION: ContextVar[Any | None] = ContextVar(
+    "active_paper_lock_connection",
+    default=None,
+)
+
+
+def active_paper_lock_connection() -> Any | None:
+    """Return the checked-out advisory-lock DB connection for the active task, if any."""
+    return _ACTIVE_LOCK_CONNECTION.get()
+
+
+def open_paper_lock_session(connection: Any = None) -> Session | None:
+    """Open an ORM Session bound to a real SQLAlchemy lock connection without checking out another pool slot."""
+    target = connection if connection is not None else _ACTIVE_LOCK_CONNECTION.get()
+    if isinstance(target, SqlAlchemyConnection):
+        return Session(
+            bind=target,
+            autocommit=False,
+            autoflush=False,
+            expire_on_commit=False,
+        )
+    return None
 
 
 class PaperOperationInProgress(RuntimeError):
@@ -101,9 +125,9 @@ def _release(connection: Any, key: int) -> None:
 async def paper_operation_lock(document_id: UUID | str) -> AsyncIterator[Any]:
     """Hold the paper's lock while it is deleted, updated, or a file is removed; ``PaperOperationInProgress`` when held.
 
-    Yields the dedicated SQLAlchemy connection holding the session-level advisory
-    lock so callers performing short read-only checks do not need a second pool
-    connection while the lock is held.
+    Yields the checked-out advisory-lock database connection so sequential SQL helpers
+    running in worker threads under the lock can reuse it without checking out a second
+    pooled connection.
     """
 
     key = paper_lock_key(document_id)
@@ -134,12 +158,14 @@ async def paper_operation_lock(document_id: UUID | str) -> AsyncIterator[Any]:
     if connection is None:
         raise PaperOperationInProgress(str(document_id))
     body_cancelled = False
+    lock_token = _ACTIVE_LOCK_CONNECTION.set(connection)
     try:
         yield connection
     except asyncio.CancelledError:
         body_cancelled = True
         raise
     finally:
+        _ACTIVE_LOCK_CONNECTION.reset(lock_token)
         # Drain the release even across repeated cancellations so the advisory lock
         # and DB connection are always closed before returning, and any release failure
         # is observed and reported cleanly.
