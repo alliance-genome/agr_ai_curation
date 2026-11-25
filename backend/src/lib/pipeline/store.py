@@ -207,6 +207,7 @@ async def store_added_file_pieces(
     user_id: str,
     *,
     chunk_range: tuple[int, int],
+    caller_reports_failure: bool = True,
 ) -> Dict[str, Any]:
     """Store the pieces of a file added to a finished paper, never touching the paper's own object.
 
@@ -214,9 +215,17 @@ async def store_added_file_pieces(
     ALL-1460, P7c1): its search-index object's processing and embedding status are
     not written, before, during or after, whatever happens to the add. Pieces,
     range verification and cancellation draining are the same as ``store_to_weaviate``.
+    ``caller_reports_failure`` defaults to ``True`` because supplement adds own
+    failure reporting at the job or cancelled-rollback boundary.
     """
     return await _store_owned(
-        chunks, document_id, weaviate_client, user_id, chunk_range=chunk_range, write_paper_status=False,
+        chunks,
+        document_id,
+        weaviate_client,
+        user_id,
+        chunk_range=chunk_range,
+        write_paper_status=False,
+        caller_reports_failure=caller_reports_failure,
     )
 
 
@@ -228,6 +237,7 @@ async def _store_owned(
     *,
     chunk_range: tuple[int, int],
     write_paper_status: bool,
+    caller_reports_failure: bool = False,
 ) -> Dict[str, Any]:
     # Executor writes cannot be stopped by cancelling their awaiting coroutine.
     # Keep ownership through chunk verification and metadata finalization so the
@@ -240,7 +250,8 @@ async def _store_owned(
     except StorageError as exc:
         # The worker wraps write failures with a cause. Input errors have none.
         if exc.__cause__ is not None:
-            logger.error("%s", exc)
+            extra = {"sentry_skip_event": True} if caller_reports_failure else None
+            logger.error("%s", exc, extra=extra)
         raise
     except asyncio.CancelledError:
         async def finish_cancelled_storage() -> None:

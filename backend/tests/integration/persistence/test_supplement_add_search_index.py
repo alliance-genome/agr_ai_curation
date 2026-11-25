@@ -9,7 +9,9 @@ provider only serves downloads. All values are made up.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import threading
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -24,6 +26,7 @@ from weaviate.classes.query import Filter
 
 from src.api import documents as documents_api
 from src.api import pdf_viewer
+from src.lib.document_files import service as file_service
 from src.lib.document_files.readable import resolve_readable_files
 from src.lib.document_sources import file_listing_service, supplement_add
 from src.lib.document_sources.access import DocumentSourceRequestContext
@@ -221,11 +224,11 @@ def _chosen(original_id: int) -> ChosenFile:
     return ChosenFile(str(original_id), md5=f"md5-{original_id}", converted_md5=f"md5-{original_id + 1}")
 
 
-async def _add(document_id, owner_id, connection, files, *, job_id, checkpoint=None, payloads=None):
+async def _add(document_id, owner_id, connection, files, *, job_id, checkpoint=None, payloads=None, commit_state=None):
     return await supplement_add.add_files_to_paper(
         document_id, owner_id, CONTEXT, files, job_id=job_id,
         provider=_Provider(payloads or {"21": WORKBOOK, "41": WORKBOOK_2}),
-        weaviate_client=connection, stage_checkpoint=checkpoint or AsyncMock(),
+        weaviate_client=connection, stage_checkpoint=checkpoint or AsyncMock(), commit_state=commit_state,
     )
 
 
@@ -357,6 +360,113 @@ async def test_during_an_add_the_paper_is_readable_viewable_and_only_its_ready_f
     assert seen["pending"][0] == "pending" and seen["pending"][1] == 3
     # A live add holds the paper's one job: delete waits for it (409), as for an import.
     assert seen["deletable"] is False
+
+
+@pytest.fixture
+def pdf_supplement(monkeypatch):
+    pdf = (Path(__file__).resolve().parents[2] / "fixtures" / "live_tiny_chat.pdf").read_bytes()
+    md5 = hashlib.md5(pdf).hexdigest()
+
+    async def list_pdf(*args, **kwargs):
+        listing = await _listing(*args, **kwargs)
+        entry = listing.files[0]
+        original = replace(entry.source_artifact, artifact_format=SourceArtifactFormat.PDF, md5sum=md5,
+                           metadata={"file_class": "supplement", "file_extension": "pdf"})
+        return replace(listing, files=(replace(entry, md5=md5, source_artifact=original, artifact_format="pdf"),))
+
+    monkeypatch.setattr(file_listing_service, "list_files_for_paper", list_pdf)
+    return replace(_chosen(20), md5=md5), {"20": pdf, "21": WORKBOOK}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("during", ["insert", "markdown", "json", "pdf", "reserve", "ready"])
+async def test_cancellation_drains_the_write_before_rollback(
+    owner_id, index, pdf_supplement, monkeypatch, tmp_path, during,
+):
+    paper = await asyncio.to_thread(_paper, owner_id, index)
+    started = asyncio.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    loop = asyncio.get_running_loop()
+    owner, name = {
+        "insert": (supplement_add, "_insert_rows"),
+        "markdown": (Path, "write_text"),
+        "json": (Path, "write_text"),
+        "pdf": (supplement_add, "_save_supplement_pdf"),
+        "reserve": (file_service, "reserve_file_chunk_range"),
+        "ready": (file_service, "mark_files_ready"),
+    }[during]
+    write = getattr(owner, name)
+
+    def paused_write(*args, **kwargs):
+        if owner is Path and args[0].suffix != {"markdown": ".md", "json": ".json"}[during]:
+            return write(*args, **kwargs)
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(10), "test did not release the writer"
+        result = write(*args, **kwargs)
+        finished.set()
+        return result
+
+    monkeypatch.setattr(owner, name, paused_write)
+    undo = AsyncMock(wraps=supplement_add._undo)
+    monkeypatch.setattr(supplement_add, "_undo", undo)
+    commit = supplement_add.SupplementAddCommit()
+    chosen, payloads = pdf_supplement
+    add = asyncio.create_task(_add(
+        paper, owner_id, index, [chosen], job_id=uuid4(), payloads=payloads, commit_state=commit,
+    ))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=10)
+        add.cancel("deadline")
+        await asyncio.sleep(0)  # Deliver cancellation while the worker is still blocked.
+        add.cancel("second cancellation")
+        await asyncio.sleep(0)
+        premature_undo = undo.await_count
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError, match="deadline"):
+        await add
+    assert premature_undo == 0 and finished.is_set()
+    rows = _rows(paper)
+    assert commit.committed is (during == "ready")
+    paths = {path for path in tmp_path.rglob("*") if path.is_file()}
+    indexes = _indexes(index, str(paper))
+    paper_object = _paper_object(index, paper)
+    assert paper_object["chunkCount"] == paper_object["vectorCount"] == len(indexes)
+    if during == "ready":
+        undo.assert_not_awaited()
+        main, added = rows
+        assert main.role == "main" and added.status == "ready"
+        assert paths == {
+            tmp_path / added.source_markdown_path, tmp_path / added.processed_json_path, tmp_path / added.file_path,
+        }
+        assert (tmp_path / added.source_markdown_path).read_bytes() == WORKBOOK
+        assert (tmp_path / added.file_path).read_bytes() == payloads["20"]
+        assert added.chunk_index_start == 3
+        assert indexes == list(range(added.chunk_index_end + 1))
+        await _usable(paper, index, readable_ranges=[(0, 2), (3, added.chunk_index_end)])
+    else:
+        undo.assert_awaited_once()
+        assert [row.role for row in rows] == ["main"]
+        assert paths == set()
+        assert indexes == [0, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_rollback_skips_ready_rows_and_their_artifacts_and_pieces(owner_id, index, tmp_path):
+    paper = await asyncio.to_thread(_paper, owner_id, index)
+    await _add(paper, owner_id, index, [_chosen(20), _chosen(40)], job_id=uuid4())
+    main, ready, failed = _rows(paper)
+    file_service.mark_file_failed(failed.id, error_message="test failure")
+    paths = [path for row in (ready, failed) for path in (row.source_markdown_path, row.processed_json_path)]
+
+    await supplement_add._undo(paper, TEST_USER_ID, [main.id, ready.id, failed.id], paths)
+
+    assert [(row.id, row.status) for row in _rows(paper)] == [(main.id, "ready"), (ready.id, "ready")]
+    assert {path for path in paths if (tmp_path / path).is_file()} == {
+        ready.source_markdown_path, ready.processed_json_path,
+    }
+    assert _indexes(index, str(paper)) == list(range(ready.chunk_index_end + 1))
 
 
 @pytest.mark.asyncio
@@ -497,6 +607,42 @@ async def test_a_paper_deleted_while_its_add_writes_keeps_no_piece_in_the_index(
     with pytest.raises(Exception):
         await _add(paper, owner_id, index, [_chosen(20)], job_id=UUID(job.job_id), checkpoint=delete_paper_mid_write)
     assert _indexes(index, str(paper)) == []
+
+
+@pytest.mark.asyncio
+async def test_paper_deleted_after_first_rollback_read_leaves_no_files_or_pieces(owner_id, index, tmp_path):
+    from sqlalchemy import event
+
+    from src.models.sql.database import engine
+
+    paper = await asyncio.to_thread(_paper, owner_id, index)
+
+    def delete_paper(*_args):
+        # Commit on another connection after Postgres has taken the rollback read's snapshot.
+        with SessionLocal.begin() as db:
+            db.execute(delete(PDFDocument).where(PDFDocument.id == paper))
+
+    async def checkpoint(stage):
+        if stage == "vector_storage":
+            chunk_reads.delete_pieces_of_deleted_paper(str(paper), TEST_USER_ID)
+        if stage == "finishing":
+            assert _indexes(index, str(paper))
+            assert any(path.is_file() for path in tmp_path.rglob("*"))
+            event.listen(engine, "after_cursor_execute", delete_paper, once=True)
+            raise RuntimeError("cancel add before ready")
+
+    try:
+        with pytest.raises(RuntimeError, match="cancel add before ready"):
+            await _add(paper, owner_id, index, [_chosen(20)], job_id=uuid4(), checkpoint=checkpoint)
+    finally:
+        if event.contains(engine, "after_cursor_execute", delete_paper):
+            event.remove(engine, "after_cursor_execute", delete_paper)
+
+    with SessionLocal() as db:
+        assert db.get(PDFDocument, paper) is None
+    assert _rows(paper) == []
+    assert _indexes(index, str(paper)) == []
+    assert not any(path.is_file() for path in tmp_path.rglob("*"))
 
 
 @pytest.mark.asyncio

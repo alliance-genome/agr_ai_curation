@@ -11,9 +11,10 @@ own job) calls ``add_files_to_paper``. The paper stays usable throughout.
   fails a step is left out with a ``FileReason`` code and the next file goes on.
 - **Write phase.** Every accepted file gets its row (``pending``), its stored
   Markdown and processed JSON, its piece range and its pieces; then all of them
-  become ``ready`` together. A failure while writing removes this add's pieces
-  (by range), stored files and rows, and leaves the paper and its earlier files
-  unchanged. The paper's status and completion time never change.
+  become ``ready`` together. Cancellation waits for an in-flight write to finish.
+  Before the ready commit, rollback removes this add's uncommitted rows, files
+  and pieces. After the commit the files stay readable. The paper's status and
+  completion time never change.
 - Rows left ``failed`` by an add that died (the stale sweep marks them) are removed
   with their pieces at the start of the next add on the paper.
 - **A PDF supplement** (P7c2) is added as its PDF: its original PDF is downloaded
@@ -33,15 +34,16 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import logging
 import tempfile
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, TypeVar
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 
 from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.file_assessment import FileProfile, assess_converted_file
@@ -68,6 +70,8 @@ from src.models.sql.pdf_document import (
 )
 
 PAPER_STATUS_COMPLETED = "completed"
+_T = TypeVar("_T")
+logger = logging.getLogger(__name__)
 
 
 class SupplementAddError(RuntimeError):
@@ -121,6 +125,13 @@ class AddResult:
         return tuple(item for item in self.files if item.outcome == "added")
 
 
+@dataclass(slots=True)
+class SupplementAddCommit:
+    """One add's ready transaction outcome, observable by its owner after cancellation."""
+
+    committed: bool = False
+
+
 @dataclass(frozen=True, slots=True)
 class _PaperState:
     owner_subject: str
@@ -133,12 +144,18 @@ class _PaperState:
 
 @dataclass(frozen=True, slots=True)
 class _Leftover:
-    """A file row an earlier add left ``failed``: its pieces and stored files are removed."""
+    """A supplement row whose range and artifacts belong to cleanup."""
 
     file_id: UUID
     chunk_index_start: int | None
     chunk_index_end: int | None
     paths: tuple[str, ...]
+
+    @classmethod
+    def from_row(cls, row: PDFDocumentFile) -> _Leftover:
+        paths = (row.source_markdown_path, row.processed_json_path, row.file_path)
+        unique_paths = tuple(dict.fromkeys(path for path in paths if path))
+        return cls(row.id, row.chunk_index_start, row.chunk_index_end, unique_paths)
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,11 +207,13 @@ async def add_files_to_paper(
     provider: DocumentSourceProvider,
     weaviate_client: Any,
     stage_checkpoint: Checkpoint,
+    commit_state: SupplementAddCommit | None = None,
 ) -> AddResult:
     """Add the chosen converted text supplements to one of the curator's papers.
 
     Runs inside the job ``job_id`` (the paper's one active job). ``stage_checkpoint``
     raises when the job is cancelled; it is called between files and stages.
+    Pass a fresh ``commit_state`` to observe whether this add became ready.
     """
 
     from src.lib.document_sources.file_listing_service import list_files_for_paper
@@ -237,6 +256,7 @@ async def add_files_to_paper(
             document_id=document_id, owner_user_id=owner_user_id, paper=paper, provider=provider,
             token=token, limits=limits, max_files=max_files, max_text_bytes=max_text_bytes,
             download_cap=download_cap, weaviate_client=weaviate_client, stage_checkpoint=stage_checkpoint,
+            commit_state=commit_state if commit_state is not None else SupplementAddCommit(),
         )
     finally:
         for item in accepted:
@@ -262,6 +282,7 @@ async def _check_and_write(
     download_cap: int,
     weaviate_client: Any,
     stage_checkpoint: Checkpoint,
+    commit_state: SupplementAddCommit,
 ) -> None:
     from src.lib.openai_agents.config import get_document_file_max_pdf_bytes
 
@@ -334,6 +355,7 @@ async def _check_and_write(
         await _write(
             accepted, document_id=document_id, owner_user_id=owner_user_id, paper=paper,
             weaviate_client=weaviate_client, stage_checkpoint=stage_checkpoint,
+            commit_state=commit_state,
         )
         for item in accepted:
             outcomes[item.listed.provider_file_id] = FileOutcome(
@@ -496,6 +518,90 @@ async def _prepare(listed: ListedFile, markdown: str, *, document_id: UUID, disp
     )
 
 
+def _report_supplement_failure(exc: BaseException, *, operation: str, message: str) -> None:
+    from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
+
+    try:
+        report_runtime_exception(
+            sanitized_runtime_error(message),
+            component="document_files",
+            operation=operation,
+            context={"exception_type": type(exc).__name__},
+            fingerprint=[operation],
+            include_request=False,
+        )
+    except Exception:
+        logger.warning("Supplement failure reporting unavailable", extra={"sentry_skip_event": True})
+
+
+async def _drain_after_cancel(
+    work: Awaitable[Any],
+    *,
+    operation: str = "supplement_add_cancelled_mutation_failed",
+    message: str = "Supplement mutation failed during cancellation",
+) -> None:
+    """Finish outstanding work and report a discarded failure before the caller re-raises cancellation."""
+    async def drain() -> None:
+        try:
+            await work
+        except asyncio.CancelledError:
+            # A chunk writer can finish its own cancellation and failure reporting.
+            pass
+        except Exception as exc:
+            _report_supplement_failure(exc, operation=operation, message=message)
+
+    finalizer = asyncio.create_task(drain())
+    while not finalizer.done():
+        try:
+            await asyncio.shield(finalizer)
+        except asyncio.CancelledError:
+            continue
+    finalizer.result()
+
+
+async def _finish_mutation(
+    mutation: Coroutine[Any, Any, _T],
+    *,
+    operation: str = "supplement_add_cancelled_mutation_failed",
+    message: str = "Supplement mutation failed during cancellation",
+) -> _T:
+    """Keep ownership of an executor-backed mutation until rollback can safely run."""
+    task = asyncio.create_task(mutation)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await _drain_after_cancel(task, operation=operation, message=message)
+        raise
+
+
+async def _store_supplement_pieces(item: _Accepted, document_id: UUID, subject: str, weaviate_client: Any) -> None:
+    from src.lib.document_sources.ingestion import store_file_pieces
+
+    # The reservation thread cannot be interrupted. At the vector storage checkpoint
+    # the pipeline takes ownership and must receive cancellation to drain its chunk writer.
+    storing = False
+    cancelled = False
+
+    async def range_reserved(_stage: str) -> None:
+        nonlocal storing
+        if cancelled:
+            raise asyncio.CancelledError
+        storing = True
+
+    task = asyncio.create_task(store_file_pieces(
+        item.prepared, document_id=str(document_id), file_id=item.file_id, user_id=subject,
+        weaviate_client=weaviate_client, added_to_finished_paper=True, stage_checkpoint=range_reserved,
+    ))
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        cancelled = True
+        if storing:
+            task.cancel()
+        await _drain_after_cancel(task)
+        raise
+
+
 async def _write(
     accepted: list[_Accepted],
     *,
@@ -504,11 +610,24 @@ async def _write(
     paper: _PaperState,
     weaviate_client: Any,
     stage_checkpoint: Checkpoint,
+    commit_state: SupplementAddCommit,
 ) -> None:
     from src.lib.document_files.service import mark_files_ready
-    from src.lib.document_sources.ingestion import _save_processed_json, _save_source_markdown, store_file_pieces
+    from src.lib.document_sources.ingestion import _save_processed_json, _save_source_markdown
+    from src.lib.exceptions import PDFCancellationError
 
     subject = paper.owner_subject
+
+    async def commit() -> None:
+        sizes = {item.file_id: item.prepared.text_bytes for item in accepted}
+        await asyncio.to_thread(mark_files_ready, sizes)
+        commit_state.committed = True
+        try:
+            await _after_add(document_id, subject, weaviate_client)
+        except Exception as exc:
+            # The files are readable. Only the paper's index counts or cache may be stale.
+            _report_after_add_failure(exc, document_id)
+
     # The rows are written first, naming their files, so a process that dies before the
     # files are written still leaves rows the stale sweep and the next add can clean up.
     planned = [
@@ -519,7 +638,7 @@ async def _write(
         item.file_id: f"{subject}/{document_id}/supplement_pdf/{item.file_id}.pdf"
         for item in accepted if item.pdf is not None
     }
-    written_paths = [
+    planned_paths = [
         path for _, markdown_path, processed_path in planned for path in (markdown_path, processed_path)
     ] + list(pdf_paths.values())
     try:
@@ -530,33 +649,54 @@ async def _write(
                      pdf_path=pdf_paths.get(item.file_id))
             for tab_order, (item, markdown_path, processed_path) in enumerate(planned, start=paper.next_tab_order)
         ]
-        await asyncio.to_thread(_insert_rows, document_id, rows)
+        await _finish_mutation(asyncio.to_thread(_insert_rows, document_id, rows))
         for item, markdown_path, processed_path in planned:
-            saved = (
-                await _save_source_markdown(markdown=item.markdown, file_id=item.file_id, user_id=subject),
-                await _save_processed_json(elements=item.prepared.elements, file_id=item.file_id, user_id=subject),
+            saved_markdown = await _finish_mutation(
+                _save_source_markdown(markdown=item.markdown, file_id=item.file_id, user_id=subject)
             )
-            if saved != (markdown_path, processed_path):
+            saved_json = await _finish_mutation(
+                _save_processed_json(elements=item.prepared.elements, file_id=item.file_id, user_id=subject)
+            )
+            if (saved_markdown, saved_json) != (markdown_path, processed_path):
                 raise SupplementAddError("stored_file_path_mismatch")
             if item.pdf is not None:
-                await asyncio.to_thread(_save_supplement_pdf, item.pdf.file, pdf_paths[item.file_id])
+                await _finish_mutation(asyncio.to_thread(_save_supplement_pdf, item.pdf.file, pdf_paths[item.file_id]))
         for item in accepted:
             await stage_checkpoint("vector_storage")
-            await store_file_pieces(
-                item.prepared, document_id=str(document_id), file_id=item.file_id, user_id=subject,
-                weaviate_client=weaviate_client, added_to_finished_paper=True,
-            )
+            await _store_supplement_pieces(item, document_id, subject, weaviate_client)
         await stage_checkpoint("finishing")
-        await asyncio.to_thread(mark_files_ready, {item.file_id: item.prepared.text_bytes for item in accepted})
-    except BaseException:
-        await _undo(document_id, subject, [item.file_id for item in accepted], written_paths)
+        await _finish_mutation(commit())
+    except BaseException as exc:
+        if not commit_state.committed:
+            rollback = _undo(
+                document_id,
+                subject,
+                [item.file_id for item in accepted],
+                planned_paths,
+                caller_reports_failure=True,
+            )
+            if isinstance(exc, (asyncio.CancelledError, PDFCancellationError)):
+                await _drain_after_cancel(
+                    rollback,
+                    operation="supplement_add_cancelled_rollback_failed",
+                    message="Supplement rollback failed during cancellation",
+                )
+            else:
+                try:
+                    await _finish_mutation(
+                        rollback,
+                        operation="supplement_add_cancelled_rollback_failed",
+                        message="Supplement rollback failed during cancellation",
+                    )
+                except asyncio.CancelledError:
+                    if isinstance(exc, Exception):
+                        _report_supplement_failure(
+                            exc,
+                            operation="supplement_add_displaced_write_failed",
+                            message="Supplement write failed before cancellation",
+                        )
+                    raise
         raise
-    try:
-        await _after_add(document_id, subject, weaviate_client)
-    except Exception as exc:
-        # The files are added and readable; only the paper's search-index count or the
-        # document cache may be stale. Reported, and the add still counts as done.
-        _report_after_add_failure(exc, document_id)
 
 
 def _save_supplement_pdf(spooled: BinaryIO, relative_path: str) -> None:
@@ -663,10 +803,7 @@ def _paper_state(document_id: UUID, owner_user_id: int) -> _PaperState:
                     raise FileRangeMissingError(f"Ready file {row.id} has no measured text size")
                 ready_bytes += row.text_bytes
         leftovers = tuple(
-            _Leftover(
-                file_id=row.id, chunk_index_start=row.chunk_index_start, chunk_index_end=row.chunk_index_end,
-                paths=tuple(path for path in (row.source_markdown_path, row.processed_json_path, row.file_path) if path),
-            )
+            _Leftover.from_row(row)
             for row in paper.files
             if row.status == FILE_STATUS_FAILED and row.role == FILE_ROLE_SUPPLEMENT
         )
@@ -689,32 +826,38 @@ def _insert_rows(document_id: UUID, rows: list[PDFDocumentFile]) -> None:
         session.add_all(rows)
 
 
+def _rollback_predicate(file_ids: Sequence[UUID]):
+    return and_(
+        PDFDocumentFile.id.in_(file_ids),
+        PDFDocumentFile.role == FILE_ROLE_SUPPLEMENT,
+        PDFDocumentFile.status.in_((FILE_STATUS_PENDING, FILE_STATUS_FAILED)),
+    )
+
+
 def _delete_rows(document_id: UUID, file_ids: Sequence[UUID]) -> None:
     from sqlalchemy import delete
 
     from src.models.sql.database import SessionLocal
 
     with SessionLocal() as session, session.begin():
-        session.execute(
-            delete(PDFDocumentFile).where(
-                PDFDocumentFile.document_id == document_id,
-                PDFDocumentFile.id.in_(list(file_ids)),
-                PDFDocumentFile.role == FILE_ROLE_SUPPLEMENT,
-                PDFDocumentFile.status.in_((FILE_STATUS_PENDING, FILE_STATUS_FAILED)),
-            )
-        )
+        session.execute(delete(PDFDocumentFile).where(
+            PDFDocumentFile.document_id == document_id, _rollback_predicate(file_ids),
+        ))
 
 
-def _ranges(document_id: UUID, file_ids: Sequence[UUID]) -> list[tuple[int, int]]:
+def _rollback_files(document_id: UUID, file_ids: Sequence[UUID]) -> list[_Leftover] | None:
+    """Read both sides of a possible paper deletion in one snapshot. None means the parent is gone."""
     from src.models.sql.database import SessionLocal
 
     with SessionLocal() as session:
         rows = session.execute(
-            select(PDFDocumentFile.chunk_index_start, PDFDocumentFile.chunk_index_end).where(
-                PDFDocumentFile.document_id == document_id, PDFDocumentFile.id.in_(list(file_ids)),
-            )
+            select(PDFDocument.id, PDFDocumentFile)
+            .outerjoin(PDFDocument.files.and_(_rollback_predicate(file_ids)))
+            .where(PDFDocument.id == document_id)
         ).all()
-    return [(start, end) for start, end in rows if start is not None and end is not None]
+        if not rows:
+            return None
+        return [_Leftover.from_row(row) for _, row in rows if row is not None]
 
 
 def _remove_stored_files(paths: Sequence[str], subject: str) -> None:
@@ -723,14 +866,34 @@ def _remove_stored_files(paths: Sequence[str], subject: str) -> None:
     remove_stored_files(paths, owner_subject=subject)
 
 
-async def _delete_pieces(document_id: UUID, subject: str, ranges: Sequence[tuple[int, int]]) -> None:
+async def _delete_pieces(
+    document_id: UUID,
+    subject: str,
+    ranges: Sequence[tuple[int, int]],
+    *,
+    caller_reports_failure: bool = False,
+) -> None:
     from src.lib.weaviate_client.chunks import delete_chunk_range
 
     for start, end in ranges:
-        await asyncio.to_thread(delete_chunk_range, str(document_id), subject, start=start, end=end)
+        await asyncio.to_thread(
+            delete_chunk_range,
+            str(document_id),
+            subject,
+            start=start,
+            end=end,
+            caller_reports_failure=caller_reports_failure,
+        )
 
 
-async def _undo(document_id: UUID, subject: str, file_ids: list[UUID], paths: list[str]) -> None:
+async def _undo(
+    document_id: UUID,
+    subject: str,
+    file_ids: list[UUID],
+    planned_paths: list[str],
+    *,
+    caller_reports_failure: bool = False,
+) -> None:
     """Remove what this add wrote: pieces in its ranges, its stored files, its rows.
 
     When the paper itself was deleted while the add ran, its rows (and so the ranges)
@@ -738,36 +901,47 @@ async def _undo(document_id: UUID, subject: str, file_ids: list[UUID], paths: li
     since no other file can own them.
     """
 
-    if await asyncio.to_thread(_paper_exists, document_id):
-        ranges = await asyncio.to_thread(_ranges, document_id, file_ids)
-        await _delete_pieces(document_id, subject, ranges)
-        await asyncio.to_thread(_remove_stored_files, paths, subject)
-        await asyncio.to_thread(_delete_rows, document_id, file_ids)
+    leftovers = await asyncio.to_thread(_rollback_files, document_id, file_ids)
+    if leftovers is not None:
+        await _remove_leftovers(
+            document_id, subject, leftovers, caller_reports_failure=caller_reports_failure,
+        )
         return
-    await _delete_pieces_of_deleted_paper(document_id, subject)
-    await asyncio.to_thread(_remove_stored_files, paths, subject)
+    await _delete_pieces_of_deleted_paper(
+        document_id, subject, caller_reports_failure=caller_reports_failure,
+    )
+    await asyncio.to_thread(_remove_stored_files, planned_paths, subject)
 
 
-def _paper_exists(document_id: UUID) -> bool:
-    from src.models.sql.database import SessionLocal
-
-    with SessionLocal() as session:
-        return session.get(PDFDocument, document_id) is not None
-
-
-async def _delete_pieces_of_deleted_paper(document_id: UUID, subject: str) -> None:
+async def _delete_pieces_of_deleted_paper(
+    document_id: UUID,
+    subject: str,
+    *,
+    caller_reports_failure: bool = False,
+) -> None:
     from src.lib.weaviate_client.chunks import delete_pieces_of_deleted_paper
 
-    await asyncio.to_thread(delete_pieces_of_deleted_paper, str(document_id), subject)
+    await asyncio.to_thread(
+        delete_pieces_of_deleted_paper,
+        str(document_id),
+        subject,
+        caller_reports_failure=caller_reports_failure,
+    )
 
 
-async def _remove_leftovers(document_id: UUID, subject: str, leftovers: Sequence[_Leftover]) -> None:
+async def _remove_leftovers(
+    document_id: UUID,
+    subject: str,
+    leftovers: Sequence[_Leftover],
+    *,
+    caller_reports_failure: bool = False,
+) -> None:
     ranges = [
         (item.chunk_index_start, item.chunk_index_end)
         for item in leftovers
         if item.chunk_index_start is not None and item.chunk_index_end is not None
     ]
-    await _delete_pieces(document_id, subject, ranges)
+    await _delete_pieces(document_id, subject, ranges, caller_reports_failure=caller_reports_failure)
     await asyncio.to_thread(
         _remove_stored_files, [path for item in leftovers for path in item.paths], subject,
     )

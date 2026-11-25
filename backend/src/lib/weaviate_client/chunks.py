@@ -1600,7 +1600,14 @@ async def get_document_sections_hierarchical(
     return await asyncio.to_thread(_fetch)
 
 
-def delete_chunk_range(document_id: str, user_id: str, *, start: int, end: int) -> int:
+def delete_chunk_range(
+    document_id: str,
+    user_id: str,
+    *,
+    start: int,
+    end: int,
+    caller_reports_failure: bool = False,
+) -> int:
     """Delete one file's pieces: ``documentId`` and ``start <= chunkIndex <= end``, in the owner's tenant.
 
     Only that range is touched, so another file's pieces of the same paper stay.
@@ -1618,7 +1625,7 @@ def delete_chunk_range(document_id: str, user_id: str, *, start: int, end: int) 
 
     from ..weaviate_helpers import get_user_collections
 
-    with connection.session() as client:
+    with connection.session(caller_reports_failure=caller_reports_failure) as client:
         chunk_collection, _ = get_user_collections(client, user_id)
         result = chunk_collection.data.delete_many(
             where=(
@@ -1632,7 +1639,12 @@ def delete_chunk_range(document_id: str, user_id: str, *, start: int, end: int) 
     return int(result.successful)
 
 
-def delete_pieces_of_deleted_paper(document_id: str, user_id: str) -> int:
+def delete_pieces_of_deleted_paper(
+    document_id: str,
+    user_id: str,
+    *,
+    caller_reports_failure: bool = False,
+) -> int:
     """Delete every piece filed under a paper id whose paper row no longer exists, in the owner's tenant.
 
     Only for a paper that is already gone (no file of any other paper has its id).
@@ -1648,7 +1660,7 @@ def delete_pieces_of_deleted_paper(document_id: str, user_id: str) -> int:
 
     from ..weaviate_helpers import get_user_collections
 
-    with connection.session() as client:
+    with connection.session(caller_reports_failure=caller_reports_failure) as client:
         chunk_collection, _ = get_user_collections(client, user_id)
         result = chunk_collection.data.delete_many(where=Filter.by_property("documentId").equal(document_id))
     if result.failed:

@@ -9,9 +9,12 @@ persistence tests cover the real rows. All values are made up.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import threading
 from dataclasses import dataclass, field
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
@@ -21,6 +24,8 @@ from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.file_reasons import FileReason
 from src.lib.document_sources.models import ProviderBearerKind
 from src.lib.document_sources.supplement_add import AddResult, ChosenFile, SupplementAddError
+from src.lib.exceptions import PDFCancellationError
+from src.lib.pipeline.store import store_added_file_pieces
 from tests.unit.lib.document_sources.test_abc_literature_provider import (
     _abc_reference_record,
     _abc_show_all_main_pdf,
@@ -28,6 +33,9 @@ from tests.unit.lib.document_sources.test_abc_literature_provider import (
     provider_from_fake,
 )
 from tests.unit.lib.document_sources.test_file_listing import _Client, _limits, _pair, _Store
+
+_REAL_DELETE_PIECES = supplement_add._delete_pieces
+_REAL_DELETE_PIECES_OF_DELETED_PAPER = supplement_add._delete_pieces_of_deleted_paper
 
 DOCUMENT_ID = uuid4()
 JOB_ID = uuid4()
@@ -94,12 +102,11 @@ def storage(monkeypatch):
     monkeypatch.setattr(ingestion, "_save_processed_json", save_json)
     monkeypatch.setattr(supplement_add, "_insert_rows", lambda _doc, rows: record.inserted.extend(rows))
 
-    ranges: dict[UUID, tuple[int, int]] = {}
-
     def reserve(_document_id, file_id, count):
         start = record.next_index
         record.next_index += count
-        ranges[file_id] = (start, start + count - 1)
+        row = next(row for row in record.inserted if row.id == file_id)
+        row.chunk_index_start, row.chunk_index_end = start, start + count - 1
         return start
 
     async def store_to_weaviate(chunks, document_id, client, user_id, *, chunk_range):
@@ -112,17 +119,20 @@ def storage(monkeypatch):
     monkeypatch.setattr(
         "src.lib.document_files.service.mark_files_ready", lambda items: record.ready.update(items),
     )
-    monkeypatch.setattr(
-        supplement_add, "_ranges", lambda _doc, ids: [ranges[file_id] for file_id in ids if file_id in ranges],
-    )
 
-    async def delete_pieces(_doc, _subject, found):
+    def rollback_files(_doc, ids):
+        if not record.paper_exists:
+            return None
+        return [supplement_add._Leftover.from_row(row) for row in record.inserted if row.id in ids]
+
+    monkeypatch.setattr(supplement_add, "_rollback_files", rollback_files)
+
+    async def delete_pieces(_doc, _subject, found, *, caller_reports_failure=False):
         record.deleted_ranges.extend(found)
 
     monkeypatch.setattr(supplement_add, "_delete_pieces", delete_pieces)
-    monkeypatch.setattr(supplement_add, "_paper_exists", lambda _doc: record.paper_exists)
 
-    async def delete_all(_doc, _subject):
+    async def delete_all(_doc, _subject, *, caller_reports_failure=False):
         record.deleted_whole_paper += 1
 
     monkeypatch.setattr(supplement_add, "_delete_pieces_of_deleted_paper", delete_all)
@@ -339,6 +349,294 @@ async def test_a_cancel_while_writing_removes_this_adds_rows(monkeypatch, storag
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup_fails, second_cancel", [(True, False), (False, True), (True, True)])
+async def test_cancelled_add_drains_rollback_and_preserves_deadline(monkeypatch, storage, cleanup_fails, second_cancel):
+    finishing = asyncio.Event()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    report = Mock()
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+
+    async def checkpoint(stage):
+        if stage == "finishing":
+            finishing.set()
+            await asyncio.Future()
+
+    undo = supplement_add._undo
+
+    async def paused_undo(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        await undo(*args, **kwargs)
+
+    monkeypatch.setattr(supplement_add, "_undo", paused_undo)
+    if cleanup_fails:
+        monkeypatch.setattr(supplement_add, "_remove_stored_files", Mock(side_effect=OSError("private-filename")))
+    add = asyncio.create_task(_add(provider, [_chosen(20)], checkpoint))
+    try:
+        await asyncio.wait_for(finishing.wait(), timeout=10)
+        add.cancel("deadline")
+        await asyncio.wait_for(entered.wait(), timeout=10)
+        if second_cancel:
+            add.cancel("second cancellation")
+            await asyncio.sleep(0)
+            assert not add.done()
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError, match="deadline"):
+        await add
+    assert storage.deleted_ranges
+    if cleanup_fails:
+        report.assert_called_once()
+        error, = report.call_args.args
+        assert error.__context__ is error.__cause__ is None
+        assert "private-filename" not in str(report.call_args)
+        assert report.call_args.kwargs["operation"] == "supplement_add_cancelled_rollback_failed"
+        assert report.call_args.kwargs["context"] == {"exception_type": "OSError"}
+        assert report.call_args.kwargs["include_request"] is False
+    else:
+        report.assert_not_called()
+        assert storage.deleted_rows == [row.id for row in storage.inserted]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_chunk_failure_is_reported_once_by_pipeline(monkeypatch, storage, caplog):
+    from src.lib.pipeline import store
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+
+    async def fail_chunk_write(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        raise RuntimeError("private-chunk-content")
+
+    report = Mock()
+    monkeypatch.setattr(store, "report_runtime_exception", report)
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+    monkeypatch.setattr(store, "store_added_file_pieces", store_added_file_pieces)
+    monkeypatch.setattr(store, "store_chunks_to_weaviate", fail_chunk_write)
+    add = asyncio.create_task(_add(provider, [_chosen(20)]))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=10)
+        add.cancel("deadline")
+        await asyncio.sleep(0)
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError, match="deadline"):
+        await add
+    report.assert_called_once()
+    assert report.call_args.kwargs["operation"] == "pipeline_cancelled_storage_write_failed"
+    assert "private-chunk-content" not in str(report.call_args)
+    for record in caplog.records:
+        if record.name == store.__name__ and record.levelno >= logging.WARNING:
+            assert getattr(record, "sentry_skip_event", False)
+    assert storage.deleted_rows == [row.id for row in storage.inserted]
+
+
+@pytest.mark.asyncio
+async def test_failed_ready_commit_during_cancellation_reports_and_rolls_back(monkeypatch, storage):
+    started = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+
+    def fail_commit(_sizes):
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(10)
+        raise RuntimeError("private-document-content")
+
+    report = Mock()
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+    monkeypatch.setattr("src.lib.document_files.service.mark_files_ready", fail_commit)
+    add = asyncio.create_task(_add(provider, [_chosen(20)]))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=10)
+        add.cancel("deadline")
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError, match="deadline"):
+        await add
+    assert storage.deleted_rows == [row.id for row in storage.inserted]
+    assert storage.deleted_ranges and storage.removed_paths
+    report.assert_called_once()
+    error, = report.call_args.args
+    assert error.__context__ is error.__cause__ is None
+    assert "private-document-content" not in str(report.call_args)
+    assert report.call_args.kwargs["operation"] == "supplement_add_cancelled_mutation_failed"
+    assert report.call_args.kwargs["context"] == {"exception_type": "RuntimeError"}
+    assert report.call_args.kwargs["include_request"] is False
+
+
+@pytest.mark.asyncio
+async def test_pdf_cancellation_drains_rollback_and_preserves_cancellation(monkeypatch, storage):
+    report = Mock()
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+    monkeypatch.setattr(supplement_add, "_remove_stored_files", Mock(side_effect=OSError("private-curator-filename")))
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+
+    async def checkpoint(stage):
+        if stage == "finishing":
+            raise PDFCancellationError("Processing cancelled by user request")
+
+    with pytest.raises(PDFCancellationError, match="cancelled by user request"):
+        await _add(provider, [_chosen(20)], checkpoint=checkpoint)
+    assert storage.deleted_ranges
+    report.assert_called_once()
+    error, = report.call_args.args
+    assert error.__context__ is error.__cause__ is None
+    assert "private-curator-filename" not in str(report.call_args)
+    assert report.call_args.kwargs["component"] == "document_files"
+    assert report.call_args.kwargs["operation"] == "supplement_add_cancelled_rollback_failed"
+    assert report.call_args.kwargs["fingerprint"] == ["supplement_add_cancelled_rollback_failed"]
+    assert report.call_args.kwargs["context"] == {"exception_type": "OSError"}
+    assert report.call_args.kwargs["include_request"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rollback_fails", [False, True])
+async def test_deadline_cancelling_failure_rollback_preserves_deadline_and_reports_displaced_failure(
+    monkeypatch, storage, caplog, rollback_fails,
+):
+    from src.lib.pipeline import store
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    report = Mock()
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+    monkeypatch.setattr(store, "store_added_file_pieces", store_added_file_pieces)
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+
+    async def fail_chunk_write(*_args, **_kwargs):
+        raise OSError("private-write-secret")
+
+    monkeypatch.setattr(store, "store_chunks_to_weaviate", fail_chunk_write)
+    undo = supplement_add._undo
+
+    async def paused_undo(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        await undo(*args, **kwargs)
+
+    monkeypatch.setattr(supplement_add, "_undo", paused_undo)
+    if rollback_fails:
+        monkeypatch.setattr(
+            supplement_add, "_remove_stored_files", Mock(side_effect=OSError("private-rollback-secret")),
+        )
+
+    with caplog.at_level(logging.ERROR):
+        add = asyncio.create_task(_add(provider, [_chosen(20)]))
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=10)
+            add.cancel("deadline")
+            await asyncio.sleep(0)
+            assert not add.done()
+        finally:
+            release.set()
+
+        with pytest.raises(asyncio.CancelledError, match="deadline"):
+            await add
+
+    promotable_errors = [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.ERROR and not getattr(record, "sentry_skip_event", False)
+    ]
+    assert promotable_errors == []
+    assert storage.deleted_ranges
+    if not rollback_fails:
+        assert storage.deleted_rows == [row.id for row in storage.inserted]
+        report.assert_called_once()
+        error, = report.call_args.args
+        assert error.__context__ is error.__cause__ is None
+        assert "private-write-secret" not in str(report.call_args)
+        assert report.call_args.kwargs["component"] == "document_files"
+        assert report.call_args.kwargs["operation"] == "supplement_add_displaced_write_failed"
+        assert report.call_args.kwargs["fingerprint"] == ["supplement_add_displaced_write_failed"]
+        assert report.call_args.kwargs["context"] == {"exception_type": "StorageError"}
+        assert report.call_args.kwargs["include_request"] is False
+    else:
+        assert report.call_count == 2
+        rollback_call, displaced_call = report.call_args_list
+        for call in (rollback_call, displaced_call):
+            err, = call.args
+            assert err.__context__ is err.__cause__ is None
+            assert call.kwargs["component"] == "document_files"
+            assert call.kwargs["include_request"] is False
+            assert "private-write-secret" not in str(call)
+            assert "private-rollback-secret" not in str(call)
+        assert rollback_call.kwargs["operation"] == "supplement_add_cancelled_rollback_failed"
+        assert rollback_call.kwargs["fingerprint"] == ["supplement_add_cancelled_rollback_failed"]
+        assert rollback_call.kwargs["context"] == {"exception_type": "OSError"}
+        assert displaced_call.kwargs["operation"] == "supplement_add_displaced_write_failed"
+        assert displaced_call.kwargs["fingerprint"] == ["supplement_add_displaced_write_failed"]
+        assert displaced_call.kwargs["context"] == {"exception_type": "StorageError"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("paper_exists", [True, False])
+async def test_cancelled_rollback_weaviate_reconnect_failure_reports_once_without_promotable_error_log(
+    monkeypatch, storage, caplog, paper_exists,
+):
+    from src.lib.weaviate_client import chunks as weaviate_chunks
+    from src.lib.weaviate_client import connection as wc
+
+    finishing = asyncio.Event()
+    report = Mock()
+    storage.paper_exists = paper_exists
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+    monkeypatch.setattr(supplement_add, "_delete_pieces", _REAL_DELETE_PIECES)
+    monkeypatch.setattr(supplement_add, "_delete_pieces_of_deleted_paper", _REAL_DELETE_PIECES_OF_DELETED_PAPER)
+    monkeypatch.setattr(wc.WeaviateConnection, "_instance", None)
+    monkeypatch.setattr(wc, "_connection", None)
+    conn = wc.WeaviateConnection(url="http://localhost:8080")
+    monkeypatch.setattr(
+        wc.weaviate,
+        "connect_to_local",
+        Mock(side_effect=ConnectionError("private-weaviate-token")),
+    )
+    monkeypatch.setattr(weaviate_chunks, "get_connection", lambda: conn)
+    _, provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+
+    async def checkpoint(stage):
+        if stage == "finishing":
+            finishing.set()
+            await asyncio.Future()
+
+    with caplog.at_level(logging.WARNING):
+        add = asyncio.create_task(_add(provider, [_chosen(20)], checkpoint))
+        await asyncio.wait_for(finishing.wait(), timeout=10)
+        add.cancel("deadline")
+        with pytest.raises(asyncio.CancelledError, match="deadline"):
+            await add
+
+    report.assert_called_once()
+    error, = report.call_args.args
+    assert error.__context__ is error.__cause__ is None
+    assert "private-weaviate-token" not in str(report.call_args)
+    assert "private-weaviate-token" not in caplog.text
+    assert report.call_args.kwargs["component"] == "document_files"
+    assert report.call_args.kwargs["operation"] == "supplement_add_cancelled_rollback_failed"
+    assert report.call_args.kwargs["fingerprint"] == ["supplement_add_cancelled_rollback_failed"]
+    assert report.call_args.kwargs["context"] == {"exception_type": "ConnectionError"}
+    assert report.call_args.kwargs["include_request"] is False
+    promotable_errors = [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.ERROR and not getattr(record, "sentry_skip_event", False)
+    ]
+    assert promotable_errors == []
+
+
+@pytest.mark.asyncio
 async def test_rows_left_failed_by_a_dead_add_are_removed_first(monkeypatch, storage):
     leftover = supplement_add._Leftover(
         file_id=uuid4(), chunk_index_start=12, chunk_index_end=15, paths=("owner-subject/source_markdown/x.md",),
@@ -525,15 +823,7 @@ async def test_supplement_pieces_are_stored_without_writing_the_papers_own_objec
         used.append("store_to_weaviate")
 
     monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", paper_store)
-    from src.lib.pipeline import store as store_module
-
-    async def real_added(chunks, document_id, client, user_id, *, chunk_range):
-        # The real added-file store (the fixture replaced the module attribute with a recorder).
-        return await store_module._store_owned(
-            chunks, document_id, client, user_id, chunk_range=chunk_range, write_paper_status=False,
-        )
-
-    monkeypatch.setattr("src.lib.pipeline.store.store_added_file_pieces", real_added)
+    monkeypatch.setattr("src.lib.pipeline.store.store_added_file_pieces", store_added_file_pieces)
     _, provider = _provider(ROWS, GOOD)
     _paper_lookup(monkeypatch)
     statuses = []
