@@ -823,17 +823,22 @@ class UploadExecutionService:
                 )
                 return
             logger.exception(
-                "Error waiting for provider conversion document %s",
-                request.document_id,
+                "Error waiting for provider conversion",
                 extra={"sentry_skip_event": True},
             )
             if not isinstance(exc, (PDFCancellationError, DocumentSourceLoginExpired)):
-                self._report_execution_failure(
-                    exc,
-                    task_name="pdf_jobs.execute_provider_conversion",
-                    request=request,
-                    failure_stage="provider_conversion",
-                )
+                try:
+                    self._report_execution_failure(
+                        exc,
+                        task_name="pdf_jobs.execute_provider_conversion",
+                        request=request,
+                        failure_stage="provider_conversion",
+                    )
+                except Exception:
+                    logger.warning(
+                        "Could not report provider conversion failure to Sentry",
+                        extra={"sentry_skip_event": True},
+                    )
             try:
                 await update_document_status(
                     request.document_id,
@@ -1533,17 +1538,15 @@ class UploadExecutionService:
                     select(PdfProcessingJob)
                     .where(PdfProcessingJob.id == UUID(str(request.job_id)))
                     .with_for_update()
-                ).scalar_one_or_none()
-                if job is not None and job.status in TERMINAL_PDF_JOB_STATUSES:
+                ).scalar_one()
+                if job.status in TERMINAL_PDF_JOB_STATUSES:
                     raise _JobFinalizedElsewhere()
                 document = session.execute(
                     select(ViewerPDFDocument).where(
                         ViewerPDFDocument.id == UUID(str(request.document_id)),
                         ViewerPDFDocument.user_id == request.owner_user_id,
                     )
-                ).scalar_one_or_none()
-                if document is None:
-                    return
+                ).scalar_one()
                 main_file = document.main_file
                 main_file.source_provider_converted_artifact_id = source_provenance.get(
                     "converted_artifact_id"
@@ -1555,6 +1558,7 @@ class UploadExecutionService:
                 main_file.source_artifact_status = source_provenance.get("artifact_status")
                 main_file.source_import_status = "pending"
                 session.commit()
+                return
             except Exception:
                 session.rollback()
                 raise
@@ -1562,12 +1566,10 @@ class UploadExecutionService:
                 session.close()
         except _JobFinalizedElsewhere:
             raise
-        except Exception as sync_err:
-            logger.warning(
-                "Failed to sync SQL provider conversion selection for document=%s: %s",
-                request.document_id,
-                sync_err,
-            )
+        except Exception:
+            # Leave the database exception context before raising the reportable error.
+            pass
+        raise RuntimeError("Provider conversion selection could not be persisted")
 
     def _default_orchestrator_factory(
         self,

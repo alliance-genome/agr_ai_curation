@@ -317,6 +317,12 @@ so logging integration keeps breadcrumbs without promoting a second event.
 Unrelated errors without an explicit capture owner remain eligible for logging
 capture; there is no global trace/message deduplication cache.
 
+Provider conversion starts Markdown ingestion only after the selected artifact
+is committed. A selection transaction failure goes through the existing
+`provider_conversion` failure stage with a fixed, chain-free exception. The
+worker still records the failure if reporting raises. A job already terminal
+when locked stops quietly.
+
 The specialist invocation wrapper attaches the actual invoked tool name to
 `SpecialistOutputError`. Flow capture follows the typed exception cause/context
 chain (with cycle protection), retaining that technical identity and the
