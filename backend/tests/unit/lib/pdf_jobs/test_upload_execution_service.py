@@ -3,14 +3,20 @@
 import asyncio
 import hashlib
 import inspect
-from unittest.mock import AsyncMock, Mock
+import logging
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast, get_type_hints
-from uuid import UUID
+from unittest.mock import AsyncMock, Mock
+from uuid import UUID, uuid4
 
 import pytest
+import sentry_sdk
 from fastapi import BackgroundTasks
+from sentry_sdk.integrations.logging import LoggingIntegration
+from sentry_sdk.transport import Transport
+from sqlalchemy.exc import NoResultFound, OperationalError
 from src.lib.document_sources.main_text import select_preferred_main_text_artifact
 from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
@@ -26,6 +32,7 @@ from src.lib.document_sources.models import (
     SourceConversionStatus,
 )
 from src.lib.exceptions import PDFCancellationError
+from src.lib.observability import sentry
 from src.lib.pdf_jobs import upload_execution_service as service_module
 from src.lib.pdf_jobs.upload_execution_service import (
     JobAwarePipelineTracker,
@@ -1102,6 +1109,148 @@ async def test_execute_provider_conversion_polls_then_ingests_main_markdown(monk
     assert progress_updates[0]["stage"] == "provider_conversion"
     assert progress_updates[0]["metadata"]["document_source"]["conversion_job_id"] == "abc-job-1"
     assert completed_events == [{"job_id": "job-conversion", "message": "Processing completed"}]
+
+
+@pytest.fixture
+def conversion_selection(monkeypatch):
+    request = replace(
+        _wait_request(), job_id=str(uuid4()), document_id=str(uuid4()), filename="private-paper.pdf",
+    )
+    provider = _Provider()
+    provider.artifacts = [_conversion_markdown("private-markdown", request.source_artifact_id)]
+    service = UploadExecutionService(
+        pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: provider,
+    )
+    session = Mock()
+    monkeypatch.setattr(database_module, "SessionLocal", lambda: session)
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", Mock(return_value=None))
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", Mock(return_value=False))
+    monkeypatch.setattr(service_module.pdf_job_service, "update_progress", Mock())
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", Mock(
+        return_value=SimpleNamespace(status=PdfJobStatus.FAILED.value, message="failed"),
+    ))
+    monkeypatch.setattr(service_module, "update_document_status", AsyncMock())
+    monkeypatch.setattr(service, "_sync_provider_conversion_sql_failure", AsyncMock())
+    monkeypatch.setattr(service, "_execute_provider_markdown_unbounded", AsyncMock())
+    return service, request, session, provider
+
+
+def _selection_result(row):
+    result = Mock()
+    result.scalar_one_or_none.return_value = row
+    if row is None:
+        result.scalar_one.side_effect = NoResultFound()
+    else:
+        result.scalar_one.return_value = row
+    return result
+
+
+@pytest.mark.asyncio
+async def test_conversion_selection_commits_before_dispatch(conversion_selection):
+    service, request, session, provider = conversion_selection
+    main_file = SimpleNamespace()
+    session.execute.side_effect = [
+        _selection_result(SimpleNamespace(status=PdfJobStatus.RUNNING.value)),
+        _selection_result(SimpleNamespace(main_file=main_file)),
+    ]
+
+    async def ingest(markdown_request, *, skip_replay_guard):
+        session.commit.assert_called_once_with()
+        session.close.assert_called_once_with()
+        assert skip_replay_guard is True
+        assert main_file.source_provider_converted_artifact_id == markdown_request.converted_artifact_id
+        assert markdown_request.converted_artifact_id == provider.artifacts[0].artifact_id
+
+    service._execute_provider_markdown_unbounded.side_effect = ingest
+    await service._execute_provider_conversion_unbounded(request)
+
+    service._execute_provider_markdown_unbounded.assert_awaited_once()
+    service_module.pdf_job_service.mark_failed.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["lock", "read", "commit", "reporter", "missing_job", "missing_document"])
+async def test_conversion_selection_failure_aborts_ingestion(conversion_selection, monkeypatch, failure):
+    service, request, session, provider = conversion_selection
+    sql = "SELECT private_selection_column"
+    db_error = OperationalError(sql, (request.document_id, request.filename), Exception("private-db-error"))
+    job = None if failure == "missing_job" else SimpleNamespace(status=PdfJobStatus.RUNNING.value)
+    document = None if failure == "missing_document" else SimpleNamespace(main_file=SimpleNamespace())
+    session.execute.side_effect = [
+        db_error if failure == "lock" else _selection_result(job),
+        db_error if failure == "read" else _selection_result(document),
+    ]
+    if failure in {"commit", "reporter"}:
+        session.commit.side_effect = db_error
+
+    reporter = Mock(wraps=service._report_execution_failure)
+    if failure == "reporter":
+        reporter.side_effect = RuntimeError("private-reporter-error")
+    monkeypatch.setattr(service, "_report_execution_failure", reporter)
+    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "false")
+    events = []
+
+    class MemoryTransport(Transport):
+        def capture_envelope(self, envelope):
+            events.extend(item.get_event() for item in envelope.items if item.headers["type"] == "event")
+
+    with sentry_sdk.Client(
+        dsn="http://public@example.invalid/1", transport=MemoryTransport,
+        before_send=sentry.before_send, include_local_variables=False, default_integrations=False,
+        integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+    ) as client, sentry_sdk.isolation_scope() as scope:
+        scope.set_client(client)
+        await service._execute_provider_conversion_unbounded(request)
+        client.flush()
+
+    service._execute_provider_markdown_unbounded.assert_not_awaited()
+    assert provider.downloads == []
+    if failure in {"commit", "reporter"}:
+        session.commit.assert_called_once_with()
+    else:
+        session.commit.assert_not_called()
+    session.rollback.assert_called_once_with()
+    session.close.assert_called_once_with()
+    reporter.assert_called_once()
+    error, = reporter.call_args.args
+    message = "Provider conversion selection could not be persisted"
+    assert str(error) == message
+    assert error.__context__ is None and error.__cause__ is None
+    service_module.update_document_status.assert_awaited_once_with(request.document_id, request.user_id, "failed")
+    service._sync_provider_conversion_sql_failure.assert_awaited_once_with(request, error)
+    service_module.pdf_job_service.mark_failed.assert_called_once_with(
+        job_id=request.job_id, message=message, stage=ProcessingStage.FAILED.value,
+    )
+    if failure == "reporter":
+        assert events == []
+    else:
+        event, = events
+        assert event["tags"]["failure_stage"] == "provider_conversion"
+        assert [exc["value"] for exc in event["exception"]["values"]] == [message]
+        for private in (sql, request.document_id, request.job_id, request.filename,
+                        request.curator_token, provider.artifacts[0].artifact_id, "private-db-error"):
+            assert private not in repr(event)
+
+
+@pytest.mark.asyncio
+async def test_conversion_selection_cancelled_under_lock_stops_quietly(conversion_selection, monkeypatch):
+    service, request, session, provider = conversion_selection
+    session.execute.return_value = _selection_result(SimpleNamespace(status=PdfJobStatus.CANCELLED.value))
+    reporter = Mock()
+    monkeypatch.setattr(service, "_report_execution_failure", reporter)
+
+    await service._execute_provider_conversion_unbounded(request)
+
+    session.execute.assert_called_once()
+    assert "FOR UPDATE" in str(session.execute.call_args.args[0])
+    session.commit.assert_not_called()
+    session.close.assert_called_once_with()
+    service._execute_provider_markdown_unbounded.assert_not_awaited()
+    assert provider.downloads == []
+    service_module.pdf_job_service.mark_failed.assert_not_called()
+    service_module.update_document_status.assert_not_awaited()
+    service._sync_provider_conversion_sql_failure.assert_not_awaited()
+    reporter.assert_not_called()
 
 
 @pytest.mark.asyncio
