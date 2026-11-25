@@ -68,7 +68,7 @@ export async function runCurationPrep(request: CurationPrepRunRequest): Promise<
   })
 
   if (!response.ok) {
-    const { message, code } = await readCurationApiErrorWithCode(response)
+    const { code } = await readCurationApiErrorWithCode(response)
     if (response.status === 409 && code === RESULT_QUOTES_REMOVED_FILE_ERROR_CODE) {
       throw new CurationWorkspaceRequestError(
         409,
@@ -76,7 +76,11 @@ export async function runCurationPrep(request: CurationPrepRunRequest): Promise<
         RESULT_QUOTES_REMOVED_FILE_ERROR_CODE,
       )
     }
-    throw new Error(message)
+    throw new CurationWorkspaceRequestError(
+      response.status,
+      'Failed to prepare curation scope.',
+      code,
+    )
   }
 
   return response.json() as Promise<CurationPrepRunResponse>

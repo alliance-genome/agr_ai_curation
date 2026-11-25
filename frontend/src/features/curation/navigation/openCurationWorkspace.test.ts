@@ -246,7 +246,8 @@ describe('openCurationWorkspace', () => {
       message: LIBRARY_REMOVE_TEXT.reviewAndCurateAfterRemoval,
     })
 
-    // A plain string detail containing the code text must NOT match by message substring.
+    // Unmapped 409 (plain string mentioning the code) and 500 must NOT match by message text
+    // and must NOT echo raw unstructured server detail verbatim to curators.
     vi.mocked(global.fetch)
       .mockResolvedValueOnce(
         new Response(JSON.stringify(buildSessionListResponse([])), {
@@ -266,9 +267,39 @@ describe('openCurationWorkspace', () => {
         ),
       )
 
+    let unmapped409: unknown = null
+    try {
+      await resolveCurationWorkspaceSessionId({ documentId: 'doc-1' })
+    } catch (error) {
+      unmapped409 = error
+    }
+    expect(unmapped409).toBeInstanceOf(CurationWorkspaceRequestError)
+    expect((unmapped409 as Error).message).toBe('Could not open the curation workspace.')
+    expect((unmapped409 as Error).message).not.toContain('Plain server string')
+    expect((unmapped409 as Error).message).not.toBe(LIBRARY_REMOVE_TEXT.reviewAndCurateAfterRemoval)
+
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(buildSessionListResponse([])), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            detail: 'Raw database traceback detail',
+          }),
+          {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        ),
+      )
+
     await expect(
       resolveCurationWorkspaceSessionId({ documentId: 'doc-1' }),
-    ).rejects.toThrow('Plain server string mentioning result_quotes_removed_file')
+    ).rejects.toThrow('Could not open the curation workspace.')
   })
 
   it('reports launch availability when no session exists yet but bootstrap is possible', async () => {

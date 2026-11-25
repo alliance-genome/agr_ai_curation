@@ -148,15 +148,18 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
     void queryClient.invalidateQueries({ queryKey: paperActiveJobsQueryKey(documentId) });
   }, [documentId, queryClient, refetch]);
 
+  const onRefreshRequestedRef = React.useRef(onRefreshRequested);
+  onRefreshRequestedRef.current = onRefreshRequested;
+
   const handleFilesChanged = React.useCallback(() => {
     if (!documentId) {
       return;
     }
-    void refetch();
-    if (onRefreshRequested) {
-      void onRefreshRequested();
+    void queryClient.invalidateQueries({ queryKey: ['document', documentId] });
+    if (onRefreshRequestedRef.current) {
+      void onRefreshRequestedRef.current();
     }
-  }, [documentId, onRefreshRequested, refetch]);
+  }, [documentId, queryClient]);
 
   const handleReembed = React.useCallback(async () => {
     if (!documentId || !onReembed) {

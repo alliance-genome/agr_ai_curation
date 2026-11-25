@@ -98,6 +98,7 @@ const DocumentsPage: React.FC = () => {
   }>({ open: false, message: '', severity: 'info' });
   const requestControllerRef = useRef<AbortController | null>(null);
   const documentRequestIdRef = useRef(0);
+  const mountedRef = useRef(true);
   const debouncedSearchTerm = useDebouncedDocumentSearchTerm(filters.searchTerm ?? '');
   const { mutateAsync: deleteDocument } = useDeleteDocument();
   const { mutateAsync: reembedDocument } = useReembedDocument();
@@ -121,7 +122,18 @@ const DocumentsPage: React.FC = () => {
     ],
   );
 
+  const latestListQueryRef = useRef({ paginationModel, queryFilters, sortModel });
+  latestListQueryRef.current = { paginationModel, queryFilters, sortModel };
+
   const handleRefresh = React.useCallback(async () => {
+    if (!mountedRef.current) {
+      return;
+    }
+    const {
+      paginationModel: currentPagination,
+      queryFilters: currentFilters,
+      sortModel: currentSort,
+    } = latestListQueryRef.current;
     requestControllerRef.current?.abort();
     const requestController = new AbortController();
     requestControllerRef.current = requestController;
@@ -131,16 +143,16 @@ const DocumentsPage: React.FC = () => {
     try {
       console.log('[DocumentsPage] Refresh start');
       const data = await fetchDocumentList({
-        page: paginationModel.page,
-        pageSize: paginationModel.pageSize,
-        sortBy: sortFieldForApi(sortModel[0]?.field),
-        sortOrder: sortModel[0]?.sort === 'asc' ? 'asc' : 'desc',
-        search: queryFilters.searchTerm,
-        embeddingStatus: queryFilters.embeddingStatus,
-        dateFrom: queryFilters.dateFrom,
-        dateTo: queryFilters.dateTo,
-        minVectorCount: queryFilters.minVectorCount,
-        maxVectorCount: queryFilters.maxVectorCount,
+        page: currentPagination.page,
+        pageSize: currentPagination.pageSize,
+        sortBy: sortFieldForApi(currentSort[0]?.field),
+        sortOrder: currentSort[0]?.sort === 'asc' ? 'asc' : 'desc',
+        search: currentFilters.searchTerm,
+        embeddingStatus: currentFilters.embeddingStatus,
+        dateFrom: currentFilters.dateFrom,
+        dateTo: currentFilters.dateTo,
+        minVectorCount: currentFilters.minVectorCount,
+        maxVectorCount: currentFilters.maxVectorCount,
       }, {
         signal: requestController.signal,
       });
@@ -148,8 +160,8 @@ const DocumentsPage: React.FC = () => {
         return;
       }
       const totalItems = data.total;
-      const lastPage = lastDocumentPage(totalItems, paginationModel.pageSize);
-      if (paginationModel.page > lastPage) {
+      const lastPage = lastDocumentPage(totalItems, currentPagination.pageSize);
+      if (currentPagination.page > lastPage) {
         setPaginationModel((previous) => ({ ...previous, page: lastPage }));
         return;
       }
@@ -171,14 +183,20 @@ const DocumentsPage: React.FC = () => {
         setLoading(false);
       }
     }
-  }, [paginationModel, queryFilters, sortModel]);
+  }, []);
 
   useEffect(() => {
     console.log('[DocumentsPage] Mounted – triggering initial refresh');
     void handleRefresh();
-  }, [handleRefresh]);
+  }, [handleRefresh, paginationModel, queryFilters, sortModel]);
 
-  useEffect(() => () => requestControllerRef.current?.abort(), []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      requestControllerRef.current?.abort();
+    };
+  }, []);
 
   const handleDelete = React.useCallback(async (id: string) => {
     try {

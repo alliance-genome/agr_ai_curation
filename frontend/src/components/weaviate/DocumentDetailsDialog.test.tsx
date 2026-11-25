@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { render, screen, waitFor } from '../../test/test-utils';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { render, screen, waitFor, within } from '../../test/test-utils';
 import DocumentDetailsDialog from './DocumentDetailsDialog';
 import {
   normalizeDocumentDetailResponse,
@@ -358,5 +359,150 @@ describe('DocumentDetailsDialog', () => {
 
     expect(screen.getAllByText('supplements-only-paper').length).toBeGreaterThan(0);
     expect(screen.getByText('File Size').parentElement).toHaveTextContent('—');
+  });
+
+  it('invalidates the removed document without calling refetch on empty documentId and triggers latest onRefreshRequested when closed mid-removal', async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const refetchMock = vi.fn();
+    const staleRefresh = vi.fn();
+    const latestRefresh = vi.fn();
+
+    let resolveDelete!: (response: Response) => void;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url === '/api/pdf-viewer/documents/doc-provider/files' && method === 'GET') {
+        return new Response(
+          JSON.stringify({
+            document_id: 'doc-provider',
+            files: [
+              {
+                file_id: 'file-main',
+                role: 'main',
+                display_name: 'provider.pdf',
+                display_mode: 'local_pdf',
+                status: 'ready',
+                tab_order: 0,
+                page_count: 5,
+                content_url: '/api/pdf-viewer/documents/doc-provider/files/file-main/content',
+                text_url: null,
+              },
+              {
+                file_id: 'file-supp',
+                role: 'supplement',
+                display_name: 'Table_S1.xlsx',
+                display_mode: 'text',
+                status: 'ready',
+                tab_order: 1,
+                page_count: null,
+                content_url: null,
+                text_url: '/api/pdf-viewer/documents/doc-provider/files/file-supp/text',
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url === '/api/weaviate/documents/doc-provider/source-files' && method === 'GET') {
+        return new Response(
+          JSON.stringify({ files: [], not_shown_count: 0, duplicate_copies_count: 0 }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.startsWith('/api/weaviate/pdf-jobs?') && method === 'GET') {
+        return new Response(
+          JSON.stringify({ jobs: [], total: 0, limit: 50, offset: 0 }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url === '/api/weaviate/documents/doc-provider/files/file-supp/removal-check' && method === 'GET') {
+        return new Response(
+          JSON.stringify({
+            document_id: 'doc-provider',
+            file_id: 'file-supp',
+            removable: true,
+            error: null,
+            newest_result_quotes_file: false,
+            has_review_session: false,
+            review_and_curate_would_refuse: false,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url === '/api/weaviate/documents/doc-provider/files/file-supp' && method === 'DELETE') {
+        return new Promise<Response>((resolve) => {
+          resolveDelete = resolve;
+        });
+      }
+      throw new Error(`Unexpected fetch: ${method} ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    useDocumentMock.mockReturnValue({
+      data: providerDocument,
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      refetch: refetchMock,
+    });
+
+    try {
+      const view = render(
+        <QueryClientProvider client={queryClient}>
+          <DocumentDetailsDialog
+            open
+            documentId="doc-provider"
+            onClose={vi.fn()}
+            onRefreshRequested={staleRefresh}
+          />
+        </QueryClientProvider>,
+      );
+
+      const removeButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' });
+      await waitFor(() => expect(removeButton).toBeEnabled());
+      await user.click(removeButton);
+
+      const confirmDialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' });
+      await user.click(within(confirmDialog).getByRole('button', { name: 'Remove file' }));
+
+      // Close the details dialog (documentId becomes null) and swap onRefreshRequested while DELETE is in flight.
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <DocumentDetailsDialog
+            open={false}
+            documentId={null}
+            onClose={vi.fn()}
+            onRefreshRequested={latestRefresh}
+          />
+        </QueryClientProvider>,
+      );
+
+      resolveDelete(
+        new Response(
+          JSON.stringify({
+            document_id: 'doc-provider',
+            file_id: 'file-supp',
+            removed: true,
+            cleanup_finished: true,
+            ready_file_count: 1,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+
+      await waitFor(() => {
+        expect(latestRefresh).toHaveBeenCalledTimes(1);
+      });
+      expect(staleRefresh).not.toHaveBeenCalled();
+      expect(refetchMock).not.toHaveBeenCalled();
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['document', 'doc-provider'] });
+      expect(
+        fetchMock.mock.calls.some(([url]) => String(url) === '/api/weaviate/documents/'),
+      ).toBe(false);
+    } finally {
+      invalidateSpy.mockRestore();
+    }
   });
 });

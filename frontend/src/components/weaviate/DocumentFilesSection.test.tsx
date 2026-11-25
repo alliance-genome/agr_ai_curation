@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -2936,10 +2936,12 @@ describe('DocumentFilesSection (Library Remove)', () => {
     expect(deleteAttempts).toBe(3)
     busyView.unmount()
 
-    // 3) DELETE 404 file_not_in_paper -> shows N44 refusal AND refreshes files/source/parent because file is already gone!
+    // 3) DELETE 404 file_not_in_paper -> shows N44 refusal AND refreshes files/source/parent/viewer because file is already gone!
     let filesCallsFor404 = 0
     let listingCallsFor404 = 0
     const onFilesChangedFor404 = vi.fn()
+    const viewerEventsFor404: PDFViewerDocumentChangedDetail[] = []
+    const unsubscribeViewerFor404 = onPDFDocumentChanged((event) => viewerEventsFor404.push(event.detail))
     stubApi({
       paperFiles: () => {
         filesCallsFor404 += 1
@@ -2957,20 +2959,33 @@ describe('DocumentFilesSection (Library Remove)', () => {
       providerShortLabel: PROVIDER_SHORT,
       onFilesChanged: onFilesChangedFor404,
     })
-    const missingRemove = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
-    await waitFor(() => expect(missingRemove).toBeEnabled())
-    await user.click(missingRemove)
-    const missingDialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
-    await user.click(within(missingDialog).getByRole('button', { name: 'Remove file' }))
+    try {
+      const missingRemove = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+      await waitFor(() => expect(missingRemove).toBeEnabled())
+      await user.click(missingRemove)
+      const missingDialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+      await user.click(within(missingDialog).getByRole('button', { name: 'Remove file' }))
 
-    expect(await within(missingDialog).findByText('This file is no longer in the paper.')).toBeInTheDocument()
-    expect(within(missingDialog).getByRole('button', { name: 'Close' })).toBeInTheDocument()
-    await waitFor(() => {
-      expect(filesCallsFor404).toBe(2)
-      expect(listingCallsFor404).toBe(2)
-      expect(onFilesChangedFor404).toHaveBeenCalledTimes(1)
-    })
-    missingView.unmount()
+      expect(await within(missingDialog).findByText('This file is no longer in the paper.')).toBeInTheDocument()
+      expect(within(missingDialog).getByRole('button', { name: 'Close' })).toBeInTheDocument()
+      await waitFor(() => {
+        expect(filesCallsFor404).toBe(2)
+        expect(listingCallsFor404).toBe(2)
+        expect(onFilesChangedFor404).toHaveBeenCalledTimes(1)
+        expect(viewerEventsFor404).toHaveLength(1)
+      })
+      expect(viewerEventsFor404[0]).toMatchObject({
+        documentId: DOCUMENT_ID,
+        refreshOnlyIfOpen: true,
+      })
+      expect(viewerEventsFor404[0]!.files.map((file) => file.file_id)).toEqual([
+        MAIN_FILE_ID,
+        PDF_SUPPLEMENT_FILE_ID,
+      ])
+    } finally {
+      unsubscribeViewerFor404()
+      missingView.unmount()
+    }
 
     // 4) DELETE unknown structured code -> N29 fallback without leaking code.
     stubApi({
@@ -2988,6 +3003,513 @@ describe('DocumentFilesSection (Library Remove)', () => {
       await within(unknownDialog).findByText('This screen cannot describe this file yet.'),
     ).toBeInTheDocument()
     expect(unknownDialog.textContent).not.toContain('brand_new_server_refusal')
+  })
+
+  it('shows Remove on failed supplements with a ready main file and on 2-supplement papers (hiding Remove when 1 remains)', async () => {
+    const user = userEvent.setup()
+
+    // 1 ready main + 1 failed supplement -> failed supplement gets Remove; main does not.
+    stubApi({
+      paperFiles: {
+        document_id: DOCUMENT_ID,
+        files: [
+          FOUR_FILES_PAYLOAD.files[0]!,
+          {
+            file_id: 'aaaaaaaa-0000-0000-0000-000000000005',
+            role: 'supplement',
+            display_name: 'Table_S4.xlsx',
+            display_mode: 'text',
+            status: 'failed',
+            tab_order: 1,
+            page_count: null,
+            content_url: null,
+            text_url: null,
+          },
+        ],
+      },
+    })
+    const failedSuppView = renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+    await screen.findByRole('list', { name: 'Files in this paper' })
+    expect(screen.queryByRole('button', { name: 'Remove made-up-paper.pdf' })).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Remove Table_S4.xlsx' })).toBeEnabled()
+    })
+    failedSuppView.unmount()
+
+    // 2 ready supplements (supplements-only paper) -> both show Remove; removing one hides Remove on the remaining sole file.
+    let paperFilesCalls = 0
+    const twoSupplements: ViewerFilesPayload = {
+      document_id: DOCUMENT_ID,
+      files: [FOUR_FILES_PAYLOAD.files[1]!, FOUR_FILES_PAYLOAD.files[2]!],
+    }
+    const oneRemainingSupplement: ViewerFilesPayload = {
+      document_id: DOCUMENT_ID,
+      files: [FOUR_FILES_PAYLOAD.files[2]!],
+    }
+    stubApi({
+      paperFiles: () => {
+        paperFilesCalls += 1
+        return jsonResponse(paperFilesCalls === 1 ? twoSupplements : oneRemainingSupplement)
+      },
+      onRemovalCheck: () => jsonResponse(removalCheckFor('removable_plain')),
+      onRemoveFile: (fileId) =>
+        jsonResponse({
+          document_id: DOCUMENT_ID,
+          file_id: fileId,
+          removed: true,
+          cleanup_finished: true,
+          ready_file_count: 1,
+        }),
+    })
+
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+    const removeFirst = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => {
+      expect(removeFirst).toBeEnabled()
+      expect(screen.getByRole('button', { name: 'Remove Figure_S2.pdf' })).toBeEnabled()
+    })
+    await user.click(removeFirst)
+    const dialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    await user.click(within(dialog).getByRole('button', { name: 'Remove file' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(screen.queryByText('Table_S1.xlsx')).not.toBeInTheDocument()
+    })
+    expect(screen.getByText('Figure_S2.pdf')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Remove/ })).not.toBeInTheDocument()
+  })
+
+  it('never deadlocks Remove when providerLabel updates or when reopening over warm cached activeJobsQuery', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: PAPER_SOURCE_FILES_STALE_MS } },
+    })
+    stubApi()
+
+    const view = renderSection(
+      { providerLabel: 'ABC', providerShortLabel: 'ABC' },
+      client,
+    )
+    const removeButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(removeButton).toBeEnabled())
+
+    // Updating providerLabel while mounted must NOT deadlock Remove or reset busy state.
+    view.rerender(
+      <QueryClientProvider client={client}>
+        <DocumentFilesSection
+          documentId={DOCUMENT_ID}
+          providerLabel={PROVIDER}
+          providerShortLabel={PROVIDER_SHORT}
+          processingStatus="completed"
+          open
+          pollIntervalMs={20}
+        />
+      </QueryClientProvider>,
+    )
+    expect(screen.getByRole('button', { name: 'Remove Table_S1.xlsx' })).toBeEnabled()
+
+    // Closing and reopening over a warm (non-refetching) activeJobsQuery cache must NOT deadlock Remove.
+    view.rerender(
+      <QueryClientProvider client={client}>
+        <DocumentFilesSection
+          documentId={DOCUMENT_ID}
+          providerLabel={PROVIDER}
+          providerShortLabel={PROVIDER_SHORT}
+          processingStatus="completed"
+          open={false}
+          pollIntervalMs={20}
+        />
+      </QueryClientProvider>,
+    )
+    view.rerender(
+      <QueryClientProvider client={client}>
+        <DocumentFilesSection
+          documentId={DOCUMENT_ID}
+          providerLabel={PROVIDER}
+          providerShortLabel={PROVIDER_SHORT}
+          processingStatus="completed"
+          open
+          pollIntervalMs={20}
+        />
+      </QueryClientProvider>,
+    )
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Remove Table_S1.xlsx' })).toBeEnabled()
+    })
+  })
+
+  it('completes an already-issued DELETE and 3-surface refresh after unmount/paper switch while still aborting pre-checks on paper switch', async () => {
+    const user = userEvent.setup()
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const onFilesChanged = vi.fn()
+    const viewerEvents: PDFViewerDocumentChangedDetail[] = []
+    const unsubscribeViewer = onPDFDocumentChanged((event) => viewerEvents.push(event.detail))
+    const invalidateSpy = vi.spyOn(client, 'invalidateQueries')
+
+    const OTHER_DOC_ID = '33333333-3333-3333-3333-333333333333'
+    let precheckSignal: AbortSignal | null | undefined
+    let deleteSignal: AbortSignal | null | undefined
+    let resolveDelete!: (response: Response) => void
+    let paperFilesCalls = 0
+
+    // 1) Pre-check IS aborted on paper switch.
+    stubApi({
+      paperFiles: (url) => {
+        if (url.includes(OTHER_DOC_ID)) {
+          return jsonResponse({ ...FOUR_FILES_PAYLOAD, document_id: OTHER_DOC_ID })
+        }
+        return jsonResponse(FOUR_FILES_PAYLOAD)
+      },
+      onRemovalCheck: (_fileId, init) => {
+        precheckSignal = init?.signal
+        return new Promise<Response>(() => undefined)
+      },
+    })
+
+    const precheckView = renderSection(
+      { providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT },
+      client,
+    )
+    const precheckRemove = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(precheckRemove).toBeEnabled())
+    await user.click(precheckRemove)
+    expect(precheckSignal?.aborted).toBe(false)
+
+    precheckView.rerender(
+      <QueryClientProvider client={client}>
+        <DocumentFilesSection
+          documentId={OTHER_DOC_ID}
+          providerLabel={PROVIDER}
+          providerShortLabel={PROVIDER_SHORT}
+          processingStatus="completed"
+          open
+          pollIntervalMs={20}
+        />
+      </QueryClientProvider>,
+    )
+    expect(precheckSignal?.aborted).toBe(true)
+    precheckView.unmount()
+
+    // 2) Already-issued DELETE is NOT aborted on unmount and completes 3-surface refresh for the original document.
+    const deleteClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const deleteInvalidateSpy = vi.spyOn(deleteClient, 'invalidateQueries')
+    stubApi({
+      paperFiles: () => {
+        paperFilesCalls += 1
+        return jsonResponse(paperFilesCalls === 1 ? FOUR_FILES_PAYLOAD : THREE_FILES_AFTER_REMOVAL)
+      },
+      onRemovalCheck: () => jsonResponse(removalCheckFor('removable_plain')),
+      onRemoveFile: (_fileId, init) => {
+        deleteSignal = init?.signal
+        return new Promise<Response>((resolve) => {
+          resolveDelete = resolve
+        })
+      },
+    })
+
+    try {
+      const deleteView = renderSection(
+        {
+          providerLabel: PROVIDER,
+          providerShortLabel: PROVIDER_SHORT,
+          onFilesChanged,
+        },
+        deleteClient,
+      )
+      const deleteRemove = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+      await waitFor(() => expect(deleteRemove).toBeEnabled())
+      await user.click(deleteRemove)
+      const dialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+      await user.click(within(dialog).getByRole('button', { name: 'Remove file' }))
+
+      // Unmount while DELETE is in flight -> signal must NOT be attached/aborted!
+      deleteView.unmount()
+      expect(deleteSignal).toBeUndefined()
+
+      resolveDelete(
+        jsonResponse({
+          document_id: DOCUMENT_ID,
+          file_id: TEXT_SUPPLEMENT_FILE_ID,
+          removed: true,
+          cleanup_finished: true,
+          ready_file_count: 2,
+        }),
+      )
+
+      await waitFor(() => {
+        expect(paperFilesCalls).toBe(2)
+        expect(onFilesChanged).toHaveBeenCalledTimes(1)
+        expect(viewerEvents).toHaveLength(1)
+      })
+      expect(viewerEvents[0]).toMatchObject({ documentId: DOCUMENT_ID, refreshOnlyIfOpen: true })
+      expect(deleteClient.getQueryData<ViewerFilesPayload>(paperFilesQueryKey(DOCUMENT_ID))?.files).toHaveLength(3)
+      expect(deleteInvalidateSpy).toHaveBeenCalledWith({ queryKey: ['documents'] })
+      expect(deleteInvalidateSpy).toHaveBeenCalledWith({ queryKey: ['document', DOCUMENT_ID] })
+    } finally {
+      unsubscribeViewer()
+      invalidateSpy.mockRestore()
+      deleteInvalidateSpy.mockRestore()
+    }
+  })
+
+  it('cancels a slow in-flight /source-files fetch before invalidating so stale pre-removal listings cannot mask the removed supplement', async () => {
+    const user = userEvent.setup()
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    let listingCalls = 0
+    let firstListingSignal: AbortSignal | null | undefined
+    let resolveSlowListing!: (response: Response) => void
+    let paperFilesCalls = 0
+
+    const stalePreRemovalListing = listingWith([
+      fileListingFixture.files[0],
+      { ...fileListingFixture.files[1], in_this_paper: true, tickable: false, not_tickable_reason: 'already_in_paper' },
+    ])
+    const freshPostRemovalListing = listingWith([
+      fileListingFixture.files[0],
+      fileListingFixture.files[1],
+    ])
+
+    stubApi({
+      paperFiles: () => {
+        paperFilesCalls += 1
+        return jsonResponse(paperFilesCalls === 1 ? FOUR_FILES_PAYLOAD : THREE_FILES_AFTER_REMOVAL)
+      },
+      listing: (_url) => {
+        listingCalls += 1
+        if (listingCalls === 1) {
+          return new Promise<Response>((resolve) => {
+            resolveSlowListing = resolve
+          })
+        }
+        return jsonResponse(freshPostRemovalListing)
+      },
+      onRemovalCheck: () => jsonResponse(removalCheckFor('removable_plain')),
+      onRemoveFile: (fileId) =>
+        jsonResponse({
+          document_id: DOCUMENT_ID,
+          file_id: fileId,
+          removed: true,
+          cleanup_finished: true,
+          ready_file_count: 2,
+        }),
+    })
+
+    // Wrap fetch to capture the first /source-files AbortSignal cleanly.
+    const baseFetch = global.fetch
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === SOURCE_FILES_URL && !firstListingSignal) {
+        firstListingSignal = init?.signal
+      }
+      return baseFetch(input, init)
+    }))
+
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT }, client)
+
+    const removeButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(removeButton).toBeEnabled())
+    await user.click(removeButton)
+    const dialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    await user.click(within(dialog).getByRole('button', { name: 'Remove file' }))
+
+    await waitFor(() => expect(listingCalls).toBe(2))
+    expect(firstListingSignal?.aborted).toBe(true)
+    expect(await screen.findByRole('checkbox', { name: 'Made_up_S20' })).toBeInTheDocument()
+
+    // Late resolution of the cancelled slow listing must NOT overwrite the fresh post-removal listing.
+    resolveSlowListing(jsonResponse(stalePreRemovalListing))
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(screen.getByRole('checkbox', { name: 'Made_up_S20' })).toBeInTheDocument()
+  })
+
+  it('publishes refreshOnlyIfOpen viewer refresh on recovery refetch when the first post-removal /files GET fails with 503', async () => {
+    const user = userEvent.setup()
+    const viewerEvents: PDFViewerDocumentChangedDetail[] = []
+    const unsubscribeViewer = onPDFDocumentChanged((event) => viewerEvents.push(event.detail))
+    let paperFilesCalls = 0
+
+    stubApi({
+      paperFiles: () => {
+        paperFilesCalls += 1
+        if (paperFilesCalls === 1) {
+          return jsonResponse(FOUR_FILES_PAYLOAD)
+        }
+        // Both direct post-removal fetch (call 2) and immediate invalidation refetch (call 3) fail with 503;
+        // manual Try again (call 4) recovers with the post-removal payload.
+        if (paperFilesCalls <= 3) {
+          return jsonResponse({ detail: 'Temporarily unavailable' }, 503)
+        }
+        return jsonResponse(THREE_FILES_AFTER_REMOVAL)
+      },
+      onRemovalCheck: () => jsonResponse(removalCheckFor('removable_plain')),
+      onRemoveFile: (fileId) =>
+        jsonResponse({
+          document_id: DOCUMENT_ID,
+          file_id: fileId,
+          removed: true,
+          cleanup_finished: true,
+          ready_file_count: 2,
+        }),
+    })
+
+    try {
+      renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+
+      const removeButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+      await waitFor(() => expect(removeButton).toBeEnabled())
+      await user.click(removeButton)
+      const dialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+      await user.click(within(dialog).getByRole('button', { name: 'Remove file' }))
+
+      expect(await screen.findByText("Could not load this paper's files.")).toBeInTheDocument()
+      expect(viewerEvents).toHaveLength(0)
+
+      await user.click(await screen.findByRole('button', { name: 'Try again' }))
+
+      await waitFor(() => {
+        expect(paperFilesCalls).toBe(4)
+        expect(viewerEvents).toHaveLength(1)
+      })
+      expect(viewerEvents[0]).toMatchObject({
+        documentId: DOCUMENT_ID,
+        refreshOnlyIfOpen: true,
+      })
+      expect(viewerEvents[0]!.files.map((file) => file.file_id)).toEqual([
+        MAIN_FILE_ID,
+        PDF_SUPPLEMENT_FILE_ID,
+      ])
+    } finally {
+      unsubscribeViewer()
+    }
+  })
+
+  it('keeps Remove disabled while activeJobsQuery is paused on cached empty results (provider and non-provider) and rechecks running jobs on non-provider papers', async () => {
+    // 1) Provider paper: paused refetch on cached empty results keeps Remove disabled until online & idle.
+    const providerClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    stubApi()
+
+    try {
+      const providerView = renderSection(
+        { providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT },
+        providerClient,
+      )
+      const providerRemove = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+      await waitFor(() => expect(providerRemove).toBeEnabled())
+
+      onlineManager.setOnline(false)
+      void providerClient.invalidateQueries({ queryKey: paperActiveJobsQueryKey(DOCUMENT_ID) })
+
+      await waitFor(() => expect(providerRemove).toBeDisabled())
+
+      onlineManager.setOnline(true)
+      await waitFor(() => expect(providerRemove).toBeEnabled())
+      providerView.unmount()
+
+      // 2) Non-provider paper: paused refetch keeps Remove disabled, and an active job rechecks automatically until clear.
+      const nonProviderClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      let nonProviderJobCalls = 0
+      stubApi({
+        activeJobs: () => {
+          nonProviderJobCalls += 1
+          if (nonProviderJobCalls === 1) {
+            return jsonResponse({
+              jobs: [makeJob({ job_id: 'job-uploaded-running', status: 'running', metadata: {} })],
+              total: 1,
+              limit: 50,
+              offset: 0,
+            })
+          }
+          return jsonResponse({ jobs: [], total: 0, limit: 50, offset: 0 })
+        },
+      })
+
+      renderSection({ providerLabel: null, pollIntervalMs: 25 }, nonProviderClient)
+      const nonProviderRemove = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+      expect(
+        await screen.findByText("This paper's import is still running. You can add or remove files when it has finished."),
+      ).toBeInTheDocument()
+      expect(nonProviderRemove).toBeDisabled()
+
+      // Automatically rechecks and enables Remove once the running job finishes.
+      await waitFor(() => {
+        expect(nonProviderJobCalls).toBeGreaterThanOrEqual(2)
+        expect(nonProviderRemove).toBeEnabled()
+      })
+
+      // Pausing refetch on the non-provider paper also disables Remove until online & idle.
+      onlineManager.setOnline(false)
+      void nonProviderClient.invalidateQueries({ queryKey: paperActiveJobsQueryKey(DOCUMENT_ID) })
+      await waitFor(() => expect(nonProviderRemove).toBeDisabled())
+
+      onlineManager.setOnline(true)
+      await waitFor(() => expect(nonProviderRemove).toBeEnabled())
+    } finally {
+      onlineManager.setOnline(true)
+    }
+  })
+
+  it('disables FileRemovalDialog action buttons when baseRemovalBlocked becomes true while the dialog is open', async () => {
+    const user = userEvent.setup()
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+
+    // 1) Confirmation phase: "Remove file" disables when processingStatus becomes non-completed.
+    stubApi({
+      onRemovalCheck: () => jsonResponse(removalCheckFor('removable_plain')),
+    })
+    const confirmView = renderSection(
+      { providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT, processingStatus: 'completed' },
+      client,
+    )
+    const removeButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(removeButton).toBeEnabled())
+    await user.click(removeButton)
+
+    const confirmDialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    expect(within(confirmDialog).getByRole('button', { name: 'Remove file' })).toBeEnabled()
+
+    confirmView.rerender(
+      <QueryClientProvider client={client}>
+        <DocumentFilesSection
+          documentId={DOCUMENT_ID}
+          providerLabel={PROVIDER}
+          providerShortLabel={PROVIDER_SHORT}
+          processingStatus="processing"
+          open
+          pollIntervalMs={20}
+        />
+      </QueryClientProvider>,
+    )
+    expect(within(confirmDialog).getByRole('button', { name: 'Remove file' })).toBeDisabled()
+    confirmView.unmount()
+
+    // 2) Pre-check error phase: "Try again" disables when processingStatus becomes non-completed.
+    const retryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    stubApi({
+      onRemovalCheck: () => jsonResponse({ detail: 'Temporary error' }, 503),
+    })
+    const errorView = renderSection(
+      { providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT, processingStatus: 'completed' },
+      retryClient,
+    )
+    const retryRemove = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(retryRemove).toBeEnabled())
+    await user.click(retryRemove)
+
+    const errorDialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    expect(await within(errorDialog).findByRole('button', { name: 'Try again' })).toBeEnabled()
+
+    errorView.rerender(
+      <QueryClientProvider client={retryClient}>
+        <DocumentFilesSection
+          documentId={DOCUMENT_ID}
+          providerLabel={PROVIDER}
+          providerShortLabel={PROVIDER_SHORT}
+          processingStatus="processing"
+          open
+          pollIntervalMs={20}
+        />
+      </QueryClientProvider>,
+    )
+    expect(within(errorDialog).getByRole('button', { name: 'Try again' })).toBeDisabled()
   })
 })
 

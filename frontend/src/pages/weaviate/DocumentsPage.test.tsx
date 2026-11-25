@@ -34,6 +34,8 @@ interface MockInlineFilterBarProps {
   onClear: () => void;
 }
 
+let capturedDocumentListRefresh: (() => void) | undefined;
+
 vi.mock('../../components/weaviate/DocumentList', () => ({
   default: ({
     documents,
@@ -48,7 +50,9 @@ vi.mock('../../components/weaviate/DocumentList', () => ({
     onDelete,
     onReembed,
     onMetadataUpdate,
-  }: MockDocumentListProps) => (
+  }: MockDocumentListProps) => {
+    capturedDocumentListRefresh = onRefresh;
+    return (
     <section
       data-testid="document-list"
       data-loading={String(loading)}
@@ -95,7 +99,8 @@ vi.mock('../../components/weaviate/DocumentList', () => ({
         Rename first document
       </button>
     </section>
-  ),
+    );
+  },
 }));
 
 vi.mock('../../components/weaviate/InlineFilterBar', () => ({
@@ -437,5 +442,29 @@ describe('DocumentsPage request ownership', () => {
     expect(fetchUrl(1)).toContain('page=3&page_size=50');
     expect(fetchUrl(2)).toContain('page=2&page_size=50');
     expect(screen.getByTestId('document-list')).toHaveAttribute('data-page', '1');
+  });
+
+  it('reloads the current active page when a delayed refresh callback captured on an earlier page fires after page navigation', async () => {
+    vi.mocked(global.fetch).mockImplementation(async () => documentListResponse('page-doc', 200));
+
+    render(<DocumentsPage />);
+    await screen.findByText('page-doc.pdf');
+    expect(fetchUrl(0)).toContain('page=1&page_size=20');
+
+    // Capture the onRefresh callback while still on page 1 (as an open details dialog would).
+    const refreshCapturedOnPageOne = capturedDocumentListRefresh;
+    expect(refreshCapturedOnPageOne).toBeDefined();
+
+    // Navigate Library to page 3 (page=3, page_size=50).
+    fireEvent.click(screen.getByRole('button', { name: 'Show page three' }));
+    await waitFor(() => expect(vi.mocked(global.fetch)).toHaveBeenCalledTimes(2));
+    expect(fetchUrl(1)).toContain('page=3&page_size=50');
+
+    // Now invoke the delayed callback captured on page 1 -> must reload page 3, NOT stale page 1!
+    await act(async () => {
+      refreshCapturedOnPageOne?.();
+    });
+    await waitFor(() => expect(vi.mocked(global.fetch)).toHaveBeenCalledTimes(3));
+    expect(fetchUrl(2)).toContain('page=3&page_size=50');
   });
 });

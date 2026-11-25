@@ -182,6 +182,13 @@ async function bootstrapCurationSession(
         RESULT_QUOTES_REMOVED_FILE_ERROR_CODE,
       )
     }
+    if (response.status === 409 || response.status >= 500 || code !== null) {
+      throw new CurationWorkspaceRequestError(
+        response.status,
+        'Could not open the curation workspace.',
+        code,
+      )
+    }
     throw new Error(message)
   }
 

@@ -38,7 +38,7 @@ describe('curationPrepService', () => {
     })
   })
 
-  it('does not match result_quotes_removed_file from unstructured detail strings or non-409 statuses', async () => {
+  it('does not match result_quotes_removed_file from unstructured detail strings or non-409 statuses and hides raw server detail', async () => {
     vi.mocked(global.fetch)
       .mockResolvedValueOnce(
         new Response(
@@ -63,12 +63,25 @@ describe('curationPrepService', () => {
         ),
       )
 
-    await expect(
-      runCurationPrep({ session_id: 'chat-session-1', adapter_keys: ['disease'] }),
-    ).rejects.toThrow('Plain message with result_quotes_removed_file')
+    let unmapped409: unknown = null
+    try {
+      await runCurationPrep({ session_id: 'chat-session-1', adapter_keys: ['disease'] })
+    } catch (error) {
+      unmapped409 = error
+    }
+    expect(unmapped409).toBeInstanceOf(CurationWorkspaceRequestError)
+    expect((unmapped409 as Error).message).toBe('Failed to prepare curation scope.')
+    expect((unmapped409 as Error).message).not.toContain('Plain message')
+    expect((unmapped409 as Error).message).not.toBe(LIBRARY_REMOVE_TEXT.reviewAndCurateAfterRemoval)
 
-    await expect(
-      runCurationPrep({ session_id: 'chat-session-1', adapter_keys: ['disease'] }),
-    ).rejects.toThrow('Request failed')
+    let non409Error: unknown = null
+    try {
+      await runCurationPrep({ session_id: 'chat-session-1', adapter_keys: ['disease'] })
+    } catch (error) {
+      non409Error = error
+    }
+    expect(non409Error).toBeInstanceOf(CurationWorkspaceRequestError)
+    expect((non409Error as Error).message).toBe('Failed to prepare curation scope.')
+    expect((non409Error as Error).message).not.toContain('result_quotes_removed_file')
   })
 })
