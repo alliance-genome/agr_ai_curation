@@ -102,7 +102,7 @@ describe('SupplementFilesList', () => {
     render(<SupplementFilesList progress={progress} providerShortLabel="ABC" />)
 
     const rows = within(screen.getByRole('list', { name: 'Supplement files' })).getAllByRole('listitem')
-    expect(rows).toHaveLength(10)
+    expect(rows).toHaveLength(9)
     expect(rows[0]).toHaveTextContent('Queued_S1.xlsx')
     expect(rows[0]).toHaveTextContent('Waiting to be added')
     expect(rows[1]).toHaveTextContent('Waiting_S2.docx')
@@ -116,7 +116,18 @@ describe('SupplementFilesList', () => {
     expect(rows[6]).toHaveTextContent('ABC has not converted this file.')
     expect(rows[7]).toHaveTextContent('ABC tried and could not convert this file.')
     expect(rows[8]).toHaveTextContent('ABC had not converted this file when the import stopped waiting.')
-    expect(rows[9]).toHaveTextContent(
+  })
+
+  it('renders paper_busy_when_ready outcomes captured from record_supplement_outcomes_on_finished_job', () => {
+    render(
+      <SupplementFilesList
+        metadata={supplementWaitMetadataFixture.paper_busy_when_ready}
+        providerShortLabel="ABC"
+      />,
+    )
+
+    const row = within(screen.getByRole('list', { name: 'Supplement files' })).getByRole('listitem')
+    expect(row).toHaveTextContent(
       'Not added: the paper was being changed when its main paper became ready.',
     )
   })

@@ -44,8 +44,19 @@ describe('supplementProgress parser (interface I1)', () => {
     expect(isPostMainSupplementPhase(mixed!)).toBe(true)
 
     const allWait = parseSupplementJobProgress(supplementWaitMetadataFixture.all_states_and_outcomes)
-    expect(allWait?.supplements).toHaveLength(10)
+    expect(allWait?.supplements).toHaveLength(9)
     expect(allWait?.supplements.every((entry) => entry.recognized)).toBe(true)
+
+    const paperBusy = parseSupplementJobProgress(supplementWaitMetadataFixture.paper_busy_when_ready)
+    expect(paperBusy?.job_kind).toBeNull()
+    expect(paperBusy?.supplement_wait_ends_at).toBeNull()
+    expect(paperBusy?.supplements).toHaveLength(1)
+    expect(paperBusy?.supplements[0]).toMatchObject({
+      recognized: true,
+      provider_file_id: '90',
+      state: 'left_out',
+      reason_code: 'paper_busy_when_ready',
+    })
 
     const addProgress = parseSupplementJobProgress(supplementAddMetadataFixture)
     expect(addProgress?.job_kind).toBe('supplement_add')

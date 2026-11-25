@@ -14,6 +14,7 @@ import {
   SUPPLEMENT_OUTCOME_REASON_CODES,
   SUPPLEMENT_STATES,
 } from '@/features/documents/supplementProgress'
+import { normalizeDocumentSourceProvenance } from '@/services/weaviate'
 
 import {
   ADD_LITERATURE_TEXT,
@@ -416,7 +417,7 @@ describe('approved supplement screen texts (N1–N29, N33–N44, N46–N47, Card
     expect(addFilesRefusalText('paper_file_limit', { limitValue: null })).toBe(UNRECOGNIZED_FILE_TEXT)
     expect(addFilesRefusalText('paper_file_limit', { limitValue: 0 })).toBe(UNRECOGNIZED_FILE_TEXT)
 
-    // 409 vs 503 disambiguation with a non-ABC provider label, and N29 when provider is missing
+    // 409 vs 503 disambiguation with a non-ABC provider label, and strict N29 when status or provider is missing/other
     expect(
       addFilesRefusalText('document_source_curator_token_unavailable', {
         httpStatus: 409,
@@ -429,6 +430,17 @@ describe('approved supplement screen texts (N1–N29, N33–N44, N46–N47, Card
         provider: 'Genome Archive',
       }),
     ).toBe('This server cannot reach Genome Archive just now, so this paper\'s files there cannot be listed.')
+    expect(
+      addFilesRefusalText('document_source_curator_token_unavailable', {
+        provider: 'Genome Archive',
+      }),
+    ).toBe(UNRECOGNIZED_FILE_TEXT)
+    expect(
+      addFilesRefusalText('document_source_curator_token_unavailable', {
+        httpStatus: 502,
+        provider: 'Genome Archive',
+      }),
+    ).toBe(UNRECOGNIZED_FILE_TEXT)
     expect(addFilesRefusalText('document_source_curator_token_unavailable', { httpStatus: 409 })).toBe(
       UNRECOGNIZED_FILE_TEXT,
     )
@@ -519,6 +531,31 @@ describe('approved supplement screen texts (N1–N29, N33–N44, N46–N47, Card
       }),
     ).toBe('Genome Archive')
     expect(resolveSupplementProviderShortLabel(null)).toBeNull()
+
+    // End-to-end Alliance provider presentation wire shape -> exact approved wording
+    const provenance = normalizeDocumentSourceProvenance({
+      provider: 'abc_literature',
+      provider_metadata: {
+        display_label: 'ABC Literature',
+        short_label: 'ABC',
+      },
+    })
+    const shortLabel = resolveSupplementProviderShortLabel(provenance)
+    expect(shortLabel).toBe('ABC')
+    expect(supplementStateText('waiting', { providerShortLabel: shortLabel })).toBe('Waiting for ABC')
+    expect(supplementWaitEndsText('3:30 PM', shortLabel)).toBe('ABC has until 3:30 PM to convert them.')
+    expect(supplementOutcomeReasonText('provider_answer_unknown', { providerShortLabel: shortLabel })).toBe(
+      'Not added: ABC\'s answer about this file could not be read.',
+    )
+    expect(supplementOutcomeReasonText('file_not_in_reference', { providerShortLabel: shortLabel })).toBe(
+      'Not added: ABC no longer lists this file for the paper.',
+    )
+    expect(supplementOutcomeReasonText('pdf_access_denied', { providerShortLabel: shortLabel })).toBe(
+      'You can read this file\'s text in ABC but not its PDF, so it was not added.',
+    )
+    expect(supplementOutcomeReasonText('not_converted_in_time', { providerShortLabel: shortLabel })).toBe(
+      'ABC had not converted this file when the import stopped waiting.',
+    )
   })
 
   it('matches Library Files column N46–N47 and Card 38 Try again', () => {

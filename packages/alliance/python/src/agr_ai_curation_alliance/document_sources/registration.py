@@ -102,6 +102,7 @@ def get_document_source_provider_registrations(
             development_reader_resolver=resolve_development_reader,
             presentation=DocumentSourceProviderPresentation(
                 display_label="ABC Literature",
+                short_label="ABC",
                 identifier_help_label=(
                     "PMID, PubMed ID, AGRKB, or ABC identifiers; comma or newline "
                     "separated."

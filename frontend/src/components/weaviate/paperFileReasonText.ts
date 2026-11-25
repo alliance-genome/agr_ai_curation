@@ -492,11 +492,13 @@ export function addFilesRefusalText(
       if (!provider) {
         return UNRECOGNIZED_FILE_TEXT
       }
-      return listingRefusalText(
-        'document_source_curator_token_unavailable',
-        options?.httpStatus ?? 409,
-        provider,
-      )
+      if (options?.httpStatus === 409) {
+        return listingRefusalText('document_source_curator_token_unavailable', 409, provider)
+      }
+      if (options?.httpStatus === 503) {
+        return listingRefusalText('document_source_curator_token_unavailable', 503, provider)
+      }
+      return UNRECOGNIZED_FILE_TEXT
     }
     case 'document_source_import_disabled':
       return null

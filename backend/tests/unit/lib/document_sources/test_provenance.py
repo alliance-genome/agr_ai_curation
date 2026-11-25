@@ -97,6 +97,7 @@ def test_build_document_source_provenance_uses_neutral_non_secret_fields() -> No
         "provider": "abc_literature",
         "provider_metadata": {
             "display_label": "ABC Literature",
+            "short_label": "ABC",
             "identifier_help_label": (
                 "PMID, PubMed ID, AGRKB, or ABC identifiers; comma or newline separated."
             ),
