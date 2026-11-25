@@ -16,21 +16,25 @@ import {
   type IdentifierSourceListing,
   type IdentifierSourceListingResult,
 } from '../features/documents/paperSourceFiles';
-import type {
-  AddPaperFileInput,
-  AddPaperFilesRequest,
-  ChosenSupplementInput,
-  DocumentFileRemovalCheckResponse,
-  DocumentFileRemovalResponse,
-  FileRemovalRefusalCode,
-  RecognizedSupplementProgressEntry,
-  SupplementJobKind,
-  SupplementJobProgress,
-  SupplementProgressEntry,
-  SupplementState,
-  UnrecognizedSupplementProgressEntry,
+import {
+  DocumentFileRemovalContractError,
+  parseDocumentFileRemovalCheckResponse,
+  parseDocumentFileRemovalResponse,
+  type AddPaperFileInput,
+  type AddPaperFilesRequest,
+  type ChosenSupplementInput,
+  type DocumentFileRemovalCheckResponse,
+  type DocumentFileRemovalResponse,
+  type FileRemovalRefusalCode,
+  type RecognizedSupplementProgressEntry,
+  type SupplementJobKind,
+  type SupplementJobProgress,
+  type SupplementProgressEntry,
+  type SupplementState,
+  type UnrecognizedSupplementProgressEntry,
 } from '../features/documents/supplementProgress';
 
+export { DocumentFileRemovalContractError };
 export type {
   AddPaperFileInput,
   AddPaperFilesRequest,
@@ -347,6 +351,33 @@ export class AddDocumentSourceFilesError extends Error {
     this.httpStatus = options.httpStatus;
     this.code = options.code;
     this.limitValue = options.limitValue ?? null;
+  }
+}
+
+/**
+ * Structured refusal error raised by
+ * `GET /api/weaviate/documents/{document_id}/files/{file_id}/removal-check` and
+ * `DELETE /api/weaviate/documents/{document_id}/files/{file_id}`.
+ * Preserves HTTP status, optional machine `code` (`detail.error`), and optional `sessionIds`.
+ */
+export class DocumentFileRemovalError extends Error {
+  readonly httpStatus: number;
+  readonly code: string | null;
+  readonly sessionIds: readonly string[];
+
+  constructor(
+    message: string,
+    options: {
+      httpStatus: number;
+      code: string | null;
+      sessionIds?: readonly string[];
+    },
+  ) {
+    super(message);
+    this.name = 'DocumentFileRemovalError';
+    this.httpStatus = options.httpStatus;
+    this.code = options.code;
+    this.sessionIds = options.sessionIds ? [...options.sessionIds] : [];
   }
 }
 
@@ -1049,6 +1080,101 @@ export const addDocumentSourceFiles = async (
   }
 
   return payload as PdfProcessingJob;
+};
+
+const buildDocumentFileRemovalError = (
+  status: number,
+  payload: unknown,
+  fallbackLabel: string,
+): DocumentFileRemovalError => {
+  const payloadRecord = toRecordOrNull(payload);
+  const detailRecord = toRecordOrNull(payloadRecord?.detail);
+  const rawCode = detailRecord?.error;
+  const code = typeof rawCode === 'string' && rawCode.trim().length > 0 ? rawCode.trim() : null;
+  const rawSessionIds = detailRecord?.session_ids;
+  const sessionIds =
+    Array.isArray(rawSessionIds)
+    && rawSessionIds.every((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      ? rawSessionIds
+      : [];
+  return new DocumentFileRemovalError(
+    code || `${fallbackLabel} (${status})`,
+    {
+      httpStatus: status,
+      code,
+      sessionIds,
+    },
+  );
+};
+
+export const checkDocumentFileRemoval = async (
+  documentId: string,
+  fileId: string,
+  signal?: AbortSignal,
+): Promise<DocumentFileRemovalCheckResponse> => {
+  const url = `${API_BASE_URL}/documents/${encodeURIComponent(documentId)}/files/${encodeURIComponent(fileId)}/removal-check`;
+  const response = await fetch(url, {
+    method: 'GET',
+    credentials: 'include',
+    signal,
+  });
+
+  if (response.status === 401) {
+    handleUnauthorizedResponse(url, 'GET', 'checkDocumentFileRemoval');
+  }
+
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => null);
+    throw buildDocumentFileRemovalError(response.status, errorPayload, 'File removal check failed');
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new DocumentFileRemovalContractError('Removal check response was not valid JSON');
+  }
+
+  const parsed = parseDocumentFileRemovalCheckResponse(payload);
+  if (parsed.document_id !== documentId || parsed.file_id !== fileId) {
+    throw new DocumentFileRemovalContractError('Removal check response names a different paper or file');
+  }
+  return parsed;
+};
+
+export const removeDocumentFile = async (
+  documentId: string,
+  fileId: string,
+  signal?: AbortSignal,
+): Promise<DocumentFileRemovalResponse> => {
+  const url = `${API_BASE_URL}/documents/${encodeURIComponent(documentId)}/files/${encodeURIComponent(fileId)}`;
+  const response = await fetch(url, {
+    method: 'DELETE',
+    credentials: 'include',
+    signal,
+  });
+
+  if (response.status === 401) {
+    handleUnauthorizedResponse(url, 'DELETE', 'removeDocumentFile');
+  }
+
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => null);
+    throw buildDocumentFileRemovalError(response.status, errorPayload, 'File removal failed');
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new DocumentFileRemovalContractError('File removal response was not valid JSON');
+  }
+
+  const parsed = parseDocumentFileRemovalResponse(payload);
+  if (parsed.document_id !== documentId || parsed.file_id !== fileId) {
+    throw new DocumentFileRemovalContractError('File removal response names a different paper or file');
+  }
+  return parsed;
 };
 
 export const buildDocumentListSearchParams = (

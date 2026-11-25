@@ -38,6 +38,7 @@ import {
   duplicateCopiesText,
   fewCharactersNote,
   fileNoLongerChoosableText,
+  fileRemovalHttpErrorText,
   fileRemovalRefusalText,
   filesCountAriaLabel,
   formatByteLimit,
@@ -520,6 +521,64 @@ describe('approved supplement screen texts (N1–N29, N33–N44, N46–N47, Card
 
     // Card 3 (W-D2): no N45 cleanup_finished message in UI
     expect(JSON.stringify(LIBRARY_REMOVE_TEXT)).not.toContain('Clearing its stored copies')
+
+    // HTTP refusal mapping strictly by structured code or status (never server detail text)
+    expect(
+      fileRemovalHttpErrorText({
+        httpStatus: 409,
+        code: 'file_quoted_in_review',
+        sessionCount: 2,
+        fallbackText: 'Fallback.',
+      }),
+    ).toEqual({
+      text: 'This file is quoted in 2 review sessions. To remove it, delete the paper.',
+      retryable: false,
+      code: 'file_quoted_in_review',
+    })
+    expect(
+      fileRemovalHttpErrorText({
+        httpStatus: 409,
+        code: 'unknown_future_code',
+        fallbackText: 'Fallback.',
+      }),
+    ).toEqual({
+      text: UNRECOGNIZED_FILE_TEXT,
+      retryable: false,
+      code: 'unknown_future_code',
+    })
+    expect(
+      fileRemovalHttpErrorText({
+        httpStatus: 409,
+        code: null,
+        fallbackText: 'Fallback.',
+      }),
+    ).toEqual({
+      text: LIBRARY_REMOVE_TEXT.operationInProgress,
+      retryable: true,
+      code: null,
+    })
+    expect(
+      fileRemovalHttpErrorText({
+        httpStatus: 503,
+        code: null,
+        fallbackText: 'Fallback.',
+      }),
+    ).toEqual({
+      text: LIBRARY_REMOVE_TEXT.serverBusy,
+      retryable: true,
+      code: null,
+    })
+    expect(
+      fileRemovalHttpErrorText({
+        httpStatus: 500,
+        code: null,
+        fallbackText: 'Fallback.',
+      }),
+    ).toEqual({
+      text: 'Fallback.',
+      retryable: true,
+      code: null,
+    })
   })
 
   it('resolves provider short labels from presentation metadata cleanly without Alliance defaults', () => {

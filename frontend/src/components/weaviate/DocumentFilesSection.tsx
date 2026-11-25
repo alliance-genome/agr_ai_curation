@@ -1,5 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Box, Button, Checkbox, Chip, CircularProgress, Divider, Paper, Stack, Typography } from '@mui/material'
+import {
+  Alert,
+  Box,
+  Button,
+  Checkbox,
+  Chip,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  Paper,
+  Stack,
+  Typography,
+} from '@mui/material'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { showPaperFilesInViewer } from '@/components/pdfViewer/pdfEvents'
@@ -17,16 +32,22 @@ import {
   type PaperSourceFile,
   type PaperSourceListedFile,
 } from '@/features/documents/paperSourceFiles'
-import { parseSupplementJobProgress } from '@/features/documents/supplementProgress'
+import {
+  parseSupplementJobProgress,
+  type DocumentFileRemovalCheckResponse,
+} from '@/features/documents/supplementProgress'
 import {
   AddDocumentSourceFilesError,
   ApiHttpError,
   AuthenticationError,
+  DocumentFileRemovalError,
   addDocumentSourceFiles,
+  checkDocumentFileRemoval,
   fetchActivePdfJobsForDocument,
   fetchDocumentSourceProviderConfiguration,
   fetchPdfJob,
   isActivePdfJobStatus,
+  removeDocumentFile,
   type DocumentSourceProvenance,
   type PdfProcessingJob,
 } from '@/services/weaviate'
@@ -34,6 +55,7 @@ import {
 import SupplementFilesList from './SupplementFilesList'
 import {
   LIBRARY_ADD_TEXT,
+  LIBRARY_REMOVE_TEXT,
   LISTING_UNREADABLE_TEXT,
   OBSERVATION_TEXT,
   TRY_AGAIN_BUTTON_TEXT,
@@ -41,21 +63,26 @@ import {
   addFilesRefusalText,
   duplicateCopiesText,
   fewCharactersNote,
+  fileRemovalHttpErrorText,
+  fileRemovalRefusalText,
   listingRefusalText,
   notShownText,
+  removeFileAriaLabel,
+  removeFileDialogTitle,
   sourceFileStatusText,
   uploadedPaperFilesText,
+  type FileRemovalErrorDisplay,
 } from './paperFileReasonText'
 
 /**
- * The paper's files in its details dialog (ALL-1460 / ALL-1747, P10b-ui parts a and b).
+ * The paper's files in its details dialog (ALL-1460 / ALL-1747 / ALL-1749, P10b-ui).
  *
- * The paper's own files come from the viewer's files route. For a paper imported from
- * a provider, the provider's other files for it come from the per-paper listing, each
- * with why it is not in the paper (codes worded in `paperFileReasonText.ts`), and
- * converted supplements can be ticked and added here (with per-file job progress via
- * `SupplementFilesList` and refresh of both lists and an open viewer for this paper).
- * Removing files is a separate part (Part 5).
+ * The paper's own files come from the viewer's files route. Supplements on papers with
+ * another ready file can be removed here after a read-only pre-check and confirmation,
+ * refreshing the paper's files, source listing, Library row, and any open viewer tab.
+ * For a paper imported from a provider, the provider's other files for it come from the
+ * per-paper listing, each with why it is not in the paper (codes worded in
+ * `paperFileReasonText.ts`), and converted supplements can be ticked and added here.
  */
 
 /** Query keys, shared with the dialog's "Refresh details". */
@@ -226,11 +253,58 @@ export interface DocumentFilesSectionProps {
   pollIntervalMs?: number
 }
 
-function PaperFileRow({ file }: { file: ViewerFile }) {
+function canShowRemoveForFile(file: ViewerFile, allFiles: readonly ViewerFile[]): boolean {
+  if (file.role !== 'supplement' || file.status === 'pending') {
+    return false
+  }
+  if (allFiles.length <= 1) {
+    return false
+  }
+  return allFiles.some((other) => other.file_id !== file.file_id && other.status === 'ready')
+}
+
+type RemovalDialogState =
+  | null
+  | {
+      file: ViewerFile
+      phase: 'checking'
+    }
+  | {
+      file: ViewerFile
+      phase: 'check_error'
+      text: string
+      retryable: boolean
+    }
+  | {
+      file: ViewerFile
+      phase: 'refused'
+      code: string | null
+      text: string
+    }
+  | {
+      file: ViewerFile
+      phase: 'confirm'
+      check: DocumentFileRemovalCheckResponse
+      submitting: boolean
+      error: FileRemovalErrorDisplay | null
+    }
+
+function PaperFileRow({
+  file,
+  showRemove,
+  removeDisabled,
+  onRequestRemove,
+}: {
+  file: ViewerFile
+  showRemove: boolean
+  removeDisabled: boolean
+  onRequestRemove: (file: ViewerFile) => void
+}) {
+  const displayName = fileDisplayLabel(file)
   return (
     <Box component="li" sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', py: 0.5 }}>
       <Typography variant="body2" sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>
-        {fileDisplayLabel(file)}
+        {displayName}
       </Typography>
       <Chip size="small" variant="outlined" label={ROLE_TEXT[file.role]} />
       <Chip size="small" variant="outlined" label={isPdfFile(file) ? 'PDF' : 'Text'} />
@@ -239,7 +313,106 @@ function PaperFileRow({ file }: { file: ViewerFile }) {
         label={STATE_TEXT[file.status]}
         color={file.status === 'ready' ? 'success' : file.status === 'failed' ? 'error' : 'default'}
       />
+      {showRemove ? (
+        <Button
+          size="small"
+          color="error"
+          variant="text"
+          disabled={removeDisabled}
+          aria-label={removeFileAriaLabel(displayName)}
+          onClick={() => onRequestRemove(file)}
+          sx={{ ml: 'auto', minWidth: 'auto', px: 1 }}
+        >
+          {LIBRARY_REMOVE_TEXT.buttonLabel}
+        </Button>
+      ) : null}
     </Box>
+  )
+}
+
+function FileRemovalDialog({
+  state,
+  onClose,
+  onRetryPrecheck,
+  onConfirm,
+}: {
+  state: RemovalDialogState
+  onClose: () => void
+  onRetryPrecheck: () => void
+  onConfirm: () => void
+}) {
+  const displayName = state ? fileDisplayLabel(state.file) : ''
+  const isSubmittingDelete = state?.phase === 'confirm' && state.submitting
+
+  return (
+    <Dialog
+      open={state !== null}
+      onClose={isSubmittingDelete ? undefined : onClose}
+      aria-labelledby="remove-paper-file-dialog-title"
+      maxWidth="xs"
+      fullWidth
+    >
+      <DialogTitle id="remove-paper-file-dialog-title">
+        {state ? removeFileDialogTitle(displayName) : ''}
+      </DialogTitle>
+      <DialogContent>
+        {state?.phase === 'checking' ? (
+          <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', py: 1 }}>
+            <CircularProgress size={16} />
+            <Typography variant="body2">Checking whether this file can be removed...</Typography>
+          </Stack>
+        ) : state?.phase === 'check_error' ? (
+          <Alert severity="warning">{state.text}</Alert>
+        ) : state?.phase === 'refused' ? (
+          <Alert severity="warning">{state.text}</Alert>
+        ) : state?.phase === 'confirm' ? (
+          <Stack spacing={1.5} sx={{ pt: 0.5 }}>
+            <Typography variant="body2">{LIBRARY_REMOVE_TEXT.confirmBody}</Typography>
+            {state.check.review_and_curate_would_refuse ? (
+              <Alert severity="warning">{LIBRARY_REMOVE_TEXT.newestResultQuotesFileWarning}</Alert>
+            ) : null}
+            {state.error ? (
+              <Alert severity="warning">{state.error.text}</Alert>
+            ) : null}
+          </Stack>
+        ) : null}
+      </DialogContent>
+      <DialogActions>
+        {state?.phase === 'checking' ? (
+          <Button onClick={onClose}>{LIBRARY_REMOVE_TEXT.cancelButton}</Button>
+        ) : state?.phase === 'check_error' ? (
+          <>
+            <Button onClick={onClose}>Close</Button>
+            {state.retryable ? (
+              <Button variant="contained" onClick={onRetryPrecheck}>
+                {TRY_AGAIN_BUTTON_TEXT}
+              </Button>
+            ) : null}
+          </>
+        ) : state?.phase === 'refused' ? (
+          <Button onClick={onClose}>Close</Button>
+        ) : state?.phase === 'confirm' ? (
+          <>
+            <Button onClick={onClose} disabled={state.submitting}>
+              {LIBRARY_REMOVE_TEXT.cancelButton}
+            </Button>
+            <Button
+              variant="contained"
+              color="error"
+              disabled={state.submitting}
+              onClick={onConfirm}
+              startIcon={state.submitting ? <CircularProgress size={14} color="inherit" /> : undefined}
+            >
+              {state.submitting
+                ? 'Removing...'
+                : state.error?.retryable
+                  ? TRY_AGAIN_BUTTON_TEXT
+                  : LIBRARY_REMOVE_TEXT.confirmButton}
+            </Button>
+          </>
+        ) : null}
+      </DialogActions>
+    </Dialog>
   )
 }
 
@@ -294,6 +467,62 @@ function SourceFileRow({
   )
 }
 
+function NonProviderActiveJobsPart({
+  documentId,
+  open,
+  onBusyChange,
+}: {
+  documentId: string
+  open: boolean
+  onBusyChange: (busy: boolean) => void
+}) {
+  const activeJobsQuery = useQuery({
+    queryKey: paperActiveJobsQueryKey(documentId),
+    queryFn: ({ signal }) => fetchActivePdfJobsForDocument(documentId, { signal }),
+    enabled: open,
+    retry: false,
+    refetchOnWindowFocus: false,
+  })
+
+  const activeJob = useMemo(
+    () => (
+      activeJobsQuery.isError
+        ? null
+        : (activeJobsQuery.data?.find((job) => isActivePdfJobStatus(job.status)) ?? null)
+    ),
+    [activeJobsQuery.data, activeJobsQuery.isError],
+  )
+
+  const busy =
+    activeJobsQuery.isPending
+    || activeJobsQuery.isFetching
+    || activeJobsQuery.isError
+    || activeJob !== null
+
+  useEffect(() => {
+    onBusyChange(busy)
+  }, [busy, onBusyChange])
+
+  if (activeJob !== null) {
+    return <Alert severity="info">{LIBRARY_ADD_TEXT.importStillRunning}</Alert>
+  }
+  if (activeJobsQuery.isError) {
+    return (
+      <Alert
+        severity="warning"
+        action={(
+          <Button size="small" color="inherit" onClick={() => void activeJobsQuery.refetch()}>
+            {TRY_AGAIN_BUTTON_TEXT}
+          </Button>
+        )}
+      >
+        Could not check whether this paper has an active import.
+      </Alert>
+    )
+  }
+  return null
+}
+
 function UploadedPaperFilesNotice({
   configuredProviderShortLabel,
   open,
@@ -342,6 +571,9 @@ function ProviderFilesPart({
   open,
   onFilesChanged,
   pollIntervalMs,
+  isRemovalBusy,
+  onAddBusyChange,
+  refreshPaperSurfaces,
 }: {
   documentId: string
   provider: string
@@ -350,6 +582,12 @@ function ProviderFilesPart({
   open: boolean
   onFilesChanged?: () => void
   pollIntervalMs: number
+  isRemovalBusy: boolean
+  onAddBusyChange: (busy: boolean) => void
+  refreshPaperSurfaces: (
+    targetDocumentId: string,
+    options?: { invalidateFilesOnFailure?: boolean },
+  ) => Promise<void>
 }) {
   const queryClient = useQueryClient()
   const shortProvider = providerShortLabel?.trim() || provider
@@ -440,31 +678,8 @@ function ProviderFilesPart({
       setRefreshingAfterAdd(true)
     }
 
-    // Cancel any older in-flight viewer /files query first so it cannot resolve later and
-    // overwrite the fresher completion payload while the dialog stays open, then fetch fresh
-    // viewer files directly (not bound to an unmount-cancelling query observer) so closing the
-    // dialog mid-completion still populates the cache and publishes the viewer refresh.
-    const viewerRefreshPromise = (async () => {
-      try {
-        await queryClient.cancelQueries({ queryKey: paperFilesQueryKey(targetDocumentId) })
-      } catch {
-        // Best-effort cancellation; still fetch the fresh viewer file list.
-      }
-      try {
-        const payload = await fetchViewerFiles(targetDocumentId)
-        queryClient.setQueryData(paperFilesQueryKey(targetDocumentId), payload)
-        showPaperFilesInViewer(targetDocumentId, payload.files, { refreshOnlyIfOpen: true })
-      } catch {
-        // Best-effort viewer refresh; leave existing cached state intact on transient failure.
-      }
-    })()
-
     try {
-      await Promise.allSettled([
-        viewerRefreshPromise,
-        queryClient.invalidateQueries({ queryKey: paperSourceFilesQueryKey(targetDocumentId) }),
-        queryClient.invalidateQueries({ queryKey: paperActiveJobsQueryKey(targetDocumentId) }),
-      ])
+      await refreshPaperSurfaces(targetDocumentId)
     } finally {
       if (mountedRef.current && activeDocumentIdRef.current === targetDocumentId) {
         setRefreshingAfterAdd(false)
@@ -475,7 +690,7 @@ function ProviderFilesPart({
         onFilesChangedRef.current?.()
       }
     }
-  }, [queryClient])
+  }, [refreshPaperSurfaces])
 
   const handleTrackedJobFinishedRef = useRef(handleTrackedJobFinished)
   handleTrackedJobFinishedRef.current = handleTrackedJobFinished
@@ -710,6 +925,19 @@ function ProviderFilesPart({
     || (trackedJob !== null && !isAddTrackedJob && isTrackedJobActive)
   const activeJobsSettled =
     !activeJobsQuery.isPending && !activeJobsQuery.isFetching && !activeJobsQuery.isError
+  const paperBusyForRemoval =
+    !activeJobsSettled
+    || hasActiveJobForPaper
+    || submitting
+    || reconcilingRetainedJob
+    || retainedReconcileFailed
+    || pending404Refresh
+    || refreshingAfterAdd
+
+  useEffect(() => {
+    onAddBusyChange(paperBusyForRemoval)
+  }, [paperBusyForRemoval, onAddBusyChange])
+
   const showTickboxes =
     isPaperCompleted
     && !hasActiveJobForPaper
@@ -765,6 +993,7 @@ function ProviderFilesPart({
       !isPaperCompleted
       || selectedFiles.length === 0
       || submitting
+      || isRemovalBusy
       || hasActiveJobForPaper
       || !activeJobsSettled
       || listingQuery.isFetching
@@ -876,6 +1105,7 @@ function ProviderFilesPart({
     documentId,
     hasActiveJobForPaper,
     isPaperCompleted,
+    isRemovalBusy,
     listingQuery.isFetching,
     pending404Refresh,
     provider,
@@ -900,35 +1130,55 @@ function ProviderFilesPart({
     void activeJobsQuery.refetch()
   }, [activeJobsQuery])
 
+  const activeJobsErrorAlert =
+    activeJobsQuery.isError && !hasActiveJobForPaper && !pollError ? (
+      <Alert
+        severity="warning"
+        action={(
+          <Button size="small" color="inherit" onClick={() => void activeJobsQuery.refetch()}>
+            {TRY_AGAIN_BUTTON_TEXT}
+          </Button>
+        )}
+      >
+        Could not check whether this paper has an active import.
+      </Alert>
+    ) : null
+
   if (importDisabled) {
-    return null
+    return activeJobsErrorAlert
   }
 
   if (listingQuery.isPending) {
     return (
-      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-        <CircularProgress size={14} />
-        <Typography variant="body2">{`Checking ${provider} for this paper's files...`}</Typography>
+      <Stack spacing={1.5}>
+        {activeJobsErrorAlert}
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+          <CircularProgress size={14} />
+          <Typography variant="body2">{`Checking ${provider} for this paper's files...`}</Typography>
+        </Stack>
       </Stack>
     )
   }
   if (listingQuery.isError) {
     const isContractError = listingQuery.error instanceof PaperSourceFilesContractError
     return (
-      <Alert
-        severity="warning"
-        action={
-          isContractError ? undefined : (
-            <Button size="small" color="inherit" onClick={() => void listingQuery.refetch()}>
-              {TRY_AGAIN_BUTTON_TEXT}
-            </Button>
-          )
-        }
-      >
-        {isContractError
-          ? LISTING_UNREADABLE_TEXT(provider)
-          : `Could not check ${provider} for this paper's files.`}
-      </Alert>
+      <Stack spacing={1.5}>
+        {activeJobsErrorAlert}
+        <Alert
+          severity="warning"
+          action={
+            isContractError ? undefined : (
+              <Button size="small" color="inherit" onClick={() => void listingQuery.refetch()}>
+                {TRY_AGAIN_BUTTON_TEXT}
+              </Button>
+            )
+          }
+        >
+          {isContractError
+            ? LISTING_UNREADABLE_TEXT(provider)
+            : `Could not check ${provider} for this paper's files.`}
+        </Alert>
+      </Stack>
     )
   }
 
@@ -937,7 +1187,15 @@ function ProviderFilesPart({
     const text = result.code === 'not_imported_from_provider'
       ? uploadedPaperFilesText(shortProvider)
       : listingRefusalText(result.code, result.httpStatus, provider)
-    return text ? <Alert severity="info">{text}</Alert> : null
+    if (!text && !activeJobsErrorAlert) {
+      return null
+    }
+    return (
+      <Stack spacing={1.5}>
+        {activeJobsErrorAlert}
+        {text ? <Alert severity="info">{text}</Alert> : null}
+      </Stack>
+    )
   }
 
   const trackedProgress = trackedJob
@@ -947,7 +1205,7 @@ function ProviderFilesPart({
     addRefusal !== null
     && !(showImportRunningNotice && addRefusal.code === 'import_in_progress')
   const canRetryAddRefusal = Boolean(
-    addRefusal?.retryable && selectedFiles.length > 0 && showTickboxes && !submitting,
+    addRefusal?.retryable && selectedFiles.length > 0 && showTickboxes && !submitting && !isRemovalBusy,
   )
   const terminalAddAlertText =
     isAddTrackedJob && !isTrackedJobActive && (trackedJob.status === 'failed' || trackedJob.status === 'cancelled')
@@ -960,18 +1218,7 @@ function ProviderFilesPart({
         <Alert severity="info">{LIBRARY_ADD_TEXT.importStillRunning}</Alert>
       ) : null}
 
-      {activeJobsQuery.isError && !hasActiveJobForPaper && !pollError ? (
-        <Alert
-          severity="warning"
-          action={(
-            <Button size="small" color="inherit" onClick={() => void activeJobsQuery.refetch()}>
-              {TRY_AGAIN_BUTTON_TEXT}
-            </Button>
-          )}
-        >
-          Could not check whether this paper has an active import.
-        </Alert>
-      ) : null}
+      {activeJobsErrorAlert}
 
       {trackedJob ? (
         isAddTrackedJob ? (
@@ -1083,7 +1330,7 @@ function ProviderFilesPart({
                   provider={provider}
                   canSelect={canSelect}
                   selected={canSelect && selectedIds.has(file.provider_file_id)}
-                  selectionDisabled={submitting}
+                  selectionDisabled={submitting || isRemovalBusy}
                   onToggleSelect={handleToggleSelect}
                 />
               )
@@ -1095,7 +1342,7 @@ function ProviderFilesPart({
             <Button
               variant="contained"
               size="small"
-              disabled={selectedFiles.length === 0 || submitting}
+              disabled={selectedFiles.length === 0 || submitting || isRemovalBusy}
               onClick={() => void handleAddSelected()}
             >
               {addFilesButtonText(selectedFiles.length)}
@@ -1127,6 +1374,39 @@ export default function DocumentFilesSection({
   onFilesChanged,
   pollIntervalMs = PDF_PROGRESS_POLL_INTERVAL_MS,
 }: DocumentFilesSectionProps) {
+  const queryClient = useQueryClient()
+  const isPaperCompleted = processingStatus?.toLowerCase() === 'completed'
+
+  const [providerPaperBusy, setProviderPaperBusy] = useState(() => Boolean(providerLabel))
+  const [nonProviderPaperBusy, setNonProviderPaperBusy] = useState(true)
+  const [removalDialog, setRemovalDialog] = useState<RemovalDialogState>(null)
+  const [refreshingAfterRemoval, setRefreshingAfterRemoval] = useState(false)
+
+  const mountedRef = useRef(true)
+  const activeDocumentIdRef = useRef(documentId)
+  activeDocumentIdRef.current = documentId
+  const onFilesChangedRef = useRef(onFilesChanged)
+  onFilesChangedRef.current = onFilesChanged
+  const removalAbortControllerRef = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      removalAbortControllerRef.current?.abort()
+      removalAbortControllerRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    removalAbortControllerRef.current?.abort()
+    removalAbortControllerRef.current = null
+    setRemovalDialog(null)
+    setRefreshingAfterRemoval(false)
+    setProviderPaperBusy(Boolean(providerLabel))
+    setNonProviderPaperBusy(true)
+  }, [documentId, open, providerLabel])
+
   const filesQuery = useQuery({
     queryKey: paperFilesQueryKey(documentId),
     queryFn: ({ signal }) => fetchViewerFiles(documentId, signal),
@@ -1134,6 +1414,299 @@ export default function DocumentFilesSection({
     retry: false,
     refetchOnWindowFocus: false,
   })
+
+  const paperFiles = useMemo(() => filesQuery.data?.files ?? [], [filesQuery.data?.files])
+  const hasRemovableSupplement = useMemo(
+    () => paperFiles.some((file) => canShowRemoveForFile(file, paperFiles)),
+    [paperFiles],
+  )
+  const needsNonProviderActiveJobs = !providerLabel && hasRemovableSupplement
+
+  useEffect(() => {
+    if (!needsNonProviderActiveJobs) {
+      setNonProviderPaperBusy(true)
+    }
+  }, [needsNonProviderActiveJobs])
+
+  const refreshPaperSurfaces = useCallback(
+    async (
+      targetDocumentId: string,
+      options?: { invalidateFilesOnFailure?: boolean },
+    ) => {
+      // Cancel any older in-flight viewer /files query first so it cannot resolve later and
+      // overwrite the fresher payload while the dialog stays open, then fetch fresh viewer
+      // files directly (not bound to an unmount-cancelling query observer) so closing the
+      // dialog mid-completion still populates the cache and publishes the viewer refresh.
+      const viewerRefreshPromise = (async () => {
+        try {
+          await queryClient.cancelQueries({ queryKey: paperFilesQueryKey(targetDocumentId) })
+        } catch {
+          // Best-effort cancellation; still fetch the fresh viewer file list.
+        }
+        try {
+          const payload = await fetchViewerFiles(targetDocumentId)
+          queryClient.setQueryData(paperFilesQueryKey(targetDocumentId), payload)
+          showPaperFilesInViewer(targetDocumentId, payload.files, { refreshOnlyIfOpen: true })
+        } catch {
+          if (options?.invalidateFilesOnFailure) {
+            await queryClient.invalidateQueries({ queryKey: paperFilesQueryKey(targetDocumentId) })
+          }
+        }
+      })()
+
+      await Promise.allSettled([
+        viewerRefreshPromise,
+        queryClient.invalidateQueries({ queryKey: paperSourceFilesQueryKey(targetDocumentId) }),
+        queryClient.invalidateQueries({ queryKey: paperActiveJobsQueryKey(targetDocumentId) }),
+        queryClient.invalidateQueries({ queryKey: ['documents'] }),
+      ])
+    },
+    [queryClient],
+  )
+
+  const runPostRemovalRefresh = useCallback(
+    async (targetDocumentId: string, notifyFilesChanged?: () => void) => {
+      if (mountedRef.current && activeDocumentIdRef.current === targetDocumentId) {
+        setRefreshingAfterRemoval(true)
+      }
+      try {
+        await refreshPaperSurfaces(targetDocumentId, { invalidateFilesOnFailure: true })
+      } finally {
+        notifyFilesChanged?.()
+        if (mountedRef.current && activeDocumentIdRef.current === targetDocumentId) {
+          setRefreshingAfterRemoval(false)
+        }
+      }
+    },
+    [refreshPaperSurfaces],
+  )
+
+  const isRemovalBusy = removalDialog !== null || refreshingAfterRemoval
+  const activeJobsOrAddBusy = providerLabel
+    ? providerPaperBusy
+    : (needsNonProviderActiveJobs && nonProviderPaperBusy)
+  const baseRemovalBlocked =
+    !isPaperCompleted
+    || activeJobsOrAddBusy
+    || refreshingAfterRemoval
+    || filesQuery.isFetching
+  const removeDisabled = baseRemovalBlocked || removalDialog !== null
+
+  const runRemovalPrecheck = useCallback(
+    async (file: ViewerFile) => {
+      const targetDocumentId = documentId
+      const notifyFilesChanged = onFilesChangedRef.current
+      removalAbortControllerRef.current?.abort()
+      const controller = new AbortController()
+      removalAbortControllerRef.current = controller
+
+      setRemovalDialog({ file, phase: 'checking' })
+
+      try {
+        const check = await checkDocumentFileRemoval(targetDocumentId, file.file_id, controller.signal)
+        if (
+          controller.signal.aborted
+          || !mountedRef.current
+          || activeDocumentIdRef.current !== targetDocumentId
+        ) {
+          return
+        }
+        if (!check.removable) {
+          setRemovalDialog({
+            file,
+            phase: 'refused',
+            code: check.error,
+            text: fileRemovalRefusalText(check.error, { sessionCount: check.session_ids?.length }),
+          })
+          if (check.error === 'file_not_in_paper') {
+            void runPostRemovalRefresh(targetDocumentId, notifyFilesChanged)
+          } else if (check.error === 'import_in_progress') {
+            void queryClient.invalidateQueries({ queryKey: paperActiveJobsQueryKey(targetDocumentId) })
+          }
+          return
+        }
+        setRemovalDialog({
+          file,
+          phase: 'confirm',
+          check,
+          submitting: false,
+          error: null,
+        })
+      } catch (error) {
+        if (
+          controller.signal.aborted
+          || !mountedRef.current
+          || activeDocumentIdRef.current !== targetDocumentId
+          || isAbortError(error)
+        ) {
+          return
+        }
+        if (error instanceof AuthenticationError) {
+          setRemovalDialog({
+            file,
+            phase: 'check_error',
+            text: 'Sign in again to remove files from this paper.',
+            retryable: false,
+          })
+          return
+        }
+        if (error instanceof DocumentFileRemovalError) {
+          const mapped = fileRemovalHttpErrorText({
+            httpStatus: error.httpStatus,
+            code: error.code,
+            sessionCount: error.sessionIds.length,
+            fallbackText: 'Could not check whether this file can be removed.',
+          })
+          if (mapped.code !== null) {
+            setRemovalDialog({
+              file,
+              phase: 'refused',
+              code: mapped.code,
+              text: mapped.text,
+            })
+            if (mapped.code === 'file_not_in_paper') {
+              void runPostRemovalRefresh(targetDocumentId, notifyFilesChanged)
+            } else if (mapped.code === 'import_in_progress') {
+              void queryClient.invalidateQueries({ queryKey: paperActiveJobsQueryKey(targetDocumentId) })
+            }
+            return
+          }
+          setRemovalDialog({
+            file,
+            phase: 'check_error',
+            text: mapped.text,
+            retryable: mapped.retryable,
+          })
+          return
+        }
+        setRemovalDialog({
+          file,
+          phase: 'check_error',
+          text: 'Could not check whether this file can be removed.',
+          retryable: true,
+        })
+      } finally {
+        if (removalAbortControllerRef.current === controller) {
+          removalAbortControllerRef.current = null
+        }
+      }
+    },
+    [documentId, queryClient, runPostRemovalRefresh],
+  )
+
+  const handleRequestRemove = useCallback(
+    (file: ViewerFile) => {
+      if (removeDisabled) {
+        return
+      }
+      void runRemovalPrecheck(file)
+    },
+    [removeDisabled, runRemovalPrecheck],
+  )
+
+  const handleRetryPrecheck = useCallback(() => {
+    if (removalDialog?.phase !== 'check_error' || baseRemovalBlocked) {
+      return
+    }
+    void runRemovalPrecheck(removalDialog.file)
+  }, [baseRemovalBlocked, removalDialog, runRemovalPrecheck])
+
+  const handleConfirmRemove = useCallback(async () => {
+    if (removalDialog?.phase !== 'confirm' || removalDialog.submitting || baseRemovalBlocked) {
+      return
+    }
+    const targetFile = removalDialog.file
+    const targetDocumentId = documentId
+    const notifyFilesChanged = onFilesChangedRef.current
+
+    removalAbortControllerRef.current?.abort()
+    const controller = new AbortController()
+    removalAbortControllerRef.current = controller
+
+    setRemovalDialog((current) =>
+      current?.phase === 'confirm' && current.file.file_id === targetFile.file_id
+        ? { ...current, submitting: true, error: null }
+        : current,
+    )
+
+    try {
+      // Card 3 (W-D2): `cleanup_finished: false` intentionally shows nothing extra in the UI;
+      // backend reports cleanup failures to Sentry.
+      await removeDocumentFile(targetDocumentId, targetFile.file_id, controller.signal)
+      if (!controller.signal.aborted && mountedRef.current && activeDocumentIdRef.current === targetDocumentId) {
+        setRemovalDialog(null)
+      }
+      await runPostRemovalRefresh(targetDocumentId, notifyFilesChanged)
+    } catch (error) {
+      if (
+        controller.signal.aborted
+        || !mountedRef.current
+        || activeDocumentIdRef.current !== targetDocumentId
+        || isAbortError(error)
+      ) {
+        return
+      }
+      if (error instanceof AuthenticationError) {
+        setRemovalDialog({
+          file: targetFile,
+          phase: 'refused',
+          code: 'authentication_required',
+          text: 'Sign in again to remove files from this paper.',
+        })
+        return
+      }
+      if (error instanceof DocumentFileRemovalError) {
+        const mapped = fileRemovalHttpErrorText({
+          httpStatus: error.httpStatus,
+          code: error.code,
+          sessionCount: error.sessionIds.length,
+          fallbackText: 'Could not remove this file.',
+        })
+        if (mapped.code !== null) {
+          setRemovalDialog({
+            file: targetFile,
+            phase: 'refused',
+            code: mapped.code,
+            text: mapped.text,
+          })
+          if (mapped.code === 'file_not_in_paper') {
+            void runPostRemovalRefresh(targetDocumentId, notifyFilesChanged)
+          } else if (mapped.code === 'import_in_progress') {
+            void queryClient.invalidateQueries({ queryKey: paperActiveJobsQueryKey(targetDocumentId) })
+          }
+          return
+        }
+        setRemovalDialog((current) =>
+          current?.phase === 'confirm' && current.file.file_id === targetFile.file_id
+            ? { ...current, submitting: false, error: mapped }
+            : current,
+        )
+        return
+      }
+      setRemovalDialog((current) =>
+        current?.phase === 'confirm' && current.file.file_id === targetFile.file_id
+          ? {
+              ...current,
+              submitting: false,
+              error: { text: 'Could not remove this file.', retryable: true, code: null },
+            }
+          : current,
+      )
+    } finally {
+      if (removalAbortControllerRef.current === controller) {
+        removalAbortControllerRef.current = null
+      }
+    }
+  }, [baseRemovalBlocked, documentId, queryClient, removalDialog, runPostRemovalRefresh])
+
+  const handleCloseRemovalDialog = useCallback(() => {
+    if (removalDialog?.phase === 'confirm' && removalDialog.submitting) {
+      return
+    }
+    removalAbortControllerRef.current?.abort()
+    removalAbortControllerRef.current = null
+    setRemovalDialog(null)
+  }, [removalDialog])
 
   return (
     <Paper variant="outlined" sx={{ p: 2 }}>
@@ -1160,9 +1733,25 @@ export default function DocumentFilesSection({
           </Alert>
         ) : (
           <Box component="ul" aria-label="Files in this paper" sx={{ m: 0, pl: 2.5 }}>
-            {filesQuery.data.files.map((file) => <PaperFileRow key={file.file_id} file={file} />)}
+            {paperFiles.map((file) => (
+              <PaperFileRow
+                key={file.file_id}
+                file={file}
+                showRemove={canShowRemoveForFile(file, paperFiles)}
+                removeDisabled={removeDisabled}
+                onRequestRemove={handleRequestRemove}
+              />
+            ))}
           </Box>
         )}
+        {needsNonProviderActiveJobs ? (
+          <NonProviderActiveJobsPart
+            key={documentId}
+            documentId={documentId}
+            open={open}
+            onBusyChange={setNonProviderPaperBusy}
+          />
+        ) : null}
         {providerLabel ? (
           <ProviderFilesPart
             key={documentId}
@@ -1173,6 +1762,9 @@ export default function DocumentFilesSection({
             open={open}
             onFilesChanged={onFilesChanged}
             pollIntervalMs={pollIntervalMs}
+            isRemovalBusy={isRemovalBusy}
+            onAddBusyChange={setProviderPaperBusy}
+            refreshPaperSurfaces={refreshPaperSurfaces}
           />
         ) : (
           <UploadedPaperFilesNotice
@@ -1181,6 +1773,12 @@ export default function DocumentFilesSection({
           />
         )}
       </Stack>
+      <FileRemovalDialog
+        state={removalDialog}
+        onClose={handleCloseRemovalDialog}
+        onRetryPrecheck={handleRetryPrecheck}
+        onConfirm={() => void handleConfirmRemove()}
+      />
     </Paper>
   )
 }

@@ -8,7 +8,10 @@ import {
   AddDocumentSourceFilesError,
   ApiHttpError,
   AuthenticationError,
+  DocumentFileRemovalContractError,
+  DocumentFileRemovalError,
   addDocumentSourceFiles,
+  checkDocumentFileRemoval,
   fetchActivePdfJobsForDocument,
   fetchDocumentList,
   fetchDocumentSourceFiles,
@@ -17,6 +20,7 @@ import {
   fetchPdfJobs,
   importSourceIdentifiers,
   isActivePdfJobStatus,
+  removeDocumentFile,
   resolveSourceIdentifiers,
   SourceIdentifierImportError,
   useDocument,
@@ -706,6 +710,217 @@ describe('weaviate service', () => {
       );
       const perRow = await importSourceIdentifiers('PMID:101');
       expect(perRow.results[0]?.errorCode).toBe('file_not_tickable');
+    });
+
+    it('calls checkDocumentFileRemoval and validates responses, structured refusals, 409/503 status errors, 401 auth, and contract errors', async () => {
+      const docId = '11111111-1111-1111-1111-111111111111';
+      const fileId = '22222222-2222-2222-2222-222222222222';
+      const removablePayload = {
+        document_id: docId,
+        file_id: fileId,
+        removable: true,
+        error: null,
+        newest_result_quotes_file: true,
+        has_review_session: false,
+        review_and_curate_would_refuse: true,
+      };
+      const quotedPayload = {
+        document_id: docId,
+        file_id: fileId,
+        removable: false,
+        error: 'file_quoted_in_review',
+        newest_result_quotes_file: false,
+        has_review_session: true,
+        review_and_curate_would_refuse: false,
+        session_ids: ['session-1', 'session-2'],
+      };
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => removablePayload })
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => quotedPayload })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 404,
+          json: async () => ({ detail: { error: 'file_not_in_paper' } }),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 409,
+          json: async () => ({ detail: 'Unstructured lock detail should never leak' }),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 503,
+          json: async () => ({ detail: 'Unstructured pool detail should never leak' }),
+        })
+        .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({ detail: 'Unauthorized' }) })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ ...removablePayload, file_id: 'other-file' }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ unexpected: true }),
+        });
+
+      const controller = new AbortController();
+      await expect(checkDocumentFileRemoval(docId, fileId, controller.signal)).resolves.toEqual(
+        removablePayload,
+      );
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        `/api/weaviate/documents/${docId}/files/${fileId}/removal-check`,
+        {
+          method: 'GET',
+          credentials: 'include',
+          signal: controller.signal,
+        },
+      );
+
+      await expect(checkDocumentFileRemoval(docId, fileId)).resolves.toEqual(quotedPayload);
+
+      await expect(checkDocumentFileRemoval(docId, fileId)).rejects.toMatchObject({
+        name: 'DocumentFileRemovalError',
+        httpStatus: 404,
+        code: 'file_not_in_paper',
+        sessionIds: [],
+      });
+
+      let busy409: unknown = null;
+      try {
+        await checkDocumentFileRemoval(docId, fileId);
+      } catch (error) {
+        busy409 = error;
+      }
+      expect(busy409).toBeInstanceOf(DocumentFileRemovalError);
+      expect(busy409).toMatchObject({ httpStatus: 409, code: null, sessionIds: [] });
+      expect((busy409 as Error).message).not.toContain('Unstructured lock detail');
+
+      let busy503: unknown = null;
+      try {
+        await checkDocumentFileRemoval(docId, fileId);
+      } catch (error) {
+        busy503 = error;
+      }
+      expect(busy503).toBeInstanceOf(DocumentFileRemovalError);
+      expect(busy503).toMatchObject({ httpStatus: 503, code: null, sessionIds: [] });
+      expect((busy503 as Error).message).not.toContain('Unstructured pool detail');
+
+      await expect(checkDocumentFileRemoval(docId, fileId)).rejects.toThrow(
+        new AuthenticationError('Session expired - redirecting to login'),
+      );
+      await expect(checkDocumentFileRemoval(docId, fileId)).rejects.toThrow(
+        DocumentFileRemovalContractError,
+      );
+      await expect(checkDocumentFileRemoval(docId, fileId)).rejects.toThrow(
+        DocumentFileRemovalContractError,
+      );
+    });
+
+    it('calls removeDocumentFile and validates cleanup_finished true/false, structured refusals, 409/503 busy statuses, 401 auth, and contract errors', async () => {
+      const docId = '11111111-1111-1111-1111-111111111111';
+      const fileId = '22222222-2222-2222-2222-222222222222';
+      const cleanResponse = {
+        document_id: docId,
+        file_id: fileId,
+        removed: true,
+        cleanup_finished: true,
+        ready_file_count: 1,
+      };
+      const unfinishedCleanupResponse = {
+        document_id: docId,
+        file_id: fileId,
+        removed: true,
+        cleanup_finished: false,
+        ready_file_count: 1,
+      };
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => cleanResponse })
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => unfinishedCleanupResponse })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 409,
+          json: async () => ({
+            detail: { error: 'file_quoted_in_review', session_ids: ['s-1', 's-2'] },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 409,
+          json: async () => ({ detail: 'Another operation on this paper is in progress; try again in a moment.' }),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 503,
+          json: async () => ({ detail: 'The server is busy right now; try removing the file again in a moment.' }),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 404,
+          json: async () => ({ detail: { error: 'file_not_in_paper' } }),
+        })
+        .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({ detail: 'Unauthorized' }) })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ ...cleanResponse, removed: false }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ ...cleanResponse, document_id: 'other-doc' }),
+        });
+
+      const controller = new AbortController();
+      await expect(removeDocumentFile(docId, fileId, controller.signal)).resolves.toEqual(
+        cleanResponse,
+      );
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        `/api/weaviate/documents/${docId}/files/${fileId}`,
+        {
+          method: 'DELETE',
+          credentials: 'include',
+          signal: controller.signal,
+        },
+      );
+
+      await expect(removeDocumentFile(docId, fileId)).resolves.toEqual(unfinishedCleanupResponse);
+
+      await expect(removeDocumentFile(docId, fileId)).rejects.toMatchObject({
+        name: 'DocumentFileRemovalError',
+        httpStatus: 409,
+        code: 'file_quoted_in_review',
+        sessionIds: ['s-1', 's-2'],
+      });
+      await expect(removeDocumentFile(docId, fileId)).rejects.toMatchObject({
+        name: 'DocumentFileRemovalError',
+        httpStatus: 409,
+        code: null,
+        sessionIds: [],
+      });
+      await expect(removeDocumentFile(docId, fileId)).rejects.toMatchObject({
+        name: 'DocumentFileRemovalError',
+        httpStatus: 503,
+        code: null,
+        sessionIds: [],
+      });
+      await expect(removeDocumentFile(docId, fileId)).rejects.toMatchObject({
+        name: 'DocumentFileRemovalError',
+        httpStatus: 404,
+        code: 'file_not_in_paper',
+        sessionIds: [],
+      });
+      await expect(removeDocumentFile(docId, fileId)).rejects.toThrow(
+        new AuthenticationError('Session expired - redirecting to login'),
+      );
+      await expect(removeDocumentFile(docId, fileId)).rejects.toThrow(
+        DocumentFileRemovalContractError,
+      );
+      await expect(removeDocumentFile(docId, fileId)).rejects.toThrow(
+        DocumentFileRemovalContractError,
+      );
     });
   });
 

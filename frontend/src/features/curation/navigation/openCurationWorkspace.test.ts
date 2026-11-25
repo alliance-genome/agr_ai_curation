@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { LIBRARY_REMOVE_TEXT } from '@/components/weaviate/paperFileReasonText'
+import { RESULT_QUOTES_REMOVED_FILE_ERROR_CODE } from '@/features/curation/services/api'
+import { CurationWorkspaceRequestError } from '@/features/curation/services/curationWorkspaceService'
+
 import {
   getCurationWorkspaceLaunchAvailability,
   normalizeCurationWorkspaceScopeValues,
@@ -206,6 +210,65 @@ describe('openCurationWorkspace', () => {
         flowRunId: 'flow-7',
       })
     ).rejects.toThrow('No prepared curation session is available for this document.')
+  })
+
+  it('maps 409 detail.error result_quotes_removed_file to approved Card 19 wording without message-text matching', async () => {
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(buildSessionListResponse([])), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            detail: { error: 'result_quotes_removed_file' },
+          }),
+          {
+            status: 409,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        ),
+      )
+
+    let caught: unknown = null
+    try {
+      await resolveCurationWorkspaceSessionId({ documentId: 'doc-1' })
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(CurationWorkspaceRequestError)
+    expect(caught).toMatchObject({
+      status: 409,
+      code: RESULT_QUOTES_REMOVED_FILE_ERROR_CODE,
+      message: LIBRARY_REMOVE_TEXT.reviewAndCurateAfterRemoval,
+    })
+
+    // A plain string detail containing the code text must NOT match by message substring.
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(buildSessionListResponse([])), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            detail: 'Plain server string mentioning result_quotes_removed_file',
+          }),
+          {
+            status: 409,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        ),
+      )
+
+    await expect(
+      resolveCurationWorkspaceSessionId({ documentId: 'doc-1' }),
+    ).rejects.toThrow('Plain server string mentioning result_quotes_removed_file')
   })
 
   it('reports launch availability when no session exists yet but bootstrap is possible', async () => {

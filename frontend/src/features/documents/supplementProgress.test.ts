@@ -8,12 +8,15 @@ import supplementWaitMetadataFixture from '@/test/fixtures/supplements/supplemen
 import { parsePaperSourceListing } from './paperSourceFiles'
 import {
   ADDING_SUPPLEMENTS_STAGE,
+  DocumentFileRemovalContractError,
   WAITING_FOR_SUPPLEMENTS_STAGE,
   getJobSupplementProgress,
   hasWaitingSupplements,
   isKnownSupplementOutcomeReasonCode,
   isPostMainSupplementPhase,
   isValidIsoTimestampWithTz,
+  parseDocumentFileRemovalCheckResponse,
+  parseDocumentFileRemovalResponse,
   parseSupplementJobProgress,
   type DocumentFileRemovalCheckResponse,
 } from './supplementProgress'
@@ -258,5 +261,86 @@ describe('supplementProgress parser (interface I1)', () => {
     expect(isKnownSupplementOutcomeReasonCode('brand_new_code')).toBe(false)
     expect(isKnownSupplementOutcomeReasonCode(null)).toBe(false)
     expect(isKnownSupplementOutcomeReasonCode(undefined)).toBe(false)
+  })
+
+  it('strictly validates removal-check and removal responses against backend fixtures', () => {
+    for (const [caseName, fixture] of Object.entries(removalCheckFixture)) {
+      expect(parseDocumentFileRemovalCheckResponse(fixture), caseName).toEqual(fixture)
+    }
+
+    // Future unknown refusal code is preserved so the UI can word it as N29 instead of crashing.
+    expect(
+      parseDocumentFileRemovalCheckResponse({
+        ...removalCheckFixture.refused_main_file,
+        error: 'future_refusal_code',
+      }).error,
+    ).toBe('future_refusal_code')
+
+    for (const badCheck of [
+      null,
+      [],
+      {},
+      { ...removalCheckFixture.removable_plain, document_id: '' },
+      { ...removalCheckFixture.removable_plain, file_id: '   ' },
+      { ...removalCheckFixture.removable_plain, removable: 'true' },
+      { ...removalCheckFixture.removable_plain, error: 'unexpected_error_when_removable' },
+      { ...removalCheckFixture.refused_main_file, error: null },
+      { ...removalCheckFixture.removable_plain, newest_result_quotes_file: 'no' },
+      { ...removalCheckFixture.removable_plain, has_review_session: null },
+      { ...removalCheckFixture.removable_plain, review_and_curate_would_refuse: 0 },
+      { ...removalCheckFixture.refused_file_quoted_in_review_single, session_ids: 'session-1' },
+      { ...removalCheckFixture.refused_file_quoted_in_review_single, session_ids: [''] },
+      { ...removalCheckFixture.refused_file_quoted_in_review_single, session_ids: [123] },
+    ]) {
+      expect(() => parseDocumentFileRemovalCheckResponse(badCheck)).toThrow(
+        DocumentFileRemovalContractError,
+      )
+    }
+
+    expect(
+      parseDocumentFileRemovalResponse({
+        document_id: 'doc-1',
+        file_id: 'file-2',
+        removed: true,
+        cleanup_finished: true,
+        ready_file_count: 1,
+      }),
+    ).toEqual({
+      document_id: 'doc-1',
+      file_id: 'file-2',
+      removed: true,
+      cleanup_finished: true,
+      ready_file_count: 1,
+    })
+
+    expect(
+      parseDocumentFileRemovalResponse({
+        document_id: 'doc-1',
+        file_id: 'file-2',
+        removed: true,
+        cleanup_finished: false,
+        ready_file_count: 2,
+      }),
+    ).toEqual({
+      document_id: 'doc-1',
+      file_id: 'file-2',
+      removed: true,
+      cleanup_finished: false,
+      ready_file_count: 2,
+    })
+
+    for (const badRemoval of [
+      null,
+      {},
+      { document_id: 'doc-1', file_id: 'file-2', removed: false, cleanup_finished: true, ready_file_count: 1 },
+      { document_id: 'doc-1', file_id: 'file-2', removed: true, cleanup_finished: 'yes', ready_file_count: 1 },
+      { document_id: 'doc-1', file_id: 'file-2', removed: true, cleanup_finished: true, ready_file_count: -1 },
+      { document_id: 'doc-1', file_id: 'file-2', removed: true, cleanup_finished: true, ready_file_count: 1.5 },
+      { document_id: '', file_id: 'file-2', removed: true, cleanup_finished: true, ready_file_count: 1 },
+    ]) {
+      expect(() => parseDocumentFileRemovalResponse(badRemoval)).toThrow(
+        DocumentFileRemovalContractError,
+      )
+    }
   })
 })

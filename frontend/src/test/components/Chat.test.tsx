@@ -72,6 +72,7 @@ function mockChatFetch(options?: {
       created: boolean
     }>
   }
+  prepRunResponse?: Response
   activeDocument?: {
     id: string
     filename?: string | null
@@ -83,6 +84,7 @@ function mockChatFetch(options?: {
     rejectHealth = false,
     prepPreview,
     prepRun,
+    prepRunResponse,
     activeDocument,
   } = options ?? {}
 
@@ -126,6 +128,9 @@ function mockChatFetch(options?: {
     }
 
     if (url === '/api/curation-workspace/prep' && init?.method === 'POST') {
+      if (prepRunResponse) {
+        return prepRunResponse
+      }
       return {
         ok: true,
         json: async () => prepRun ?? {
@@ -1557,6 +1562,42 @@ describe('Chat persistence', () => {
     expect(
       await screen.findByText(/Prepared 2 candidate annotations for curation review\./i)
     ).toBeInTheDocument()
+  })
+
+  it('shows the approved Card 19 message when POST /prep returns 409 result_quotes_removed_file', async () => {
+    mockChatFetch({
+      prepPreview: {
+        ready: true,
+        summary_text: 'You discussed 2 candidate annotations. Prepare all for curation review?',
+        candidate_count: 2,
+        unscoped_candidate_count: 0,
+        preparable_candidate_count: 2,
+        extraction_result_count: 1,
+        conversation_message_count: 4,
+        adapter_keys: ['disease'],
+        discussed_adapter_keys: ['disease'],
+        blocking_reasons: [],
+      },
+      prepRunResponse: new Response(
+        JSON.stringify({
+          detail: { error: 'result_quotes_removed_file' },
+        }),
+        {
+          status: 409,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    })
+
+    renderChat({ sessionId: 'session-1' })
+
+    fireEvent.click(screen.getByRole('button', { name: /prepare for curation/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /start prep/i }))
+
+    const expectedMessage =
+      "This paper's newest result quotes a file that was removed from the paper. Run the extraction again to review it."
+    expect((await screen.findAllByText(expectedMessage)).length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByText(/result_quotes_removed_file/)).not.toBeInTheDocument()
   })
 
   it('prepares all adapters in scope and opens the first prepared session', async () => {

@@ -1,5 +1,11 @@
+import { LIBRARY_REMOVE_TEXT } from '@/components/weaviate/paperFileReasonText'
 import { fetchCurationSessionList } from '@/features/curation/inventory/curationInventoryService'
-import { readCurationApiError } from '@/features/curation/services/api'
+import {
+  RESULT_QUOTES_REMOVED_FILE_ERROR_CODE,
+  readCurationApiError,
+  readCurationApiErrorWithCode,
+} from '@/features/curation/services/api'
+import { CurationWorkspaceRequestError } from '@/features/curation/services/curationWorkspaceService'
 import type {
   CurationDocumentBootstrapAvailabilityResponse,
   CurationDocumentBootstrapResponse,
@@ -168,7 +174,15 @@ async function bootstrapCurationSession(
   )
 
   if (!response.ok) {
-    throw new Error(await readCurationApiError(response))
+    const { message, code } = await readCurationApiErrorWithCode(response)
+    if (response.status === 409 && code === RESULT_QUOTES_REMOVED_FILE_ERROR_CODE) {
+      throw new CurationWorkspaceRequestError(
+        409,
+        LIBRARY_REMOVE_TEXT.reviewAndCurateAfterRemoval,
+        RESULT_QUOTES_REMOVED_FILE_ERROR_CODE,
+      )
+    }
+    throw new Error(message)
   }
 
   const payload = await response.json() as CurationDocumentBootstrapResponse

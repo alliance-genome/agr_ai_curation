@@ -3,12 +3,26 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { onPDFDocumentChanged, type PDFViewerDocumentChangedDetail } from '@/components/pdfViewer/pdfEvents'
+import {
+  PAPER_FILES_REFRESH_CHANNEL,
+  PAPER_FILES_REFRESH_STORAGE_KEY,
+  onPDFDocumentChanged,
+  type PDFViewerDocumentChangedDetail,
+} from '@/components/pdfViewer/pdfEvents'
 import type { ViewerFilesPayload } from '@/components/pdfViewer/viewerFiles'
-import { DOCUMENT_ID, FOUR_FILES_PAYLOAD } from '@/components/pdfViewer/viewerFilesFixtures'
+import {
+  DOCUMENT_ID,
+  FOUR_FILES_PAYLOAD,
+  MAIN_FILE_ID,
+  PDF_SUPPLEMENT_FILE_ID,
+  SUPPLEMENTS_ONLY_PAYLOAD,
+  TEXT_SUPPLEMENT_FILE_ID,
+  singleMainPdfFile,
+} from '@/components/pdfViewer/viewerFilesFixtures'
 import { WAITING_FOR_SUPPLEMENTS_STAGE } from '@/features/documents/supplementProgress'
 import type { PdfProcessingJob } from '@/services/weaviate'
 import fileListingFixture from '@/test/fixtures/supplements/file_listing.json'
+import removalCheckFixture from '@/test/fixtures/supplements/removal_check.json'
 import supplementAddMetadataFixture from '@/test/fixtures/supplements/supplement_add_metadata.json'
 import supplementWaitMetadataFixture from '@/test/fixtures/supplements/supplement_wait_metadata.json'
 
@@ -118,6 +132,8 @@ interface StubApiOptions {
   sourceProvider?: Record<string, unknown>
   onAddFiles?: (body: unknown, init?: RequestInit, url?: string) => Response | Promise<Response>
   onFetchJob?: (jobId: string, init?: RequestInit) => Response | Promise<Response>
+  onRemovalCheck?: (fileId: string, init?: RequestInit, url?: string) => Response | Promise<Response>
+  onRemoveFile?: (fileId: string, init?: RequestInit, url?: string) => Response | Promise<Response>
 }
 
 function stubApi(options: StubApiOptions = {}) {
@@ -164,6 +180,20 @@ function stubApi(options: StubApiOptions = {}) {
       }
       const jobId = decodeURIComponent(url.slice('/api/weaviate/pdf-jobs/'.length))
       return await options.onFetchJob(jobId, init)
+    }
+    const removalCheckMatch = /^\/api\/weaviate\/documents\/[^/]+\/files\/([^/]+)\/removal-check$/.exec(url)
+    if (removalCheckMatch && method === 'GET') {
+      if (!options.onRemovalCheck) {
+        throw new Error(`Unexpected removal check without handler: ${url}`)
+      }
+      return await options.onRemovalCheck(decodeURIComponent(removalCheckMatch[1]!), init, url)
+    }
+    const removeFileMatch = /^\/api\/weaviate\/documents\/[^/]+\/files\/([^/]+)$/.exec(url)
+    if (removeFileMatch && method === 'DELETE') {
+      if (!options.onRemoveFile) {
+        throw new Error(`Unexpected file removal without handler: ${url}`)
+      }
+      return await options.onRemoveFile(decodeURIComponent(removeFileMatch[1]!), init, url)
     }
     throw new Error(`Unexpected fetch: ${method} ${url}`)
   })
@@ -214,8 +244,8 @@ describe('DocumentFilesSection (Library Files + Add)', () => {
     const rows = within(list).getAllByRole('listitem')
     expect(rows.map((row) => row.textContent)).toEqual([
       'made-up-paper.pdfMain paperPDFReady',
-      'Table_S1.xlsxSupplementTextReady',
-      'Figure_S2.pdfSupplementPDFReady',
+      'Table_S1.xlsxSupplementTextReadyRemove',
+      'Figure_S2.pdfSupplementPDFReadyRemove',
       'Table_S3.docxSupplementTextBeing added',
     ])
   })
@@ -2122,7 +2152,9 @@ describe('DocumentFilesSection (Library Files + Add)', () => {
     renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
 
     const list = await screen.findByRole('list', { name: 'Files in this paper' })
-    const states = within(list).getAllByRole('listitem').map((row) => row.lastElementChild?.textContent)
+    const states = within(list)
+      .getAllByRole('listitem')
+      .map((row) => row.querySelectorAll('.MuiChip-label')[2]?.textContent)
     expect(states).toEqual(['Ready', 'Ready', 'Ready', 'Being added', 'Could not be added'])
   })
 
@@ -2244,6 +2276,718 @@ describe('DocumentFilesSection (Library Files + Add)', () => {
       expect(fetchMock.mock.calls.filter(([url]) => String(url) === PAPER_FILES_URL)).toHaveLength(2)
     })
     expect(fetchMock.mock.calls.filter(([url]) => String(url) === SOURCE_FILES_URL)).toHaveLength(1)
+  })
+})
+
+describe('DocumentFilesSection (Library Remove)', () => {
+  afterEach(() => {
+    clearPendingAddJobIds()
+    vi.unstubAllGlobals()
+  })
+
+  const THREE_FILES_AFTER_REMOVAL: ViewerFilesPayload = {
+    document_id: DOCUMENT_ID,
+    files: FOUR_FILES_PAYLOAD.files.filter((file) => file.file_id !== TEXT_SUPPLEMENT_FILE_ID),
+  }
+
+  function removalCheckFor(
+    fixtureKey: keyof typeof removalCheckFixture,
+    overrides: Record<string, unknown> = {},
+  ) {
+    return {
+      ...removalCheckFixture[fixtureKey],
+      document_id: DOCUMENT_ID,
+      file_id: TEXT_SUPPLEMENT_FILE_ID,
+      ...overrides,
+    }
+  }
+
+  it('shows Remove only on non-pending supplements when another ready file exists, never on main or a paper\'s only file', async () => {
+    // Standard multi-file paper: main + 2 ready supplements + 1 pending supplement.
+    stubApi()
+    const multiView = renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+
+    await screen.findByRole('list', { name: 'Files in this paper' })
+    expect(screen.queryByRole('button', { name: 'Remove made-up-paper.pdf' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Remove Table_S3.docx' })).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Remove Table_S1.xlsx' })).toBeEnabled()
+      expect(screen.getByRole('button', { name: 'Remove Figure_S2.pdf' })).toBeEnabled()
+    })
+    multiView.unmount()
+
+    // Single main file only: zero Remove buttons.
+    stubApi({
+      paperFiles: { document_id: DOCUMENT_ID, files: [singleMainPdfFile()] },
+    })
+    const mainOnlyView = renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+    await screen.findByRole('list', { name: 'Files in this paper' })
+    expect(screen.queryByRole('button', { name: /Remove/ })).not.toBeInTheDocument()
+    mainOnlyView.unmount()
+
+    // Supplements-only paper with a single ready supplement: zero Remove buttons.
+    stubApi({ paperFiles: SUPPLEMENTS_ONLY_PAYLOAD })
+    const singleSuppView = renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+    await screen.findByRole('list', { name: 'Files in this paper' })
+    expect(screen.queryByRole('button', { name: /Remove/ })).not.toBeInTheDocument()
+    singleSuppView.unmount()
+
+    // 1 failed main + 1 ready supplement (only 1 ready file total): zero Remove buttons.
+    stubApi({
+      paperFiles: {
+        document_id: DOCUMENT_ID,
+        files: [
+          { ...FOUR_FILES_PAYLOAD.files[0]!, status: 'failed', page_count: null, content_url: null },
+          FOUR_FILES_PAYLOAD.files[1]!,
+        ],
+      },
+    })
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+    await screen.findByRole('list', { name: 'Files in this paper' })
+    expect(screen.queryByRole('button', { name: /Remove/ })).not.toBeInTheDocument()
+  })
+
+  it('disables Remove while active jobs are loading, running, or errored, while paper is not completed, or while an add is in flight, and blocks Add during removal', async () => {
+    const user = userEvent.setup()
+
+    // 1) Active job lookup still pending -> Remove fails closed (disabled) until settled empty.
+    let resolveActiveJobs!: (response: Response) => void
+    stubApi({
+      activeJobs: () => new Promise<Response>((resolve) => {
+        resolveActiveJobs = resolve
+      }),
+    })
+    const loadingView = renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+    const pendingRemoveButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    expect(pendingRemoveButton).toBeDisabled()
+    resolveActiveJobs(jsonResponse({ jobs: [], total: 0, limit: 50, offset: 0 }))
+    await waitFor(() => expect(pendingRemoveButton).toBeEnabled())
+    loadingView.unmount()
+
+    // 2) Active job running on paper -> Remove disabled.
+    const runningJob = makeJob({ status: 'running', current_stage: WAITING_FOR_SUPPLEMENTS_STAGE })
+    stubApi({
+      activeJobs: [runningJob],
+      onFetchJob: () => jsonResponse(runningJob),
+    })
+    const activeJobView = renderSection({
+      providerLabel: PROVIDER,
+      providerShortLabel: PROVIDER_SHORT,
+      pollIntervalMs: 500,
+    })
+    const activeJobRemoveButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await screen.findByText('Adding files')
+    expect(activeJobRemoveButton).toBeDisabled()
+    activeJobView.unmount()
+
+    // 3) Active job lookup failed -> Remove fails closed (disabled) until Try again succeeds.
+    let activeJobsAttempts = 0
+    stubApi({
+      activeJobs: () => {
+        activeJobsAttempts += 1
+        if (activeJobsAttempts === 1) {
+          return jsonResponse({ detail: 'Jobs service unavailable' }, 500)
+        }
+        return jsonResponse({ jobs: [], total: 0, limit: 50, offset: 0 })
+      },
+    })
+    const errorView = renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+    const erroredRemoveButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    expect(await screen.findByText('Could not check whether this paper has an active import.')).toBeInTheDocument()
+    expect(erroredRemoveButton).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(erroredRemoveButton).toBeEnabled())
+    errorView.unmount()
+
+    // 4) Non-completed paper -> Remove disabled.
+    stubApi()
+    const nonCompletedView = renderSection({
+      providerLabel: PROVIDER,
+      providerShortLabel: PROVIDER_SHORT,
+      processingStatus: 'processing',
+    })
+    await screen.findByRole('list', { name: 'Files in this paper' })
+    expect(screen.getByRole('button', { name: 'Remove Table_S1.xlsx' })).toBeDisabled()
+    nonCompletedView.unmount()
+
+    // 5) Mutual exclusion: in-flight removal pre-check disables Add checkboxes and Add button.
+    let resolvePrecheck!: (response: Response) => void
+    stubApi({
+      onRemovalCheck: () => new Promise<Response>((resolve) => {
+        resolvePrecheck = resolve
+      }),
+    })
+    const mutualView = renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+    const checkbox = await screen.findByRole('checkbox', { name: 'Made_up_S20' })
+    await user.click(checkbox)
+    const addButton = screen.getByRole('button', { name: 'Add 1 file' })
+    expect(addButton).toBeEnabled()
+    const removeButton = screen.getByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(removeButton).toBeEnabled())
+    await user.click(removeButton)
+
+    expect(checkbox).toBeDisabled()
+    expect(addButton).toBeDisabled()
+    resolvePrecheck(jsonResponse(removalCheckFor('removable_plain')))
+    expect(await screen.findByRole('button', { name: 'Remove file' })).toBeInTheDocument()
+    mutualView.unmount()
+
+    // 6) Mutual exclusion: in-flight Add POST disables Remove immediately.
+    let resolveAdd!: (response: Response) => void
+    stubApi({
+      onAddFiles: () => new Promise<Response>((resolve) => {
+        resolveAdd = resolve
+      }),
+    })
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+    const addCheckbox = await screen.findByRole('checkbox', { name: 'Made_up_S20' })
+    const removeDuringAdd = screen.getByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(removeDuringAdd).toBeEnabled())
+    await user.click(addCheckbox)
+    await user.click(screen.getByRole('button', { name: 'Add 1 file' }))
+    expect(removeDuringAdd).toBeDisabled()
+    resolveAdd(jsonResponse(makeJob({ status: 'completed' }), 202))
+  })
+
+  it('protects Remove with active-job checks on non-provider papers that still have removable supplements', async () => {
+    const user = userEvent.setup()
+    let activeJobCalls = 0
+    stubApi({
+      activeJobs: () => {
+        activeJobCalls += 1
+        if (activeJobCalls === 1) {
+          return jsonResponse({ detail: 'Temporary active-jobs failure' }, 500)
+        }
+        return jsonResponse({ jobs: [], total: 0, limit: 50, offset: 0 })
+      },
+    })
+
+    renderSection({ providerLabel: null })
+
+    const removeButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    expect(await screen.findByText('Could not check whether this paper has an active import.')).toBeInTheDocument()
+    expect(removeButton).toBeDisabled()
+
+    await user.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(removeButton).toBeEnabled())
+  })
+
+  it('shows confirmation dialog with and without N40 warning based on pre-check response', async () => {
+    const user = userEvent.setup()
+
+    // Case 1: removable_plain -> N39 body, NO N40 warning.
+    stubApi({
+      onRemovalCheck: () => jsonResponse(removalCheckFor('removable_plain')),
+    })
+    const plainView = renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+    const plainRemove = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(plainRemove).toBeEnabled())
+    await user.click(plainRemove)
+
+    const plainDialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    expect(
+      within(plainDialog).getByText(
+        'AI Curation will no longer read this file or show it in the viewer. Evidence already saved stays as it is.',
+      ),
+    ).toBeInTheDocument()
+    expect(
+      within(plainDialog).queryByText(
+        "This paper's newest result quotes this file, so Review & Curate will ask you to run the extraction again.",
+      ),
+    ).not.toBeInTheDocument()
+    expect(within(plainDialog).getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
+    expect(within(plainDialog).getByRole('button', { name: 'Remove file' })).toBeInTheDocument()
+    plainView.unmount()
+
+    // Case 2: removable_with_review_warning -> shows N40 warning.
+    stubApi({
+      onRemovalCheck: () => jsonResponse(removalCheckFor('removable_with_review_warning')),
+    })
+    const warningView = renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+    const warningRemove = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(warningRemove).toBeEnabled())
+    await user.click(warningRemove)
+
+    const warningDialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    expect(
+      within(warningDialog).getByText(
+        "This paper's newest result quotes this file, so Review & Curate will ask you to run the extraction again.",
+      ),
+    ).toBeInTheDocument()
+    warningView.unmount()
+
+    // Case 3: newest_result_quotes_file=true but paper already has a review session -> review_and_curate_would_refuse=false -> NO N40 warning.
+    stubApi({
+      onRemovalCheck: () =>
+        jsonResponse(
+          removalCheckFor('removable_with_review_warning', {
+            has_review_session: true,
+            review_and_curate_would_refuse: false,
+          }),
+        ),
+    })
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+    const sessionRemove = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(sessionRemove).toBeEnabled())
+    await user.click(sessionRemove)
+
+    const sessionDialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    expect(within(sessionDialog).getByRole('button', { name: 'Remove file' })).toBeInTheDocument()
+    expect(
+      within(sessionDialog).queryByText(
+        "This paper's newest result quotes this file, so Review & Curate will ask you to run the extraction again.",
+      ),
+    ).not.toBeInTheDocument()
+  })
+
+  it.each([
+    {
+      name: 'single review session (Card 2 W-D1, count only, no session names)',
+      payload: () => removalCheckFor('refused_file_quoted_in_review_single'),
+      expectedText: 'This file is quoted in 1 review session. To remove it, delete the paper.',
+      forbiddenTokens: ['session-1'],
+    },
+    {
+      name: 'multiple review sessions (Card 2 W-D1, count only, no session names)',
+      payload: () => removalCheckFor('refused_file_quoted_in_review_multiple'),
+      expectedText: 'This file is quoted in 2 review sessions. To remove it, delete the paper.',
+      forbiddenTokens: ['session-1', 'session-2'],
+    },
+    {
+      name: 'main_file_not_removable',
+      payload: () => removalCheckFor('refused_main_file'),
+      expectedText: 'The main paper cannot be removed. To remove it, delete the paper.',
+      forbiddenTokens: ['main_file_not_removable'],
+    },
+    {
+      name: 'last_file_not_removable',
+      payload: () => removalCheckFor('refused_last_file'),
+      expectedText: "A paper's only file cannot be removed. To remove it, delete the paper.",
+      forbiddenTokens: ['last_file_not_removable'],
+    },
+    {
+      name: 'import_in_progress',
+      payload: () => removalCheckFor('refused_import_in_progress'),
+      expectedText: "This paper's import is still running. You can add or remove files when it has finished.",
+      forbiddenTokens: ['import_in_progress'],
+    },
+    {
+      name: 'paper_not_completed',
+      payload: () => removalCheckFor('refused_paper_not_completed'),
+      expectedText: 'Files can be removed once the paper has finished processing.',
+      forbiddenTokens: ['paper_not_completed'],
+    },
+    {
+      name: 'file_not_in_paper',
+      payload: () => removalCheckFor('refused_file_not_in_paper'),
+      expectedText: 'This file is no longer in the paper.',
+      forbiddenTokens: ['file_not_in_paper'],
+    },
+    {
+      name: 'unknown future refusal code -> N29 fallback',
+      payload: () => removalCheckFor('refused_main_file', { error: 'future_unrecognized_refusal' }),
+      expectedText: 'This screen cannot describe this file yet.',
+      forbiddenTokens: ['future_unrecognized_refusal'],
+    },
+  ])('renders pre-check refusal for $name with Close button and NO confirm button', async ({ payload, expectedText, forbiddenTokens }) => {
+    const user = userEvent.setup()
+    stubApi({
+      onRemovalCheck: () => jsonResponse(payload()),
+    })
+
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+    const removeButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(removeButton).toBeEnabled())
+    await user.click(removeButton)
+
+    const dialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    expect(await within(dialog).findByText(expectedText)).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: 'Remove file' })).not.toBeInTheDocument()
+    for (const token of forbiddenTokens) {
+      expect(dialog.textContent).not.toContain(token)
+    }
+
+    await user.click(within(dialog).getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('shows Card 38 Try again on pre-check network, 409 busy, and 503 busy failures without leaking raw server text, and aborts cleanly on cancel', async () => {
+    const user = userEvent.setup()
+    let attempts = 0
+    const signals: Array<AbortSignal | null | undefined> = []
+
+    stubApi({
+      onRemovalCheck: (_fileId, init) => {
+        attempts += 1
+        signals.push(init?.signal)
+        if (attempts === 1) {
+          return jsonResponse({ detail: 'Raw internal 409 lock string' }, 409)
+        }
+        if (attempts === 2) {
+          return jsonResponse({ detail: 'Raw internal 503 pool string' }, 503)
+        }
+        if (attempts === 3) {
+          return Promise.reject(new TypeError('Failed to fetch'))
+        }
+        return jsonResponse(removalCheckFor('removable_plain'))
+      },
+    })
+
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+    const removeButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(removeButton).toBeEnabled())
+    await user.click(removeButton)
+
+    const dialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    expect(
+      await within(dialog).findByText('Another operation on this paper is in progress; try again in a moment.'),
+    ).toBeInTheDocument()
+    expect(dialog.textContent).not.toContain('Raw internal 409 lock string')
+
+    await user.click(within(dialog).getByRole('button', { name: 'Try again' }))
+    expect(
+      await within(dialog).findByText('The server is busy right now; try removing the file again in a moment.'),
+    ).toBeInTheDocument()
+    expect(dialog.textContent).not.toContain('Raw internal 503 pool string')
+
+    await user.click(within(dialog).getByRole('button', { name: 'Try again' }))
+    expect(
+      await within(dialog).findByText('Could not check whether this file can be removed.'),
+    ).toBeInTheDocument()
+
+    await user.click(within(dialog).getByRole('button', { name: 'Try again' }))
+    expect(await within(dialog).findByRole('button', { name: 'Remove file' })).toBeInTheDocument()
+    expect(attempts).toBe(4)
+
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    // Cancelling while pre-check is still in flight aborts its AbortSignal cleanly.
+    let cancelSignal: AbortSignal | null | undefined
+    stubApi({
+      onRemovalCheck: (_fileId, init) => {
+        cancelSignal = init?.signal
+        return new Promise<Response>(() => undefined)
+      },
+    })
+    const cancelView = renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+    const removeButtons = await screen.findAllByRole('button', { name: 'Remove Table_S1.xlsx' })
+    const secondRemove = removeButtons[removeButtons.length - 1]!
+    await waitFor(() => expect(secondRemove).toBeEnabled())
+    await user.click(secondRemove)
+    const checkingDialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    expect(cancelSignal?.aborted).toBe(false)
+    await user.click(within(checkingDialog).getByRole('button', { name: 'Cancel' }))
+    expect(cancelSignal?.aborted).toBe(true)
+    cancelView.unmount()
+  })
+
+  it('removes a supplement on confirmation and refreshes attached files, source listing, Library documents row, and same-tab + cross-tab open viewer', async () => {
+    const user = userEvent.setup()
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const onFilesChanged = vi.fn()
+    const viewerEvents: PDFViewerDocumentChangedDetail[] = []
+    const unsubscribeViewer = onPDFDocumentChanged((event) => viewerEvents.push(event.detail))
+    const broadcastMessages: Array<{ channel: string; data: unknown }> = []
+    const originalBroadcastChannel = globalThis.BroadcastChannel
+
+    class MockBroadcastChannel {
+      name: string
+      constructor(name: string) {
+        this.name = name
+      }
+      postMessage(data: unknown) {
+        broadcastMessages.push({ channel: this.name, data })
+      }
+      close() {}
+      addEventListener() {}
+      removeEventListener() {}
+    }
+
+    vi.stubGlobal('BroadcastChannel', MockBroadcastChannel)
+    client.setQueryData(['documents'], { documents: [{ id: DOCUMENT_ID, ready_file_count: 3 }] })
+    const invalidateSpy = vi.spyOn(client, 'invalidateQueries')
+
+    let paperFilesCalls = 0
+    let listingCalls = 0
+    let deletedFileId: string | null = null
+
+    const listingBeforeRemoval = listingWith([
+      fileListingFixture.files[0],
+      { ...fileListingFixture.files[1], in_this_paper: true, tickable: false, not_tickable_reason: 'already_in_paper' },
+    ])
+    const listingAfterRemoval = listingWith([
+      fileListingFixture.files[0],
+      fileListingFixture.files[1],
+    ])
+
+    stubApi({
+      paperFiles: () => {
+        paperFilesCalls += 1
+        return jsonResponse(paperFilesCalls === 1 ? FOUR_FILES_PAYLOAD : THREE_FILES_AFTER_REMOVAL)
+      },
+      listing: () => {
+        listingCalls += 1
+        return jsonResponse(listingCalls === 1 ? listingBeforeRemoval : listingAfterRemoval)
+      },
+      onRemovalCheck: () => jsonResponse(removalCheckFor('removable_plain')),
+      onRemoveFile: (fileId) => {
+        deletedFileId = fileId
+        return jsonResponse({
+          document_id: DOCUMENT_ID,
+          file_id: fileId,
+          removed: true,
+          cleanup_finished: true,
+          ready_file_count: 2,
+        })
+      },
+    })
+
+    try {
+      renderSection(
+        {
+          providerLabel: PROVIDER,
+          providerShortLabel: PROVIDER_SHORT,
+          onFilesChanged,
+        },
+        client,
+      )
+
+      const removeButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+      await waitFor(() => expect(removeButton).toBeEnabled())
+      await user.click(removeButton)
+
+      const dialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+      await user.click(within(dialog).getByRole('button', { name: 'Remove file' }))
+
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      })
+      expect(deletedFileId).toBe(TEXT_SUPPLEMENT_FILE_ID)
+
+      await waitFor(() => {
+        expect(paperFilesCalls).toBe(2)
+        expect(listingCalls).toBe(2)
+        expect(onFilesChanged).toHaveBeenCalledTimes(1)
+        expect(viewerEvents).toHaveLength(1)
+      })
+
+      // 1) Attached files list removed Table_S1.xlsx and source listing re-offers Made_up_S20.
+      const filesList = screen.getByRole('list', { name: 'Files in this paper' })
+      expect(within(filesList).queryByText('Table_S1.xlsx')).not.toBeInTheDocument()
+      expect(within(filesList).getByText('Figure_S2.pdf')).toBeInTheDocument()
+      expect(await screen.findByRole('checkbox', { name: 'Made_up_S20' })).toBeInTheDocument()
+
+      // 2) Library documents query invalidated alongside onFilesChanged callback.
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documents'] })
+
+      // 3) Open viewer refreshed with refreshOnlyIfOpen: true (same-tab) + cross-tab BroadcastChannel.
+      expect(viewerEvents[0]).toMatchObject({
+        documentId: DOCUMENT_ID,
+        refreshOnlyIfOpen: true,
+      })
+      expect(viewerEvents[0]!.files.map((file) => file.file_id)).toEqual([
+        MAIN_FILE_ID,
+        PDF_SUPPLEMENT_FILE_ID,
+      ])
+      expect(broadcastMessages).toContainEqual(
+        expect.objectContaining({
+          channel: PAPER_FILES_REFRESH_CHANNEL,
+          data: expect.objectContaining({ documentId: DOCUMENT_ID }),
+        }),
+      )
+    } finally {
+      unsubscribeViewer()
+      invalidateSpy.mockRestore()
+      vi.stubGlobal('BroadcastChannel', originalBroadcastChannel)
+    }
+  })
+
+  it('falls back to localStorage storage refresh signal when BroadcastChannel is unavailable and shows NOTHING extra when cleanup_finished is false (Card 3 W-D2)', async () => {
+    const user = userEvent.setup()
+    const onFilesChanged = vi.fn()
+    const originalBroadcastChannel = globalThis.BroadcastChannel
+    vi.stubGlobal('BroadcastChannel', undefined)
+    window.localStorage.removeItem(PAPER_FILES_REFRESH_STORAGE_KEY)
+
+    let paperFilesCalls = 0
+    stubApi({
+      paperFiles: () => {
+        paperFilesCalls += 1
+        return jsonResponse(paperFilesCalls === 1 ? FOUR_FILES_PAYLOAD : THREE_FILES_AFTER_REMOVAL)
+      },
+      onRemovalCheck: () => jsonResponse(removalCheckFor('removable_plain')),
+      onRemoveFile: (fileId) =>
+        jsonResponse({
+          document_id: DOCUMENT_ID,
+          file_id: fileId,
+          removed: true,
+          cleanup_finished: false,
+          ready_file_count: 2,
+        }),
+    })
+
+    try {
+      const { container } = renderSection({
+        providerLabel: PROVIDER,
+        providerShortLabel: PROVIDER_SHORT,
+        onFilesChanged,
+      })
+
+      const removeButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+      await waitFor(() => expect(removeButton).toBeEnabled())
+      await user.click(removeButton)
+
+      const dialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+      await user.click(within(dialog).getByRole('button', { name: 'Remove file' }))
+
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+        expect(paperFilesCalls).toBe(2)
+        expect(onFilesChanged).toHaveBeenCalledTimes(1)
+      })
+
+      // Card 3 (W-D2): ZERO extra alerts, warnings, or cleanup copy in UI when cleanup_finished is false.
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+      expect(container.textContent).not.toMatch(/clean|clearing|unfinished|stored copies/i)
+
+      // Cross-tab localStorage fallback signal published for this document.
+      const storedSignal = window.localStorage.getItem(PAPER_FILES_REFRESH_STORAGE_KEY)
+      expect(storedSignal).not.toBeNull()
+      expect(JSON.parse(storedSignal!)).toMatchObject({ documentId: DOCUMENT_ID })
+    } finally {
+      window.localStorage.removeItem(PAPER_FILES_REFRESH_STORAGE_KEY)
+      vi.stubGlobal('BroadcastChannel', originalBroadcastChannel)
+    }
+  })
+
+  it('handles DELETE refusals strictly by code/status: 409 file_quoted_in_review, 409/503 busy with Try again, 404 file_not_in_paper with refresh, and unknown code', async () => {
+    const user = userEvent.setup()
+
+    // 1) DELETE 409 file_quoted_in_review (multiple sessions, zero session names) -> Close only, NO confirm button.
+    stubApi({
+      onRemovalCheck: () => jsonResponse(removalCheckFor('removable_plain')),
+      onRemoveFile: () =>
+        jsonResponse(
+          { detail: { error: 'file_quoted_in_review', session_ids: ['secret-session-a', 'secret-session-b'] } },
+          409,
+        ),
+    })
+    const quotedView = renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+    const quotedRemove = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(quotedRemove).toBeEnabled())
+    await user.click(quotedRemove)
+    const quotedDialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    await user.click(within(quotedDialog).getByRole('button', { name: 'Remove file' }))
+
+    expect(
+      await within(quotedDialog).findByText(
+        'This file is quoted in 2 review sessions. To remove it, delete the paper.',
+      ),
+    ).toBeInTheDocument()
+    expect(quotedDialog.textContent).not.toContain('secret-session-a')
+    expect(quotedDialog.textContent).not.toContain('secret-session-b')
+    expect(within(quotedDialog).getByRole('button', { name: 'Close' })).toBeInTheDocument()
+    expect(within(quotedDialog).queryByRole('button', { name: 'Remove file' })).not.toBeInTheDocument()
+    quotedView.unmount()
+
+    // 2) DELETE 409 busy -> 503 busy -> Try again succeeds (mapping strictly by status, never raw detail string).
+    let deleteAttempts = 0
+    stubApi({
+      onRemovalCheck: () => jsonResponse(removalCheckFor('removable_plain')),
+      onRemoveFile: (fileId) => {
+        deleteAttempts += 1
+        if (deleteAttempts === 1) {
+          return jsonResponse({ detail: 'Raw lock error string must not render' }, 409)
+        }
+        if (deleteAttempts === 2) {
+          return jsonResponse({ detail: 'Raw pool timeout string must not render' }, 503)
+        }
+        return jsonResponse({
+          document_id: DOCUMENT_ID,
+          file_id: fileId,
+          removed: true,
+          cleanup_finished: true,
+          ready_file_count: 2,
+        })
+      },
+    })
+    const busyView = renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+    const busyRemove = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(busyRemove).toBeEnabled())
+    await user.click(busyRemove)
+    const busyDialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    await user.click(within(busyDialog).getByRole('button', { name: 'Remove file' }))
+
+    expect(
+      await within(busyDialog).findByText('Another operation on this paper is in progress; try again in a moment.'),
+    ).toBeInTheDocument()
+    expect(busyDialog.textContent).not.toContain('Raw lock error string')
+
+    await user.click(within(busyDialog).getByRole('button', { name: 'Try again' }))
+    expect(
+      await within(busyDialog).findByText('The server is busy right now; try removing the file again in a moment.'),
+    ).toBeInTheDocument()
+    expect(busyDialog.textContent).not.toContain('Raw pool timeout string')
+
+    await user.click(within(busyDialog).getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(deleteAttempts).toBe(3)
+    busyView.unmount()
+
+    // 3) DELETE 404 file_not_in_paper -> shows N44 refusal AND refreshes files/source/parent because file is already gone!
+    let filesCallsFor404 = 0
+    let listingCallsFor404 = 0
+    const onFilesChangedFor404 = vi.fn()
+    stubApi({
+      paperFiles: () => {
+        filesCallsFor404 += 1
+        return jsonResponse(filesCallsFor404 === 1 ? FOUR_FILES_PAYLOAD : THREE_FILES_AFTER_REMOVAL)
+      },
+      listing: () => {
+        listingCallsFor404 += 1
+        return jsonResponse(fileListingFixture)
+      },
+      onRemovalCheck: () => jsonResponse(removalCheckFor('removable_plain')),
+      onRemoveFile: () => jsonResponse({ detail: { error: 'file_not_in_paper' } }, 404),
+    })
+    const missingView = renderSection({
+      providerLabel: PROVIDER,
+      providerShortLabel: PROVIDER_SHORT,
+      onFilesChanged: onFilesChangedFor404,
+    })
+    const missingRemove = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(missingRemove).toBeEnabled())
+    await user.click(missingRemove)
+    const missingDialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    await user.click(within(missingDialog).getByRole('button', { name: 'Remove file' }))
+
+    expect(await within(missingDialog).findByText('This file is no longer in the paper.')).toBeInTheDocument()
+    expect(within(missingDialog).getByRole('button', { name: 'Close' })).toBeInTheDocument()
+    await waitFor(() => {
+      expect(filesCallsFor404).toBe(2)
+      expect(listingCallsFor404).toBe(2)
+      expect(onFilesChangedFor404).toHaveBeenCalledTimes(1)
+    })
+    missingView.unmount()
+
+    // 4) DELETE unknown structured code -> N29 fallback without leaking code.
+    stubApi({
+      onRemovalCheck: () => jsonResponse(removalCheckFor('removable_plain')),
+      onRemoveFile: () => jsonResponse({ detail: { error: 'brand_new_server_refusal' } }, 409),
+    })
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+    const unknownRemove = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(unknownRemove).toBeEnabled())
+    await user.click(unknownRemove)
+    const unknownDialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    await user.click(within(unknownDialog).getByRole('button', { name: 'Remove file' }))
+
+    expect(
+      await within(unknownDialog).findByText('This screen cannot describe this file yet.'),
+    ).toBeInTheDocument()
+    expect(unknownDialog.textContent).not.toContain('brand_new_server_refusal')
   })
 })
 
