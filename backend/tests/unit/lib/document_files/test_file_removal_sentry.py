@@ -228,8 +228,13 @@ async def test_real_weaviate_reconnect_failure_emits_single_sanitized_event_with
         Mock(side_effect=ConnectionError(raw_weaviate_secret)),
     )
 
+    seen_caller_reports: list[bool] = []
     if failing_step == "pieces":
-        monkeypatch.setattr("src.lib.weaviate_client.chunks.get_connection", lambda: broken_conn)
+        def _get_broken_conn(*, caller_reports_failure: bool = False):
+            seen_caller_reports.append(caller_reports_failure)
+            return broken_conn
+
+        monkeypatch.setattr("src.lib.weaviate_client.chunks.get_connection", _get_broken_conn)
 
         async def _ok_piece_count(*_a, **_k):
             return None
@@ -272,6 +277,8 @@ async def test_real_weaviate_reconnect_failure_emits_single_sanitized_event_with
 
     assert result.cleanup_finished is False
     assert result.cleanup_failures == [failing_step]
+    if failing_step == "pieces":
+        assert seen_caller_reports == [True]
     # Exactly ONE Sentry event: WeaviateConnection.session(caller_reports_failure=True)
     # must NOT emit an unmarked ERROR log that LoggingIntegration promotes with the DELETE URL.
     assert len(captured_events) == 1
@@ -298,3 +305,94 @@ async def test_real_weaviate_reconnect_failure_emits_single_sanitized_event_with
     ):
         assert sensitive not in serialized
         assert sensitive not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("write_fails", [False, True])
+async def test_cancelled_remove_paper_file_drains_in_flight_piece_count_write_before_releasing_lock(
+    monkeypatch, write_fails,
+):
+    import asyncio
+    import threading
+    from contextlib import asynccontextmanager
+
+    document_id = uuid4()
+    file_id = uuid4()
+    removed = _make_removed(
+        document_id, file_id, owner_subject="curator-sub", stored_path="curator-sub/doc/supp.md",
+    )
+    monkeypatch.setattr(file_removal, "_mark_removed_or_busy", lambda *_args: removed)
+    monkeypatch.setattr("src.lib.weaviate_client.chunks.delete_chunk_range", lambda *_a, **_k: 0)
+    monkeypatch.setattr("src.lib.document_files.service.remove_stored_files", lambda *_a, **_k: None)
+    monkeypatch.setattr(file_removal, "_delete_removed_row", lambda *_a, **_k: None)
+    monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_a, **_k: None)
+    report = Mock(return_value=True)
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    order: list[str] = []
+
+    class _SlowCountClient:
+        from contextlib import contextmanager
+
+        @contextmanager
+        def session(self, *, caller_reports_failure=False):
+            assert caller_reports_failure is True
+            yield object()
+
+    class _SlowCollection:
+        class _Data:
+            def update(self, **_kwargs):
+                loop.call_soon_threadsafe(entered.set)
+                assert release.wait(10)
+                order.append("piece_count_finished")
+                if write_fails:
+                    raise ConnectionError("private-count-failure-secret")
+
+        data = _Data()
+
+    monkeypatch.setattr(
+        "src.lib.weaviate_helpers.get_user_collections",
+        lambda _client, _user: (None, _SlowCollection()),
+    )
+
+    @asynccontextmanager
+    async def tracked_paper_lock(_doc_id):
+        order.append("lock_acquired")
+        try:
+            yield object()
+        finally:
+            order.append("lock_released")
+
+    async def locked_remove():
+        async with tracked_paper_lock(document_id):
+            return await remove_paper_file(document_id, 42, file_id, weaviate_client=_SlowCountClient())
+
+    task = asyncio.create_task(locked_remove())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=10)
+        task.cancel("first-cancel")
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert order == ["lock_acquired"]
+        # A second cancellation while draining must still keep the lock held.
+        task.cancel("second-cancel")
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert order == ["lock_acquired"]
+    finally:
+        release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert order == ["lock_acquired", "piece_count_finished", "lock_released"]
+    if write_fails:
+        report.assert_called_once()
+        assert report.call_args.kwargs["operation"] == "file_removal_cleanup_failed"
+        assert report.call_args.kwargs["include_request"] is False
+        assert "private-count-failure-secret" not in str(report.call_args)
+    else:
+        report.assert_not_called()

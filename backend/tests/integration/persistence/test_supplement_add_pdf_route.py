@@ -114,7 +114,7 @@ async def test_the_add_route_adds_a_pdf_supplement_as_its_pdf_with_the_rest(owne
         "src.lib.document_sources.registry.get_configured_document_source_provider",
         lambda: _ClosingProvider({"21": WORKBOOK, "70": PDF, "71": PDF_TEXT}),
     )
-    monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda: index)
+    monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda **_kwargs: index)
 
     payload = AddFilesRequest(files=[
         {"provider_file_id": "70", "md5": hashlib.md5(PDF).hexdigest(), "converted_md5": hashlib.md5(PDF_TEXT).hexdigest()},

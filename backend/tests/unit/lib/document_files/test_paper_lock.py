@@ -68,7 +68,11 @@ async def test_cancel_during_acquire(monkeypatch, caplog, failure, capture_fails
         (error,) = report.call_args.args
         operation = "paper_lock_acquire_failed_after_cancel" if failure == "acquire" else "paper_lock_release_failed"
         assert report.call_args.kwargs == {
-            "component": "document_files", "operation": operation, "level": "warning", "fingerprint": [operation],
+            "component": "document_files",
+            "operation": operation,
+            "level": "warning",
+            "fingerprint": [operation],
+            "include_request": False,
         }
         assert type(db_error).__name__ in str(error)
         assert error.__traceback__ is not None
@@ -79,4 +83,85 @@ async def test_cancel_during_acquire(monkeypatch, caplog, failure, capture_fails
 
     for sensitive in (str(db_error), str(capture_error), str(document_id), str(paper_lock.paper_lock_key(document_id))):
         assert sensitive not in repr(report.call_args)
+        assert sensitive not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redaction_enabled", ["false", "true"])
+async def test_paper_lock_release_failure_omits_request_url_with_real_sentry_sdk(
+    monkeypatch, caplog, redaction_enabled,
+):
+    import json
+    import logging
+
+    import sentry_sdk
+    from sentry_sdk import Client
+    from sentry_sdk.integrations.logging import LoggingIntegration
+    from sentry_sdk.transport import Transport
+
+    from src.lib.observability.sentry import before_send
+
+    document_id = uuid4()
+    raw_db_secret = f"pg_advisory_unlock failed for doc={document_id} user=curator.secret@example.org"
+    connection = Mock()
+    taken = Mock()
+    taken.scalar_one.return_value = True
+    connection.execute.side_effect = [taken, RuntimeError(raw_db_secret)]
+    monkeypatch.setattr("src.models.sql.database.engine.connect", lambda: connection)
+    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", redaction_enabled)
+
+    events: list[dict] = []
+
+    class MemoryTransport(Transport):
+        def capture_envelope(self, envelope):
+            for item in envelope.items:
+                if item.headers.get("type") == "event":
+                    events.append(item.payload.json)
+
+    client = Client(
+        dsn="https://public@example.invalid/1",
+        transport=MemoryTransport,
+        before_send=before_send,
+        send_default_pii=False,
+        include_local_variables=False,
+        default_integrations=False,
+        integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+    )
+    caplog.set_level(logging.WARNING, logger=paper_lock.__name__)
+    try:
+        with sentry_sdk.isolation_scope() as scope:
+            scope.set_client(client)
+
+            def _attach_delete_request(event, _hint):
+                event.setdefault(
+                    "request",
+                    {
+                        "method": "DELETE",
+                        "url": f"https://app.example.org/api/weaviate/documents/{document_id}",
+                    },
+                )
+                return event
+
+            scope.add_event_processor(_attach_delete_request)
+            async with paper_lock.paper_operation_lock(document_id) as held_connection:
+                assert held_connection is connection
+            client.flush()
+    finally:
+        client.close()
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["tags"]["runtime_component"] == "document_files"
+    assert event["tags"]["operation"] == "paper_lock_release_failed"
+    assert event["level"] == "warning"
+    assert event["fingerprint"] == ["paper_lock_release_failed"]
+    assert "request" not in event
+    serialized = json.dumps(event)
+    for sensitive in (
+        str(document_id),
+        str(paper_lock.paper_lock_key(document_id)),
+        "curator.secret@example.org",
+        "/api/weaviate/documents/",
+    ):
+        assert sensitive not in serialized
         assert sensitive not in caplog.text
