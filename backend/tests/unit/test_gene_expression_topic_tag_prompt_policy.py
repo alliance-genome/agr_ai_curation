@@ -1,20 +1,34 @@
-"""WormBase scope rules for the gene-expression topic-tag agent (ALL-1462).
-
-The shared topic-tag prompt stays organism-neutral. WormBase's scope for
-ATP:0000041 (wild-type C. elegans only, with WB's exclusions) is a WB group
-rule, so it reaches WB curators and no other group.
-"""
+"""WormBase scope rules and 0.12.0 disabled-state policy for gene_expression_topic_tag."""
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
+from sqlalchemy.sql.elements import False_, True_
 import yaml
 
-from src.lib.config import agent_sources
+from src.lib.agent_access import is_resource_access_allowed
+from src.lib.agent_studio import runtime_validation
+from src.lib.agent_studio.flow_agent_policy import flow_palette_show_in_palette
+from src.lib.agent_studio.registry_builder import build_agent_registry
+from src.lib.agent_studio.studio_guide import (
+    prepare_studio_prompt_template,
+    read_studio_guide,
+)
+from src.lib.agent_studio.system_agent_sync import _build_system_agent_values
+from src.lib.config import agent_loader, agent_sources
+from src.lib.config.groups_loader import load_groups
+from src.lib.config.models_loader import load_models
+from src.lib.runtime_entrypoint import validate_runtime_packages
 
 
-REPO_PACKAGES_DIR = Path(__file__).resolve().parents[3] / "packages"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_PACKAGES_DIR = REPO_ROOT / "packages"
+ALLIANCE_STUDIO_PROMPT_PATH = (
+    REPO_PACKAGES_DIR / "alliance" / "config" / "agent_studio_system_prompt.md"
+)
 
 
 def _topic_tag_source():
@@ -27,6 +41,14 @@ def _topic_tag_source():
 
 def _content(path: Path) -> str:
     return str(yaml.safe_load(path.read_text(encoding="utf-8"))["content"])
+
+
+def _load_shipped_agents(monkeypatch):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    load_groups(REPO_ROOT / "config" / "groups.yaml", force_reload=True)
+    load_models(REPO_ROOT / "config" / "models.yaml", force_reload=True)
+    agent_loader.reset_cache()
+    return agent_loader.load_agent_definitions(force_reload=True)
 
 
 def test_topic_tag_agent_enables_group_rules_and_ships_only_wb():
@@ -54,3 +76,171 @@ def test_wormbase_scope_lives_in_wb_rules_not_the_shared_prompt():
     assert "C. elegans" in wb_rules
     for wormbase_only in ("<wormbase_scope>", "C. elegans", "WormBase"):
         assert wormbase_only not in base_prompt
+
+
+def test_topic_tag_agent_is_disabled_for_0120_across_routing_palette_and_access(
+    monkeypatch,
+):
+    try:
+        definitions = _load_shipped_agents(monkeypatch)
+        agent = definitions["gene_expression_topic_tag"]
+
+        assert agent.supervisor_routing.enabled is False
+        assert agent.frontend.show_in_palette is False
+        assert agent.access.allowed_group_ids == ["WB"]
+        assert agent.curation.launchable is True
+
+        supervisor_tools = agent_loader.get_supervisor_tools()
+        assert "gene_expression_topic_tag" not in {
+            tool["agent_id"] for tool in supervisor_tools
+        }
+        assert "ask_gene_expression_topic_tag_specialist" not in {
+            tool["tool_name"] for tool in supervisor_tools
+        }
+
+        registry = build_agent_registry()
+        entry = registry["gene_expression_topic_tag"]
+        assert entry["supervisor"]["enabled"] is False
+        assert entry["frontend"]["show_in_palette"] is False
+        assert flow_palette_show_in_palette("gene_expression_topic_tag", entry) is False
+
+        assert is_resource_access_allowed(
+            visibility_allowed=True,
+            allowed_group_ids=agent.access.allowed_group_ids,
+            active_group_ids=["WB"],
+        )
+        for active_groups in ([], ["FB"], ["MGI"], ["RGD"], ["SGD"], ["ZFIN"]):
+            assert not is_resource_access_allowed(
+                visibility_allowed=True,
+                allowed_group_ids=agent.access.allowed_group_ids,
+                active_group_ids=active_groups,
+            )
+    finally:
+        agent_loader.reset_cache()
+
+
+def test_topic_tag_agent_is_excluded_from_agent_studio_templates(monkeypatch):
+    import src.api.agent_studio as api_module
+
+    try:
+        definitions = _load_shipped_agents(monkeypatch)
+        rows = [
+            SimpleNamespace(
+                **_build_system_agent_values(
+                    definitions[agent_id], instructions="System prompt"
+                )
+            )
+            for agent_id in ("gene_expression_topic_tag", "gene_extractor")
+        ]
+        topic_row = next(r for r in rows if r.agent_key == "gene_expression_topic_tag")
+        assert topic_row.supervisor_enabled is False
+        assert topic_row.show_in_palette is False
+        assert topic_row.allowed_group_ids == ["WB"]
+        assert topic_row.is_active is True
+
+        filtered_columns: list[str] = []
+
+        class _FilteringQuery:
+            def __init__(self, items):
+                self._items = list(items)
+
+            def filter(self, *criteria):
+                items = list(self._items)
+                for criterion in criteria:
+                    col_name = criterion.left.name
+                    if isinstance(criterion.right, True_):
+                        expected = True
+                    elif isinstance(criterion.right, False_):
+                        expected = False
+                    else:
+                        expected = criterion.right.value
+                    filtered_columns.append(col_name)
+                    items = [item for item in items if getattr(item, col_name) == expected]
+                return _FilteringQuery(items)
+
+            def order_by(self, *_args, **_kwargs):
+                return self
+
+            def all(self):
+                return list(self._items)
+
+        fake_db = SimpleNamespace(query=lambda *_args, **_kwargs: _FilteringQuery(rows))
+        response = asyncio.run(
+            api_module.get_agent_templates_endpoint(
+                user={"sub": "wb-curator", "cognito:groups": ["WormBase"]},
+                db=fake_db,
+            )
+        )
+
+        assert "show_in_palette" in filtered_columns
+        template_ids = [item.agent_id for item in response.templates]
+        assert "gene_expression_topic_tag" not in template_ids
+        assert "gene_extractor" in template_ids
+    finally:
+        agent_loader.reset_cache()
+
+
+def test_topic_tag_disabled_config_passes_runtime_startup_validation(monkeypatch):
+    try:
+        definitions = _load_shipped_agents(monkeypatch)
+        monkeypatch.setenv(
+            "AGR_RUNTIME_OVERRIDES_PATH",
+            str(REPO_PACKAGES_DIR / "alliance" / "config" / "runtime_overrides.yaml"),
+        )
+        registry = validate_runtime_packages()
+        assert registry.loaded_packages
+
+        system_rows = [
+            SimpleNamespace(
+                execution_revision_id=None,
+                **_build_system_agent_values(agent, instructions="System prompt"),
+            )
+            for agent in definitions.values()
+        ]
+        monkeypatch.setattr(
+            runtime_validation, "_fetch_active_agents", lambda: system_rows
+        )
+        monkeypatch.setattr(
+            runtime_validation, "_fetch_head_output_contracts", lambda _agents: {}
+        )
+
+        report = runtime_validation.build_agent_runtime_report(strict_mode=True)
+
+        assert report["errors"] == []
+        assert report["status"] == "healthy"
+        assert report["summary"]["missing_system_agent_count"] == 0
+        topic_entry = next(
+            item
+            for item in report["agents"]
+            if item["agent_key"] == "gene_expression_topic_tag"
+        )
+        assert topic_entry["errors"] == []
+        assert topic_entry["disabled"] is False
+    finally:
+        agent_loader.reset_cache()
+
+
+def test_agent_studio_prompt_and_docs_hide_topic_tag_for_0120():
+    raw_prompt = ALLIANCE_STUDIO_PROMPT_PATH.read_text(encoding="utf-8")
+    always_sent, _ = prepare_studio_prompt_template(raw_prompt)
+    architecture = read_studio_guide(
+        template=raw_prompt,
+        render_diagnostic_tools=str,
+        topic="system_architecture",
+    )
+
+    assert architecture["success"] is True
+    assert "gene_expression_topic_tag" not in raw_prompt
+    assert "gene_expression_topic_tag" not in always_sent
+    assert "gene_expression_topic_tag" not in architecture["content"]
+
+    docs_path = (
+        REPO_PACKAGES_DIR / "alliance" / "agents" / "gene_expression_topic_tag" / "docs.yaml"
+    )
+    docs = yaml.safe_load(docs_path.read_text(encoding="utf-8"))
+    assert docs["use_when"] == ["Not offered in release 0.12.0."]
+    assert (
+        "This agent is not offered to curators in release 0.12.0 while its rules and "
+        "ABC workflow are being finished."
+    ) in docs["limitations"]
+    assert "cannot be submitted to ABC until then" not in "\n".join(docs["limitations"])

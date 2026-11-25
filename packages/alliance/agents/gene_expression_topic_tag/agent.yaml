@@ -4,6 +4,26 @@
 # Proposes one paper-level gene-expression topic tag for a curator to sign off.
 # Tool name generated at runtime: ask_gene_expression_topic_tag_specialist
 # =============================================================================
+#
+# Disabled for 0.12.0 (ALL-1754) — how to re-enable in 0.13.0:
+#   1. In this file (packages/alliance/agents/gene_expression_topic_tag/agent.yaml):
+#      - Set supervisor_routing.enabled: true
+#      - Set frontend.show_in_palette: true
+#      - Update or remove access.allowed_group_ids per the 0.13.0 rollout scope.
+#   2. In packages/alliance/agents/gene_expression_topic_tag/docs.yaml:
+#      - Restore use_when and the 4th limitations bullet from the YAML comments there.
+#   3. In packages/alliance/config/agent_studio_system_prompt.md (line 43):
+#      - Restore the gene_expression_topic_tag clause in the "Domain-envelope
+#        extractors" bullet. (No HTML comment is placed in that markdown file
+#        because agent_studio_prompt_loader.py and studio_guide.py send the
+#        file raw to the LLM without stripping HTML comments.)
+#      - Exact pre-0.12.0 line 43 to restore:
+#        - **Domain-envelope extractors**: `gene_extractor`, `allele_extractor`, `disease_extractor`, `phenotype_extractor`, `gene_expression`, and `rgd_go_paper_curator` (RGD curators only) read papers and produce evidence-backed domain-envelope proposals; `gene_expression_topic_tag` reads one paper and proposes its paper-level gene-expression topic tag. `gene_expression` is the flow/prompt alias for the packaged `gene_expression_extraction` agent.
+#   4. Update tests and baseline fixtures:
+#      - backend/tests/unit/api/fixtures/agent_documentation_baseline.json
+#      - backend/tests/contract/alliance/domain_packs/test_topic_entity_tag_domain_pack.py
+#      - backend/tests/unit/test_gene_expression_topic_tag_prompt_policy.py
+# =============================================================================
 
 agent_id: gene_expression_topic_tag
 
@@ -17,8 +37,13 @@ description: >
 category: "Extraction"
 subcategory: "PDF Extraction"
 
+# Disabled for 0.12.0 (ALL-1754): restrict access to WormBase curators.
+# See top-of-file comment block for full 0.13.0 re-enable steps.
+access:
+  allowed_group_ids: [WB]
+
 supervisor_routing:
-  enabled: true
+  enabled: false  # Disabled for 0.12.0 (ALL-1754); set to true to re-enable in 0.13.0
   description: >
     Use to propose the paper-level gene-expression topic tag for the loaded paper.
     Not for extracting detailed expression annotations; use the gene expression
@@ -60,7 +85,7 @@ batch_capabilities:
 
 frontend:
   icon: "🏷️"
-  show_in_palette: true
+  show_in_palette: false  # Disabled for 0.12.0 (ALL-1754); set to true to re-enable in 0.13.0
 
 curation:
   adapter_key: "topic_entity_tag"
