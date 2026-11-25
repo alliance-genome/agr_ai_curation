@@ -568,6 +568,7 @@ render_with_override \
 assert_rejected_with "${unsafe_environment}" "${frontend_build_metadata_file}" \
   'backend.AUTH_PROVIDER' \
   'backend.AGR_PACKAGE_ENV_BOOTSTRAP_MODE' \
+  'benchmark_worker.AGR_PACKAGE_ENV_BOOTSTRAP_MODE' \
   'backend.DEBUG' \
   'backend.DEV_MODE' \
   'backend.SECURE_COOKIES' \
@@ -595,5 +596,25 @@ assert_rejected_with "${unsafe_images}" "${frontend_build_metadata_file}" \
 
 assert_rejected_with "${rendered_file}" "${unsafe_frontend_build_metadata_file}" \
   'frontend image must be compiled with vite_dev_mode=false'
+
+# Explicit blank AGR_PACKAGE_ENV_BOOTSTRAP_MODE= must render blank (no silent default)
+# and be rejected by production preflight on both backend and benchmark_worker.
+blank_mode_env="${temp_dir}/blank-mode.env"
+blank_mode_rendered="${temp_dir}/blank-mode.json"
+cp "${default_env_file}" "${blank_mode_env}"
+printf 'AGR_PACKAGE_ENV_BOOTSTRAP_MODE=\n' >>"${blank_mode_env}"
+docker compose --env-file "${blank_mode_env}" -f "${compose_file}" \
+  config --format json >"${blank_mode_rendered}"
+python3 - "${blank_mode_rendered}" <<'PY'
+import json
+import sys
+
+services = json.load(open(sys.argv[1], encoding="utf-8"))["services"]
+for service in ("backend", "benchmark_worker"):
+    assert services[service]["environment"]["AGR_PACKAGE_ENV_BOOTSTRAP_MODE"] == "", service
+PY
+assert_rejected_with "${blank_mode_rendered}" "${frontend_build_metadata_file}" \
+  'backend.AGR_PACKAGE_ENV_BOOTSTRAP_MODE' \
+  'benchmark_worker.AGR_PACKAGE_ENV_BOOTSTRAP_MODE'
 
 echo "Production Compose render-backed contract tests passed"

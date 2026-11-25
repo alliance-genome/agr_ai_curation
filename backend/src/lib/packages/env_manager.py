@@ -5,9 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Collection
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +42,18 @@ PACKAGE_ENV_BOOTSTRAP_MODES = frozenset(
     }
 )
 
+# Supply-chain allowlist for .pth files inside baked package venvs (mirrors Dockerfile.prod).
+ALLOWED_PACKAGE_VENV_PTH_FILES = frozenset(
+    {
+        "a1_coverage.pth",
+        "distutils-precedence.pth",
+        "sphinxcontrib_jsmath-1.0.1-py3.7-nspkg.pth",
+    }
+)
+
+_SHA256_HASH_TOKEN_PATTERN = re.compile(r"^--hash=sha256:[0-9a-f]{64}$")
+_INLINE_COMMENT_PATTERN = re.compile(r"\s+#.*$")
+
 
 def parse_package_env_bootstrap_mode(raw: str | None) -> str:
     """Validate an AGR_PACKAGE_ENV_BOOTSTRAP_MODE value without silent fallback."""
@@ -65,6 +79,224 @@ def _has_requirement_entries(text: str) -> bool:
         line.strip() and not line.lstrip().startswith("#")
         for line in text.splitlines()
     )
+
+
+def _strip_inline_comment(raw_line: str) -> str:
+    return _INLINE_COMMENT_PATTERN.sub("", raw_line.strip()).strip()
+
+
+def _validate_hashed_lockfile(
+    *,
+    package_id: str,
+    requirements_file: str,
+    requirements_text: str,
+    requirements_lock_file: str,
+    requirements_lock_text: str,
+    constraints_text: str,
+) -> None:
+    """Validate that a hashed package lockfile pins all hashes, matches backend constraints, and satisfies runtime.txt."""
+    from packaging.requirements import InvalidRequirement, Requirement
+    from packaging.utils import canonicalize_name
+    from packaging.version import InvalidVersion, Version
+
+    logical_entries: list[str] = []
+    current = ""
+    for line_no, raw_line in enumerate(requirements_lock_text.splitlines(), start=1):
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            if current:
+                raise PackageEnvironmentBootstrapError(
+                    package_id,
+                    (
+                        f"Malformed line continuation in '{requirements_lock_file}' "
+                        f"for package '{package_id}' at line {line_no}"
+                    ),
+                    details={"step": "validate_lockfile", "line": line_no},
+                )
+            continue
+        if stripped.endswith("\\"):
+            current = f"{current} {stripped[:-1].strip()}".strip()
+        else:
+            current = f"{current} {stripped}".strip()
+            logical_entries.append(current)
+            current = ""
+
+    if current:
+        raise PackageEnvironmentBootstrapError(
+            package_id,
+            (
+                f"Dangling line continuation at end of '{requirements_lock_file}' "
+                f"for package '{package_id}'"
+            ),
+            details={"step": "validate_lockfile"},
+        )
+
+    pkg_pins: dict[str, str] = {}
+    for entry in logical_entries:
+        tokens = entry.split()
+        spec_token = tokens[0]
+        hash_tokens = tokens[1:]
+        try:
+            req = Requirement(spec_token)
+        except InvalidRequirement as exc:
+            raise PackageEnvironmentBootstrapError(
+                package_id,
+                (
+                    f"Invalid requirement '{spec_token}' in '{requirements_lock_file}' "
+                    f"for package '{package_id}': {exc}"
+                ),
+                details={"step": "validate_lockfile", "entry": spec_token},
+            ) from exc
+
+        specifiers = list(req.specifier)
+        if req.url is not None or len(specifiers) != 1 or specifiers[0].operator != "==":
+            raise PackageEnvironmentBootstrapError(
+                package_id,
+                (
+                    f"Package lockfile '{requirements_lock_file}' for '{package_id}' "
+                    f"must use exact '==' version pins only; got '{spec_token}'"
+                ),
+                details={"step": "validate_lockfile", "entry": spec_token},
+            )
+        if not hash_tokens or not all(
+            _SHA256_HASH_TOKEN_PATTERN.fullmatch(token) for token in hash_tokens
+        ):
+            raise PackageEnvironmentBootstrapError(
+                package_id,
+                (
+                    f"Package lockfile '{requirements_lock_file}' for '{package_id}' "
+                    f"must include valid --hash=sha256:... entries for '{spec_token}'"
+                ),
+                details={"step": "validate_lockfile", "entry": spec_token},
+            )
+        canonical = canonicalize_name(req.name)
+        if canonical in pkg_pins:
+            raise PackageEnvironmentBootstrapError(
+                package_id,
+                (
+                    f"Duplicate distribution '{req.name}' in '{requirements_lock_file}' "
+                    f"for package '{package_id}'"
+                ),
+                details={"step": "validate_lockfile", "distribution": req.name},
+            )
+        pkg_pins[canonical] = specifiers[0].version
+
+    backend_pins: dict[str, str] = {}
+    for raw_line in constraints_text.splitlines():
+        line = _strip_inline_comment(raw_line)
+        if not line or line.startswith("#"):
+            continue
+        try:
+            req = Requirement(line)
+        except InvalidRequirement:
+            continue
+        specifiers = list(req.specifier)
+        if len(specifiers) == 1 and specifiers[0].operator == "==":
+            backend_pins[canonicalize_name(req.name)] = specifiers[0].version
+
+    drift = {
+        name: {"package_lock": pkg_ver, "backend_lock": backend_pins[name]}
+        for name, pkg_ver in sorted(pkg_pins.items())
+        if name in backend_pins and pkg_ver != backend_pins[name]
+    }
+    if drift:
+        summary = ", ".join(
+            f"{name}: {versions['package_lock']} != {versions['backend_lock']}"
+            for name, versions in drift.items()
+        )
+        raise PackageEnvironmentBootstrapError(
+            package_id,
+            (
+                f"Package lockfile '{requirements_lock_file}' for '{package_id}' drifts "
+                f"from backend constraints: {summary}"
+            ),
+            details={"step": "validate_lockfile", "version_drift": drift},
+        )
+
+    for raw_line in requirements_text.splitlines():
+        line = _strip_inline_comment(raw_line)
+        if not line or line.startswith("#"):
+            continue
+        try:
+            req = Requirement(line)
+        except InvalidRequirement as exc:
+            raise PackageEnvironmentBootstrapError(
+                package_id,
+                (
+                    f"Invalid direct requirement '{line}' in '{requirements_file}' "
+                    f"for package '{package_id}': {exc}"
+                ),
+                details={"step": "validate_lockfile", "requirement": line},
+            ) from exc
+        if req.marker is not None and not req.marker.evaluate():
+            continue
+        canonical = canonicalize_name(req.name)
+        if canonical not in pkg_pins:
+            raise PackageEnvironmentBootstrapError(
+                package_id,
+                (
+                    f"Package lockfile '{requirements_lock_file}' for '{package_id}' is "
+                    f"missing direct requirement '{req.name}' declared in '{requirements_file}'"
+                ),
+                details={"step": "validate_lockfile", "missing_requirement": req.name},
+            )
+        try:
+            pinned_version = Version(pkg_pins[canonical])
+        except InvalidVersion as exc:
+            raise PackageEnvironmentBootstrapError(
+                package_id,
+                (
+                    f"Invalid pinned version '{pkg_pins[canonical]}' for '{req.name}' "
+                    f"in '{requirements_lock_file}': {exc}"
+                ),
+                details={"step": "validate_lockfile", "distribution": req.name},
+            ) from exc
+        if pinned_version not in req.specifier:
+            raise PackageEnvironmentBootstrapError(
+                package_id,
+                (
+                    f"Package lockfile pin '{req.name}=={pkg_pins[canonical]}' in "
+                    f"'{requirements_lock_file}' does not satisfy '{req}' declared in "
+                    f"'{requirements_file}'"
+                ),
+                details={
+                    "step": "validate_lockfile",
+                    "distribution": req.name,
+                    "pinned_version": pkg_pins[canonical],
+                    "requirement": str(req),
+                },
+            )
+
+
+def _verify_venv_pth_allowlist(
+    *,
+    package_id: str,
+    venv_dir: Path,
+    allowed_pth_files: Collection[str],
+) -> None:
+    """Scan a package venv's lib tree for unknown .pth files BEFORE executing its interpreter."""
+    allowed = set(allowed_pth_files)
+    lib_dir = venv_dir / "lib"
+    if not lib_dir.is_dir():
+        return
+    unknown = [
+        str(pth)
+        for pth in sorted(lib_dir.rglob("*.pth"))
+        if pth.name not in allowed
+    ]
+    if unknown:
+        raise PackageEnvironmentBootstrapError(
+            package_id,
+            (
+                f"SECURITY: Unknown .pth file(s) detected in package venv for "
+                f"'{package_id}': {' '.join(unknown)}"
+            ),
+            details={
+                "step": "verify_pth_whitelist",
+                "venv_dir": str(venv_dir),
+                "unknown_pth_files": unknown,
+            },
+        )
 
 
 @dataclass(frozen=True)
@@ -158,6 +390,7 @@ class PackageEnvironmentManager:
         target_dir: Path,
         require_hashed_lock: bool = True,
         run_pip_check: bool = True,
+        allowed_pth_files: Collection[str] = ALLOWED_PACKAGE_VENV_PTH_FILES,
     ) -> PackageEnvironment:
         """Build a self-contained prebuilt environment for one package at image build time."""
         resolved = self._resolve_requirements(package)
@@ -176,15 +409,19 @@ class PackageEnvironmentManager:
                         "requirements_lock_file": package.manifest.requirements_lock_file,
                     },
                 )
-            if not _has_requirement_entries(resolved.requirements_lock_text):
-                raise PackageEnvironmentBootstrapError(
-                    package.package_id,
-                    (
-                        f"Hashed requirements lockfile for package '{package.package_id}' "
-                        f"is empty: {resolved.requirements_lock_path}"
-                    ),
-                    details={"requirements_lock_path": str(resolved.requirements_lock_path)},
-                )
+        if (
+            resolved.requirements_lock_path is not None
+            and resolved.requirements_lock_text is not None
+            and package.manifest.requirements_lock_file is not None
+        ):
+            _validate_hashed_lockfile(
+                package_id=package.package_id,
+                requirements_file=package.manifest.requirements_file,
+                requirements_text=resolved.requirements_text,
+                requirements_lock_file=package.manifest.requirements_lock_file,
+                requirements_lock_text=resolved.requirements_lock_text,
+                constraints_text=resolved.constraints_text,
+            )
 
         resolved_target_dir = target_dir.expanduser().resolve(strict=False)
         venv_dir = resolved_target_dir / DEFAULT_PACKAGE_RUNNER_VENV_DIRNAME
@@ -201,6 +438,7 @@ class PackageEnvironmentManager:
             resolved,
             venv_dir=venv_dir,
             run_pip_check=run_pip_check,
+            allowed_pth_files=allowed_pth_files,
         )
         metadata_payload = self._build_metadata_payload(
             package,
@@ -226,9 +464,22 @@ class PackageEnvironmentManager:
     def _resolve_requirements(
         self, package: LoadedPackage
     ) -> _ResolvedPackageRequirements:
+        package_root = package.package_path.expanduser().resolve(strict=False)
         requirements_path = (
-            package.package_path / package.manifest.requirements_file
+            package_root / package.manifest.requirements_file
         ).expanduser().resolve(strict=False)
+        if not requirements_path.is_relative_to(package_root):
+            raise PackageEnvironmentBootstrapError(
+                package.package_id,
+                (
+                    f"Requirements file for package '{package.package_id}' escapes "
+                    f"package root '{package_root}': {requirements_path}"
+                ),
+                details={
+                    "package_root": str(package_root),
+                    "requirements_path": str(requirements_path),
+                },
+            )
         if not requirements_path.is_file():
             raise PackageEnvironmentBootstrapError(
                 package.package_id,
@@ -236,12 +487,26 @@ class PackageEnvironmentManager:
                 details={"requirements_path": str(requirements_path)},
             )
 
+        requirements_text = requirements_path.read_text(encoding="utf-8")
+
         requirements_lock_path: Path | None = None
         requirements_lock_text: str | None = None
         if package.manifest.requirements_lock_file is not None:
             requirements_lock_path = (
-                package.package_path / package.manifest.requirements_lock_file
+                package_root / package.manifest.requirements_lock_file
             ).expanduser().resolve(strict=False)
+            if not requirements_lock_path.is_relative_to(package_root):
+                raise PackageEnvironmentBootstrapError(
+                    package.package_id,
+                    (
+                        f"Requirements lockfile for package '{package.package_id}' escapes "
+                        f"package root '{package_root}': {requirements_lock_path}"
+                    ),
+                    details={
+                        "package_root": str(package_root),
+                        "requirements_lock_path": str(requirements_lock_path),
+                    },
+                )
             if not requirements_lock_path.is_file():
                 raise PackageEnvironmentBootstrapError(
                     package.package_id,
@@ -252,6 +517,18 @@ class PackageEnvironmentManager:
                     details={"requirements_lock_path": str(requirements_lock_path)},
                 )
             requirements_lock_text = requirements_lock_path.read_text(encoding="utf-8")
+            if _has_requirement_entries(requirements_text) and not _has_requirement_entries(
+                requirements_lock_text
+            ):
+                raise PackageEnvironmentBootstrapError(
+                    package.package_id,
+                    (
+                        f"Hashed requirements lockfile for package '{package.package_id}' "
+                        f"is empty while '{package.manifest.requirements_file}' declares "
+                        f"dependencies: {requirements_lock_path}"
+                    ),
+                    details={"requirements_lock_path": str(requirements_lock_path)},
+                )
 
         if not self._constraints_path.is_file():
             raise PackageEnvironmentBootstrapError(
@@ -260,7 +537,6 @@ class PackageEnvironmentManager:
                 details={"constraints_path": str(self._constraints_path)},
             )
 
-        requirements_text = requirements_path.read_text(encoding="utf-8")
         constraints_text = self._constraints_path.read_text(encoding="utf-8")
         fingerprint = self._build_fingerprint(
             package,
@@ -287,19 +563,61 @@ class PackageEnvironmentManager:
             self._prebuilt_envs_dir
             if self._prebuilt_envs_dir is not None
             else get_prebuilt_package_envs_dir()
-        )
+        ).expanduser().resolve(strict=False)
         env_dir = get_prebuilt_package_env_dir(
             package.package_id,
             prebuilt_envs_dir=prebuilt_root,
         )
+        if not env_dir.is_relative_to(prebuilt_root):
+            raise PackageEnvironmentBootstrapError(
+                package.package_id,
+                (
+                    f"Prebuilt package environment directory for '{package.package_id}' "
+                    f"escapes prebuilt root '{prebuilt_root}': {env_dir}"
+                ),
+                details={
+                    "mode": PACKAGE_ENV_BOOTSTRAP_MODE_PREBUILT,
+                    "prebuilt_root": str(prebuilt_root),
+                    "prebuilt_env_dir": str(env_dir),
+                },
+            )
+
         venv_dir = get_prebuilt_package_venv_dir(
             package.package_id,
             prebuilt_envs_dir=prebuilt_root,
         )
+        if not venv_dir.is_relative_to(env_dir):
+            raise PackageEnvironmentBootstrapError(
+                package.package_id,
+                (
+                    f"Prebuilt package virtual environment for '{package.package_id}' "
+                    f"escapes environment directory '{env_dir}': {venv_dir}"
+                ),
+                details={
+                    "mode": PACKAGE_ENV_BOOTSTRAP_MODE_PREBUILT,
+                    "prebuilt_env_dir": str(env_dir),
+                    "venv_dir": str(venv_dir),
+                },
+            )
+
         metadata_path = get_prebuilt_package_metadata_path(
             package.package_id,
             prebuilt_envs_dir=prebuilt_root,
         )
+        if not metadata_path.is_relative_to(env_dir):
+            raise PackageEnvironmentBootstrapError(
+                package.package_id,
+                (
+                    f"Prebuilt package metadata for '{package.package_id}' "
+                    f"escapes environment directory '{env_dir}': {metadata_path}"
+                ),
+                details={
+                    "mode": PACKAGE_ENV_BOOTSTRAP_MODE_PREBUILT,
+                    "prebuilt_env_dir": str(env_dir),
+                    "metadata_path": str(metadata_path),
+                },
+            )
+
         python_executable = self._resolve_venv_python(venv_dir)
         metadata = self._read_metadata(metadata_path)
 
@@ -316,6 +634,22 @@ class PackageEnvironmentManager:
                     "prebuilt_env_dir": str(env_dir),
                     "metadata_path": str(metadata_path),
                     "expected_fingerprint": resolved.fingerprint,
+                },
+            )
+
+        if metadata.get("prebuilt") is not True:
+            raise PackageEnvironmentBootstrapError(
+                package.package_id,
+                (
+                    f"Prebuilt package environment metadata for package '{package.package_id}' "
+                    f"at {metadata_path} is not marked prebuilt=true (found {metadata.get('prebuilt')!r}). "
+                    "Prebuilt mode does not install packages at runtime; rebuild the backend image."
+                ),
+                details={
+                    "mode": PACKAGE_ENV_BOOTSTRAP_MODE_PREBUILT,
+                    "prebuilt_env_dir": str(env_dir),
+                    "metadata_path": str(metadata_path),
+                    "actual_prebuilt": metadata.get("prebuilt"),
                 },
             )
 
@@ -357,13 +691,13 @@ class PackageEnvironmentManager:
                 },
             )
 
-        if not python_executable.is_file():
+        if not python_executable.is_file() or not os.access(python_executable, os.X_OK):
             raise PackageEnvironmentBootstrapError(
                 package.package_id,
                 (
-                    f"Prebuilt package environment interpreter missing for package "
-                    f"'{package.package_id}': {python_executable}. Prebuilt mode does not "
-                    "install packages at runtime; rebuild the backend image."
+                    f"Prebuilt package environment interpreter missing or not executable for "
+                    f"package '{package.package_id}': {python_executable}. Prebuilt mode does "
+                    "not install packages at runtime; rebuild the backend image."
                 ),
                 details={
                     "mode": PACKAGE_ENV_BOOTSTRAP_MODE_PREBUILT,
@@ -422,6 +756,7 @@ class PackageEnvironmentManager:
                 resolved,
                 venv_dir=venv_dir,
                 run_pip_check=False,
+                allowed_pth_files=None,
             )
 
             metadata_payload = self._build_metadata_payload(
@@ -453,6 +788,7 @@ class PackageEnvironmentManager:
         *,
         venv_dir: Path,
         run_pip_check: bool,
+        allowed_pth_files: Collection[str] | None,
     ) -> Path:
         self._run_command(
             [str(self._host_python), "-m", "venv", str(venv_dir)],
@@ -500,6 +836,14 @@ class PackageEnvironmentManager:
                 ],
                 package_id=package.package_id,
                 step="install_requirements",
+            )
+
+        # Scan the package venv for unknown .pth files BEFORE invoking its interpreter.
+        if allowed_pth_files is not None:
+            _verify_venv_pth_allowlist(
+                package_id=package.package_id,
+                venv_dir=venv_dir,
+                allowed_pth_files=allowed_pth_files,
             )
 
         if run_pip_check:

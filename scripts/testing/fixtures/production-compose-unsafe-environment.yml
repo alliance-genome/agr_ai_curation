@@ -11,6 +11,9 @@ services:
       SECURE_COOKIES: "false"
       SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS: "20000"
       SENTRY_TRANSACTION_RETAINED_SPANS_MAX: ""
+  benchmark_worker:
+    environment:
+      AGR_PACKAGE_ENV_BOOTSTRAP_MODE: dynamic
   trace_review_backend:
     environment:
       DEV_MODE: "true"

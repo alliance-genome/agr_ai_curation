@@ -1654,7 +1654,10 @@ def _write_fake_agents_dependency(tmp_path: Path) -> Path:
 def test_production_image_ships_the_backend_lock_for_package_environments():
     dockerfile = (BACKEND_ROOT / "Dockerfile.prod").read_text(encoding="utf-8")
     builder_stage, runtime_stage = dockerfile.split(" AS runtime", 1)
+    assert "/usr/local/bin/python3 -I -S" in builder_stage
+    assert builder_stage.index("/usr/local/bin/python3 -I -S") < builder_stage.index("/tmp/cost_pricing")
     assert "src.lib.packages.build_package_envs" in builder_stage
+    assert "--allowed-pth" in builder_stage
     assert "/opt/package-envs" in builder_stage
     assert "KNOWN_PTH=" in builder_stage
     assert "WORKDIR /app/backend" in runtime_stage
@@ -1730,6 +1733,7 @@ def test_prebuilt_environment_matches_across_different_mount_roots_with_zero_sub
             py = prebuilt_root / package_id / "venv" / "bin" / "python"
             py.parent.mkdir(parents=True, exist_ok=True)
             py.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            py.chmod(0o755)
 
     monkeypatch.setattr(builder, "_run_command", fake_build_run)
     built = builder.build_environment(
@@ -1774,12 +1778,17 @@ def test_prebuilt_environment_matches_across_different_mount_roots_with_zero_sub
     "failure_case,expected_fragment",
     [
         ("missing_dir", "metadata missing or invalid"),
-        ("missing_python", "interpreter missing"),
+        ("missing_python", "interpreter missing or not executable"),
+        ("non_executable_python", "interpreter missing or not executable"),
         ("corrupt_metadata", "metadata missing or invalid"),
+        ("prebuilt_false", "not marked prebuilt=true"),
+        ("prebuilt_missing", "not marked prebuilt=true"),
         ("wrong_package_id", "package_id mismatch"),
         ("mutated_lock", "fingerprint mismatch"),
         ("mutated_requirements", "fingerprint mismatch"),
         ("mutated_constraints", "fingerprint mismatch"),
+        ("symlink_env_escape", "escapes prebuilt root"),
+        ("symlink_metadata_escape", "escapes environment directory"),
     ],
 )
 def test_prebuilt_mode_fails_loudly_without_download_fallback(
@@ -1806,6 +1815,7 @@ def test_prebuilt_mode_fails_loudly_without_download_fallback(
                 py = prebuilt_root / package_id / "venv" / "bin" / "python"
                 py.parent.mkdir(parents=True, exist_ok=True)
                 py.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+                py.chmod(0o755)
 
         monkeypatch.setattr(builder, "_run_command", fake_build_run)
         builder.build_environment(
@@ -1817,8 +1827,18 @@ def test_prebuilt_mode_fails_loudly_without_download_fallback(
     python_path = prebuilt_root / "demo.runner" / "venv" / "bin" / "python"
     if failure_case == "missing_python":
         python_path.unlink()
+    elif failure_case == "non_executable_python":
+        python_path.chmod(0o644)
     elif failure_case == "corrupt_metadata":
         metadata_path.write_text("{not-json", encoding="utf-8")
+    elif failure_case == "prebuilt_false":
+        meta = json.loads(metadata_path.read_text(encoding="utf-8"))
+        meta["prebuilt"] = False
+        metadata_path.write_text(json.dumps(meta), encoding="utf-8")
+    elif failure_case == "prebuilt_missing":
+        meta = json.loads(metadata_path.read_text(encoding="utf-8"))
+        meta.pop("prebuilt", None)
+        metadata_path.write_text(json.dumps(meta), encoding="utf-8")
     elif failure_case == "wrong_package_id":
         meta = json.loads(metadata_path.read_text(encoding="utf-8"))
         meta["package_id"] = "other.pkg"
@@ -1835,6 +1855,14 @@ def test_prebuilt_mode_fails_loudly_without_download_fallback(
         )
     elif failure_case == "mutated_constraints":
         constraints.write_text("demo-dependency==2.0.0\n", encoding="utf-8")
+    elif failure_case == "symlink_env_escape":
+        escaped_env = tmp_path / "outside-env"
+        shutil.move(str(prebuilt_root / "demo.runner"), str(escaped_env))
+        (prebuilt_root / "demo.runner").symlink_to(escaped_env)
+    elif failure_case == "symlink_metadata_escape":
+        escaped_meta = tmp_path / "outside-environment.json"
+        shutil.move(str(metadata_path), str(escaped_meta))
+        metadata_path.symlink_to(escaped_meta)
 
     monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime-state-root"))
     monkeypatch.setenv("AGR_PACKAGE_ENV_BOOTSTRAP_MODE", "prebuilt")
@@ -1848,6 +1876,158 @@ def test_prebuilt_mode_fails_loudly_without_download_fallback(
     with pytest.raises(PackageEnvironmentBootstrapError, match=expected_fragment):
         manager.ensure_environment(package)
     assert not (tmp_path / "runtime-state-root" / "state" / "package_runner").exists()
+
+
+def test_resolve_requirements_blocks_symlink_escapes_and_empty_declared_lock(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from src.lib.packages.env_manager import PackageEnvironmentBootstrapError
+
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime"))
+    constraints = tmp_path / "requirements.lock.txt"
+    constraints.write_text("demo-dependency==1.0.0\n", encoding="utf-8")
+    manager, commands = _recording_manager(monkeypatch, constraints)
+
+    # Empty declared lockfile with non-empty runtime.txt must fail in dynamic mode too.
+    empty_lock_pkg = _stage_locked_demo_package(
+        tmp_path / "packages-empty-lock",
+        requirements_text="demo-dependency==1.0.0\n",
+        lock_text="# intentionally empty\n",
+        declare_lock=True,
+    )
+    with pytest.raises(PackageEnvironmentBootstrapError, match="lockfile .* is empty"):
+        manager.ensure_environment(empty_lock_pkg)
+    assert commands == []
+
+    # Symlink escape on requirements/runtime.txt must fail before reading outside files.
+    outside_req = tmp_path / "outside-runtime.txt"
+    outside_req.write_text("demo-dependency==1.0.0\n", encoding="utf-8")
+    escape_req_pkg = _stage_locked_demo_package(tmp_path / "packages-escape-req")
+    req_file = escape_req_pkg.package_path / "requirements" / "runtime.txt"
+    req_file.unlink()
+    req_file.symlink_to(outside_req)
+    with pytest.raises(PackageEnvironmentBootstrapError, match="escapes package root"):
+        manager.ensure_environment(escape_req_pkg)
+
+    # Symlink escape on requirements/runtime.lock.txt must also fail.
+    outside_lock = tmp_path / "outside-runtime.lock.txt"
+    outside_lock.write_text(
+        "demo-dependency==1.0.0 \\\n    --hash=sha256:" + ("a" * 64) + "\n",
+        encoding="utf-8",
+    )
+    escape_lock_pkg = _stage_locked_demo_package(tmp_path / "packages-escape-lock")
+    lock_file = escape_lock_pkg.package_path / "requirements" / "runtime.lock.txt"
+    lock_file.unlink()
+    lock_file.symlink_to(outside_lock)
+    with pytest.raises(PackageEnvironmentBootstrapError, match="escapes package root"):
+        manager.ensure_environment(escape_lock_pkg)
+
+
+def test_build_environment_scans_pth_allowlist_before_running_pip_check(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from src.lib.packages.env_manager import PackageEnvironmentBootstrapError
+
+    package = _stage_locked_demo_package(tmp_path / "packages")
+    constraints = tmp_path / "requirements.lock.txt"
+    constraints.write_text("demo-dependency==1.0.0\n", encoding="utf-8")
+    target_dir = tmp_path / "opt" / "package-envs" / package.package_id
+    manager = PackageEnvironmentManager(
+        host_python=Path(sys.executable),
+        constraints_path=constraints,
+    )
+    steps: list[str] = []
+
+    def fake_run(command, *, package_id, step):
+        steps.append(step)
+        if step == "create_venv":
+            py = target_dir / "venv" / "bin" / "python"
+            py.parent.mkdir(parents=True, exist_ok=True)
+            py.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            py.chmod(0o755)
+        elif step == "install_requirements":
+            site_pkgs = target_dir / "venv" / "lib" / "python3.11" / "site-packages"
+            site_pkgs.mkdir(parents=True, exist_ok=True)
+            (site_pkgs / "malicious_startup.pth").write_text("import os\n", encoding="utf-8")
+        elif step == "verify_requirements":
+            raise AssertionError("pip check must NEVER run when an unknown .pth file is present")
+
+    monkeypatch.setattr(manager, "_run_command", fake_run)
+    with pytest.raises(PackageEnvironmentBootstrapError, match="Unknown .pth file") as exc_info:
+        manager.build_environment(package, target_dir=target_dir)
+    assert exc_info.value.details["step"] == "verify_pth_whitelist"
+    assert steps == ["create_venv", "install_requirements"]
+
+
+@pytest.mark.parametrize(
+    "requirements_text,lock_text,constraints_text,expected_match",
+    [
+        (
+            "demo-dependency>=1.0\nextra-lib>=2.0\n",
+            "demo-dependency==1.0.0 \\\n    --hash=sha256:" + ("a" * 64) + "\n",
+            "demo-dependency==1.0.0\n",
+            "missing direct requirement 'extra-lib'",
+        ),
+        (
+            "demo-dependency>=2.0\n",
+            "demo-dependency==1.0.0 \\\n    --hash=sha256:" + ("a" * 64) + "\n",
+            "demo-dependency==1.0.0\n",
+            "does not satisfy 'demo-dependency>=2.0'",
+        ),
+        (
+            "demo-dependency>=1.0\n",
+            "demo-dependency==2.0.0 \\\n    --hash=sha256:" + ("a" * 64) + "\n",
+            "demo-dependency==1.0.0\n",
+            "drifts from backend constraints",
+        ),
+        (
+            "demo-dependency>=1.0\n",
+            "demo-dependency>=1.0 \\\n    --hash=sha256:" + ("a" * 64) + "\n",
+            "demo-dependency==1.0.0\n",
+            "exact '==' version pins only",
+        ),
+        (
+            "demo-dependency>=1.0\n",
+            "demo-dependency==1.0.0\n",
+            "demo-dependency==1.0.0\n",
+            "must include valid --hash=sha256",
+        ),
+    ],
+)
+def test_build_environment_rejects_stale_or_invalid_custom_package_lockfile(
+    monkeypatch,
+    tmp_path: Path,
+    requirements_text: str,
+    lock_text: str,
+    constraints_text: str,
+    expected_match: str,
+):
+    from src.lib.packages.env_manager import PackageEnvironmentBootstrapError
+
+    package = _stage_locked_demo_package(
+        tmp_path / "packages",
+        requirements_text=requirements_text,
+        lock_text=lock_text,
+        declare_lock=True,
+    )
+    constraints = tmp_path / "requirements.lock.txt"
+    constraints.write_text(constraints_text, encoding="utf-8")
+    manager = PackageEnvironmentManager(
+        host_python=Path(sys.executable),
+        constraints_path=constraints,
+    )
+
+    def forbid_run(*args, **kwargs):
+        raise AssertionError("Stale lockfile must be rejected before running venv/pip")
+
+    monkeypatch.setattr(manager, "_run_command", forbid_run)
+    with pytest.raises(PackageEnvironmentBootstrapError, match=expected_match):
+        manager.build_environment(
+            package,
+            target_dir=tmp_path / "out" / package.package_id,
+        )
 
 
 def test_dynamic_mode_uses_hashed_lockfile_and_fails_when_declared_lock_is_missing(

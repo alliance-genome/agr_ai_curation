@@ -790,6 +790,13 @@ def _safe_rendered_config() -> dict:
                 "image": "example.invalid/trace-review:v0.9.0",
                 "environment": {"DEV_MODE": "false", "SECURE_COOKIES": "true"},
             },
+            "benchmark_worker": {
+                "image": "example.invalid/backend:v0.9.0",
+                "environment": {
+                    "WEAVIATE_EXPECTED_VERSION": "1.31.18",
+                    "AGR_PACKAGE_ENV_BOOTSTRAP_MODE": "prebuilt",
+                },
+            },
         }
     )
     services["weaviate"]["image"] = "example.invalid/weaviate:1.31.18@sha256:" + "a" * 64
@@ -904,6 +911,8 @@ def test_runtime_preflight_allows_explicit_sentry_operational_overrides():
         ("backend", "DEV_MODE", "true", "backend.DEV_MODE"),
         ("backend", "AGR_PACKAGE_ENV_BOOTSTRAP_MODE", "dynamic", "backend.AGR_PACKAGE_ENV_BOOTSTRAP_MODE"),
         ("backend", "AGR_PACKAGE_ENV_BOOTSTRAP_MODE", "", "backend.AGR_PACKAGE_ENV_BOOTSTRAP_MODE"),
+        ("benchmark_worker", "AGR_PACKAGE_ENV_BOOTSTRAP_MODE", "dynamic", "benchmark_worker.AGR_PACKAGE_ENV_BOOTSTRAP_MODE"),
+        ("benchmark_worker", "AGR_PACKAGE_ENV_BOOTSTRAP_MODE", "", "benchmark_worker.AGR_PACKAGE_ENV_BOOTSTRAP_MODE"),
         ("backend", "DEBUG", "true", "backend.DEBUG"),
         ("backend", "AUTH_PROVIDER", "dev", "backend.AUTH_PROVIDER"),
         ("backend", "SECURE_COOKIES", "false", "backend.SECURE_COOKIES"),
@@ -1509,7 +1518,7 @@ def test_package_env_bootstrap_settings_have_deployment_parity(monkeypatch):
 
     for service in ("backend", "benchmark_worker"):
         assert prod_services[service]["environment"]["AGR_PACKAGE_ENV_BOOTSTRAP_MODE"] == (
-            "${AGR_PACKAGE_ENV_BOOTSTRAP_MODE:-prebuilt}"
+            "${AGR_PACKAGE_ENV_BOOTSTRAP_MODE-prebuilt}"
         )
         assert prod_services[service]["environment"]["AGR_PREBUILT_PACKAGE_ENVS_DIR"] == (
             "${AGR_PREBUILT_PACKAGE_ENVS_DIR:-/opt/package-envs}"
@@ -1518,7 +1527,7 @@ def test_package_env_bootstrap_settings_have_deployment_parity(monkeypatch):
         if isinstance(dev_env, list):
             dev_env = _list_environment(dev_env)
         assert dev_env["AGR_PACKAGE_ENV_BOOTSTRAP_MODE"] == (
-            "${AGR_PACKAGE_ENV_BOOTSTRAP_MODE:-dynamic}"
+            "${AGR_PACKAGE_ENV_BOOTSTRAP_MODE-dynamic}"
         )
         assert dev_env["AGR_PREBUILT_PACKAGE_ENVS_DIR"] == (
             "${AGR_PREBUILT_PACKAGE_ENVS_DIR:-/opt/package-envs}"

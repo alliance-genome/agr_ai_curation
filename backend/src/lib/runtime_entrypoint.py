@@ -20,6 +20,7 @@ from src.lib.database.curation_resolver import get_curation_resolver
 from src.lib.packages import (
     AgentBundleRegistrationError,
     ExportKind,
+    PACKAGE_ENV_BOOTSTRAP_MODE_PREBUILT,
     PackageEnvironmentManager,
     PackageRegistry,
     build_document_source_provider_catalog,
@@ -30,6 +31,7 @@ from src.lib.packages import (
     get_file_output_dir,
     get_identifier_prefix_file_path,
     get_identifier_prefix_state_dir,
+    get_package_env_bootstrap_mode,
     get_package_runner_state_dir,
     get_pdf_storage_dir,
     get_pdfx_json_storage_dir,
@@ -209,9 +211,16 @@ def _warn_undeclared_agent_bundle_directories(registry: PackageRegistry) -> None
             )
 
 
+def _should_prepare_package_environments_on_start() -> bool:
+    """Always verify prebuilt package environments at startup; gate eager dynamic installs."""
+    if get_package_env_bootstrap_mode() == PACKAGE_ENV_BOOTSTRAP_MODE_PREBUILT:
+        return True
+    return _parse_bool_env(PACKAGE_ENV_BOOTSTRAP_ENV_VAR, False)
+
+
 def bootstrap_package_environments(registry: PackageRegistry) -> None:
-    """Eagerly create per-package virtual environments when requested."""
-    if not _parse_bool_env(PACKAGE_ENV_BOOTSTRAP_ENV_VAR, False):
+    """Verify prebuilt environments or eagerly create dynamic venvs when requested."""
+    if not _should_prepare_package_environments_on_start():
         logger.info(
             "Skipping eager package environment bootstrap (%s=false)",
             PACKAGE_ENV_BOOTSTRAP_ENV_VAR,
@@ -262,7 +271,7 @@ def maybe_prepare_package_tool_environments_on_start() -> bool:
         )
         return False
 
-    if not _parse_bool_env(PACKAGE_ENV_BOOTSTRAP_ENV_VAR, False):
+    if not _should_prepare_package_environments_on_start():
         logger.info(
             "Skipping eager package environment bootstrap (%s=false)",
             PACKAGE_ENV_BOOTSTRAP_ENV_VAR,

@@ -206,18 +206,21 @@ jobs:
         run: |
           image_ref="${REPOSITORY}@${DIGEST}"
           docker pull "${image_ref}"
-          docker run --rm --network=none --entrypoint /opt/venv/bin/python "${image_ref}" -c '
-            import json, pathlib, subprocess
-            root = pathlib.Path("/opt/package-envs")
-            env_dirs = sorted(p for p in root.iterdir() if p.is_dir())
-            assert env_dirs, "Expected at least one prebuilt package environment under /opt/package-envs"
-            for env_dir in env_dirs:
-                meta = json.loads((env_dir / "environment.json").read_text(encoding="utf-8"))
-                assert meta.get("prebuilt") is True and meta.get("fingerprint"), env_dir
-                py = env_dir / "venv" / "bin" / "python"
-                assert py.is_file(), py
-                subprocess.run([str(py), "-m", "pip", "check"], check=True)
-          '
+          docker run --rm -i --network=none --entrypoint /opt/venv/bin/python "${image_ref}" - <<'PY'
+          import json
+          import pathlib
+          import subprocess
+
+          root = pathlib.Path("/opt/package-envs")
+          env_dirs = sorted(p for p in root.iterdir() if p.is_dir())
+          assert env_dirs, "Expected at least one prebuilt package environment under /opt/package-envs"
+          for env_dir in env_dirs:
+              meta = json.loads((env_dir / "environment.json").read_text(encoding="utf-8"))
+              assert meta.get("prebuilt") is True and meta.get("fingerprint"), env_dir
+              py = env_dir / "venv" / "bin" / "python"
+              assert py.is_file(), py
+              subprocess.run([str(py), "-m", "pip", "check"], check=True)
+          PY
 
       - name: Verify frontend compiled mode artifact
         if: matrix.artifact_id == 'frontend'

@@ -4,19 +4,22 @@ Discovers every runtime package beneath ``--packages-dir`` that exports at least
 one ``tool_binding`` and builds an isolated virtual environment plus fingerprint
 metadata under ``<output-dir>/<package_id>/``. Non-empty package requirements
 must be backed by a hashed ``requirements_lock_file`` declared in ``package.yaml``;
-installation enforces ``--require-hashes --no-deps --no-build-isolation`` and
-runs ``pip check``.
+installation enforces ``--require-hashes --no-deps --no-build-isolation``, scans
+the package venv's ``.pth`` files against the allowlist before executing the new
+interpreter, and runs ``pip check``.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Collection
 from pathlib import Path
 from typing import Sequence
 
 from .discovery import discover_package_manifests
 from .env_manager import (
+    ALLOWED_PACKAGE_VENV_PTH_FILES,
     BACKEND_DEPENDENCY_LOCK,
     PackageEnvironment,
     PackageEnvironmentBootstrapError,
@@ -34,6 +37,7 @@ def build_package_environments(
     constraints_path: Path = BACKEND_DEPENDENCY_LOCK,
     host_python: Path | None = None,
     require_hashed_lock: bool = True,
+    allowed_pth_files: Collection[str] = ALLOWED_PACKAGE_VENV_PTH_FILES,
 ) -> list[PackageEnvironment]:
     """Discover tool-bearing packages and build prebuilt environments for each."""
     resolved_packages_dir = packages_dir.expanduser().resolve(strict=False)
@@ -91,6 +95,7 @@ def build_package_environments(
             loaded,
             target_dir=target_dir,
             require_hashed_lock=require_hashed_lock,
+            allowed_pth_files=allowed_pth_files,
         )
         built.append(env)
         print(
@@ -135,7 +140,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="Base Python interpreter used to create package venvs (defaults to base_prefix python3).",
     )
+    parser.add_argument(
+        "--allowed-pth",
+        type=str,
+        default=None,
+        help="Whitespace-separated allowlist of .pth filenames permitted inside built package venvs.",
+    )
     args = parser.parse_args(argv)
+    allowed_pth = (
+        frozenset(args.allowed_pth.split())
+        if args.allowed_pth is not None
+        else ALLOWED_PACKAGE_VENV_PTH_FILES
+    )
 
     try:
         build_package_environments(
@@ -143,6 +159,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir=args.output_dir,
             constraints_path=args.constraints,
             host_python=args.host_python,
+            allowed_pth_files=allowed_pth,
         )
     except (PackageEnvironmentBootstrapError, RuntimeError, ValueError) as exc:
         print(f"[build-package-envs] ERROR: {exc}", file=sys.stderr, flush=True)

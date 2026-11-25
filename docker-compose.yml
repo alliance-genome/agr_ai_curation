@@ -221,7 +221,7 @@ services:
       - EXTRACTION_FANOUT_WRITER_STORE_RESPONSES=${EXTRACTION_FANOUT_WRITER_STORE_RESPONSES:-false}
       - PYTHONUNBUFFERED=1
       - AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START=${AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START:-true}
-      - AGR_PACKAGE_ENV_BOOTSTRAP_MODE=${AGR_PACKAGE_ENV_BOOTSTRAP_MODE:-dynamic}
+      - AGR_PACKAGE_ENV_BOOTSTRAP_MODE=${AGR_PACKAGE_ENV_BOOTSTRAP_MODE-dynamic}
       - AGR_PREBUILT_PACKAGE_ENVS_DIR=${AGR_PREBUILT_PACKAGE_ENVS_DIR:-/opt/package-envs}
       - DEV_MODE=${DEV_MODE:-false}  # Set to true to bypass Cognito auth for local development
       # Never let generic production-shaped shell exports choose the dev DSN.
@@ -513,7 +513,7 @@ services:
         condition: service_healthy
     environment:
       PYTHONUNBUFFERED: "1"
-      AGR_PACKAGE_ENV_BOOTSTRAP_MODE: ${AGR_PACKAGE_ENV_BOOTSTRAP_MODE:-dynamic}
+      AGR_PACKAGE_ENV_BOOTSTRAP_MODE: ${AGR_PACKAGE_ENV_BOOTSTRAP_MODE-dynamic}
       AGR_PREBUILT_PACKAGE_ENVS_DIR: ${AGR_PREBUILT_PACKAGE_ENVS_DIR:-/opt/package-envs}
       # Must equal the weaviate image tag; the worker refuses any other engine version at start.
       WEAVIATE_EXPECTED_VERSION: "1.31.18"

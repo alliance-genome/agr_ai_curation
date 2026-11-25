@@ -23,6 +23,17 @@ RUN python -m venv "${VIRTUAL_ENV}" \
     && pip install --no-cache-dir --upgrade pip setuptools wheel \
     && pip install --no-cache-dir -r requirements.lock.txt
 
+# Pre-execution security check: scan /opt/venv for unexpected .pth files using
+# the isolated base interpreter (-I -S, skipping site.py) BEFORE invoking
+# /opt/venv/bin/python or /opt/venv/bin/pip for local installs or package builds.
+RUN KNOWN_PTH="a1_coverage.pth distutils-precedence.pth sphinxcontrib_jsmath-1.0.1-py3.7-nspkg.pth" \
+    /usr/local/bin/python3 -I -S -c '\
+import os, pathlib, sys; \
+known = set(os.environ["KNOWN_PTH"].split()); \
+root = pathlib.Path(os.environ["VIRTUAL_ENV"]) / "lib"; \
+unknown = [str(pth) for pth in sorted(root.rglob("*.pth")) if pth.name not in known]; \
+print("SECURITY: Unknown .pth file(s) detected: " + " ".join(unknown) + "\nIf legitimate, add to KNOWN_PTH whitelist in Dockerfile.prod.") or sys.exit(1) if unknown else print("SECURITY: .pth whitelist check passed (base /opt/venv)")'
+
 COPY backend/cost_pricing/ /tmp/cost_pricing/
 RUN pip install --no-cache-dir --no-deps /tmp/cost_pricing
 COPY backend/auth_runtime/ /tmp/auth_runtime/
@@ -30,6 +41,7 @@ RUN pip install --no-cache-dir --no-deps /tmp/auth_runtime
 
 # Bake per-package isolated environments into /opt/package-envs/<package_id> from
 # each package's hashed lockfile (--require-hashes --no-deps --no-build-isolation).
+# Each package venv is scanned against KNOWN_PTH BEFORE its interpreter runs pip check.
 # Only copy the minimal package-discovery/builder modules plus packages/ so
 # unrelated backend code edits keep this layer cached.
 RUN mkdir -p /build/pkg_builder/src/lib/packages \
@@ -46,16 +58,18 @@ COPY backend/src/lib/packages/build_package_envs.py \
      /build/pkg_builder/src/lib/packages/
 COPY packages/ /build/packages/
 
-RUN PYTHONPATH=/build/pkg_builder python -m src.lib.packages.build_package_envs \
+RUN KNOWN_PTH="a1_coverage.pth distutils-precedence.pth sphinxcontrib_jsmath-1.0.1-py3.7-nspkg.pth" && \
+    PYTHONPATH=/build/pkg_builder python -m src.lib.packages.build_package_envs \
     --packages-dir /build/packages \
     --output-dir /opt/package-envs \
     --constraints /build/requirements.lock.txt \
-    --host-python /usr/local/bin/python3
+    --host-python /usr/local/bin/python3 \
+    --allowed-pth "${KNOWN_PTH}"
 
-# Post-install security check: only allow known .pth files across BOTH
-# /opt/venv and every prebuilt package venv under /opt/package-envs (supply chain defense).
+# Final post-install security check across BOTH /opt/venv and every prebuilt
+# package venv under /opt/package-envs using isolated base Python (-I -S).
 RUN KNOWN_PTH="a1_coverage.pth distutils-precedence.pth sphinxcontrib_jsmath-1.0.1-py3.7-nspkg.pth" \
-    python -c '\
+    /usr/local/bin/python3 -I -S -c '\
 import os, pathlib, sys; \
 known = set(os.environ["KNOWN_PTH"].split()); \
 roots = [pathlib.Path(os.environ["VIRTUAL_ENV"]) / "lib"]; \
