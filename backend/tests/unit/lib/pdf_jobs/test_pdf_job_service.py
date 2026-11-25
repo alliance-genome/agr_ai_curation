@@ -232,6 +232,7 @@ def test_list_jobs_filters_by_document_id_before_pagination_and_skips_window_for
     # All three statements (stale reconcile, count, paginated rows) scope to document_id
     # and skip the history window_days created_at cutoff for strictly active-status queries.
     for sql, stmt in zip(compiled_sql, session.statements, strict=True):
+        assert "pdf_processing_jobs.user_id =" in sql
         assert "pdf_processing_jobs.document_id =" in sql
         assert "pdf_processing_jobs.created_at >=" not in sql
         assert target_doc_id in stmt.compile().params.values()

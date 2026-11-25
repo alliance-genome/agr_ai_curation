@@ -1237,6 +1237,284 @@ describe('DocumentFilesSection (Library Files + Add)', () => {
     }
   })
 
+  it('shows a single retryable alert when a server-adopted active job hits 404 then 500, and refreshes /source-files when Try again succeeds empty', async () => {
+    const user = userEvent.setup()
+    let activeJobCalls = 0
+    let listingCalls = 0
+    let paperFilesCalls = 0
+
+    const adoptedWaitingJob = makeJob({
+      job_id: 'job-adopted-404',
+      status: 'running',
+      current_stage: WAITING_FOR_SUPPLEMENTS_STAGE,
+      metadata: supplementWaitMetadataFixture.mixed_waiting,
+    })
+
+    stubApi({
+      activeJobs: () => {
+        activeJobCalls += 1
+        if (activeJobCalls === 1) {
+          return jsonResponse({ jobs: [adoptedWaitingJob], total: 1, limit: 50, offset: 0 })
+        }
+        if (activeJobCalls === 2) {
+          return jsonResponse({ detail: 'Temporary active-jobs failure' }, 500)
+        }
+        return jsonResponse({ jobs: [], total: 0, limit: 50, offset: 0 })
+      },
+      listing: () => {
+        listingCalls += 1
+        return jsonResponse(fileListingFixture)
+      },
+      paperFiles: () => {
+        paperFilesCalls += 1
+        return jsonResponse(paperFilesCalls === 1 ? FOUR_FILES_PAYLOAD : UPDATED_FIVE_FILES_PAYLOAD)
+      },
+      onFetchJob: () => jsonResponse({ detail: 'Not found' }, 404),
+    })
+
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT, pollIntervalMs: 20 })
+
+    // Initially adopted -> N34 shown, then poll returns 404 -> active-jobs refetch returns 500 ->
+    // stale serverActiveJob is NOT retained; single retryable warning appears instead of deadlock!
+    expect(await screen.findByText('Could not check whether this paper has an active import.')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Try again' })).toHaveLength(1)
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    expect(listingCalls).toBe(1)
+
+    // Clicking Try again succeeds with [] -> deferred 404 reconciliation refreshes /files and /source-files before enabling Add!
+    await user.click(screen.getByRole('button', { name: 'Try again' }))
+
+    expect(await screen.findByRole('checkbox', { name: 'Made_up_S20' })).toBeInTheDocument()
+    await waitFor(() => {
+      expect(listingCalls).toBe(2)
+      expect(paperFilesCalls).toBe(2)
+    })
+  })
+
+  it('keeps tickboxes hidden on reopen while post-add /source-files is fetching, and clears retainedReconcileFailed when an adopted job finishes', async () => {
+    const user = userEvent.setup()
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    let listingCalls = 0
+    let resolveSecondListing!: (response: Response) => void
+    let fetchJobCalls = 0
+    let activeJobPhase: 'none' | 'adopted' | 'done' = 'none'
+
+    const runningAddJob = makeJob({
+      job_id: 'job-reopen-edge',
+      status: 'running',
+      metadata: { job_kind: 'supplement_add' },
+    })
+
+    stubApi({
+      activeJobs: () => {
+        const jobs = activeJobPhase === 'adopted' ? [runningAddJob] : []
+        return jsonResponse({ jobs, total: jobs.length, limit: 50, offset: 0 })
+      },
+      listing: () => {
+        listingCalls += 1
+        if (listingCalls === 2) {
+          return new Promise<Response>((resolve) => {
+            resolveSecondListing = resolve
+          })
+        }
+        return jsonResponse(fileListingFixture)
+      },
+      onAddFiles: () => jsonResponse(makeJob({ job_id: 'job-reopen-edge', status: 'pending' }), 202),
+      onFetchJob: () => {
+        fetchJobCalls += 1
+        if (fetchJobCalls === 1) {
+          // Retained-job check fails with 500 on reopen, while activeJobsQuery returns the running job!
+          return jsonResponse({ detail: 'Transient retained check 500' }, 500)
+        }
+        activeJobPhase = 'done'
+        return jsonResponse(
+          makeJob({
+            job_id: 'job-reopen-edge',
+            status: 'completed',
+            message: 'Added 1 of 1 files.',
+            metadata: supplementAddMetadataFixture,
+          }),
+        )
+      },
+    })
+
+    const view = renderSection(
+      { providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT, pollIntervalMs: 20 },
+      client,
+    )
+
+    await user.click(await screen.findByRole('checkbox', { name: 'Made_up_S20' }))
+    await user.click(screen.getByRole('button', { name: 'Add 1 file' }))
+    expect(await screen.findByText('Adding files')).toBeInTheDocument()
+
+    // Close dialog mid-add, then reopen while server still reports the running job (adopted path).
+    activeJobPhase = 'adopted'
+    view.rerender(
+      <QueryClientProvider client={client}>
+        <DocumentFilesSection
+          documentId={DOCUMENT_ID}
+          providerLabel={PROVIDER}
+          providerShortLabel={PROVIDER_SHORT}
+          processingStatus="completed"
+          open={false}
+          pollIntervalMs={20}
+        />
+      </QueryClientProvider>,
+    )
+    view.rerender(
+      <QueryClientProvider client={client}>
+        <DocumentFilesSection
+          documentId={DOCUMENT_ID}
+          providerLabel={PROVIDER}
+          providerShortLabel={PROVIDER_SHORT}
+          processingStatus="completed"
+          open
+          pollIntervalMs={20}
+        />
+      </QueryClientProvider>,
+    )
+
+    // Retained check hit 500, active job was adopted, polled to completed, and triggered listing call 2 (still pending).
+    expect(await screen.findByText('Added 1 of 1 files.')).toBeInTheDocument()
+    await waitFor(() => expect(listingCalls).toBe(2))
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+
+    // Close and reopen while listing call 2 is STILL in flight -> checkboxes MUST stay hidden (`!listingQuery.isFetching`).
+    view.rerender(
+      <QueryClientProvider client={client}>
+        <DocumentFilesSection
+          documentId={DOCUMENT_ID}
+          providerLabel={PROVIDER}
+          providerShortLabel={PROVIDER_SHORT}
+          processingStatus="completed"
+          open={false}
+          pollIntervalMs={20}
+        />
+      </QueryClientProvider>,
+    )
+    view.rerender(
+      <QueryClientProvider client={client}>
+        <DocumentFilesSection
+          documentId={DOCUMENT_ID}
+          providerLabel={PROVIDER}
+          providerShortLabel={PROVIDER_SHORT}
+          processingStatus="completed"
+          open
+          pollIntervalMs={20}
+        />
+      </QueryClientProvider>,
+    )
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+
+    // Once listing call 2 finishes without Made_up_S20, Add is cleanly enabled for Made_up_S22 (retainedReconcileFailed cleared!).
+    resolveSecondListing(
+      jsonResponse(
+        listingWith([
+          fileListingFixture.files[0],
+          { ...fileListingFixture.files[1], in_this_paper: true, tickable: false, not_tickable_reason: 'already_in_paper' },
+          SECOND_TICKABLE_FILE,
+        ]),
+      ),
+    )
+    expect(await screen.findByRole('checkbox', { name: 'Made_up_S22' })).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: 'Made_up_S20' })).not.toBeInTheDocument()
+  })
+
+  it('fires a fresh uncancelled viewer /files GET and publishes viewer refresh even when the initial viewer /files observer GET is still in flight on completion + unmount', async () => {
+    const user = userEvent.setup()
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const viewerEvents: PDFViewerDocumentChangedDetail[] = []
+    const unsubscribeViewer = onPDFDocumentChanged((event) => viewerEvents.push(event.detail))
+
+    let paperFilesCalls = 0
+    let resolveCompletionViewerFetch!: (response: Response) => void
+
+    stubApi({
+      paperFiles: () => {
+        paperFilesCalls += 1
+        if (paperFilesCalls === 1) {
+          // Initial viewer files observer GET stays pending until unmount aborts it.
+          return new Promise<Response>(() => undefined)
+        }
+        return new Promise<Response>((resolve) => {
+          resolveCompletionViewerFetch = resolve
+        })
+      },
+      onAddFiles: () => jsonResponse(makeJob({ job_id: 'job-fresh-viewer-get', status: 'pending' }), 202),
+      onFetchJob: () =>
+        jsonResponse(
+          makeJob({
+            job_id: 'job-fresh-viewer-get',
+            status: 'completed',
+            message: 'Added 1 of 1 files.',
+            metadata: supplementAddMetadataFixture,
+          }),
+        ),
+    })
+
+    try {
+      const view = renderSection(
+        { providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT, pollIntervalMs: 20 },
+        client,
+      )
+
+      await user.click(await screen.findByRole('checkbox', { name: 'Made_up_S20' }))
+      await user.click(screen.getByRole('button', { name: 'Add 1 file' }))
+
+      // Completion fires a SECOND, independent /files GET even though call 1 is still pending!
+      await waitFor(() => expect(paperFilesCalls).toBe(2))
+
+      // Unmount the dialog immediately; call 2 is NOT bound to the observer signal so it still resolves and refreshes the viewer.
+      view.unmount()
+      resolveCompletionViewerFetch(jsonResponse(UPDATED_FIVE_FILES_PAYLOAD))
+
+      await waitFor(() => expect(viewerEvents).toHaveLength(1))
+      expect(viewerEvents[0]).toMatchObject({
+        documentId: DOCUMENT_ID,
+        refreshOnlyIfOpen: true,
+      })
+      expect(viewerEvents[0]!.files.map((file) => file.file_id)).toContain('22222222-2222-2222-2222-222222222223')
+    } finally {
+      unsubscribeViewer()
+    }
+  })
+
+  it('clears N35 after 409 import_in_progress -> 500 active-jobs failure -> Try again empty lookup', async () => {
+    const user = userEvent.setup()
+    let activeJobCalls = 0
+
+    stubApi({
+      activeJobs: () => {
+        activeJobCalls += 1
+        if (activeJobCalls === 2) {
+          return jsonResponse({ detail: 'Temporary active-jobs failure' }, 500)
+        }
+        return jsonResponse({ jobs: [], total: 0, limit: 50, offset: 0 })
+      },
+      onAddFiles: () => jsonResponse({ detail: { error: 'import_in_progress' } }, 409),
+    })
+
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+
+    await user.click(await screen.findByRole('checkbox', { name: 'Made_up_S20' }))
+    await user.click(screen.getByRole('button', { name: 'Add 1 file' }))
+
+    // After 409 -> 500, checkboxes are hidden (fail closed), N35 and active-jobs retry warning are shown.
+    expect(
+      await screen.findByText("This paper's import is still running. You can add or remove files when it has finished."),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Could not check whether this paper has an active import.')).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+
+    // Clicking Try again succeeds with [] -> N35 clears cleanly and checkboxes return!
+    await user.click(screen.getByRole('button', { name: 'Try again' }))
+
+    expect(await screen.findByRole('checkbox', { name: 'Made_up_S20' })).toBeInTheDocument()
+    expect(
+      screen.queryByText("This paper's import is still running. You can add or remove files when it has finished."),
+    ).not.toBeInTheDocument()
+  })
+
   it('shows Card 34 on an uploaded paper without asking the provider listing, using configured short label (Alliance & non-ABC) and hides when import disabled', async () => {
     const fetchMock = stubApi({
       sourceProvider: {

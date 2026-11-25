@@ -331,6 +331,7 @@ function ProviderFilesPart({
   )
   const [retainedReconcileFailed, setRetainedReconcileFailed] = useState(false)
   const [retainedRetryCount, setRetainedRetryCount] = useState(0)
+  const [pending404Refresh, setPending404Refresh] = useState(false)
   const [refreshingAfterAdd, setRefreshingAfterAdd] = useState(false)
   const [pollError, setPollError] = useState<string | null>(null)
   const [pollRetryCount, setPollRetryCount] = useState(0)
@@ -361,6 +362,7 @@ function ProviderFilesPart({
     setImportDisabled(false)
     setTrackedJobState(null)
     setRetainedReconcileFailed(false)
+    setPending404Refresh(false)
     setRefreshingAfterAdd(false)
     setPollError(null)
     setPollRetryCount(0)
@@ -387,8 +389,12 @@ function ProviderFilesPart({
   refetchActiveJobsRef.current = activeJobsQuery.refetch
 
   const serverActiveJob = useMemo(
-    () => activeJobsQuery.data?.find((job) => isActivePdfJobStatus(job.status)) ?? null,
-    [activeJobsQuery.data],
+    () => (
+      activeJobsQuery.isError
+        ? null
+        : (activeJobsQuery.data?.find((job) => isActivePdfJobStatus(job.status)) ?? null)
+    ),
+    [activeJobsQuery.data, activeJobsQuery.isError],
   )
 
   const handleTrackedJobFinished = useCallback(async (targetDocumentId: string) => {
@@ -396,19 +402,16 @@ function ProviderFilesPart({
       setRefreshingAfterAdd(true)
     }
 
-    // Fetch fresh viewer files independently of /source-files and ALWAYS publish the
-    // document-scoped viewer refresh (same-tab + cross-tab) even if this dialog closes mid-flight.
-    const viewerRefreshPromise = queryClient
-      .fetchQuery({
-        queryKey: paperFilesQueryKey(targetDocumentId),
-        queryFn: () => fetchViewerFiles(targetDocumentId),
-        staleTime: 0,
-      })
+    // Fetch fresh viewer files directly (not bound to an unmount-cancelling query observer)
+    // so closing the dialog mid-completion still populates the cache and publishes the
+    // document-scoped viewer refresh (same-tab + cross-tab).
+    const viewerRefreshPromise = fetchViewerFiles(targetDocumentId)
       .then((payload) => {
+        queryClient.setQueryData(paperFilesQueryKey(targetDocumentId), payload)
         showPaperFilesInViewer(targetDocumentId, payload.files, { refreshOnlyIfOpen: true })
       })
       .catch(() => {
-        // Best-effort viewer refresh; React Query captures query error state if still mounted.
+        // Best-effort viewer refresh; leave existing cached state intact on transient failure.
       })
 
     try {
@@ -420,6 +423,8 @@ function ProviderFilesPart({
     } finally {
       if (mountedRef.current && activeDocumentIdRef.current === targetDocumentId) {
         setRefreshingAfterAdd(false)
+        setRetainedReconcileFailed(false)
+        setPollError(null)
         setAddRefusal((prev) => (prev?.code === 'import_in_progress' ? null : prev))
         onFilesChangedRef.current?.()
       }
@@ -499,6 +504,8 @@ function ProviderFilesPart({
     if (!open || !serverActiveJob) {
       return
     }
+    setRetainedReconcileFailed(false)
+    setPollError(null)
     setAddRefusal((prev) => (prev?.code === 'import_in_progress' ? null : prev))
     setTrackedJobState((current) => {
       if (current && current.job.job_id === serverActiveJob.job_id) {
@@ -560,7 +567,8 @@ function ProviderFilesPart({
           }
           if (refetched.isError) {
             // Active-jobs refetch failed after 404: fail closed via activeJobsQuery.isError
-            // (renders one retryable warning and never treats stale cached data as completion).
+            // and trigger a full refresh if a subsequent "Try again" confirms no active job remains.
+            setPending404Refresh(true)
             setTrackedJobState(null)
             setPollError(null)
             return
@@ -646,9 +654,37 @@ function ProviderFilesPart({
     isPaperCompleted
     && !hasActiveJobForPaper
     && activeJobsSettled
+    && !listingQuery.isFetching
     && !reconcilingRetainedJob
     && !retainedReconcileFailed
+    && !pending404Refresh
     && !refreshingAfterAdd
+
+  // Complete a deferred 404 reconciliation once a subsequent active-jobs retry succeeds empty.
+  useEffect(() => {
+    if (!open || !pending404Refresh || !activeJobsSettled) {
+      return
+    }
+    setPending404Refresh(false)
+    if (!hasActiveJobForPaper) {
+      pendingAddJobIdsByDocument.delete(documentId)
+      void handleTrackedJobFinishedRef.current(documentId)
+    }
+  }, [open, pending404Refresh, activeJobsSettled, hasActiveJobForPaper, documentId])
+
+  // Clear N35 (409 import_in_progress) whenever an authoritative active-jobs lookup settles empty
+  // (immediately after 409 or after a 500 -> "Try again" retry), so N35 never sits beside enabled tickboxes.
+  useEffect(() => {
+    if (
+      open
+      && activeJobsSettled
+      && !hasActiveJobForPaper
+      && !submitting
+      && addRefusal?.code === 'import_in_progress'
+    ) {
+      setAddRefusal(null)
+    }
+  }, [open, activeJobsSettled, hasActiveJobForPaper, submitting, addRefusal])
 
   const handleToggleSelect = useCallback((providerFileId: string) => {
     setAddRefusal(null)
@@ -670,8 +706,10 @@ function ProviderFilesPart({
       || submitting
       || hasActiveJobForPaper
       || !activeJobsSettled
+      || listingQuery.isFetching
       || reconcilingRetainedJob
       || retainedReconcileFailed
+      || pending404Refresh
       || refreshingAfterAdd
     ) {
       return
@@ -717,8 +755,8 @@ function ProviderFilesPart({
       ) {
         return
       }
-      setSubmitting(false)
       if (error instanceof AuthenticationError) {
+        setSubmitting(false)
         const signInText =
           listingRefusalText('document_source_curator_token_unavailable', 409, provider)
           ?? 'Sign in again to add files to this paper.'
@@ -727,6 +765,7 @@ function ProviderFilesPart({
       }
       if (error instanceof AddDocumentSourceFilesError) {
         if (error.code === 'document_source_import_disabled') {
+          setSubmitting(false)
           setImportDisabled(true)
           void queryClient.invalidateQueries({ queryKey: paperSourceFilesQueryKey(documentId) })
           return
@@ -742,20 +781,19 @@ function ProviderFilesPart({
             if (text !== null) {
               setAddRefusal({ code: error.code, text, retryable: false })
             }
-            const refetched = await refetchActiveJobsRef.current({ throwOnError: false })
+            // Keep submitting=true across the follow-up active-jobs lookup so the clearing effect
+            // only runs against the settled follow-up result (empty clears N35; 500 keeps N35 until Try again).
+            await refetchActiveJobsRef.current({ throwOnError: false })
             if (
               !controller.signal.aborted
               && mountedRef.current
               && activeDocumentIdRef.current === documentId
-              && !refetched.isError
-              && !refetched.data?.some((job) => isActivePdfJobStatus(job.status))
             ) {
-              // The conflicting job finished before the follow-up lookup completed; clear N35
-              // so it never sits alongside enabled checkboxes.
-              setAddRefusal((prev) => (prev?.code === 'import_in_progress' ? null : prev))
+              setSubmitting(false)
             }
             return
           }
+          setSubmitting(false)
           if (text !== null) {
             const retryable =
               error.code === 'file_removal_unfinished'
@@ -765,6 +803,7 @@ function ProviderFilesPart({
           return
         }
       }
+      setSubmitting(false)
       setAddRefusal({ code: null, text: 'Could not add files to this paper.', retryable: true })
     } finally {
       if (submitAbortControllerRef.current === controller) {
@@ -776,6 +815,8 @@ function ProviderFilesPart({
     documentId,
     hasActiveJobForPaper,
     isPaperCompleted,
+    listingQuery.isFetching,
+    pending404Refresh,
     provider,
     queryClient,
     reconcilingRetainedJob,
