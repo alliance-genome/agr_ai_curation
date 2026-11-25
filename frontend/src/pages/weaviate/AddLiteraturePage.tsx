@@ -49,10 +49,10 @@ import {
   validatePdfSelection,
 } from '@/features/documents/pdfUploadFlow';
 import type {
+  IdentifierSourceFile,
+  IdentifierSourceListedFile,
   IdentifierSourceListing,
   ListingRefusalCode,
-  PaperSourceFile,
-  PaperSourceListedFile,
 } from '@/features/documents/paperSourceFiles';
 import {
   PDF_JOB_FALLBACK_POLL_INTERVAL_MS,
@@ -326,7 +326,7 @@ interface PaperSupplementsPanelProps {
   displayProvider: string;
   selectedByFileId: Record<string, ChosenSupplementInput> | undefined;
   disabled: boolean;
-  onToggleFile: (identifier: string, file: PaperSourceFile) => void;
+  onToggleFile: (identifier: string, file: IdentifierSourceFile) => void;
   onRetry: (identifier: string) => void;
 }
 
@@ -417,7 +417,7 @@ const PaperSupplementsPanel: React.FC<PaperSupplementsPanelProps> = ({
     || listing.not_shown_count > 0
     || listing.duplicate_copies_count > 0;
 
-  const renderListedFileRow = (file: PaperSourceListedFile) => {
+  const renderListedFileRow = (file: IdentifierSourceListedFile) => {
     const fileName = file.display_name || UNNAMED_FILE_LABEL;
     const isMainFile = file.recognized && file.file_role === 'main';
 
@@ -749,7 +749,7 @@ const AddLiteraturePage: React.FC = () => {
   );
 
   const handleToggleSupplementSelection = React.useCallback(
-    (identifier: string, file: PaperSourceFile) => {
+    (identifier: string, file: IdentifierSourceFile) => {
       if (!file.tickable || file.file_role === 'main') {
         return;
       }
