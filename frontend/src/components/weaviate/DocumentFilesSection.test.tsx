@@ -3879,35 +3879,13 @@ describe('DocumentFilesSection (Library Remove)', () => {
       await waitFor(() => expect(paperFilesCalls).toBe(3))
       expect(recoverySignal?.aborted).toBe(false)
 
-      // Close the dialog mid-recovery -> must NOT abort the shared recovery GET.
-      view.rerender(
-        <QueryClientProvider client={client}>
-          <DocumentFilesSection
-            documentId={DOCUMENT_ID}
-            providerLabel={PROVIDER}
-            providerShortLabel={PROVIDER_SHORT}
-            processingStatus="completed"
-            open={false}
-            pollIntervalMs={20}
-          />
-        </QueryClientProvider>,
-      )
+      // Unmount mid-recovery (destroying the QueryObserver) -> must NOT abort the shared recovery GET.
+      view.unmount()
       await new Promise((resolve) => setTimeout(resolve, 25))
       expect(recoverySignal?.aborted).toBe(false)
 
-      // Reopen the dialog while recovery is STILL in flight -> must reuse the same GET (still 3).
-      view.rerender(
-        <QueryClientProvider client={client}>
-          <DocumentFilesSection
-            documentId={DOCUMENT_ID}
-            providerLabel={PROVIDER}
-            providerShortLabel={PROVIDER_SHORT}
-            processingStatus="completed"
-            open
-            pollIntervalMs={20}
-          />
-        </QueryClientProvider>,
-      )
+      // Remount with the same QueryClient while recovery is STILL in flight -> must reuse the same GET (still 3).
+      renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT }, client)
       await new Promise((resolve) => setTimeout(resolve, 25))
       expect(paperFilesCalls).toBe(3)
       expect(recoverySignal?.aborted).toBe(false)
@@ -3917,6 +3895,7 @@ describe('DocumentFilesSection (Library Remove)', () => {
 
       await waitFor(() => {
         expect(viewerEvents).toHaveLength(1)
+        expect(screen.getByRole('button', { name: 'Remove Figure_S2.pdf' })).toBeInTheDocument()
         expect(screen.queryByRole('button', { name: 'Remove Table_S1.xlsx' })).not.toBeInTheDocument()
       })
       expect(paperFilesCalls).toBe(3)
