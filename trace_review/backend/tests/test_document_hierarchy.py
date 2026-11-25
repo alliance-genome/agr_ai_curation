@@ -66,7 +66,29 @@ class PerFileOutlineTests(unittest.TestCase):
         self.assertEqual(result["files"][1]["sections"], [
             {"name": "Sheet1", "page_range": "", "chunk_count": 19, "subsections": []}])
         self.assertEqual(result["top_level_sections"], ["Materials and Methods", "Results", "Sheet1"])
-        self.assertEqual(result["chunk_count_total"], 3 + 1 + 2 + 19)
+        self.assertEqual(result["chunk_count_total"], 3 + 2 + 19)
+
+    def test_single_chunk_in_a_subsection_of_a_named_or_unnamed_file(self):
+        for name in ("paper.pdf", ""):
+            with self.subTest(name=name):
+                outline = f"""## Document Structure
+
+This paper has 1 file. Each file lists its sections and subsections with their exact names; use these names, written exactly, with `read_section` and `read_subsection`.
+
+File 1 of 1: {name} (main paper, PDF, 1 chunks, chunks 0 to 0)
+**Methods** (p.1, 1 chunks)
+  └─ Sampling (p.1, 1 chunks)
+
+### How to use this outline:
+"""
+                result = DocumentHierarchyAnalyzer.analyze({}, _observations(outline))
+
+                self.assertEqual([file["name"] for file in result["files"]], [name])
+                self.assertEqual(result["files"][0]["sections"], [{
+                    "name": "Methods", "page_range": "1", "chunk_count": 1,
+                    "subsections": [{"name": "Sampling", "page_range": "1", "chunk_count": 1}],
+                }])
+                self.assertEqual(result["chunk_count_total"], 1)
 
     def test_the_files_being_added_line_is_reported(self):
         adding = OUTLINE.replace(
@@ -105,7 +127,7 @@ class PerFileOutlineTests(unittest.TestCase):
         self.assertEqual([s["name"] for s in result["sections"][2]["subsections"]],
                          ["2.1. Design of the study", "2.2. Made-up protein ratios"])
         self.assertEqual(result["top_level_sections"], ["TITLE", "Introduction", "Results and Discussion", "Methods"])
-        self.assertEqual(result["chunk_count_total"], 1 + 5 + 25 + 3 + 3 + 7)
+        self.assertEqual(result["chunk_count_total"], 1 + 5 + 25 + 7)
         self.assertEqual(len(result["files"]), 1)
         self.assertIsNone(result["files"][0]["name"])
         self.assertFalse(result["files_being_added"])

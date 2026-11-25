@@ -17,7 +17,8 @@ from .extraction_followup import FACTS as FOLLOWUP_FACTS
 # v2: tool_calls and pdf_citations read numbered section reads (ALL-1550).
 # v3: document_hierarchy reads the per-file outline; section reads show the file
 #     and the section answer codes (ALL-1460, P8c).
-ANALYZER_SCHEMA_VERSION = "extraction_timeline_analyzer.v3"
+# v4: document_hierarchy counts each parent once and retains unnamed files (ALL-1697).
+ANALYZER_SCHEMA_VERSION = "extraction_timeline_analyzer.v4"
 EVENT_SCHEMA_VERSION = "extraction_trace_event.v1"
 EVIDENCE_REVISIONS_SCHEMA_VERSION = "evidence_revisions.v1"
 SUMMARY_TEXT_LIMIT = 500
