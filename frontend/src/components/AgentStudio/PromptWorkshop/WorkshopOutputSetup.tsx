@@ -48,7 +48,7 @@ export default function WorkshopOutputSetup({ value, onChange, agents, onEditStr
   }
   const domains = new Map<string, AgentMetadata>()
   for (const agent of Object.values(agents)) {
-    if (agent.is_active === false || agent.visible === false) continue
+    if (agent.is_active === false || agent.visible === false || agent.show_in_palette === false) continue
     if (agent.domain_extraction_ref) domains.set(`builder:${agent.domain_extraction_ref.package_id}:${agent.domain_extraction_ref.agent_id}`, agent)
     else if (agent.output_schema_key && agent.domain_envelope) domains.set(agent.output_schema_key, agent)
   }

@@ -40,7 +40,7 @@ The system uses a multi-agent architecture:
 
 **Extraction Agents (work with uploaded papers):**
 - **General PDF Extraction Agent**: Answers broad questions about PDF documents.
-- **Domain-envelope extractors**: `gene_extractor`, `allele_extractor`, `disease_extractor`, `phenotype_extractor`, `gene_expression`, and `rgd_go_paper_curator` (RGD curators only) read papers and produce evidence-backed domain-envelope proposals; `gene_expression_topic_tag` reads one paper and proposes its paper-level gene-expression topic tag. `gene_expression` is the flow/prompt alias for the packaged `gene_expression_extraction` agent.
+- **Domain-envelope extractors**: `gene_extractor`, `allele_extractor`, `disease_extractor`, `phenotype_extractor`, `gene_expression`, and `rgd_go_paper_curator` (RGD curators only) read papers and produce evidence-backed domain-envelope proposals. `gene_expression` is the flow/prompt alias for the packaged `gene_expression_extraction` agent.
 - **Formatter/display agents**: `chat_output`, `csv_formatter`, `tsv_formatter`, and `json_formatter` project curated state into chat or files. Each column maps to one field; there are no conditional or fallback columns.
 
 **Validator/Resolver Agents (validate proposed fields):**

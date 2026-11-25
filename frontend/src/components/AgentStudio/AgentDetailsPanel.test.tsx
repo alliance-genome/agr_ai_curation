@@ -67,6 +67,7 @@ function buildFlaggedAgent(): PromptInfo {
     custom_prompt_removed_layer_kinds: ['core_static'],
     custom_prompt_warning: 'Custom-agent prompt still contains locked/core prompt markers after safe cleanup.',
     tools: [],
+    template_eligible: false,
   }
 }
 
@@ -104,6 +105,7 @@ function buildDocumentedAgent(): PromptInfo {
     has_group_rules: false,
     group_rules: {},
     tools: ['lookup_term', 'search_synonyms', 'get_id', 'search_db', 'record_evidence'],
+    template_eligible: true,
     documentation: {
       summary: 'Confirms names against the ontology.',
       capabilities: [{ name: 'Name lookup', description: 'Find identifiers for names.' }],
@@ -284,7 +286,7 @@ describe('AgentDetailsPanel', () => {
   })
 
   it('presents package-owned group restrictions as read-only', () => {
-    const systemAgent = { ...buildCleanCustomAgent(), agent_id: 'gene', agent_name: 'Gene Specialist' }
+    const systemAgent = { ...buildCleanCustomAgent(), agent_id: 'gene', agent_name: 'Gene Specialist', template_eligible: true }
     metadataMocks.agents = {
       gene: { allowed_group_ids: ['group_a'] },
     }
@@ -351,5 +353,59 @@ describe('AgentDetailsPanel', () => {
     expect(effective).toHaveTextContent('Safe locked core contract')
     expect(effective).toHaveTextContent('Parent base prompt')
     expect(effective).toHaveTextContent('Curator overlay guidance')
+  })
+
+  it('hides Clone to Workshop for template_eligible=false agents and keeps it for validators without metadata', () => {
+    metadataMocks.agents = {}
+    const hiddenAgent: PromptInfo = {
+      ...buildDocumentedAgent(),
+      agent_id: 'hidden_agent',
+      agent_name: 'Hidden Agent',
+      show_in_palette: false,
+      template_eligible: false,
+      documentation: {
+        summary: 'Hidden agent summary.',
+        capabilities: [],
+        data_sources: [],
+        limitations: ['This agent is not offered in this release.'],
+        use_when: ['Not offered in release 0.12.0.'],
+        avoid_when: [],
+        note: '',
+      },
+    }
+
+    const { rerender } = render(
+      <AgentDetailsPanel
+        agent={hiddenAgent}
+        selectedGroupId={null}
+        onGroupSelect={vi.fn()}
+        onDiscussWithClaude={vi.fn()}
+        onCloneToWorkshop={vi.fn()}
+      />
+    )
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Hidden Agent' })).toBeInTheDocument()
+    expect(screen.getByText('Not offered in release 0.12.0.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Clone to Workshop' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Discuss with AI Chat' })).toBeInTheDocument()
+
+    // Attachment-only validator (Flow Builder show_in_palette=false, Workshop template_eligible=true)
+    // retains Clone to Workshop even when metadata is absent/loading.
+    rerender(
+      <AgentDetailsPanel
+        agent={{
+          ...buildDocumentedAgent(),
+          agent_id: 'gene_validation',
+          agent_name: 'Gene Validator',
+          show_in_palette: false,
+          template_eligible: true,
+        }}
+        selectedGroupId={null}
+        onGroupSelect={vi.fn()}
+        onDiscussWithClaude={vi.fn()}
+        onCloneToWorkshop={vi.fn()}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Clone to Workshop' })).toBeInTheDocument()
   })
 })

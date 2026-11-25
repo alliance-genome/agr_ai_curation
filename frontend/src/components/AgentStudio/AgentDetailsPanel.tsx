@@ -226,7 +226,9 @@ function AgentDetailsPanel({
   }
 
   const { documentation } = agent
-  const canCloneToWorkshop = agent.agent_id !== 'task_input'
+  const canCloneToWorkshop =
+    agent.agent_id.startsWith('ca_')
+    || (agent.agent_id !== 'task_input' && agent.template_eligible === true)
   const summary = documentation?.summary || agent.description
 
   return (

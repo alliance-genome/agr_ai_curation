@@ -471,3 +471,114 @@ def test_installed_disease_prompt_and_document_tool_results_stay_provider_visibl
     assert reconstructed_layers == {
         layer.id: layer.content for layer in bundle.layers
     }
+
+
+def test_diagnostic_prompt_and_tool_reads_enforce_scoped_group_access(monkeypatch):
+    from src.lib.agent_studio import catalog_service
+    from src.lib.config import groups_loader
+    from src.lib.prompts import cache as prompt_cache
+
+    configured_groups = groups_loader.get_valid_group_ids()
+    monkeypatch.setattr(
+        groups_loader,
+        "get_valid_group_ids",
+        lambda: [*configured_groups, "GROUP_A", "GROUP_B"],
+    )
+
+    restricted_agent = SimpleNamespace(
+        agent_id="restricted_agent",
+        agent_name="Restricted Agent",
+        description="Restricted prompt",
+        source_file="packages/demo/agents/restricted_agent/prompt.yaml",
+        has_group_rules=False,
+        group_rules={},
+    )
+    open_agent = SimpleNamespace(
+        agent_id="demo_agent",
+        agent_name="Demo Agent",
+        description="Demo prompt",
+        source_file="packages/demo/agents/demo_agent/prompt.yaml",
+        has_group_rules=False,
+        group_rules={},
+    )
+    service = SimpleNamespace(
+        get_agent=lambda agent_id: {
+            "restricted_agent": restricted_agent,
+            "demo_agent": open_agent,
+        }.get(agent_id),
+        get_effective_prompt_bundle=lambda agent_id, group_id=None: _bundle(),
+        catalog=SimpleNamespace(
+            categories=[SimpleNamespace(agents=[restricted_agent, open_agent])],
+            available_groups=[],
+        ),
+    )
+    monkeypatch.setattr(catalog_service, "get_prompt_catalog", lambda: service)
+    monkeypatch.setattr(
+        catalog_service,
+        "AGENT_REGISTRY",
+        {
+            "restricted_agent": {
+                "name": "Restricted Agent",
+                "allowed_group_ids": ["GROUP_A"],
+                "tools": ["search_document"],
+            },
+            "demo_agent": {
+                "name": "Demo Agent",
+                "allowed_group_ids": [],
+                "tools": ["search_document"],
+            },
+        },
+    )
+    monkeypatch.setattr(prompt_cache, "is_initialized", lambda: True)
+    monkeypatch.setattr(
+        catalog_service,
+        "get_tool_for_agent",
+        lambda tool_id, agent_id: {"name": tool_id, "agent_id": agent_id},
+    )
+
+    prompt_handler = tool_definitions._create_get_prompt_handler()
+    inventory_handler = tool_definitions._create_get_tool_inventory_handler()
+    details_handler = tool_definitions._create_get_tool_details_handler()
+
+    # Unauthorized group cannot discover or inspect the restricted agent.
+    desc_other, _ = tool_definitions._get_prompt_diagnostic_contract(
+        active_group_ids=["GROUP_B"]
+    )
+    assert "restricted_agent" not in desc_other
+    assert "demo_agent" in desc_other
+
+    with tool_definitions.scoped_diagnostic_active_groups(["GROUP_B"]):
+        denied_prompt = prompt_handler(agent_id="restricted_agent")
+        unknown_prompt = prompt_handler(agent_id="unknown_agent")
+        denied_inventory = inventory_handler(agent_id="restricted_agent")
+        unknown_inventory = inventory_handler(agent_id="unknown_agent")
+        denied_details = details_handler(
+            tool_id="search_document", agent_id="restricted_agent"
+        )
+        unknown_details = details_handler(
+            tool_id="search_document", agent_id="unknown_agent"
+        )
+    assert denied_prompt["status"] == "error"
+    assert unknown_prompt["status"] == "error"
+    assert denied_prompt["available_agents"] == ["demo_agent"]
+    assert unknown_prompt["available_agents"] == ["demo_agent"]
+    assert denied_prompt.keys() == unknown_prompt.keys()
+    assert denied_inventory == {"success": False, "error": "Agent restricted_agent was not found."}
+    assert unknown_inventory == {"success": False, "error": "Agent unknown_agent was not found."}
+    assert denied_details == {
+        "success": False,
+        "error": "Tool search_document for agent restricted_agent was not found.",
+    }
+    assert unknown_details == {
+        "success": False,
+        "error": "Tool search_document for agent unknown_agent was not found.",
+    }
+
+    # Authorized group can discover and inspect the restricted agent.
+    desc_allowed, _ = tool_definitions._get_prompt_diagnostic_contract(
+        active_group_ids=["GROUP_A"]
+    )
+    assert "restricted_agent" in desc_allowed
+    with tool_definitions.scoped_diagnostic_active_groups(["GROUP_A"]):
+        allowed_prompt = prompt_handler(agent_id="restricted_agent")
+    assert allowed_prompt["status"] == "ok"

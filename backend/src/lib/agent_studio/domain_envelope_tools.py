@@ -713,18 +713,25 @@ def get_domain_pack_validation_plan(
             resolved_domain_pack_id = saved_pack_id
         elif agent_revision_id is not None:
             raise ValueError("agent_revision_id requires a custom agent_id")
-        elif resolved_agent_id and not resolved_domain_pack_id:
+        elif resolved_agent_id:
+            from src.lib.agent_access import is_resource_access_allowed
             from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
 
             entry = AGENT_REGISTRY.get(resolved_agent_id)
-            if entry is None:
+            if entry is None or not is_resource_access_allowed(
+                visibility_allowed=True,
+                allowed_group_ids=list(entry.get("allowed_group_ids") or []),
+                active_group_ids=list(active_group_ids),
+                resource_kind="domain_pack_validation_plan",
+            ):
                 return _error(f"Agent {resolved_agent_id} was not found.")
-            curation = entry.get("curation")
-            if not isinstance(curation, Mapping):
-                return _error(f"Agent {resolved_agent_id} does not declare a domain pack.")
-            resolved_domain_pack_id = _optional_text(curation.get("domain_pack_id"))
-            if resolved_domain_pack_id is None:
-                return _error(f"Agent {resolved_agent_id} does not declare a domain pack.")
+            if not resolved_domain_pack_id:
+                curation = entry.get("curation")
+                if not isinstance(curation, Mapping):
+                    return _error(f"Agent {resolved_agent_id} does not declare a domain pack.")
+                resolved_domain_pack_id = _optional_text(curation.get("domain_pack_id"))
+                if resolved_domain_pack_id is None:
+                    return _error(f"Agent {resolved_agent_id} does not declare a domain pack.")
 
         registries = domain_pack_validation_registries()
         registry = registries.get(str(resolved_domain_pack_id))

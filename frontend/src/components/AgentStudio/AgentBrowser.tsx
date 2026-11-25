@@ -135,9 +135,12 @@ function AgentBrowser({
     return allAgents.find((a) => a.agent_id === selectedAgentId) || null
   }, [allAgents, selectedAgentId])
 
+  const isTemplateEligible = (agent: PromptInfo): boolean =>
+    agent.agent_id !== 'task_input' && !agent.agent_id.startsWith('ca_') && agent.template_eligible === true
+
   const filterCounts = useMemo(() => {
     const shared = allAgents.filter((agent) => agent.subcategory === 'Shared Agents').length
-    const templates = allAgents.filter((agent) => !agent.agent_id.startsWith('ca_')).length
+    const templates = allAgents.filter(isTemplateEligible).length
     return {
       all: allAgents.length,
       shared,
@@ -150,7 +153,7 @@ function AgentBrowser({
       return allAgents.filter((agent) => agent.subcategory === 'Shared Agents')
     }
     if (browserFilter === 'templates') {
-      return allAgents.filter((agent) => !agent.agent_id.startsWith('ca_'))
+      return allAgents.filter(isTemplateEligible)
     }
     return allAgents
   }, [allAgents, browserFilter])

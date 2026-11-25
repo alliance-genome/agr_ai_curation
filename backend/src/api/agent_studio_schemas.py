@@ -130,6 +130,7 @@ class AgentMetadata(BaseModel):
     output_schema_key: Optional[str] = None
     is_active: bool = True
     visible: bool = True
+    show_in_palette: bool = True
     allowed_group_ids: List[str] = Field(default_factory=list)
     produces_flow_artifacts: bool = False
     validation_attachments: List[Dict[str, Any]] = Field(default_factory=list)

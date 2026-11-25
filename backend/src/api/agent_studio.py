@@ -446,6 +446,7 @@ async def _merge_custom_agents_into_catalog(
                 custom_id,
                 custom_flow_policy_entry,
             ),
+            template_eligible=False,
             documentation=None,
             prompt_id=str(custom.id),
             prompt_version=None,
@@ -829,12 +830,17 @@ async def get_registry_metadata(
         supervisor_tool = supervisor.get("tool_name") if supervisor_enabled else None
 
         # Icon can be at top level or nested under frontend.icon
+        frontend = entry.get("frontend") or {}
         icon = entry.get("icon")
         if icon is None:
-            frontend = entry.get("frontend", {})
             icon = frontend.get("icon", "❓")
+        show_in_palette = frontend.get("show_in_palette", True) is not False
 
-        domain_ref = domain_extraction_ref_for_agent(agent_id, active_group_ids=_authenticated_group_ids(user))
+        domain_ref = (
+            domain_extraction_ref_for_agent(agent_id, active_group_ids=_authenticated_group_ids(user))
+            if show_in_palette
+            else None
+        )
         agents[agent_id] = AgentMetadata(
             name=entry.get("name", agent_id),
             icon=icon,
@@ -844,6 +850,7 @@ async def get_registry_metadata(
             output_schema_key=entry.get("output_schema_key"),
             is_active=entry.get("is_active", True) is not False,
             visible=entry.get("visible", True) is not False,
+            show_in_palette=show_in_palette,
             allowed_group_ids=list(entry.get("allowed_group_ids") or []),
             produces_flow_artifacts=_produces_flow_artifacts(entry),
             validation_attachments=validation_attachments_by_agent.get(agent_id, []),
@@ -886,6 +893,7 @@ async def get_registry_metadata(
                 output_schema_key=receipt.output_contract.output_schema_key if receipt else None,
                 is_active=bool(getattr(custom, "is_active", True)) and receipt is not None,
                 visible=True,
+                show_in_palette=bool(getattr(custom, "show_in_palette", True)),
                 allowed_group_ids=list(custom.allowed_group_ids),
                 produces_flow_artifacts=bool(receipt and receipt.output_contract.output_state == "structured_extraction"),
                 validation_attachments=envelope_metadata["validation_attachments"] if envelope_metadata else [],
@@ -1490,7 +1498,12 @@ def _get_openai_authorized_tool_definitions(
 ) -> AuthorizedToolUniverse:
     """Return the request-local, context-authorized hosted-search universe."""
 
-    definitions = _get_all_opus_tools(context)
+    from src.lib.agent_studio.diagnostic_tools.tool_definitions import (
+        scoped_diagnostic_active_groups,
+    )
+
+    with scoped_diagnostic_active_groups(active_group_ids):
+        definitions = _get_all_opus_tools(context)
     db = SessionLocal()
     try:
         try:
@@ -3473,8 +3486,12 @@ async def _execute_tool_call(
 
         # Execute the diagnostic tool handler
         logger.debug('Executing diagnostic tool: %s', tool_name)
+        from src.lib.agent_studio.diagnostic_tools.tool_definitions import (
+            scoped_diagnostic_active_groups,
+        )
         try:
-            result = tool_def.handler(**tool_input)
+            with scoped_diagnostic_active_groups(active_group_ids):
+                result = tool_def.handler(**tool_input)
             return result
         except Exception as exc:
             report_runtime_exception(

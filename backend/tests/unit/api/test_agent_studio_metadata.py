@@ -416,6 +416,7 @@ class TestGetRegistryMetadata:
                             },
                             tools=[],
                             subcategory="Data Validation",
+                            template_eligible=True,
                         )
                     ],
                 )
@@ -488,6 +489,7 @@ class TestGetRegistryMetadata:
                             group_rules={},
                             tools=[],
                             subcategory="Data Validation",
+                            template_eligible=True,
                         )
                     ],
                 )
@@ -550,6 +552,7 @@ class TestGetRegistryMetadata:
                             has_group_rules=False,
                             group_rules={},
                             tools=[],
+                            template_eligible=True,
                         )
                     ],
                 )
@@ -669,6 +672,7 @@ class TestGetRegistryMetadata:
                             has_group_rules=False,
                             group_rules={},
                             tools=[],
+                            template_eligible=True,
                         )
                     ],
                 )
@@ -1072,6 +1076,7 @@ class TestGetRegistryMetadata:
                 )
             },
             tools=[],
+            template_eligible=True,
         )
 
         assert prompt.has_group_rules is True
@@ -1080,7 +1085,7 @@ class TestGetRegistryMetadata:
         assert dumped["has_group_rules"] is True
         assert dumped["group_rules"]["WB"]["group_id"] == "WB"
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError) as exc_info:
             PromptInfo.model_validate(
                 {
                     "agent_id": "gene",
@@ -1088,9 +1093,13 @@ class TestGetRegistryMetadata:
                     "description": "Curate genes",
                     "base_prompt": "Base prompt",
                     "source_file": "database",
+                    "template_eligible": True,
                     "has_mod_rules": True,
                 }
             )
+        assert [
+            (error["type"], error["loc"]) for error in exc_info.value.errors()
+        ] == [("extra_forbidden", ("has_mod_rules",))]
 
     def test_agent_workshop_group_fields_dump_canonical_fields(self):
         from src.lib.agent_studio.models import AgentWorkshopContext

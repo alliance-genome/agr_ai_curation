@@ -15,6 +15,7 @@ const DISEASE_VALIDATOR: PromptInfo = {
   has_group_rules: false,
   group_rules: {},
   tools: [],
+  template_eligible: true,
 }
 
 const serviceMocks = vi.hoisted(() => ({

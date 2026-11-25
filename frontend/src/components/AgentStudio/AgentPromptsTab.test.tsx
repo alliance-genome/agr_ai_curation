@@ -37,6 +37,7 @@ function buildAgent(overrides: Partial<PromptInfo> = {}): PromptInfo {
     ],
     effective_prompt_hash: 'abcdef1234567890',
     tools: [],
+    template_eligible: true,
     ...overrides,
   }
 }

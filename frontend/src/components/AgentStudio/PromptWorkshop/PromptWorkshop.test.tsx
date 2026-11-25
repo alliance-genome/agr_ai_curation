@@ -98,6 +98,7 @@ function buildCatalog(): PromptCatalog {
             has_group_rules: false,
             group_rules: {},
             tools: ['agr_curation_query'],
+            template_eligible: true,
           },
         ],
       },
@@ -176,6 +177,7 @@ function buildCatalogWithTemplateSpecificGroupRules(): PromptCatalog {
               WB: { group_id: 'WB', content: 'WB template prompt', source_file: 'database' },
             },
             tools: ['agr_curation_query'],
+            template_eligible: true,
           },
           {
             agent_id: 'disease',
@@ -188,6 +190,7 @@ function buildCatalogWithTemplateSpecificGroupRules(): PromptCatalog {
               WB: { group_id: 'WB', content: 'Disease WB template prompt', source_file: 'database' },
             },
             tools: ['agr_curation_query'],
+            template_eligible: true,
           },
         ],
       },

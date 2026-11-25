@@ -488,7 +488,10 @@ def test_agent_declares_builder_tools_and_curation_routing_without_lookups():
         "domain_pack_id": TOPIC_ENTITY_TAG_DOMAIN_PACK_ID,
         "launchable": True,
     }
-    assert agent["frontend"]["show_in_palette"] is True
+    # Disabled for 0.12.0 (ALL-1754); revert these three flags when re-enabling in 0.13.0.
+    assert agent["frontend"]["show_in_palette"] is False
+    assert agent["supervisor_routing"]["enabled"] is False
+    assert agent["access"] == {"allowed_group_ids": ["WB"]}
     assert {"stage_topic_entity_tag", "finalize_topic_entity_tag_extraction"} <= set(agent["tools"])
     assert "agr_literature_reference_lookup" not in agent["tools"]
 

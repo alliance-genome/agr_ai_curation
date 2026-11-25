@@ -1594,15 +1594,27 @@ def get_all_opus_tools(
 
     registry = diagnostic_registry_factory()
     ensure_registered(registry)
+    from src.lib.agent_studio.diagnostic_tools.tool_definitions import (
+        _get_prompt_diagnostic_contract,
+        get_active_diagnostic_group_ids,
+    )
+
+    active_group_ids = get_active_diagnostic_group_ids()
     diagnostic_tools = []
     for tool in registry.get_all_tools():
         if not is_allowed(tool.name, context):
             continue
+        description = tool.description
+        input_schema = tool.input_schema
+        if tool.name == "get_prompt" and active_group_ids is not None:
+            description, input_schema = _get_prompt_diagnostic_contract(
+                active_group_ids=active_group_ids
+            )
         diagnostic_tools.append(
             {
                 "name": tool.name,
-                "description": tool.description,
-                "input_schema": tool.input_schema,
+                "description": description,
+                "input_schema": input_schema,
             }
         )
     tools.extend(diagnostic_tools)

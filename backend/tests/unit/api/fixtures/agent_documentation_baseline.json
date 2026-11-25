@@ -1046,13 +1046,13 @@
       "Covers one topic, gene expression in wild type, for WormBase.",
       "For WormBase curators it looks for where or when a C. elegans gene or its protein is found in wild-type C. elegans, including where it sits inside a cell, and it leans toward yes when the evidence is borderline. It does not count data from other organisms, RNA-seq, microarray or SAGE data, changes in how much of a gene's product there is, expression seen only in mutant or treated animals, a known pattern shown again only as a control, or a reporter used only as a marker or readout.",
       "Proposes one tag per paper.",
-      "A paper uploaded directly, rather than imported from ABC, may have no ABC reference. A curator can link it on the review screen, and it cannot be submitted to ABC until then.",
+      "This agent is not offered to curators in release 0.12.0 while its rules and ABC workflow are being finished.",
       "Nothing is written to ABC by this agent."
     ],
     "note": "",
     "summary": "Reads a paper and proposes whether it has data for the topic \"gene expression in wild type\", with its reasoning and the supporting passages, for a curator to sign off.",
     "use_when": [
-      "When you want a proposed gene-expression topic tag for a paper, to review and sign off."
+      "Not offered in release 0.12.0."
     ]
   },
   "gene_extractor": {

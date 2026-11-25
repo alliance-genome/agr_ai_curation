@@ -63,6 +63,7 @@ def test_prompt_catalog_get_agent_accepts_validator_agent_id_from_validation_pla
         base_prompt="Gene validator prompt",
         source_file="database",
         tools=["agr_curation_query"],
+        template_eligible=True,
     )
     service._catalog = PromptCatalog(
         categories=[AgentPrompts(category="Validation", agents=[gene_prompt])],
@@ -199,8 +200,11 @@ def test_build_catalog_hides_attachment_only_validators_from_flow_palette(monkey
     }
 
     assert by_id["allele_validation"].show_in_palette is False
+    assert by_id["allele_validation"].template_eligible is True
     assert by_id["ontology_term_validation"].show_in_palette is True
+    assert by_id["ontology_term_validation"].template_eligible is True
     assert by_id["chat_output"].show_in_palette is True
+    assert by_id["chat_output"].template_eligible is True
 
 
 def test_build_catalog_surfaces_prompt_layer_projection_errors(monkeypatch):

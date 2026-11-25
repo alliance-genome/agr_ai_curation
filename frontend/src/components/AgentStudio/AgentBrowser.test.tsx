@@ -35,6 +35,7 @@ const buildAgent = (agentId: string, name: string, overrides: Partial<PromptInfo
   group_rules: {},
   tools: [],
   subcategory: 'Data Validation',
+  template_eligible: !agentId.startsWith('ca_'),
   ...overrides,
 })
 
@@ -205,5 +206,53 @@ describe('AgentBrowser', () => {
     expect(screen.getByRole('heading', { level: 2, name: 'Agents' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { level: 2, name: 'Validator A' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Back to Agents' })).not.toBeInTheDocument()
+  })
+
+  it('excludes template_eligible=false agents from Templates and keeps validators even when metadata is absent', () => {
+    metadataMocks.agents = {}
+    render(
+      <AgentBrowser
+        catalog={buildCatalog([
+          buildAgent('hidden_agent', 'Hidden Template Agent', {
+            show_in_palette: false,
+            template_eligible: false,
+            subcategory: 'PDF Extraction',
+            documentation: {
+              summary: 'Hidden agent summary.',
+              capabilities: [],
+              data_sources: [],
+              limitations: ['Not offered in this release.'],
+              use_when: ['Not offered in release 0.12.0.'],
+              avoid_when: [],
+              note: '',
+            },
+          }),
+          buildAgent('validator_template', 'Validator Template', {
+            show_in_palette: false,
+            template_eligible: true,
+            subcategory: 'Data Validation',
+          }),
+        ])}
+        selectedAgentId="hidden_agent"
+        selectedGroupId={null}
+        onAgentSelect={vi.fn()}
+        onGroupSelect={vi.fn()}
+        onCloneToWorkshop={vi.fn()}
+      />
+    )
+
+    // Still readable in All with its Guide tab, without Clone to Workshop.
+    expect(screen.getByText('Not offered in release 0.12.0.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Clone to Workshop' })).not.toBeInTheDocument()
+
+    // Templates tab excludes template_eligible=false system agents, while keeping
+    // attachment-only validators (show_in_palette=false, template_eligible=true)
+    // even while agentMetadata has not loaded yet.
+    const filterTabs = within(screen.getByRole('tablist', { name: 'Agent list filter' })).getAllByRole('tab')
+    expect(filterTabs.map((tab) => tab.textContent)).toEqual(['All (2)', 'Shared (0)', 'Templates (1)'])
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Templates (1)' }))
+    expect(screen.queryByRole('button', { name: /Hidden Template Agent/ })).not.toBeInTheDocument()
+    expect(screen.getByText('Data Validation')).toBeInTheDocument()
   })
 })

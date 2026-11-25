@@ -25,7 +25,7 @@ export default function WorkshopStartScreen({ onChoose, onCustomExtraction, agen
   const [help, setHelp] = useState<{ title: string; text: string } | null>(null)
   const envelopes = [...new Map(Object.values(agents).flatMap((agent) =>
     agent.domain_envelope && (agent.domain_extraction_ref || agent.output_schema_key)
-      && agent.visible !== false && agent.is_active !== false
+      && agent.visible !== false && agent.is_active !== false && agent.show_in_palette !== false
       ? [[agent.domain_envelope.domain_pack_id, { ...agent.domain_envelope, display_name: agent.name }] as const] : [],
   )).values()].sort((a, b) => a.display_name.localeCompare(b.display_name))
   const choices: Choice[] = [

@@ -47,6 +47,8 @@ def prepare_workshop_action(db, *, context, user_id: int, active_group_ids: list
                 raise ValueError("You can edit your own custom agents. Create a clone or template draft for this agent instead")
             if request.mode == "template" and custom:
                 raise ValueError("Use clone for a saved custom agent")
+            if request.mode == "template" and record.detail.get("show_in_palette") is False:
+                raise ValueError("This agent is not available as a Workshop template")
             if request.mode == "clone" and not custom:
                 raise ValueError("Use template for a pre-made agent")
             source = {"agent_id": record.resource_id, "name": record.name,

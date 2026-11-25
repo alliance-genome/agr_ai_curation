@@ -10,15 +10,19 @@ data_sources:
     description: "Searches and reads the text of the paper you have open."
     species_supported: null
     data_types: ["Paper text", "Sections"]
+# Disabled for 0.12.0 (ALL-1754). To re-enable in 0.13.0, restore:
+#   - "When you want a proposed gene-expression topic tag for a paper, to review and sign off."
 use_when:
-  - "When you want a proposed gene-expression topic tag for a paper, to review and sign off."
+  - "Not offered in release 0.12.0."
 avoid_when:
   - "To extract detailed expression patterns; use the Gene Expression Extractor."
   - "To add a tag to ABC directly; this agent only proposes one for review."
   - "When there is no loaded paper, since it cannot work from chat text alone."
+# Disabled for 0.12.0 (ALL-1754). To re-enable in 0.13.0, replace the 4th bullet below with:
+#   - "A paper uploaded directly, rather than imported from ABC, may have no ABC reference. A curator can link it on the review screen, and it cannot be submitted to ABC until then."
 limitations:
   - "Covers one topic, gene expression in wild type, for WormBase."
   - "For WormBase curators it looks for where or when a C. elegans gene or its protein is found in wild-type C. elegans, including where it sits inside a cell, and it leans toward yes when the evidence is borderline. It does not count data from other organisms, RNA-seq, microarray or SAGE data, changes in how much of a gene's product there is, expression seen only in mutant or treated animals, a known pattern shown again only as a control, or a reporter used only as a marker or readout."
   - "Proposes one tag per paper."
-  - "A paper uploaded directly, rather than imported from ABC, may have no ABC reference. A curator can link it on the review screen, and it cannot be submitted to ABC until then."
+  - "This agent is not offered to curators in release 0.12.0 while its rules and ABC workflow are being finished."
   - "Nothing is written to ABC by this agent."
