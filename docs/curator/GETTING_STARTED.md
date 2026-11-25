@@ -20,7 +20,7 @@ Papers imported through **Documents → Add Literature** can include supplementa
 1. Open **Documents → Add Literature**, enter your identifiers under **Identifiers**, and click **Resolve**.
 2. On a resolved paper, click **Choose supplements** to see its files. The main paper is always included; tick any supplemental files you want to import with it.
    - Supplements already converted by your configured literature source are ready to add right away.
-   - When an import can request conversion, you may also tick an unconverted supplement. Your literature source converts it in the background, and the main paper becomes usable without waiting for it.
+   - When an import can request conversion, you may also tick an unconverted supplement. The import asks your literature source to convert it in the background while the main paper becomes usable without waiting; if conversion fails or times out, the main paper still finishes and **PDF Jobs** explains why the supplement was not added.
    - Files that cannot be added (such as unsupported file types, large data files, or text that did not pass readability checks) explain why without a checkbox.
 3. Click **Import with 1 supplement** (or **Import with {n} supplements**) to start the import. To import only the main paper, leave supplements unticked and click **Resolve and Import**.
 4. Follow per-file progress in the **PDF Jobs** panel below. Each supplement reports whether it is waiting for the main paper, waiting to be added, waiting for conversion, being added, **Added**, or **Not added** with the reason. You can leave the page once the import starts.
@@ -34,7 +34,7 @@ If a paper is already in your **Library**, Add Literature links you to it there 
 3. Tick any converted supplements you want to include and click **Add 1 file** (or **Add {n} files**).
    - Adding from the Library only offers files that your literature source has already converted; use **Refresh details** in the dialog header to check again later.
    - Files can be added only to papers imported from your literature source (not manually uploaded PDFs), and adding or removing is paused while an import or add job is running on the paper.
-4. When the files finish adding, the paper's file list, the Library **Files** count, and any open PDF viewer for that paper refresh automatically.
+4. When the files finish adding while the details dialog is open, the paper's file list, the Library **Files** count, and any open PDF viewer for that paper refresh automatically. If you close the details dialog before the job finishes, reopen it later to check the result and refresh those views.
 
 ### Remove a supplement
 
