@@ -3879,9 +3879,25 @@ async def test_complete_main_paper_post_commit_cancellation_still_launches_commi
 
 @pytest.mark.asyncio
 async def test_complete_main_paper_marks_stage_job_failed_if_launch_raises(monkeypatch):
+    """A launch failure after main-paper commit fails only the stage job and never corrupts the paper."""
+    import threading
+
     from src.lib.document_sources import supplement_wait
 
-    completed, failed = [], []
+    completed, failed, reported = [], [], []
+    status_updates = []
+    sql_failures = []
+
+    async def _ingest(request, *, weaviate_client):
+        del request, weaviate_client
+        return None
+
+    async def _update_status(document_id, user_id, status):
+        status_updates.append((document_id, user_id, status))
+
+    async def _sync_sql_failure(self, request, exc):
+        del self
+        sql_failures.append((request.document_id, str(exc)))
 
     def _atomic_handoff(**kwargs):
         return (
@@ -3900,26 +3916,154 @@ async def test_complete_main_paper_marks_stage_job_failed_if_launch_raises(monke
         raise RuntimeError("event loop refused task")
 
     _quiet_jobs(monkeypatch, completed, failed)
+    monkeypatch.setattr(service_module, "update_document_status", _update_status)
+    monkeypatch.setattr(UploadExecutionService, "_sync_provider_markdown_sql_failure", _sync_sql_failure)
+    monkeypatch.setattr(
+        "src.lib.observability.runtime.report_runtime_exception",
+        lambda exc, **kwargs: reported.append((exc, kwargs)),
+    )
     monkeypatch.setattr(
         service_module.pdf_job_service,
         "complete_import_and_start_supplement_wait",
         _atomic_handoff,
     )
     monkeypatch.setattr(supplement_wait, "start_supplement_stage", _boom_launch)
+    tracker = _Tracker()
     service = UploadExecutionService(
-        pipeline_tracker=_Tracker(),
+        pipeline_tracker=tracker,
         document_source_provider_factory=lambda: _Provider(),
+        provider_markdown_ingestion_fn=_ingest,
     )
 
-    with pytest.raises(RuntimeError, match="event loop refused task"):
-        await service._complete_main_paper(
-            _markdown_request(supplements=_plan()),
-            message="Processing completed",
-        )
+    await service.execute_provider_markdown(_markdown_request(supplements=_plan()))
 
     assert len(failed) == 1
     assert failed[0]["job_id"] == "stage-launch-boom"
     assert failed[0]["message"] == supplement_wait.SUPPLEMENT_STAGE_FAILED_MESSAGE
+    assert status_updates == []
+    assert sql_failures == []
+    assert tracker.calls[-1]["document_id"] == "doc-job-provider"
+    assert tracker.calls[-1]["stage"] == ProcessingStage.COMPLETED
+    assert tracker.failure_calls == []
+    assert len(reported) == 1
+    assert str(reported[0][0]) == "Supplement stage launch failed"
+    assert reported[0][1]["component"] == "document_sources"
+    assert reported[0][1]["operation"] == "supplement_stage"
+    assert reported[0][1]["include_request"] is False
+
+    # Even when cancelled mid-handoff AND launch raises, stage is failed, tracker syncs COMPLETED,
+    # and the deferred CancelledError still propagates cleanly.
+    entered = threading.Event()
+    release = threading.Event()
+    failed.clear()
+    tracker.calls.clear()
+
+    def _slow_handoff(**kwargs):
+        entered.set()
+        release.wait(timeout=5)
+        return _atomic_handoff(**kwargs)
+
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "complete_import_and_start_supplement_wait",
+        _slow_handoff,
+    )
+    task = asyncio.create_task(
+        service._complete_main_paper(_markdown_request(supplements=_plan()), message="Processing completed")
+    )
+    while not entered.is_set():
+        await asyncio.sleep(0.005)
+    task.cancel()
+    await asyncio.sleep(0.01)
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert len(failed) == 1 and failed[0]["job_id"] == "stage-launch-boom"
+    assert tracker.calls[-1]["document_id"] == "doc-job-provider"
+    assert tracker.calls[-1]["stage"] == ProcessingStage.COMPLETED
+    assert tracker.failure_calls == []
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_markdown_deadline_during_commit_launches_stage_and_never_fails_paper(monkeypatch):
+    """If execute_provider_markdown times out mid-handoff commit, the stage launches and paper stays completed."""
+    import threading
+
+    from src.lib.document_sources import supplement_wait
+
+    entered_handoff = threading.Event()
+    allow_commit_finish = threading.Event()
+    committed = False
+    started, failed, status_updates, sql_failures = [], [], [], []
+
+    async def _ingest(request, *, weaviate_client):
+        del request, weaviate_client
+        return None
+
+    async def _update_status(document_id, user_id, status):
+        status_updates.append((document_id, user_id, status))
+
+    async def _sync_sql_failure(self, request, exc):
+        del self
+        sql_failures.append((request.document_id, str(exc)))
+
+    def _slow_commit(**kwargs):
+        nonlocal committed
+        entered_handoff.set()
+        allow_commit_finish.wait(timeout=5)
+        committed = True
+        return (
+            SimpleNamespace(
+                job_id=kwargs["job_id"],
+                status="completed",
+                current_stage="completed",
+                cancel_requested=False,
+                message=kwargs["message"],
+                error_message=None,
+            ),
+            SimpleNamespace(job_id="stage-after-deadline"),
+        )
+
+    def _get_job_by_id(**_kwargs):
+        return SimpleNamespace(status="completed" if committed else "pending", metadata={})
+
+    _quiet_jobs(monkeypatch, [], failed)
+    monkeypatch.setattr(service_module, "get_document_source_import_timeout_seconds", lambda: 0.03)
+    monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", _get_job_by_id)
+    monkeypatch.setattr(service_module, "update_document_status", _update_status)
+    monkeypatch.setattr(UploadExecutionService, "_sync_provider_markdown_sql_failure", _sync_sql_failure)
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "complete_import_and_start_supplement_wait",
+        _slow_commit,
+    )
+    monkeypatch.setattr(
+        supplement_wait,
+        "start_supplement_stage",
+        lambda *, job_id, run, outcomes: started.append(job_id),
+    )
+    service = UploadExecutionService(
+        pipeline_tracker=_Tracker(),
+        document_source_provider_factory=lambda: _Provider(),
+        provider_markdown_ingestion_fn=_ingest,
+    )
+
+    run_task = asyncio.create_task(
+        service.execute_provider_markdown(_markdown_request(supplements=_plan()))
+    )
+    while not entered_handoff.is_set():
+        await asyncio.sleep(0.005)
+    # Wait past the 0.03s bounded deadline so asyncio.wait_for cancels mid-commit, then let commit finish.
+    await asyncio.sleep(0.06)
+    allow_commit_finish.set()
+    await run_task
+
+    assert started == ["stage-after-deadline"]
+    assert failed == []
+    assert status_updates == []
+    assert sql_failures == []
 
 
 @pytest.mark.asyncio
@@ -4148,9 +4292,10 @@ async def test_execute_provider_conversion_post_selection_ingestion_timeout_is_n
 
 @pytest.mark.asyncio
 async def test_overlapping_replay_for_same_job_id_cannot_clobber_ingesting_markdown_phase(monkeypatch):
-    """Task-local ContextVar keeps an overlapping replay for the same job_id from clearing phase state."""
+    """Task-local ContextVar keeps an overlapping replay before phase flip from clearing state."""
     failed_events = []
-    entered_ingestion = asyncio.Event()
+    entered_selection = asyncio.Event()
+    allow_selection_finish = asyncio.Event()
     selected_artifact = SourceArtifact(
         provider="abc_literature",
         artifact_id="md-1",
@@ -4172,9 +4317,14 @@ async def test_overlapping_replay_for_same_job_id_cannot_clobber_ingesting_markd
         # Call 1 (worker 1 start): pending; Call 2+ (worker 2 replay & timeout check): running.
         return SimpleNamespace(status="pending" if job_calls == 1 else "running", metadata={})
 
+    async def _select_then_wait(self, **_kwargs):
+        del self
+        entered_selection.set()
+        await allow_selection_finish.wait()
+        return selected_artifact, ()
+
     async def _hang_during_ingestion(self, request, *, skip_replay_guard=False):
         del self, request, skip_replay_guard
-        entered_ingestion.set()
         await asyncio.sleep(10)
 
     service = UploadExecutionService(
@@ -4189,7 +4339,7 @@ async def test_overlapping_replay_for_same_job_id_cannot_clobber_ingesting_markd
     monkeypatch.setattr(
         UploadExecutionService,
         "_select_converted_main_artifact",
-        AsyncMock(return_value=(selected_artifact, ())),
+        _select_then_wait,
     )
     monkeypatch.setattr(UploadExecutionService, "_sync_provider_conversion_sql_selection", AsyncMock(return_value=None))
     monkeypatch.setattr(UploadExecutionService, "_execute_provider_markdown_unbounded", _hang_during_ingestion)
@@ -4211,9 +4361,11 @@ async def test_overlapping_replay_for_same_job_id_cannot_clobber_ingesting_markd
         source_provenance={"provider": "abc_literature"},
     )
     worker_1 = asyncio.create_task(service.execute_provider_conversion(req))
-    await entered_ingestion.wait()
-    # Overlapping replay enters, hits replay guard, exits, and resets its own ContextVar token.
+    await entered_selection.wait()
+    # Overlapping replay enters, hits replay guard, exits, and resets its own ContextVar token
+    # BEFORE worker 1 reaches the ingesting_markdown = True transition (the exact shared-dict race).
     await service.execute_provider_conversion(req)
+    allow_selection_finish.set()
     await worker_1
 
     assert len(failed_events) == 1

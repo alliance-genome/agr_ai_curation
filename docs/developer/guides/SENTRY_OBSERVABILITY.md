@@ -832,7 +832,9 @@ expired (`DocumentSourceLoginExpired`, the curator's own condition; the import
 fails by name). When the stage itself fails unexpectedly, it reports once under
 component `document_sources` and operation `supplement_stage`, with only the tag
 `failure_type` (the exception's type name). The exception is the fixed,
-chain-free "Supplement stage failed"; paper, file names, the reference, the
+chain-free "Supplement stage failed" (or "Supplement stage launch failed" with
+`include_request=False` if launching the worker task fails after the main paper
+commits); paper, file names, the reference, the
 curator and any text are omitted. The job then ends failed with a named message;
 the main paper stays usable. An error after the stage's job was made terminal
 elsewhere (the curator deleted the paper, which can make a listing fail, or a

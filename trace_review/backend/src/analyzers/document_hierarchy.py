@@ -166,8 +166,8 @@ class DocumentHierarchyAnalyzer:
             result["files"] = cls._parse_files(raw_text)
             # The outline says so while files of the paper were being added (0.12.0).
             result["files_being_added"] = cls._FILES_BEING_ADDED in raw_text
-            # ... and while an import waited for ABC to convert its supplements.
-            result["supplements_converting"] = cls._SUPPLEMENTS_CONVERTING in raw_text
+            # ... and while an import waited for the document source to convert its supplements.
+            result["supplements_converting"] = bool(cls._SUPPLEMENTS_CONVERTING_RE.search(raw_text))
             result["sections"] = [section for file in result["files"] for section in file["sections"]]
 
             # Check for hierarchy resolution failure (only "Unknown" section)
@@ -218,8 +218,10 @@ class DocumentHierarchyAnalyzer:
         return result
 
     _FILES_BEING_ADDED = "Files are still being added to this paper; they cannot be read yet."
-    # Keep in step with SUPPLEMENTS_CONVERTING_LINE in backend prompt_utils.
-    _SUPPLEMENTS_CONVERTING = "ABC has not finished converting this paper's supplements; they cannot be read yet."
+    # Keep in step with _supplements_converting_line in backend prompt_utils.
+    _SUPPLEMENTS_CONVERTING_RE = re.compile(
+        r"(?m)^.+ has not finished converting this paper's supplements; they cannot be read yet\.$"
+    )
 
     _FILE_LINE = re.compile(
         r'^File (\d+) of (\d+): (.+) \((main paper|supplement), ([^,]+), (\d+) chunks, chunks (\d+) to (\d+)\)$'

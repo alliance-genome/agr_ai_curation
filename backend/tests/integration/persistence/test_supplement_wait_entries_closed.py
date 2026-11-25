@@ -415,3 +415,17 @@ def test_atomic_complete_honors_cancel_requested_under_row_lock_without_starting
     assert [entry["display_name"] for entry in saved] == ["Made_up_S30", "Made_up_S40"]
     assert [j for j in all_jobs if (j.metadata_json or {}).get("job_kind") == "supplement_wait"] == []
 
+    # Direct start_supplement_wait_job must also refuse a completed job with cancel_requested=True.
+    queued_completed = job_service.create_job(
+        document_id=paper.id, user_id=owner_id, filename=paper.filename,
+        metadata={"supplements": queued},
+    )
+    job_service.mark_completed(job_id=queued_completed.job_id, message="Processing completed")
+    with SessionLocal.begin() as db:
+        db.get(PdfProcessingJob, queued_completed.job_id).cancel_requested = True
+    with pytest.raises(job_service.SupplementHandoffRefusedError):
+        job_service.start_supplement_wait_job(
+            document_id=paper.id, user_id=owner_id, filename=paper.filename,
+            source_job_id=queued_completed.job_id,
+        )
+

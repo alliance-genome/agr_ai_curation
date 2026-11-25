@@ -282,9 +282,9 @@ The identifier import takes the ticked supplements beside `identifiers`:
   ABC's answer in `conversion_answer` when it sent the request; without one, that
   identifier ends with the per-identifier error `file_not_tickable`, and the
   paper is not imported.
-- Whole-request refusals are 422s with a code: `supplement_identifier_unknown`,
-  `file_chosen_twice`, `paper_file_limit` (more than `DOCUMENT_MAX_FILES_PER_PAPER`
-  files, the main included).
+- Whole-request refusals are 422s with `{"code": ...}`: `supplement_identifier_unknown`,
+  `file_chosen_twice`, and `paper_file_limit` (which also includes `"limit_value"` set
+  to `DOCUMENT_MAX_FILES_PER_PAPER`, the main paper included).
 
 The main paper is imported exactly as before, and its import job completes as
 before. Once it is ready (`completed` and readable), the supplement stage starts

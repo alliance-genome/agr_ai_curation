@@ -633,6 +633,13 @@ class UploadExecutionService:
                 task_name="pdf_jobs.execute_provider_markdown",
             )
         except asyncio.TimeoutError:
+            existing_job = pdf_job_service.get_job_by_id(job_id=request.job_id, reconcile_stale=False)
+            if existing_job is not None and existing_job.status in TERMINAL_PDF_JOB_STATUSES:
+                logger.info(
+                    "Provider Markdown job %s was finalized elsewhere; nothing written at its deadline",
+                    request.job_id,
+                )
+                return
             timeout_error = RuntimeError(
                 f"Provider Markdown import exceeded {timeout_seconds:g} seconds"
             )
@@ -1497,7 +1504,32 @@ class UploadExecutionService:
 
             try:
                 supplement_wait.start_supplement_stage(job_id=stage_job_id, run=run, outcomes=outcomes)
-            except Exception:
+            except Exception as exc:
+                # The main paper is already completed and usable; never propagate a
+                # supplement-stage launch error back into the main import handler.
+                logger.exception(
+                    "Failed to launch supplement stage worker for job %s",
+                    stage_job_id,
+                    extra={"sentry_skip_event": True},
+                )
+                try:
+                    from src.lib.observability.runtime import (
+                        report_runtime_exception,
+                        sanitized_runtime_error,
+                    )
+
+                    report_runtime_exception(
+                        sanitized_runtime_error("Supplement stage launch failed"),
+                        component="document_sources",
+                        operation="supplement_stage",
+                        tags={"failure_type": type(exc).__name__},
+                        include_request=False,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to report supplement stage launch failure",
+                        extra={"sentry_skip_event": True},
+                    )
                 fail_task = asyncio.create_task(
                     asyncio.to_thread(
                         pdf_job_service.mark_failed,
@@ -1509,10 +1541,16 @@ class UploadExecutionService:
                 while not fail_task.done():
                     try:
                         await asyncio.shield(fail_task)
-                    except asyncio.CancelledError as exc:
-                        cancelled_exc = exc
-                fail_task.result()
-                raise
+                    except asyncio.CancelledError as cancel_err:
+                        cancelled_exc = cancel_err
+                try:
+                    fail_task.result()
+                except Exception:
+                    logger.exception(
+                        "Failed to mark unlaunched supplement stage job %s failed",
+                        stage_job_id,
+                        extra={"sentry_skip_event": True},
+                    )
         elif stored_job is not None and stored_job.status == PdfJobStatus.COMPLETED.value:
             if stored_job.cancel_requested:
                 logger.info(
