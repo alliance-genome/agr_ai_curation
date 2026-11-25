@@ -1974,21 +1974,34 @@ async def test_stage_catches_file_removal_unfinished_cleanly_without_stage_failu
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "licence_outcome",
-    ["restricted", "unchanged", "resolve_error", "resolve_401", "all_polls_fail_then_restricted"],
+    [
+        "restricted",
+        "unchanged",
+        "resolve_error",
+        "resolve_401",
+        "all_polls_fail_then_restricted",
+        "deadline_during_first_sleep_then_restricted",
+    ],
 )
 async def test_open_access_reference_revalidated_once_before_add_after_polls(
     job, monkeypatch, tmp_path, licence_outcome,
 ):
     """ALL-1751 review: an open-access (GLOBAL) reference revalidates GET /reference once
-    before adding after polls run (including when every poll failed). If the licence became
-    restricted, show_all is refreshed once with the new reference so a queued Office
-    supplement that lost access is NOT added (0 add downloads). If GET /reference returns 401,
-    it ends login_expired. If unchanged, 0 extra show_all calls are made and the file joins."""
+    before adding whenever wait time elapsed (after polls, when all polls fail, or when
+    the wait hits its deadline during its first sleep). If the licence became restricted,
+    show_all is refreshed once with the new reference so a queued Office supplement that
+    lost access is NOT added (0 add downloads). If GET /reference returns 401, it ends
+    login_expired. If unchanged, 0 extra show_all calls are made and the file joins."""
     from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
     from src.lib.document_sources import file_listing_service, supplement_add
     from tests.unit.lib.document_sources.test_file_listing import _Store
 
-    wait_seconds = "600" if licence_outcome == "all_polls_fail_then_restricted" else "120"
+    if licence_outcome == "all_polls_fail_then_restricted":
+        wait_seconds = "600"
+    elif licence_outcome == "deadline_during_first_sleep_then_restricted":
+        wait_seconds = "45"
+    else:
+        wait_seconds = "120"
     monkeypatch.setenv("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", wait_seconds)
     monkeypatch.setenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", "60")
     clock = _Clock()
@@ -2006,7 +2019,10 @@ async def test_open_access_reference_revalidated_once_before_add_after_polls(
             ]
 
         def handle(self, request):
-            if self.polls >= 1 and licence_outcome in ("restricted", "all_polls_fail_then_restricted"):
+            if (
+                (self.polls >= 1 and licence_outcome in ("restricted", "all_polls_fail_then_restricted"))
+                or (licence_outcome == "deadline_during_first_sleep_then_restricted" and clock() > 1_000_000.0)
+            ):
                 self.show_reference_payload = _abc_reference_record(
                     copyright_license_open_access=False,
                     copyright_license_name="Restricted License",
@@ -2085,6 +2101,15 @@ async def test_open_access_reference_revalidated_once_before_add_after_polls(
     elif licence_outcome == "all_polls_fail_then_restricted":
         # 1 initial + 3 failed polls + 1 refresh after licence changed = 5 show_all; 0 add downloads
         assert kinds.count("show_all") == 5
+        assert kinds.count("download") == 1
+        assert _final_entries(job) == {
+            "20": ("left_out", FileReason.FILE_NOT_IN_REFERENCE.value),
+            "30": ("left_out", IN_TIME),
+        }
+    elif licence_outcome == "deadline_during_first_sleep_then_restricted":
+        # Slept once for 45s and hit deadline with 0 wait polls; 1 initial + 1 post-licence-change refresh = 2 show_all
+        assert clock() == 1_000_045.0
+        assert kinds.count("show_all") == 2
         assert kinds.count("download") == 1
         assert _final_entries(job) == {
             "20": ("left_out", FileReason.FILE_NOT_IN_REFERENCE.value),

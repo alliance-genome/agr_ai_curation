@@ -850,3 +850,72 @@ async def test_prebuilt_add_enforces_paper_text_limit_under_insert_lock(paper, m
     assert [path.name for path in storage.rglob("*.md")] == [f"{outcomes['20'].file_id}.md"]
     assert [path.name for path in storage.rglob("*.json")] == [f"{outcomes['20'].file_id}.json"]
     assert len(index.stored) == 1
+
+
+@pytest.mark.asyncio
+async def test_overlapping_pending_writers_cannot_exceed_paper_text_limit(paper, monkeypatch):
+    """ALL-1751 review: writer A reserves its measured text_bytes on its newly inserted
+    pending row under _insert_rows lock, so an overlapping writer B running before writer A
+    commits mark_files_ready cannot spend the same remaining DOCUMENT_PAPER_MAX_TEXT_BYTES."""
+    import asyncio
+
+    from src.lib.document_sources.file_reasons import FileReason
+
+    # Main file uses 1000 bytes; each workbook prepares to ~55-70 bytes (so one fits in 100 bytes
+    # of headroom while both together exceed 100 bytes). Setting limit=1100 lets writer A's 20 fit
+    # while writer B's 40 exceeds the limit once writer A reserves its pending row's text_bytes.
+    monkeypatch.setenv("DOCUMENT_PAPER_MAX_TEXT_BYTES", "1100")
+    document_id, owner_id, _subject, storage = paper
+    index = _Index().install(monkeypatch)
+
+    writer_a_inserted = asyncio.Event()
+    writer_b_finished = asyncio.Event()
+    writer_b_prepared = asyncio.Event()
+
+    async def _writer_a_checkpoint(stage: str) -> None:
+        if stage == "saving_files":
+            # Let writer B read _paper_state and prepare file 40 BEFORE writer A inserts its pending row,
+            # so both writers pass _check_and_write and race into _insert_rows.
+            await asyncio.wait_for(writer_b_prepared.wait(), timeout=10)
+        elif stage == "vector_storage":
+            # Writer A has inserted its pending row and released the paper lock; pause before commit.
+            writer_a_inserted.set()
+            await asyncio.wait_for(writer_b_finished.wait(), timeout=10)
+
+    async def _writer_b_checkpoint(stage: str) -> None:
+        if stage == "saving_files":
+            writer_b_prepared.set()
+            await asyncio.wait_for(writer_a_inserted.wait(), timeout=10)
+
+    async def _run_writer_b():
+        try:
+            return await supplement_add.add_files_to_paper_with_listing(
+                document_id, owner_id, CONTEXT, [_chosen(40)],
+                listing=_bound_listing(40), job_id=uuid4(), provider=_AbcBoundProvider(WORKBOOKS),
+                weaviate_client=object(), stage_checkpoint=_writer_b_checkpoint,
+            )
+        finally:
+            writer_b_finished.set()
+
+    result_a, result_b = await asyncio.gather(
+        supplement_add.add_files_to_paper_with_listing(
+            document_id, owner_id, CONTEXT, [_chosen(20)],
+            listing=_bound_listing(20), job_id=uuid4(), provider=_AbcBoundProvider(WORKBOOKS),
+            weaviate_client=object(), stage_checkpoint=_writer_a_checkpoint,
+        ),
+        _run_writer_b(),
+    )
+
+    (outcome_a,) = result_a.files
+    (outcome_b,) = result_b.files
+    assert outcome_a.outcome == "added" and outcome_a.file_id is not None
+    assert outcome_b.outcome == "left_out"
+    assert outcome_b.reason_code is FileReason.PAPER_TEXT_LIMIT
+    assert outcome_b.limit_value == 1100
+    assert outcome_b.measured_value is not None and outcome_b.measured_value > 1100
+    assert [(row.source_provider_source_file_id, row.status) for row in _files(document_id)] == [
+        ("10", "ready"), ("20", "ready"),
+    ]
+    assert [path.name for path in storage.rglob("*.md")] == [f"{outcome_a.file_id}.md"]
+    assert [path.name for path in storage.rglob("*.json")] == [f"{outcome_a.file_id}.json"]
+    assert len(index.stored) == 1

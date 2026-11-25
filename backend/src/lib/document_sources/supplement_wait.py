@@ -554,7 +554,7 @@ async def _poll_until_done(
     poll_seconds = get_document_supplement_listing_poll_seconds()
     max_failed_reads = get_document_source_listing_max_failed_reads()
     failed_reads = 0
-    polls_ran = False
+    waited = False
     latest_artifacts: list[SourceArtifact] | None = None
     token = stage.plan.request_context.curator_token
     stage.apply(_converted_in(listing, stage.ids_in(SupplementState.WAITING)), listing)
@@ -567,11 +567,11 @@ async def _poll_until_done(
         remaining = stage.wait_ends_at - stage.clock()
         if remaining <= 0:
             break
+        waited = True
         await sleep(min(poll_seconds, remaining))
         await stage.checkpoint()
         if stage.clock() >= stage.wait_ends_at:
             break
-        polls_ran = True
         try:
             artifacts = await provider.list_artifacts(resolved_reference, request_bearer_token=token)
         except DocumentSourceLoginExpired:
@@ -626,8 +626,8 @@ async def _poll_until_done(
     if queued_ids and not stage.login_gone():
         # A globally-scoped queued file may depend on reference-level licence
         # metadata that per-poll artifact reads do not re-fetch; revalidate the
-        # reference once before adding when polls ran after the initial listing.
-        needs_global_ref_check = polls_ran and (
+        # reference once before adding whenever wall-clock wait time elapsed.
+        needs_global_ref_check = waited and (
             any(
                 item.provider_file_id in queued_ids
                 and item.source_artifact.access_policy.scope is SourceAccessScope.GLOBAL

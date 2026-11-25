@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import hashlib
-from src.lib.observability.runtime import report_runtime_exception
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 import logging
 import re
 import shutil
@@ -103,6 +103,31 @@ def _report_source_failure(exc: Exception, operation: str) -> None:
         return
     try:
         report_runtime_exception(exc, component="identifier_import", operation=operation)
+    except Exception:
+        pass
+
+
+def _report_service_login_expired(
+    exc: DocumentSourceLoginExpired,
+    operation: str,
+    *,
+    bearer_kind: ProviderBearerKind,
+) -> None:
+    """Report a rejected non-curator (service) token once with sanitized details."""
+    if bearer_kind is ProviderBearerKind.CURATOR:
+        # An expired curator login is the curator's own condition, not a server failure.
+        return
+    try:
+        report_runtime_exception(
+            sanitized_runtime_error("Document-source service bearer was rejected"),
+            component="identifier_import",
+            operation=operation,
+            context={
+                "bearer_kind": bearer_kind.value,
+                "exception_type": type(exc).__name__,
+            },
+            include_request=False,
+        )
     except Exception:
         pass
 
@@ -968,7 +993,14 @@ class IdentifierImportService:
                 source_provenance=source_provenance,
             )
         except (DocumentSourceConfigError, DocumentSourceError) as exc:
-            _report_source_failure(exc, "source_resolve_failed")
+            if isinstance(exc, DocumentSourceLoginExpired):
+                _report_service_login_expired(
+                    exc,
+                    "source_resolve_failed",
+                    bearer_kind=document_source_context.bearer_kind,
+                )
+            else:
+                _report_source_failure(exc, "source_resolve_failed")
             logger.warning(
                 "Document-source identifier resolve failed for %s: %s",
                 normalized.normalized,
@@ -1106,8 +1138,13 @@ class IdentifierImportService:
                 message="Access to the document-source PDF was denied.",
             )
         except (DocumentSourceConfigError, DocumentSourceError) as exc:
-            if not isinstance(exc, DocumentSourceLoginExpired):
-                # An expired curator login is the curator's own condition, not a server failure.
+            if isinstance(exc, DocumentSourceLoginExpired):
+                _report_service_login_expired(
+                    exc,
+                    "source_import_failed",
+                    bearer_kind=document_source_context.bearer_kind,
+                )
+            else:
                 _report_source_failure(exc, "source_import_failed")
             logger.warning(
                 "Document-source identifier import failed for %s: %s",

@@ -1093,6 +1093,8 @@ def _paper_state(document_id: UUID, owner_user_id: int) -> _PaperState:
                 if row.text_bytes is None:
                     raise FileRangeMissingError(f"Ready file {row.id} has no measured text size")
                 ready_bytes += row.text_bytes
+            elif row.text_bytes is not None:
+                ready_bytes += row.text_bytes
         leftovers = tuple(
             _Leftover.from_row(row)
             for row in paper.files
@@ -1187,12 +1189,15 @@ def _insert_rows(
         skipped: dict[str, tuple[FileReason, int | None, int | None]] = {}
         to_insert: list[PDFDocumentFile] = []
         live_count = sum(1 for _, status, _, _, _, _ in existing if status not in _NOT_LIVE)
-        ready_text_bytes = 0
+        reserved_text_bytes = 0
         for file_id, status, _, _, _, text_bytes in existing:
             if status == FILE_STATUS_READY:
                 if text_bytes is None:
                     raise FileRangeMissingError(f"Ready file {file_id} has no measured text size")
-                ready_text_bytes += text_bytes
+                reserved_text_bytes += text_bytes
+            elif status not in _NOT_LIVE and text_bytes is not None:
+                # Include text bytes already reserved by overlapping pending writers.
+                reserved_text_bytes += text_bytes
         next_tab_order = max((tab_order for _, _, _, _, tab_order, _ in existing), default=-1) + 1
         for row in rows:
             source_id = row.source_provider_source_file_id
@@ -1209,15 +1214,20 @@ def _insert_rows(
                 if text_bytes_by_file is not None and source_id and source_id in text_bytes_by_file
                 else None
             )
-            if row_text_bytes is not None and ready_text_bytes + row_text_bytes > max_text_bytes:
+            if row_text_bytes is not None and reserved_text_bytes + row_text_bytes > max_text_bytes:
                 assert source_id is not None
-                skipped[source_id] = (FileReason.PAPER_TEXT_LIMIT, ready_text_bytes + row_text_bytes, max_text_bytes)
+                skipped[source_id] = (
+                    FileReason.PAPER_TEXT_LIMIT,
+                    reserved_text_bytes + row_text_bytes,
+                    max_text_bytes,
+                )
                 continue
             row.tab_order = next_tab_order
             next_tab_order += 1
             live_count += 1
             if row_text_bytes is not None:
-                ready_text_bytes += row_text_bytes
+                row.text_bytes = row_text_bytes
+                reserved_text_bytes += row_text_bytes
             active_ids.update(row_copy_ids)
             to_insert.append(row)
         if to_insert:
