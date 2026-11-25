@@ -1281,6 +1281,10 @@ describe('AddLiteraturePage', () => {
               },
             ],
           },
+          new Response(JSON.stringify({ detail: 'Authentication provider unavailable' }), {
+            status: 503,
+            headers: { 'Content-Type': 'application/json' },
+          }),
           {
             imported_count: 1,
             results: [
@@ -1329,12 +1333,17 @@ describe('AddLiteraturePage', () => {
       expect(within(preservedList202).getByRole('checkbox', { name: 'Made_up_S40' })).toBeChecked();
       expect(screen.getByRole('button', { name: 'Import with 2 supplements' })).toBeInTheDocument();
 
-      // Untick the unconverted file on PMID:202 and re-import ONLY PMID:202 with its remaining supplement
+      // Untick the unconverted file on PMID:202; a non-coded 503 during recovery preserves Job job-101 and recovery scope
       await user.click(within(preservedList202).getByRole('checkbox', { name: 'Made_up_S40' }));
+      await user.click(screen.getByRole('button', { name: 'Import with 1 supplement' }));
+      expect(await screen.findByText('Authentication provider unavailable')).toBeInTheDocument();
+      expect(screen.getByText('Job job-101')).toBeInTheDocument();
+      expect(within(screen.getByRole('list', { name: 'Files for PMID:202' })).getByRole('checkbox', { name: 'Made_up_S20' })).toBeChecked();
+
+      // Retry again: still posts ONLY PMID:202 and merges job-202 while keeping PMID:101's original imported row
       await user.click(screen.getByRole('button', { name: 'Import with 1 supplement' }));
       await screen.findByText('Job job-202');
 
-      // PMID:101 keeps its original imported status/job untouched while PMID:202 is merged in as imported
       expect(screen.getByText('Job job-101')).toBeInTheDocument();
       expect(screen.getByText('paper-101.pdf')).toBeInTheDocument();
       expect(screen.getAllByText('Imported')).toHaveLength(2);
@@ -1343,22 +1352,99 @@ describe('AddLiteraturePage', () => {
       const importCalls = vi.mocked(fetch).mock.calls.filter(
         ([input]) => String(input) === '/api/weaviate/documents/import/source-identifiers',
       );
-      expect(importCalls).toHaveLength(2);
-      const retryBody = JSON.parse((importCalls[1]?.[1] as { body: string }).body) as {
-        identifiers: string;
-        supplements: Array<Record<string, unknown>>;
-      };
-      expect(retryBody).toEqual({
-        identifiers: 'PMID:202',
-        supplements: [
+      expect(importCalls).toHaveLength(3);
+      for (const recoveryCall of importCalls.slice(1)) {
+        const recoveryBody = JSON.parse((recoveryCall?.[1] as { body: string }).body) as {
+          identifiers: string;
+          supplements: Array<Record<string, unknown>>;
+        };
+        expect(recoveryBody).toEqual({
+          identifiers: 'PMID:202',
+          supplements: [
+            {
+              identifier: 'PMID:202',
+              provider_file_id: '20',
+              md5: 'original-md5-20',
+              converted_md5: 'converted-md5-20',
+            },
+          ],
+        });
+      }
+    });
+
+    it('consumes each incoming row once when recovering duplicated file_not_tickable identifiers', async () => {
+      const user = userEvent.setup();
+      stubRoutedFetch(
+        [
           {
-            identifier: 'PMID:202',
-            provider_file_id: '20',
-            md5: 'original-md5-20',
-            converted_md5: 'converted-md5-20',
+            imported_count: 0,
+            results: [
+              resolvedRow('PMID:202', 'paper-202.pdf'),
+              resolvedRow('PMID:202', 'paper-202.pdf'),
+            ],
+          },
+          {
+            imported_count: 0,
+            results: [
+              {
+                identifier: 'PMID:202',
+                normalized_identifier: 'PMID:202',
+                status: 'error',
+                error_code: 'file_not_tickable',
+                message: 'Backend text.',
+                filename: 'paper-202.pdf',
+              },
+              {
+                identifier: 'PMID:202',
+                normalized_identifier: 'PMID:202',
+                status: 'error',
+                error_code: 'file_not_tickable',
+                message: 'Backend text.',
+                filename: 'paper-202.pdf',
+              },
+            ],
+          },
+          {
+            imported_count: 1,
+            results: [
+              {
+                identifier: 'PMID:202',
+                normalized_identifier: 'PMID:202',
+                status: 'imported',
+                message: 'Import queued for background processing.',
+                document_id: 'doc-202',
+                job_id: 'job-202',
+                filename: 'paper-202.pdf',
+              },
+            ],
           },
         ],
+        allianceProviderConfig,
+        emptyPdfJobsResponse,
+        () => buildIdentifierListingFromFixture(),
+      );
+      render(<AddLiteraturePage />);
+
+      fireEvent.change(screen.getByLabelText('Source identifiers'), {
+        target: { value: 'PMID:202\nPMID:202' },
       });
+      await user.click(screen.getByRole('button', { name: 'Resolve' }));
+      const chooseButtons = await screen.findAllByRole('button', { name: 'Choose supplements for PMID:202' });
+      await user.click(chooseButtons[0]!);
+      const lists = await screen.findAllByRole('list', { name: 'Files for PMID:202' });
+      await user.click(within(lists[0]!).getByRole('checkbox', { name: 'Made_up_S40' }));
+
+      await user.click(screen.getByRole('button', { name: 'Import with 1 supplement' }));
+      await screen.findAllByText(
+        'This file can no longer be chosen: ABC has not converted it and this import will not ask ABC to.',
+      );
+
+      // Untick and recover: job-202 renders exactly once (duplicate deduplicated row is dropped)
+      const preservedLists = screen.getAllByRole('list', { name: 'Files for PMID:202' });
+      await user.click(within(preservedLists[0]!).getByRole('checkbox', { name: 'Made_up_S40' }));
+      await user.click(screen.getByRole('button', { name: 'Resolve and Import' }));
+
+      expect(await screen.findAllByText('Job job-202')).toHaveLength(1);
     });
 
     it('lets an in-flight file listing complete cleanly after a 422 import refusal without wedging in loading', async () => {
@@ -1455,13 +1541,16 @@ describe('AddLiteraturePage', () => {
       });
       await user.click(screen.getByRole('button', { name: 'Resolve' }));
 
-      // Listing 503 document_source_import_disabled suppresses the panel & Choose supplements (NEVER N6)
+      // Listing 503 document_source_import_disabled suppresses the panel, Choose supplements (NEVER N6), and Ready to import
       await user.click(await screen.findByRole('button', { name: 'Choose supplements for PMID:202' }));
       await act(async () => undefined);
       expect(screen.queryByText(
         'Could not list this paper\'s files. You can import the main paper now and add supplements later from the Library.',
       )).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Choose supplements for PMID:202' })).not.toBeInTheDocument();
+      const row202 = screen.getByText('paper-202.pdf').closest('tr');
+      expect(row202).not.toBeNull();
+      expect(within(row202!).queryByText('Ready to import')).not.toBeInTheDocument();
 
       // Tick a supplement on PMID:101, then hit plain-string 503 disabled on POST
       await user.click(screen.getByRole('button', { name: 'Choose supplements for PMID:101' }));

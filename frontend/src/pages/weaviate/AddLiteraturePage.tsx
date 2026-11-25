@@ -285,22 +285,32 @@ const mergeImportResults = (
   previousResults: LiteratureImportResult[],
   incomingResults: LiteratureImportResult[],
 ): LiteratureImportResult[] => {
-  const incomingByIdentifier = new Map(
-    incomingResults.map((item) => [item.identifier, item]),
-  );
-  const seen = new Set<string>();
-  const merged = previousResults.map((existing) => {
-    const replacement = incomingByIdentifier.get(existing.identifier);
-    if (replacement) {
-      seen.add(existing.identifier);
-      return replacement;
-    }
-    return existing;
-  });
+  const incomingQueueByIdentifier = new Map<string, LiteratureImportResult[]>();
   for (const item of incomingResults) {
-    if (!seen.has(item.identifier)) {
-      merged.push(item);
+    const queue = incomingQueueByIdentifier.get(item.identifier);
+    if (queue) {
+      queue.push(item);
+    } else {
+      incomingQueueByIdentifier.set(item.identifier, [item]);
     }
+  }
+  const merged: LiteratureImportResult[] = [];
+  const replacedIdentifiers = new Set<string>();
+  for (const existing of previousResults) {
+    if (existing.errorCode !== 'file_not_tickable') {
+      merged.push(existing);
+      continue;
+    }
+    const queue = incomingQueueByIdentifier.get(existing.identifier);
+    if (queue && queue.length > 0) {
+      merged.push(queue.shift()!);
+      replacedIdentifiers.add(existing.identifier);
+    } else if (!replacedIdentifiers.has(existing.identifier)) {
+      merged.push(existing);
+    }
+  }
+  for (const remaining of incomingQueueByIdentifier.values()) {
+    merged.push(...remaining);
   }
   return merged;
 };
@@ -1064,8 +1074,12 @@ const AddLiteraturePage: React.FC = () => {
           });
           return;
         }
-        clearSupplementState();
         const message = error instanceof Error ? error.message : 'Failed to import source identifiers.';
+        if (isRecoveryImport) {
+          setIdentifierFeedback({ severity: 'error', message });
+          return;
+        }
+        clearSupplementState();
         setResults([{
           identifier: identifiers,
           normalizedIdentifier: null,
@@ -1476,7 +1490,7 @@ const AddLiteraturePage: React.FC = () => {
                     </TableCell>
                   </TableRow>
                 ) : results.map((result, rowIndex) => {
-                  const rowKey = `${result.identifier}-${result.status}-${result.documentId ?? result.jobId ?? result.message}`;
+                  const rowKey = `${rowIndex}-${result.identifier}-${result.status}-${result.documentId ?? result.jobId ?? result.message}`;
                   const panelId = `${panelIdPrefix}-supplements-${rowIndex}`;
                   const listingEntry = paperListings[result.identifier];
                   const listingDuplicate = listingEntry?.status === 'loaded'
