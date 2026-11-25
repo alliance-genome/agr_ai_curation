@@ -4,7 +4,7 @@ import logging
 import json
 import os
 import time
-from typing import List, Dict, Any, Optional, Sequence, Union
+from typing import Callable, List, Dict, Any, Optional, Sequence, Union
 from datetime import datetime, timezone
 import asyncio
 import uuid
@@ -746,12 +746,15 @@ async def update_document_piece_count(
     user_id: str,
     *,
     caller_reports_failure: bool = False,
+    on_cancelled_error: Optional[Callable[[Exception], None]] = None,
 ) -> None:
     """Write only the paper object's piece counts (after files are added to a finished paper).
 
     The object's processing and embedding status are left as they are. Failures raise.
     Pass ``caller_reports_failure=True`` when the caller owns sanitized failure reporting so
-    connection-layer errors do not emit duplicate unmarked error logs.
+    connection-layer errors do not emit duplicate unmarked error logs. Pass
+    ``on_cancelled_error`` to report a worker ``Exception`` discarded while draining after
+    cancellation before ``CancelledError`` propagates.
     """
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped metadata updates")
@@ -765,7 +768,13 @@ async def update_document_piece_count(
                 uuid=document_id, properties={"chunkCount": piece_count, "vectorCount": piece_count},
             )
 
-    await asyncio.to_thread(sync_update)
+    from src.lib.document_cleanup import run_thread_drained
+
+    await run_thread_drained(
+        sync_update,
+        cancellable_before_start=True,
+        on_cancelled_error=on_cancelled_error,
+    )
 
 
 async def update_processing_status(

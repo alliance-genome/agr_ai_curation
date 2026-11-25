@@ -1,5 +1,6 @@
 """Runtime unit tests for core document endpoints."""
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
@@ -176,7 +177,14 @@ def _patch_session_factory(monkeypatch, sessions):
         assert stack, "SessionLocal called more times than expected"
         return stack.pop(0)
 
+    def _open_lock_session(connection=None):
+        if connection is None:
+            return None
+        assert isinstance(connection, _FakeLockConnection)
+        return _factory()
+
     monkeypatch.setattr(documents, "SessionLocal", _factory)
+    monkeypatch.setattr("src.lib.document_files.paper_lock.open_paper_lock_session", _open_lock_session)
 
 
 def _patch_indexed_document_status(monkeypatch, status="completed"):
@@ -1375,7 +1383,7 @@ async def test_delete_document_endpoint_raises_when_cleanup_fails(monkeypatch, t
             raise RuntimeError("source cleanup failed")
 
     monkeypatch.setattr(documents, "remove_stored_files", _raise_cleanup)
-    caplog.set_level(logging.ERROR, logger=documents.logger.name)
+    caplog.set_level(logging.WARNING, logger=documents.logger.name)
 
     with pytest.raises(HTTPException) as exc:
         await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
@@ -1386,7 +1394,11 @@ async def test_delete_document_endpoint_raises_when_cleanup_fails(monkeypatch, t
     assert file_session.rollbacks == 1
     assert file_session.commits == 0
     assert file_session.deleted == []
-    assert "source cleanup failed" in caplog.text
+    assert "Paper delete cleanup failed" in caplog.text
+    assert "step=stored_files" in caplog.text
+    assert "exception_type=RuntimeError" in caplog.text
+    assert "source cleanup failed" not in caplog.text
+    assert doc_id not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -1467,6 +1479,1130 @@ async def test_delete_document_endpoint_raises_500_when_delete_fails(monkeypatch
         await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
     assert exc.value.status_code == 500
     assert exc.value.detail == "nope"
+
+
+@pytest.mark.asyncio
+async def test_delete_document_endpoint_cancel_during_chunk_wipe_drains_under_lock(monkeypatch, tmp_path):
+    from src.lib.document_files.paper_lock import paper_lock_key
+
+    doc_id = str(uuid4())
+    lock_key = paper_lock_key(doc_id)
+    pdf_dir = tmp_path / "user-1" / doc_id
+    pdf_dir.mkdir(parents=True)
+    pdf_file = pdf_dir / "paper.pdf"
+    pdf_file.write_bytes(b"%PDF-1.7\n")
+
+    verify_session = _FakeSession()
+    paper = _doc(id=doc_id, user_id=42, file_path=f"user-1/{doc_id}/paper.pdf")
+    snapshot_session = _FakeSession(execute_doc=paper)
+    file_session = _FakeSession(execute_doc=paper)
+    cleanup_session = _FakeSession(execute_doc=paper)
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session, file_session, cleanup_session])
+
+    wipe_entered = asyncio.Event()
+    resume_wipe = asyncio.Event()
+    parent_entered = asyncio.Event()
+    resume_parent = asyncio.Event()
+    order: list[str] = []
+
+    async def _wipe_chunks(*_args, **_kwargs):
+        from src.lib.document_cleanup import mark_destructive_delete_started
+
+        mark_destructive_delete_started()
+        wipe_entered.set()
+        await resume_wipe.wait()
+        assert lock_key in _FakeLockConnection.held
+        order.append("chunks")
+        return {"success": True, "chunks_deleted": 3}
+
+    async def _delete_parent(*_args, **kwargs):
+        assert kwargs == {"allow_missing": True}
+        assert not pdf_file.exists()
+        assert lock_key in _FakeLockConnection.held
+        order.append("files")
+        parent_entered.set()
+        await resume_parent.wait()
+        assert lock_key in _FakeLockConnection.held
+        order.append("parent")
+        return {"success": True, "deleted": True}
+
+    def _delete_sql(owned_paper):
+        assert lock_key in _FakeLockConnection.held
+        order.append("sql_delete")
+        cleanup_session.deleted.append(owned_paper)
+
+    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
+    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
+    monkeypatch.setattr(documents, "delete_paper_chunks", _wipe_chunks)
+    monkeypatch.setattr(documents, "delete_paper_object", _delete_parent)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+    monkeypatch.setattr(cleanup_session, "delete", _delete_sql)
+
+    request_task = asyncio.create_task(documents.delete_document_endpoint(doc_id, {"sub": "user-1"}))
+    await asyncio.wait_for(wipe_entered.wait(), timeout=2)
+
+    request_task.cancel("client disconnected")
+    await asyncio.sleep(0)
+    request_task.cancel("second cancellation")
+    await asyncio.sleep(0)
+    assert not request_task.done()
+    assert lock_key in _FakeLockConnection.held
+
+    resume_wipe.set()
+    await asyncio.wait_for(parent_entered.wait(), timeout=2)
+    request_task.cancel("third cancellation during parent delete")
+    await asyncio.sleep(0)
+    assert not request_task.done()
+    assert lock_key in _FakeLockConnection.held
+
+    resume_parent.set()
+    with pytest.raises(asyncio.CancelledError, match="client disconnected"):
+        await asyncio.wait_for(request_task, timeout=2)
+
+    assert order == ["chunks", "files", "parent", "sql_delete"]
+    assert not pdf_file.exists()
+    assert cleanup_session.deleted == [paper]
+    assert cleanup_session.commits == 1
+    assert _FakeLockConnection.held == set()
+
+
+@pytest.mark.asyncio
+async def test_delete_document_endpoint_cancel_before_destructive_write_cancels_promptly(monkeypatch):
+    from src.lib.document_files.paper_lock import paper_lock_key
+
+    doc_id = str(uuid4())
+    lock_key = paper_lock_key(doc_id)
+    verify_session = _FakeSession()
+    _patch_session_factory(monkeypatch, [verify_session])
+
+    in_get_document = asyncio.Event()
+    wipe_called = False
+
+    async def _slow_get_document(*_args, **_kwargs):
+        assert lock_key in _FakeLockConnection.held
+        in_get_document.set()
+        await asyncio.sleep(5)
+        return {"document": {"processing_status": "completed"}}
+
+    async def _unexpected_wipe(*_args, **_kwargs):
+        nonlocal wipe_called
+        wipe_called = True
+        return {"success": True, "chunks_deleted": 0}
+
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
+    monkeypatch.setattr(documents, "get_document", _slow_get_document)
+    monkeypatch.setattr(documents, "delete_paper_chunks", _unexpected_wipe)
+    monkeypatch.setattr(
+        documents,
+        "delete_paper_object",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("parent delete must not run")),
+    )
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+
+    request_task = asyncio.create_task(documents.delete_document_endpoint(doc_id, {"sub": "user-1"}))
+    await asyncio.wait_for(in_get_document.wait(), timeout=2)
+
+    request_task.cancel("cancelled before destructive write")
+    with pytest.raises(asyncio.CancelledError, match="cancelled before destructive write"):
+        await asyncio.wait_for(request_task, timeout=2)
+
+    assert wipe_called is False
+    assert _FakeLockConnection.held == set()
+
+
+@pytest.mark.asyncio
+async def test_delete_document_endpoint_cancel_during_incomplete_chunk_wipe_retains_ownership(
+    monkeypatch, tmp_path, caplog,
+):
+    from src.lib.document_files.paper_lock import paper_lock_key
+
+    doc_id = str(uuid4())
+    lock_key = paper_lock_key(doc_id)
+    pdf_dir = tmp_path / "user-1" / doc_id
+    pdf_dir.mkdir(parents=True)
+    pdf_file = pdf_dir / "paper.pdf"
+    pdf_file.write_bytes(b"%PDF-1.7\n")
+
+    verify_session = _FakeSession()
+    paper = _doc(id=doc_id, user_id=42, file_path=f"user-1/{doc_id}/paper.pdf")
+    snapshot_session = _FakeSession(execute_doc=paper)
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session])
+
+    wipe_entered = asyncio.Event()
+    resume_wipe = asyncio.Event()
+
+    async def _incomplete_wipe(*_args, **_kwargs):
+        from src.lib.document_cleanup import mark_destructive_delete_started
+
+        mark_destructive_delete_started()
+        wipe_entered.set()
+        await resume_wipe.wait()
+        assert lock_key in _FakeLockConnection.held
+        return {
+            "success": False,
+            "message": "Document deletion reported as unsuccessful",
+            "chunks_deleted": 1,
+            "chunks_matched": 2,
+            "chunks_failed": 1,
+        }
+
+    report = MagicMock()
+    monkeypatch.setattr(documents, "report_runtime_exception", report)
+    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
+    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
+    monkeypatch.setattr(documents, "delete_paper_chunks", _incomplete_wipe)
+    monkeypatch.setattr(
+        documents,
+        "delete_paper_object",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("parent object must stay when chunk wipe is incomplete")),
+    )
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+    caplog.set_level(logging.WARNING, logger=documents.logger.name)
+
+    request_task = asyncio.create_task(documents.delete_document_endpoint(doc_id, {"sub": "user-1"}))
+    await asyncio.wait_for(wipe_entered.wait(), timeout=2)
+    request_task.cancel("client disconnected")
+    await asyncio.sleep(0)
+    request_task.cancel("second cancel")
+    await asyncio.sleep(0)
+    assert not request_task.done()
+    assert lock_key in _FakeLockConnection.held
+
+    resume_wipe.set()
+    with pytest.raises(asyncio.CancelledError, match="client disconnected"):
+        await asyncio.wait_for(request_task, timeout=2)
+
+    assert pdf_file.exists()
+    assert _FakeLockConnection.held == set()
+    # Incomplete chunk wipes are owned solely by paper_delete_chunk_wipe_incomplete: no second capture.
+    report.assert_not_called()
+    assert doc_id not in caplog.text
+    warnings = [record for record in caplog.records if record.name == documents.logger.name]
+    assert warnings
+    assert all(getattr(record, "sentry_skip_event", False) for record in warnings)
+
+
+@pytest.mark.asyncio
+async def test_delete_document_endpoint_cancel_during_file_unlink_failure_retains_ownership(
+    monkeypatch, tmp_path, caplog,
+):
+    from src.lib.document_files.paper_lock import paper_lock_key
+    from src.lib.observability.sentry import hash_sentry_identifier
+
+    doc_id = str(uuid4())
+    lock_key = paper_lock_key(doc_id)
+    fake_private_path = f"/private-storage/fake-curator/{doc_id}/secret-paper.pdf"
+    verify_session = _FakeSession()
+    cleanup_doc = _doc(
+        id=doc_id,
+        user_id=42,
+        file_path=None,
+        pdfx_json_path=None,
+        processed_json_path=None,
+        source_markdown_path=f"user-1/source_markdown/{doc_id}.md",
+        display_mode="text",
+    )
+    snapshot_session = _FakeSession(execute_doc=cleanup_doc)
+    file_session = _FakeSession(execute_doc=cleanup_doc)
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session, file_session])
+
+    wipe_entered = asyncio.Event()
+    resume_wipe = asyncio.Event()
+    unlink_saw_lock = False
+
+    async def _wipe_chunks(*_args, **_kwargs):
+        from src.lib.document_cleanup import mark_destructive_delete_started
+
+        mark_destructive_delete_started()
+        wipe_entered.set()
+        await resume_wipe.wait()
+        return {"success": True, "chunks_deleted": 2}
+
+    def _fail_unlink(paths, *, owner_subject):
+        nonlocal unlink_saw_lock
+        unlink_saw_lock = lock_key in _FakeLockConnection.held
+        if list(paths):
+            raise PermissionError(f"cannot unlink {fake_private_path}")
+
+    report = MagicMock()
+    monkeypatch.setattr(documents, "report_runtime_exception", report)
+    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
+    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
+    monkeypatch.setattr(documents, "delete_paper_chunks", _wipe_chunks)
+    monkeypatch.setattr(documents, "remove_stored_files", _fail_unlink)
+    monkeypatch.setattr(
+        documents,
+        "delete_paper_object",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("parent object must stay when file cleanup fails")),
+    )
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+    caplog.set_level(logging.WARNING, logger=documents.logger.name)
+
+    request_task = asyncio.create_task(documents.delete_document_endpoint(doc_id, {"sub": "user-1"}))
+    await asyncio.wait_for(wipe_entered.wait(), timeout=2)
+    request_task.cancel("client disconnected")
+    await asyncio.sleep(0)
+    assert not request_task.done()
+    assert lock_key in _FakeLockConnection.held
+
+    resume_wipe.set()
+    with pytest.raises(asyncio.CancelledError, match="client disconnected"):
+        await asyncio.wait_for(request_task, timeout=2)
+
+    assert unlink_saw_lock is True
+    assert file_session.rollbacks == 1
+    assert file_session.commits == 0
+    assert file_session.deleted == []
+    assert _FakeLockConnection.held == set()
+    report.assert_called_once()
+    (reported_exc,) = report.call_args.args
+    assert isinstance(reported_exc, RuntimeError)
+    assert str(reported_exc) == "Paper delete failed while draining after cancellation"
+    assert reported_exc.__traceback__ is not None
+    assert reported_exc.__cause__ is None and reported_exc.__context__ is None
+    assert report.call_args.kwargs == {
+        "component": "documents",
+        "operation": "paper_delete_cancelled_drain_failed",
+        "context": {
+            "document_id_hash": hash_sentry_identifier(doc_id),
+            "step": "stored_files",
+            "exception_type": "PermissionError",
+        },
+        "fingerprint": ["paper_delete_cancelled_drain_failed", "stored_files", "PermissionError"],
+        "include_request": False,
+    }
+    for sensitive in (fake_private_path, doc_id):
+        assert sensitive not in repr(report.call_args)
+        assert sensitive not in caplog.text
+    warnings = [record for record in caplog.records if record.name == documents.logger.name]
+    assert warnings
+    assert all(getattr(record, "sentry_skip_event", False) for record in warnings)
+
+
+@pytest.mark.asyncio
+async def test_delete_document_endpoint_cancel_during_pool_timeout_emits_one_sanitized_report(
+    monkeypatch, tmp_path, caplog,
+):
+    from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+    from src.lib.document_files.paper_lock import paper_lock_key
+    from src.lib.observability.sentry import hash_sentry_identifier
+
+    doc_id = str(uuid4())
+    lock_key = paper_lock_key(doc_id)
+    fake_db_secret = "private-pool-detail-fake-curator-session"
+    verify_session = _FakeSession()
+    paper = _doc(id=doc_id, user_id=42)
+    snapshot_session = _FakeSession(execute_doc=paper)
+    file_session = _FakeSession(execute_doc=paper)
+    cleanup_session = _FakeSession(execute_doc=paper)
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session, file_session, cleanup_session])
+
+    wipe_entered = asyncio.Event()
+    resume_wipe = asyncio.Event()
+
+    async def _wipe_chunks(*_args, **_kwargs):
+        from src.lib.document_cleanup import mark_destructive_delete_started
+
+        mark_destructive_delete_started()
+        wipe_entered.set()
+        await resume_wipe.wait()
+        return {"success": True, "chunks_deleted": 1}
+
+    def _pool_timeout_on_commit():
+        assert lock_key in _FakeLockConnection.held
+        raise PoolTimeoutError(f"QueuePool exhausted for {fake_db_secret} doc={doc_id}")
+
+    report = MagicMock()
+    monkeypatch.setattr(documents, "report_runtime_exception", report)
+    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
+    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
+    monkeypatch.setattr(documents, "delete_paper_chunks", _wipe_chunks)
+    monkeypatch.setattr(documents, "delete_paper_object", lambda *_args, **_kwargs: _async_value({"success": True, "deleted": True}))
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+    monkeypatch.setattr(cleanup_session, "commit", _pool_timeout_on_commit)
+    caplog.set_level(logging.WARNING, logger=documents.logger.name)
+
+    request_task = asyncio.create_task(documents.delete_document_endpoint(doc_id, {"sub": "user-1"}))
+    await asyncio.wait_for(wipe_entered.wait(), timeout=2)
+    request_task.cancel("client disconnected")
+    await asyncio.sleep(0)
+    assert not request_task.done()
+
+    resume_wipe.set()
+    with pytest.raises(asyncio.CancelledError, match="client disconnected"):
+        await asyncio.wait_for(request_task, timeout=2)
+
+    assert cleanup_session.rollbacks == 1
+    assert _FakeLockConnection.held == set()
+    report.assert_called_once()
+    (reported_exc,) = report.call_args.args
+    assert isinstance(reported_exc, RuntimeError)
+    assert reported_exc.__traceback__ is not None
+    assert reported_exc.__cause__ is None and reported_exc.__context__ is None
+    assert report.call_args.kwargs == {
+        "component": "documents",
+        "operation": "paper_delete_cancelled_drain_failed",
+        "context": {
+            "document_id_hash": hash_sentry_identifier(doc_id),
+            "step": "sql_cleanup",
+            "exception_type": "TimeoutError",
+        },
+        "fingerprint": ["paper_delete_cancelled_drain_failed", "sql_cleanup", "TimeoutError"],
+        "include_request": False,
+    }
+    for sensitive in (fake_db_secret, doc_id):
+        assert sensitive not in repr(report.call_args)
+        assert sensitive not in caplog.text
+    warnings = [record for record in caplog.records if record.name == documents.logger.name]
+    assert warnings
+    assert all(getattr(record, "sentry_skip_event", False) for record in warnings)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_point", ["before_task_create", "after_task_create"])
+async def test_delete_document_endpoint_cancel_in_pre_submission_scheduling_gap_aborts_before_wipe(
+    monkeypatch, tmp_path, cancel_point,
+):
+    from src.lib import document_cleanup
+
+    doc_id = str(uuid4())
+    pdf_dir = tmp_path / "user-1" / doc_id
+    pdf_dir.mkdir(parents=True)
+    pdf_file = pdf_dir / "paper.pdf"
+    pdf_file.write_bytes(b"%PDF-1.7\n")
+
+    verify_session = _FakeSession()
+    paper = _doc(id=doc_id, user_id=42, file_path=f"user-1/{doc_id}/paper.pdf")
+    snapshot_session = _FakeSession(execute_doc=paper)
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session])
+
+    wipe_called = False
+    parent_called = False
+
+    async def _unexpected_wipe(*_args, **_kwargs):
+        nonlocal wipe_called
+        wipe_called = True
+        return {"success": True, "chunks_deleted": 3}
+
+    async def _unexpected_parent(*_args, **_kwargs):
+        nonlocal parent_called
+        parent_called = True
+        return {"success": True, "deleted": True}
+
+    request_task: asyncio.Task[Any] | None = None
+    real_drain = document_cleanup.drain_shielded
+    real_create_task = document_cleanup.asyncio.create_task
+
+    if cancel_point == "before_task_create":
+        async def _cancel_before_drain(coro, **kwargs):
+            assert request_task is not None
+            request_task.cancel("cancelled right before submission")
+            return await real_drain(coro, **kwargs)
+
+        monkeypatch.setattr(documents, "drain_shielded", _cancel_before_drain)
+    else:
+        def _cancel_in_create_task_gap(coro, *args, **kwargs):
+            task = real_create_task(coro, *args, **kwargs)
+            if request_task is not None and getattr(getattr(coro, "cr_code", None), "co_name", None) == "_guarded":
+                request_task.cancel("cancelled right before submission")
+            return task
+
+        monkeypatch.setattr(document_cleanup.asyncio, "create_task", _cancel_in_create_task_gap)
+
+    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
+    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
+    monkeypatch.setattr(documents, "delete_paper_chunks", _unexpected_wipe)
+    monkeypatch.setattr(documents, "delete_paper_object", _unexpected_parent)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+
+    request_task = real_create_task(documents.delete_document_endpoint(doc_id, {"sub": "user-1"}))
+    with pytest.raises(asyncio.CancelledError, match="cancelled right before submission"):
+        await asyncio.wait_for(request_task, timeout=2)
+
+    assert wipe_called is False
+    assert parent_called is False
+    assert pdf_file.exists()
+    assert _FakeLockConnection.held == set()
+
+
+@pytest.mark.asyncio
+async def test_delete_document_endpoint_cancel_preserves_cancellation_when_report_callback_fails(
+    monkeypatch, tmp_path,
+):
+    doc_id = str(uuid4())
+    verify_session = _FakeSession()
+    cleanup_doc = _doc(
+        id=doc_id,
+        user_id=42,
+        file_path=None,
+        pdfx_json_path=None,
+        processed_json_path=None,
+        source_markdown_path=f"user-1/source_markdown/{doc_id}.md",
+        display_mode="text",
+    )
+    snapshot_session = _FakeSession(execute_doc=cleanup_doc)
+    file_session = _FakeSession(execute_doc=cleanup_doc)
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session, file_session])
+
+    wipe_entered = asyncio.Event()
+    resume_wipe = asyncio.Event()
+
+    async def _wipe_chunks(*_args, **_kwargs):
+        from src.lib.document_cleanup import mark_destructive_delete_started
+
+        mark_destructive_delete_started()
+        wipe_entered.set()
+        await resume_wipe.wait()
+        return {"success": True, "chunks_deleted": 1}
+
+    def _fail_unlink(paths, *, owner_subject):
+        if list(paths):
+            raise PermissionError("fake-unlink-error")
+
+    monkeypatch.setattr(
+        documents,
+        "report_runtime_exception",
+        MagicMock(side_effect=RuntimeError("sentry transport down")),
+    )
+    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
+    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
+    monkeypatch.setattr(documents, "delete_paper_chunks", _wipe_chunks)
+    monkeypatch.setattr(documents, "remove_stored_files", _fail_unlink)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+
+    request_task = asyncio.create_task(documents.delete_document_endpoint(doc_id, {"sub": "user-1"}))
+    await asyncio.wait_for(wipe_entered.wait(), timeout=2)
+    request_task.cancel("client disconnected")
+    await asyncio.sleep(0)
+
+    resume_wipe.set()
+    with pytest.raises(asyncio.CancelledError, match="client disconnected"):
+        await asyncio.wait_for(request_task, timeout=2)
+
+    assert file_session.rollbacks == 1
+    assert _FakeLockConnection.held == set()
+
+
+@pytest.mark.asyncio
+async def test_delete_document_endpoint_cancel_during_real_chunk_wipe_checkpoint_aborts_before_submit(
+    monkeypatch, tmp_path,
+):
+    from contextlib import contextmanager
+    from src.lib.weaviate_client import documents as weaviate_docs
+
+    doc_id = str(uuid4())
+    pdf_dir = tmp_path / "user-1" / doc_id
+    pdf_dir.mkdir(parents=True)
+    pdf_file = pdf_dir / "paper.pdf"
+    pdf_file.write_bytes(b"%PDF-1.7\n")
+
+    verify_session = _FakeSession()
+    paper = _doc(id=doc_id, user_id=42, file_path=f"user-1/{doc_id}/paper.pdf")
+    snapshot_session = _FakeSession(execute_doc=paper)
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session])
+
+    chunks, papers = MagicMock(), MagicMock()
+
+    @contextmanager
+    def _unexpected_session():
+        raise AssertionError("Weaviate session must not open when cancelled before submission")
+        yield MagicMock()
+
+    connection = MagicMock()
+    connection.session.side_effect = _unexpected_session
+    monkeypatch.setattr(weaviate_docs, "get_connection", lambda: connection)
+    monkeypatch.setattr(weaviate_docs, "get_user_collections", lambda *_: (chunks, papers))
+
+    request_task: asyncio.Task[Any] | None = None
+    real_sleep = weaviate_docs.asyncio.sleep
+    cancelled_once = False
+
+    async def _cancel_at_helper_checkpoint(delay, *args, **kwargs):
+        nonlocal cancelled_once
+        if delay == 0 and not cancelled_once and request_task is not None:
+            cancelled_once = True
+            request_task.cancel("cancelled at helper checkpoint")
+        return await real_sleep(delay, *args, **kwargs)
+
+    monkeypatch.setattr(weaviate_docs.asyncio, "sleep", _cancel_at_helper_checkpoint)
+    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
+    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+
+    request_task = asyncio.create_task(documents.delete_document_endpoint(doc_id, {"sub": "user-1"}))
+    with pytest.raises(asyncio.CancelledError, match="cancelled at helper checkpoint"):
+        await asyncio.wait_for(request_task, timeout=2)
+
+    assert cancelled_once is True
+    connection.session.assert_not_called()
+    chunks.data.delete_many.assert_not_called()
+    papers.data.delete_by_id.assert_not_called()
+    assert pdf_file.exists()
+    assert _FakeLockConnection.held == set()
+
+
+@pytest.mark.asyncio
+async def test_delete_document_endpoint_cancel_at_chunk_wipe_yield_before_submit_aborts(
+    monkeypatch, tmp_path,
+):
+    """Cancel arriving right at delete_paper_chunks's own yield aborts with zero wipe."""
+    from contextlib import contextmanager
+    from src.lib.weaviate_client import documents as weaviate_docs
+
+    doc_id = str(uuid4())
+    pdf_dir = tmp_path / "user-1" / doc_id
+    pdf_dir.mkdir(parents=True)
+    pdf_file = pdf_dir / "paper.pdf"
+    pdf_file.write_bytes(b"%PDF-1.7\n")
+
+    verify_session = _FakeSession()
+    paper = _doc(id=doc_id, user_id=42, file_path=f"user-1/{doc_id}/paper.pdf")
+    snapshot_session = _FakeSession(execute_doc=paper)
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session])
+
+    chunks, papers = MagicMock(), MagicMock()
+
+    @contextmanager
+    def _unexpected_session(*_args, **_kwargs):
+        raise AssertionError("Weaviate session must not open when cancelled at chunk-wipe yield")
+        yield MagicMock()
+
+    connection = MagicMock()
+    connection.session.side_effect = _unexpected_session
+    monkeypatch.setattr(weaviate_docs, "get_connection", lambda: connection)
+    monkeypatch.setattr(weaviate_docs, "get_user_collections", lambda *_: (chunks, papers))
+
+    request_task: asyncio.Task[Any] | None = None
+    real_sleep = weaviate_docs.asyncio.sleep
+    sleep_zero_calls = 0
+    cancelled_in_chunk_wipe = False
+
+    async def _cancel_after_chunk_wipe_yield(delay, *args, **kwargs):
+        nonlocal sleep_zero_calls, cancelled_in_chunk_wipe
+        result = await real_sleep(delay, *args, **kwargs)
+        if delay == 0:
+            sleep_zero_calls += 1
+            # Call 1 is drain_shielded's entry yield; call 2 is delete_paper_chunks's
+            # pre-submission yield inside the shielded child task. Cancelling the
+            # owning request_task right as call 2 resumes reproduces the exact scheduling
+            # order where the child steps before the owner runs task.cancel().
+            if sleep_zero_calls == 2 and request_task is not None:
+                cancelled_in_chunk_wipe = True
+                request_task.cancel("cancelled at chunk-wipe yield")
+        return result
+
+    monkeypatch.setattr(weaviate_docs.asyncio, "sleep", _cancel_after_chunk_wipe_yield)
+    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr(
+        documents,
+        "verify_document_ownership",
+        lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42),
+    )
+    monkeypatch.setattr(
+        documents,
+        "get_document",
+        lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}),
+    )
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+
+    request_task = asyncio.create_task(documents.delete_document_endpoint(doc_id, {"sub": "user-1"}))
+    with pytest.raises(asyncio.CancelledError, match="cancelled at chunk-wipe yield"):
+        await asyncio.wait_for(request_task, timeout=2)
+
+    assert cancelled_in_chunk_wipe is True
+    assert sleep_zero_calls == 2
+    connection.session.assert_not_called()
+    chunks.data.delete_many.assert_not_called()
+    papers.data.delete_by_id.assert_not_called()
+    assert pdf_file.exists()
+    assert _FakeLockConnection.held == set()
+
+
+@pytest.mark.parametrize(
+    "failure_mode",
+    [
+        "chunk_error",
+        "parent_error",
+        "parent_reconnect_error",
+        "parent_reconnect_cancel_at_yield",
+        "stored_files_cancel_before_on_cancel",
+        "sql_cleanup_cancel_before_on_cancel",
+        "incomplete_wipe",
+    ],
+)
+def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_without_request_url(
+    failure_mode,
+):
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent(f"""
+        import asyncio
+        import logging
+        import os
+        import tempfile
+        import threading
+        from contextlib import contextmanager
+        from pathlib import Path
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        os.environ["SENTRY_CONTENT_REDACTION_ENABLED"] = "false"
+
+        import sentry_sdk
+        from sentry_sdk.integrations.logging import LoggingIntegration
+        import weaviate
+
+        from src.api import documents
+        from src.lib.document_files import paper_lock
+        from src.lib.observability.sentry import before_send, hash_sentry_identifier
+        from src.lib.weaviate_client.connection import WeaviateConnection
+        from src.lib.weaviate_client import documents as weaviate_docs
+        import src.models.sql.database as sql_db
+
+        doc_id = "11111111-2222-3333-4444-555555555555"
+        secret_detail = "private-weaviate-detail-for-secret-curator"
+        events = []
+
+        logging.basicConfig(level=logging.INFO)
+        sentry_sdk.init(
+            dsn="http://public@example.invalid/1",
+            transport=events.append,
+            before_send=before_send,
+            include_local_variables=False,
+            default_integrations=False,
+            integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+        )
+
+        def _attach_request_url(event, _hint):
+            event["request"] = {{"url": f"https://example.invalid/weaviate/documents/{{doc_id}}"}}
+            return event
+
+        sentry_sdk.get_global_scope().add_event_processor(_attach_request_url)
+
+        class _LockConn:
+            def execute(self, statement, params):
+                return SimpleNamespace(scalar_one=lambda: True)
+            def commit(self):
+                pass
+            def close(self):
+                pass
+            def invalidate(self):
+                pass
+
+        sql_db.engine = SimpleNamespace(connect=lambda: _LockConn())
+
+        class _Session:
+            def __init__(self, doc=None, *, fail_on_delete=False):
+                self._doc = doc
+                self._fail_on_delete = fail_on_delete
+            def execute(self, *_a, **_kw):
+                return SimpleNamespace(
+                    scalars=lambda: SimpleNamespace(first=lambda: self._doc),
+                    scalar_one_or_none=lambda: self._doc,
+                )
+            def delete(self, _row):
+                if self._fail_on_delete:
+                    raise RuntimeError(f"{{secret_detail}} {{doc_id}}")
+            def commit(self):
+                pass
+            def rollback(self):
+                pass
+            def close(self):
+                pass
+
+        main_file = SimpleNamespace(
+            id="f1", role="main", status="ready", display_mode="local_pdf",
+            file_path=None, pdfx_json_path=None, processed_json_path=None, source_markdown_path=None,
+        )
+        paper = SimpleNamespace(
+            id=doc_id, user_id=42, document_kind="library",
+            main_file=main_file, main_file_or_none=main_file, files=[main_file],
+        )
+        sessions = [
+            _Session(),
+            _Session(paper),
+            _Session(paper),
+            _Session(paper, fail_on_delete=({failure_mode!r} == "sql_cleanup_cancel_before_on_cancel")),
+        ]
+        documents.SessionLocal = lambda: sessions.pop(0)
+        def _open_lock_session(conn=None):
+            if conn is None:
+                return None
+            assert isinstance(conn, _LockConn)
+            return sessions.pop(0)
+        paper_lock.open_paper_lock_session = _open_lock_session
+        documents.provision_user_async = lambda _p: asyncio.sleep(0, result=SimpleNamespace(id=42))
+        documents.verify_document_ownership = lambda *_a, **_kw: SimpleNamespace(id=doc_id, user_id=42)
+        documents.get_document = lambda *_a, **_kw: asyncio.sleep(0, result={{"document": {{"processing_status": "completed"}}}})
+        documents.pdf_job_service.get_latest_job_for_document = lambda **_kw: None
+        documents.pipeline_tracker.get_pipeline_status = lambda *_a, **_kw: asyncio.sleep(0, result=None)
+        documents.cleanup_document_curation_dependencies = lambda *_a, **_kw: {{}}
+        if {failure_mode!r} == "stored_files_cancel_before_on_cancel":
+            def _boom_files(*_a, **_kw):
+                raise RuntimeError(f"{{secret_detail}} {{doc_id}}")
+            documents.remove_stored_files = _boom_files
+
+        wipe_entered = threading.Event()
+        resume_wipe = threading.Event()
+        ready_state = {{"ready": True}}
+        wipe_state = {{"done": False, "cancelled_at_parent": False, "cancelled_before_on_cancel": False}}
+        is_reconnect_mode = {failure_mode!r} in {{"parent_reconnect_error", "parent_reconnect_cancel_at_yield"}}
+        is_post_wipe_cancel_mode = {failure_mode!r} in {{
+            "parent_reconnect_cancel_at_yield",
+            "stored_files_cancel_before_on_cancel",
+            "sql_cleanup_cancel_before_on_cancel",
+        }}
+
+        if is_reconnect_mode:
+            WeaviateConnection._instance = None
+            conn = WeaviateConnection(url="http://localhost:8080")
+            fake_client = MagicMock()
+            fake_client.is_ready.side_effect = lambda: ready_state["ready"]
+            conn._client = fake_client
+
+            def _refuse_reconnect(**_kw):
+                raise ConnectionRefusedError(f"{{secret_detail}} {{doc_id}}")
+
+            weaviate.connect_to_local = _refuse_reconnect
+        else:
+            @contextmanager
+            def _weaviate_session(*_args, **_kwargs):
+                yield MagicMock()
+
+            conn = MagicMock()
+            conn.session.side_effect = _weaviate_session
+
+        chunks, papers = MagicMock(), MagicMock()
+
+        def _delete_many(**_kw):
+            wipe_entered.set()
+            assert resume_wipe.wait(timeout=5)
+            if {failure_mode!r} == "chunk_error":
+                raise RuntimeError(f"{{secret_detail}} {{doc_id}}")
+            if {failure_mode!r} == "incomplete_wipe":
+                return SimpleNamespace(successful=1, matches=2, failed=1)
+            if is_reconnect_mode:
+                ready_state["ready"] = False
+            wipe_state["done"] = True
+            return SimpleNamespace(successful=2, matches=2, failed=0)
+
+        def _delete_by_id(_doc_id):
+            if {failure_mode!r} == "parent_error":
+                raise RuntimeError(f"{{secret_detail}} {{doc_id}}")
+            return True
+
+        chunks.data.delete_many.side_effect = _delete_many
+        papers.data.delete_by_id.side_effect = _delete_by_id
+        weaviate_docs.get_connection = lambda: conn
+        weaviate_docs.get_user_collections = lambda *_a: (chunks, papers)
+
+        async def _exercise():
+            task_holder = []
+            if {failure_mode!r} == "parent_reconnect_cancel_at_yield":
+                real_sleep = weaviate_docs.asyncio.sleep
+
+                async def _cancel_at_parent_yield(delay, *args, **kwargs):
+                    res = await real_sleep(delay, *args, **kwargs)
+                    if (
+                        delay == 0
+                        and wipe_state["done"]
+                        and not wipe_state["cancelled_at_parent"]
+                        and task_holder
+                    ):
+                        wipe_state["cancelled_at_parent"] = True
+                        task_holder[0].cancel("client disconnected at parent yield")
+                    return res
+
+                weaviate_docs.asyncio.sleep = _cancel_at_parent_yield
+            elif {failure_mode!r} in {{
+                "stored_files_cancel_before_on_cancel",
+                "sql_cleanup_cancel_before_on_cancel",
+            }}:
+                target_worker = (
+                    "remove_paper_files"
+                    if {failure_mode!r} == "stored_files_cancel_before_on_cancel"
+                    else "finish_delete"
+                )
+                real_run_thread = documents.run_thread_drained
+
+                async def _cancel_before_on_cancel(func, *args, **kwargs):
+                    if getattr(func, "__name__", None) == target_worker:
+                        try:
+                            return await real_run_thread(func, *args, **kwargs)
+                        except Exception:
+                            # Cancel the owning request task immediately before complete_delete's
+                            # except handler runs so owner_task.cancelling() > initial_cancels
+                            # while drain_state.cancelled is still False.
+                            wipe_state["cancelled_before_on_cancel"] = True
+                            task_holder[0].cancel("client disconnected before on_cancel")
+                            raise
+                    return await real_run_thread(func, *args, **kwargs)
+
+                documents.run_thread_drained = _cancel_before_on_cancel
+
+            with tempfile.TemporaryDirectory() as tmp:
+                documents.get_pdf_storage_path = lambda: tmp
+                task = asyncio.create_task(documents.delete_document_endpoint(doc_id, {{"sub": "user-1"}}))
+                task_holder.append(task)
+                try:
+                    assert await asyncio.to_thread(wipe_entered.wait, 5)
+                    if not is_post_wipe_cancel_mode:
+                        task.cancel("client disconnected")
+                        await asyncio.sleep(0.02)
+                finally:
+                    resume_wipe.set()
+                try:
+                    await asyncio.wait_for(task, timeout=5)
+                except asyncio.CancelledError:
+                    pass
+                else:
+                    raise AssertionError("expected CancelledError")
+
+        asyncio.run(_exercise())
+
+        if {failure_mode!r} == "parent_reconnect_cancel_at_yield":
+            assert wipe_state["cancelled_at_parent"] is True
+        if {failure_mode!r} in {{
+            "stored_files_cancel_before_on_cancel",
+            "sql_cleanup_cancel_before_on_cancel",
+        }}:
+            assert wipe_state["cancelled_before_on_cancel"] is True
+
+        assert len(events) == 1, f"expected 1 Sentry event, got {{len(events)}}: {{events!r}}"
+        event = events[0]
+        assert "request" not in event, f"request leaked into Sentry event: {{event.get('request')!r}}"
+        assert doc_id not in repr(event), f"raw doc_id leaked: {{event!r}}"
+        assert secret_detail not in repr(event), f"secret leaked: {{event!r}}"
+        runtime_ctx = event["contexts"]["runtime_exception"]
+        if {failure_mode!r} == "incomplete_wipe":
+            assert runtime_ctx["component"] == "weaviate_client"
+            assert runtime_ctx["operation"] == "paper_delete_chunk_wipe_incomplete"
+        else:
+            step_by_mode = {{
+                "chunk_error": "chunk_wipe",
+                "parent_error": "parent_object",
+                "parent_reconnect_error": "parent_object",
+                "parent_reconnect_cancel_at_yield": "parent_object",
+                "stored_files_cancel_before_on_cancel": "stored_files",
+                "sql_cleanup_cancel_before_on_cancel": "sql_cleanup",
+            }}
+            exc_by_mode = {{
+                "chunk_error": "HTTPException",
+                "parent_error": "HTTPException",
+                "parent_reconnect_error": "ConnectionRefusedError",
+                "parent_reconnect_cancel_at_yield": "ConnectionRefusedError",
+                "stored_files_cancel_before_on_cancel": "RuntimeError",
+                "sql_cleanup_cancel_before_on_cancel": "RuntimeError",
+            }}
+            assert runtime_ctx == {{
+                "component": "documents",
+                "operation": "paper_delete_cancelled_drain_failed",
+                "document_id_hash": hash_sentry_identifier(doc_id),
+                "step": step_by_mode[{failure_mode!r}],
+                "exception_type": exc_by_mode[{failure_mode!r}],
+            }}
+    """)
+    result = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("failure_step", ["stored_files", "sql_cleanup"])
+def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_without_request_url(
+    failure_step,
+):
+    """Non-cancelled HTTP stored_files/sql_cleanup failures emit 1 sanitized Sentry event, no request.url, and HTTP 500."""
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent(f"""
+        import asyncio
+        from contextlib import contextmanager
+        import io
+        import logging
+        import os
+        import tempfile
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        os.environ["SENTRY_CONTENT_REDACTION_ENABLED"] = "false"
+
+        import sentry_sdk
+        from sentry_sdk.integrations.logging import LoggingIntegration
+        from fastapi import HTTPException
+
+        from src.api import documents
+        from src.lib.document_files import paper_lock
+        from src.lib.observability.sentry import before_send, hash_sentry_identifier
+        from src.lib.weaviate_client import documents as weaviate_docs
+        import src.models.sql.database as sql_db
+
+        doc_id = "22222222-3333-4444-5555-666666666666"
+        secret_detail = "private-db-constraint-value-secret"
+        events = []
+
+        log_buffer = io.StringIO()
+        log_handler = logging.StreamHandler(log_buffer)
+        log_handler.setLevel(logging.INFO)
+        logging.basicConfig(level=logging.INFO, handlers=[log_handler], force=True)
+        sentry_sdk.init(
+            dsn="http://public@example.invalid/1",
+            transport=events.append,
+            before_send=before_send,
+            include_local_variables=False,
+            default_integrations=False,
+            integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+        )
+
+        def _attach_request_url(event, _hint):
+            event["request"] = {{"url": f"https://example.invalid/weaviate/documents/{{doc_id}}"}}
+            return event
+
+        sentry_sdk.get_global_scope().add_event_processor(_attach_request_url)
+
+        class _LockConn:
+            def execute(self, *_a, **_kw):
+                return SimpleNamespace(scalar_one=lambda: True)
+            def commit(self):
+                pass
+            def close(self):
+                pass
+            def invalidate(self):
+                pass
+
+        sql_db.engine = SimpleNamespace(connect=lambda: _LockConn())
+
+        class _Session:
+            def __init__(self, doc=None, *, fail_on_delete=False):
+                self._doc = doc
+                self._fail_on_delete = fail_on_delete
+            def execute(self, *_a, **_kw):
+                return SimpleNamespace(
+                    scalars=lambda: SimpleNamespace(first=lambda: self._doc),
+                    scalar_one_or_none=lambda: self._doc,
+                )
+            def delete(self, _row):
+                if self._fail_on_delete:
+                    raise RuntimeError(f"{{secret_detail}} {{doc_id}}")
+            def commit(self):
+                pass
+            def rollback(self):
+                pass
+            def close(self):
+                pass
+
+        main_file = SimpleNamespace(
+            id="f1", role="main", status="ready", display_mode="local_pdf",
+            file_path=None, pdfx_json_path=None, processed_json_path=None, source_markdown_path=None,
+        )
+        paper = SimpleNamespace(
+            id=doc_id, user_id=42, document_kind="library",
+            main_file=main_file, main_file_or_none=main_file, files=[main_file],
+        )
+        sessions = [
+            _Session(),
+            _Session(paper),
+            _Session(paper),
+            _Session(paper, fail_on_delete=({failure_step!r} == "sql_cleanup")),
+        ]
+        documents.SessionLocal = lambda: sessions.pop(0)
+        def _open_lock_session(conn=None):
+            if conn is None:
+                return None
+            assert isinstance(conn, _LockConn)
+            return sessions.pop(0)
+        paper_lock.open_paper_lock_session = _open_lock_session
+        documents.provision_user_async = lambda _p: asyncio.sleep(0, result=SimpleNamespace(id=42))
+        documents.verify_document_ownership = lambda *_a, **_kw: SimpleNamespace(id=doc_id, user_id=42)
+        documents.get_document = lambda *_a, **_kw: asyncio.sleep(0, result={{"document": {{"processing_status": "completed"}}}})
+        documents.pdf_job_service.get_latest_job_for_document = lambda **_kw: None
+        documents.pipeline_tracker.get_pipeline_status = lambda *_a, **_kw: asyncio.sleep(0, result=None)
+        documents.cleanup_document_curation_dependencies = lambda *_a, **_kw: {{}}
+        if {failure_step!r} == "stored_files":
+            def _boom_files(*_a, **_kw):
+                raise RuntimeError(f"{{secret_detail}} {{doc_id}}")
+            documents.remove_stored_files = _boom_files
+
+        @contextmanager
+        def _weaviate_session(*_a, **_kw):
+            yield MagicMock()
+
+        conn = MagicMock()
+        conn.session.side_effect = _weaviate_session
+        chunks, papers = MagicMock(), MagicMock()
+        chunks.data.delete_many.return_value = SimpleNamespace(successful=2, matches=2, failed=0)
+        papers.data.delete_by_id.return_value = True
+        weaviate_docs.get_connection = lambda: conn
+        weaviate_docs.get_user_collections = lambda *_a: (chunks, papers)
+
+        async def _exercise():
+            with tempfile.TemporaryDirectory() as tmp:
+                documents.get_pdf_storage_path = lambda: tmp
+                try:
+                    await documents.delete_document_endpoint(doc_id, {{"sub": "user-1"}})
+                except HTTPException as exc:
+                    assert exc.status_code == 500
+                    assert exc.detail == "Failed to delete document"
+                else:
+                    raise AssertionError("expected HTTPException 500")
+
+        asyncio.run(_exercise())
+
+        assert len(events) == 1, f"expected 1 Sentry event, got {{len(events)}}: {{events!r}}"
+        event = events[0]
+        assert "request" not in event, f"request leaked: {{event.get('request')!r}}"
+        assert doc_id not in repr(event), f"raw doc_id leaked: {{event!r}}"
+        assert secret_detail not in repr(event), f"secret leaked: {{event!r}}"
+        assert event["contexts"]["runtime_exception"] == {{
+            "component": "documents",
+            "operation": "paper_delete_cleanup_failed",
+            "document_id_hash": hash_sentry_identifier(doc_id),
+            "step": {failure_step!r},
+            "exception_type": "RuntimeError",
+        }}
+        log_output = log_buffer.getvalue()
+        assert "Paper delete cleanup failed" in log_output
+        assert f"step={failure_step}" in log_output
+        assert doc_id not in log_output, f"raw doc_id leaked into logs: {{log_output!r}}"
+        assert secret_detail not in log_output, f"secret leaked into logs: {{log_output!r}}"
+    """)
+    result = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.asyncio
@@ -2326,7 +3462,10 @@ async def test_a_delete_during_a_supplement_wait_ends_the_wait_and_deletes_the_p
 
     result = await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
 
-    assert ended == [{"document_id": doc_id, "user_id": 42}]
+    assert len(ended) == 1
+    assert ended[0]["document_id"] == doc_id
+    assert ended[0]["user_id"] == 42
+    assert isinstance(ended[0]["connection"], _FakeLockConnection)
     assert result.success is True
 
 

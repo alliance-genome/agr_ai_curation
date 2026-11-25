@@ -88,3 +88,73 @@ def test_a_folder_link_that_leaves_the_owners_folder_refuses(storage):
     with pytest.raises(StoredPathOutsideOwnerStorage):
         remove_stored_files([f"{OWNER}/escape/source_markdown/victim.md"], owner_subject=OWNER)
     assert (storage / "other-subject/source_markdown/victim.md").is_file()
+
+
+def test_zero_removable_paths_still_rejects_symlinked_owner_directory(tmp_path):
+    """Owner-directory symlink validation must run even when a paper has 0 removable file paths."""
+    from fastapi import HTTPException
+    from src.api import documents as documents_api
+    from src.lib.document_files.service import (
+        remove_paper_stored_files,
+        require_removable_paper_paths,
+    )
+
+    base_storage = tmp_path / "storage"
+    base_storage.mkdir()
+    outside = tmp_path / "outside"
+    doc_id = "11111111-2222-3333-4444-555555555555"
+    outside_supp = outside / doc_id / "supplement_pdf"
+    outside_supp.mkdir(parents=True)
+
+    (base_storage / OWNER).symlink_to(outside, target_is_directory=True)
+    empty_cleanup = {"files": []}
+
+    with pytest.raises(StoredPathOutsideOwnerStorage):
+        require_removable_paper_paths(empty_cleanup, base_storage, OWNER)
+
+    with pytest.raises(StoredPathOutsideOwnerStorage):
+        remove_paper_stored_files(
+            empty_cleanup,
+            base_storage=base_storage,
+            user_sub=OWNER,
+            document_id=doc_id,
+        )
+
+    with pytest.raises(HTTPException) as exc_info:
+        documents_api._require_removable_paths(empty_cleanup, base_storage, OWNER)
+    assert exc_info.value.status_code == 403
+
+    with pytest.raises(StoredPathOutsideOwnerStorage):
+        documents_api._remove_empty_paper_folders(base_storage, OWNER, doc_id)
+
+    assert outside_supp.is_dir()
+
+
+def test_empty_folder_pruning_never_follows_symlinked_paper_dir_into_supplement_pdf(tmp_path):
+    """A symlinked paper_dir must never prune an empty supplement_pdf subfolder in its target."""
+    from src.api import documents as documents_api
+    from src.lib.document_files.service import remove_paper_stored_files
+
+    base_storage = tmp_path / "storage"
+    owner_dir = base_storage / OWNER
+    owner_dir.mkdir(parents=True)
+
+    target_dir = tmp_path / "external_target"
+    target_supp = target_dir / "supplement_pdf"
+    target_supp.mkdir(parents=True)
+
+    doc_id = "22222222-3333-4444-5555-666666666666"
+    paper_link = owner_dir / doc_id
+    paper_link.symlink_to(target_dir, target_is_directory=True)
+
+    remove_paper_stored_files(
+        {"files": []},
+        base_storage=base_storage,
+        user_sub=OWNER,
+        document_id=doc_id,
+    )
+    documents_api._remove_empty_paper_folders(base_storage, OWNER, doc_id)
+
+    assert paper_link.is_symlink()
+    assert target_supp.is_dir()
+    assert target_dir.is_dir()

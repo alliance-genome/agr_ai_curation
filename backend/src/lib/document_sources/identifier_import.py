@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import hashlib
 from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
+from src.lib.observability.sentry import hash_sentry_identifier
 import logging
 import re
-import shutil
 import uuid
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -21,7 +21,23 @@ from fastapi import BackgroundTasks
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from src.config import get_pdf_storage_path
-from src.lib.document_cleanup import cleanup_document_curation_dependencies
+from src.lib.document_cleanup import (
+    cleanup_document_curation_dependencies,
+    drain_shielded,
+    report_compensation_file_cleanup_failure,
+    report_sql_cleanup_failure,
+    run_thread_drained,
+)
+from src.lib.document_files.paper_lock import (
+    PaperOperationInProgress,
+    open_paper_lock_session,
+    paper_operation_lock,
+)
+from src.lib.document_files.service import (
+    owned_paper_by_main_file_hash,
+    remove_committed_paper_stored_files,
+    remove_staged_paper_artifacts,
+)
 from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.supplement_plan import ChosenSupplement, SupplementPlan
 from src.lib.document_sources.import_selection import (
@@ -89,7 +105,6 @@ from src.models.sql.pdf_document import (
     PDFDocument as ViewerPDFDocument,
     PDFDocumentFile,
 )
-from src.lib.document_files.service import owned_paper_by_main_file_hash
 from src.services.user_service import principal_from_claims, provision_user_async, ProvisionedUser
 
 logger = logging.getLogger(__name__)
@@ -738,12 +753,15 @@ class IdentifierImportService:
         reference_import_selector: Callable[..., Awaitable[ReferenceImportDecision]] = select_reference_import_candidate,
         create_document_fn: Callable[[str, Any], Awaitable[dict[str, Any]]] = create_document,
         create_job_fn: Callable[..., Any] = pdf_job_service.create_job,
-        get_document_fn: Callable[[str, str], Awaitable[Any]] = get_document,
-        delete_document_fn: Callable[[str, str], Awaitable[Any]] = delete_document,
+        get_document_fn: Callable[..., Awaitable[Any]] = get_document,
+        delete_document_fn: Callable[..., Awaitable[Any]] = delete_document,
         find_existing_source_document_fn: Callable[..., Any] = find_existing_document_by_source,
         cleanup_document_dependencies_fn: Callable[[Session, uuid.UUID], Any] = cleanup_document_curation_dependencies,
         tenant_name_resolver: Callable[[str], str] = get_tenant_name,
         import_batch_limit_provider: Callable[[], int] = get_document_source_import_batch_limit,
+        get_active_job_fn: Callable[..., Any] | None = None,
+        mark_job_failed_fn: Callable[..., Any] | None = None,
+        paper_operation_lock_fn: Callable[[uuid.UUID | str], Any] | None = None,
     ) -> None:
         self.upload_execution_service = upload_execution_service
         self._session_factory = session_factory
@@ -760,6 +778,9 @@ class IdentifierImportService:
         self._cleanup_document_dependencies = cleanup_document_dependencies_fn
         self._tenant_name_resolver = tenant_name_resolver
         self._import_batch_limit_provider = import_batch_limit_provider
+        self._get_active_job_fn = get_active_job_fn
+        self._mark_job_failed_fn = mark_job_failed_fn
+        self._paper_operation_lock_fn = paper_operation_lock_fn
 
     async def import_identifiers(
         self,
@@ -1245,7 +1266,18 @@ class IdentifierImportService:
                     user_sub=user_sub,
                 )
             if existing_hash_document:
-                _cleanup_saved_pdf(saved_path)
+                if not _cleanup_saved_pdf(
+                    saved_path,
+                    base_storage=base_storage,
+                    user_sub=user_sub,
+                    document_id=document_id,
+                ):
+                    report_compensation_file_cleanup_failure(
+                        component="document_sources",
+                        document_id=document_id,
+                        sql_record_committed=False,
+                        weaviate_document_created=False,
+                    )
                 return IdentifierImportItemResult(
                     identifier=normalized.original,
                     normalized_identifier=normalized.normalized,
@@ -1311,6 +1343,7 @@ class IdentifierImportService:
         finally:
             session.close()
 
+        created_job_id: str | None = None
         try:
             job_values: dict[str, Any] = {}
             job_metadata: dict[str, Any] = {}
@@ -1332,6 +1365,7 @@ class IdentifierImportService:
                 filename=filename,
                 **job_values,
             )
+            created_job_id = str(job.job_id)
             if decision.selected.converted_artifact is not None:
                 await self.upload_execution_service.dispatch_provider_markdown_execution(
                     background_tasks=background_tasks,
@@ -1398,6 +1432,8 @@ class IdentifierImportService:
                 document_id=document_id,
                 saved_path=saved_path,
                 weaviate_document_created=True,
+                sql_record_committed=True,
+                created_job_id=created_job_id,
             )
             raise
 
@@ -1469,24 +1505,76 @@ class IdentifierImportService:
             session.rollback()
             raise
 
-    async def _compensate_partial_import(
+    async def _fail_undispatched_import_job(
         self,
         *,
-        user_sub: str,
+        job_id: str,
+        document_id_hash: str | None,
+    ) -> bool:
+        mark_job_failed = self._mark_job_failed_fn or pdf_job_service.mark_failed
+        try:
+            await run_thread_drained(
+                mark_job_failed,
+                job_id=job_id,
+                message="Import dispatch failed before background processing started",
+                stage="dispatch",
+                cancellable_before_start=False,
+            )
+            return True
+        except Exception as exc:
+            logger.warning(
+                "Failed to mark undispatched import job failed (%s, document_id_hash=%s)",
+                type(exc).__name__,
+                document_id_hash,
+                extra={"sentry_skip_event": True},
+            )
+            return False
+
+    def _remove_committed_paper_files(
+        self,
+        *,
         document_id: str,
+        user_sub: str,
         saved_path: Path,
-        weaviate_document_created: bool,
+        lock_conn: Any,
+        document_id_hash: str | None,
+    ) -> bool:
+        bound_session = open_paper_lock_session(lock_conn)
+        session = bound_session if bound_session is not None else self._session_factory()
+        base_storage = self._storage_path_provider()
+        try:
+            return remove_committed_paper_stored_files(
+                session,
+                document_id=document_id,
+                user_sub=user_sub,
+                base_storage=base_storage,
+                fallback_cleanup=lambda: _cleanup_saved_pdf(
+                    saved_path,
+                    base_storage=base_storage,
+                    user_sub=user_sub,
+                    document_id=document_id,
+                ),
+            )
+        except Exception as cleanup_err:
+            session.rollback()
+            logger.warning(
+                "Failed to snapshot/remove committed import PDF artifacts (%s, document_id_hash=%s)",
+                type(cleanup_err).__name__,
+                document_id_hash,
+                extra={"sentry_skip_event": True},
+            )
+            return False
+        finally:
+            session.close()
+
+    def _delete_committed_sql_row(
+        self,
+        *,
+        document_id: str,
+        lock_conn: Any,
     ) -> None:
-        if weaviate_document_created:
-            try:
-                await self._delete_document(user_sub, document_id)
-            except Exception as cleanup_err:
-                logger.warning(
-                    "Best-effort Weaviate cleanup failed for identifier import %s: %s",
-                    document_id,
-                    cleanup_err,
-                )
-        session = self._session_factory()
+        bound_session = open_paper_lock_session(lock_conn)
+        session = bound_session if bound_session is not None else self._session_factory()
         try:
             persisted = (
                 session.execute(
@@ -1500,11 +1588,182 @@ class IdentifierImportService:
             if persisted:
                 session.delete(persisted)
                 session.commit()
-        except Exception:
+        except Exception as cleanup_err:
             session.rollback()
+            report_sql_cleanup_failure(
+                component="document_sources",
+                document_id=document_id,
+                exception_type=type(cleanup_err).__name__,
+            )
         finally:
             session.close()
-        _cleanup_saved_pdf(saved_path)
+
+    async def _compensate_partial_import(
+        self,
+        *,
+        user_sub: str,
+        document_id: str,
+        saved_path: Path,
+        weaviate_document_created: bool,
+        sql_record_committed: bool = False,
+        created_job_id: str | None = None,
+    ) -> None:
+        document_id_hash = hash_sentry_identifier(document_id)
+
+        if not sql_record_committed:
+            # Pre-commit compensation: no SQL owner exists yet. If the staged PDF cannot
+            # be removed, retain the Weaviate owner and report so no private file is stranded.
+            if not _cleanup_saved_pdf(
+                saved_path,
+                base_storage=self._storage_path_provider(),
+                user_sub=user_sub,
+                document_id=document_id,
+            ):
+                report_compensation_file_cleanup_failure(
+                    component="document_sources",
+                    document_id=document_id,
+                    sql_record_committed=False,
+                    weaviate_document_created=weaviate_document_created,
+                )
+                return
+            if weaviate_document_created:
+                try:
+                    await self._delete_document(user_sub, document_id)
+                except Exception as cleanup_err:
+                    logger.warning(
+                        "Best-effort Weaviate cleanup failed for identifier import %s: %s",
+                        document_id,
+                        cleanup_err,
+                    )
+            return
+
+        # Fail any undispatched pending job created by this import BEFORE acquiring
+        # paper_operation_lock (shielded across cancellation) so neither a 1-connection
+        # DB pool nor cancellation during lock acquisition can leave a 2-hour pending job.
+        if created_job_id is not None:
+            job_failed = await drain_shielded(
+                self._fail_undispatched_import_job(
+                    job_id=created_job_id,
+                    document_id_hash=document_id_hash,
+                )
+            )
+            if not job_failed:
+                return
+
+        lock_fn = self._paper_operation_lock_fn or paper_operation_lock
+        get_active_job = self._get_active_job_fn or pdf_job_service.get_active_job_for_document
+        try:
+            async with lock_fn(document_id) as lock_conn:
+                try:
+                    active_job = await run_thread_drained(
+                        get_active_job,
+                        document_id=document_id,
+                        reconcile_stale=False,
+                        connection=lock_conn,
+                    )
+                except Exception as job_check_err:
+                    logger.warning(
+                        "Skipping import compensation because active-job check failed "
+                        "(%s, document_id_hash=%s)",
+                        type(job_check_err).__name__,
+                        document_id_hash,
+                        extra={"sentry_skip_event": True},
+                    )
+                    return
+                if active_job is not None:
+                    logger.warning(
+                        "Skipping import compensation because an active job exists "
+                        "(document_id_hash=%s)",
+                        document_id_hash,
+                        extra={"sentry_skip_event": True},
+                    )
+                    return
+
+                compensation_started = False
+
+                def _mark_compensation_started() -> None:
+                    nonlocal compensation_started
+                    compensation_started = True
+
+                async def _complete_committed_compensation() -> None:
+                    # Snapshot and remove live SQL-owned stored files under the paper row lock
+                    # first; if cleanup fails, retain both Weaviate and SQL ownership for retry.
+                    files_removed = await run_thread_drained(
+                        self._remove_committed_paper_files,
+                        document_id=document_id,
+                        user_sub=user_sub,
+                        saved_path=saved_path,
+                        lock_conn=lock_conn,
+                        document_id_hash=document_id_hash,
+                        cancellable_before_start=False,
+                        on_submit=_mark_compensation_started,
+                    )
+                    if not files_removed:
+                        report_compensation_file_cleanup_failure(
+                            component="document_sources",
+                            document_id=document_id,
+                            sql_record_committed=True,
+                            weaviate_document_created=weaviate_document_created,
+                        )
+                        return
+
+                    # Let the Weaviate wipe outcome govern SQL owner deletion: if delete_document
+                    # reports an error or incomplete chunk wipe (or raises CancelledError after an
+                    # incomplete/unstarted wipe), retain the SQL owner alongside the Weaviate parent.
+                    # When delete_document owns SQL deletion (reporting "postgres_deleted"), do not
+                    # issue a second SQL delete pass (delete_document reports SQL errors).
+                    weaviate_cleanup_ok = True
+                    sql_owned_by_delete_document = False
+                    if weaviate_document_created:
+                        try:
+                            delete_result = await self._delete_document(
+                                user_sub,
+                                document_id,
+                                connection=lock_conn,
+                            )
+                        except Exception as cleanup_err:
+                            logger.warning(
+                                "Best-effort Weaviate cleanup failed for identifier import %s: %s",
+                                document_id,
+                                cleanup_err,
+                            )
+                            weaviate_cleanup_ok = False
+                        else:
+                            if isinstance(delete_result, dict):
+                                if "error" in delete_result or "chunks_failed" in delete_result:
+                                    weaviate_cleanup_ok = False
+                                elif "postgres_deleted" in delete_result:
+                                    sql_owned_by_delete_document = True
+
+                    if not weaviate_cleanup_ok or sql_owned_by_delete_document:
+                        return
+
+                    await run_thread_drained(
+                        self._delete_committed_sql_row,
+                        document_id=document_id,
+                        lock_conn=lock_conn,
+                        cancellable_before_start=False,
+                    )
+
+                await drain_shielded(
+                    _complete_committed_compensation(),
+                    started=lambda: compensation_started,
+                )
+        except PaperOperationInProgress:
+            logger.warning(
+                "Skipping import compensation because another operation holds the paper lock "
+                "(document_id_hash=%s)",
+                document_id_hash,
+                extra={"sentry_skip_event": True},
+            )
+        except Exception as lock_err:
+            logger.warning(
+                "Skipping import compensation because acquiring the paper lock failed "
+                "(%s, document_id_hash=%s)",
+                type(lock_err).__name__,
+                document_id_hash,
+                extra={"sentry_skip_event": True},
+            )
 
     @staticmethod
     def _error_result_from_decision(
@@ -1870,6 +2129,16 @@ def _write_source_pdf(
     return saved_path
 
 
-def _cleanup_saved_pdf(saved_path: Path) -> None:
-    if saved_path.exists():
-        shutil.rmtree(saved_path.parent, ignore_errors=True)
+def _cleanup_saved_pdf(
+    saved_path: Path,
+    *,
+    base_storage: Path,
+    user_sub: str,
+    document_id: str,
+) -> bool:
+    return remove_staged_paper_artifacts(
+        saved_path,
+        base_storage=base_storage,
+        user_sub=user_sub,
+        document_id=document_id,
+    )

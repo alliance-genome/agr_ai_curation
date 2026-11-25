@@ -930,3 +930,35 @@ async def test_a_dead_job_stops_blocking_a_removal_even_after_a_refused_attempt(
     assert [row.id for row in _rows(paper)] == [main.id]
     with SessionLocal() as db:
         assert db.get(PdfProcessingJob, UUID(job.job_id)).status == swept_to
+
+
+@pytest.mark.asyncio
+async def test_uncontended_file_removal_succeeds_under_one_connection_pool(owner_id, index, monkeypatch):
+    """Uncontended DELETE /files/{file_id} reuses lock_conn across SQL phases under pool_size=1, max_overflow=0."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from src.lib.pdf_jobs import service as pdf_job_service
+    from src.models.sql import database
+
+    paper = await _paper_with_supplements(owner_id, index, 20)
+    (main, supplement) = _rows(paper)
+    _wire(monkeypatch, owner_id)
+
+    one_conn_engine = create_engine(database.engine.url, pool_size=1, max_overflow=0, pool_timeout=1)
+    one_conn_session_local = sessionmaker(
+        bind=one_conn_engine, autocommit=False, autoflush=False, expire_on_commit=False,
+    )
+    monkeypatch.setattr(database, "engine", one_conn_engine)
+    monkeypatch.setattr(database, "SessionLocal", one_conn_session_local)
+    monkeypatch.setattr(pdf_job_service, "SessionLocal", one_conn_session_local)
+
+    try:
+        answer = await _remove(paper, supplement.id)
+        assert answer["removed"] is True
+        assert answer["cleanup_finished"] is True
+        assert answer["ready_file_count"] == 1
+        assert [row.id for row in _rows(paper)] == [main.id]
+        assert _indexes(index, str(paper)) == [0, 1, 2]
+    finally:
+        one_conn_engine.dispose()
