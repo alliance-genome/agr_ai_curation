@@ -1,0 +1,164 @@
+{
+  "mixed_waiting": {
+    "job_kind": "supplement_wait",
+    "supplements": [
+      {
+        "provider_file_id": "20",
+        "display_name": "Converted_S1.xlsx",
+        "state": "queued",
+        "reason_code": null,
+        "observed_at": null,
+        "file_id": null,
+        "measured_value": null,
+        "limit_value": null
+      },
+      {
+        "provider_file_id": "21",
+        "display_name": "Pending_S2.docx",
+        "state": "waiting",
+        "reason_code": null,
+        "observed_at": null,
+        "file_id": null,
+        "measured_value": null,
+        "limit_value": null
+      }
+    ],
+    "supplement_wait_ends_at": "2026-11-24T15:30:00+00:00"
+  },
+  "all_states_and_outcomes": {
+    "job_kind": "supplement_wait",
+    "supplements": [
+      {
+        "provider_file_id": "1",
+        "display_name": "Queued_S1.xlsx",
+        "state": "queued",
+        "reason_code": null,
+        "observed_at": null,
+        "file_id": null,
+        "measured_value": null,
+        "limit_value": null
+      },
+      {
+        "provider_file_id": "2",
+        "display_name": "Waiting_S2.docx",
+        "state": "waiting",
+        "reason_code": null,
+        "observed_at": null,
+        "file_id": null,
+        "measured_value": null,
+        "limit_value": null
+      },
+      {
+        "provider_file_id": "3",
+        "display_name": "Adding_S3.csv",
+        "state": "adding",
+        "reason_code": null,
+        "observed_at": null,
+        "file_id": null,
+        "measured_value": null,
+        "limit_value": null
+      },
+      {
+        "provider_file_id": "4",
+        "display_name": "Added_S4.pdf",
+        "state": "added",
+        "reason_code": null,
+        "observed_at": null,
+        "file_id": "22222222-2222-2222-2222-222222222223",
+        "measured_value": null,
+        "limit_value": null
+      },
+      {
+        "provider_file_id": "5",
+        "display_name": "Cancelled_S5.xlsx",
+        "state": "left_out",
+        "reason_code": "import_cancelled",
+        "observed_at": "2026-11-24T15:05:00+00:00",
+        "file_id": null,
+        "measured_value": null,
+        "limit_value": null
+      },
+      {
+        "provider_file_id": "6",
+        "display_name": "StageFailed_S6.xlsx",
+        "state": "left_out",
+        "reason_code": "supplement_stage_failed",
+        "observed_at": "2026-11-24T15:05:00+00:00",
+        "file_id": null,
+        "measured_value": null,
+        "limit_value": null
+      },
+      {
+        "provider_file_id": "7",
+        "display_name": "NotConverted_S7.docx",
+        "state": "left_out",
+        "reason_code": "provider_not_converted",
+        "observed_at": "2026-11-24T15:05:00+00:00",
+        "file_id": null,
+        "measured_value": null,
+        "limit_value": null
+      },
+      {
+        "provider_file_id": "8",
+        "display_name": "ConversionFailed_S8.docx",
+        "state": "left_out",
+        "reason_code": "provider_conversion_failed",
+        "observed_at": "2026-11-24T15:05:00+00:00",
+        "file_id": null,
+        "measured_value": null,
+        "limit_value": null
+      },
+      {
+        "provider_file_id": "9",
+        "display_name": "WaitExpired_S9.docx",
+        "state": "left_out",
+        "reason_code": "not_converted_in_time",
+        "observed_at": "2026-11-24T15:05:00+00:00",
+        "file_id": null,
+        "measured_value": null,
+        "limit_value": null
+      }
+    ],
+    "supplement_wait_ends_at": "2026-11-24T15:30:00+00:00"
+  },
+  "paper_busy_when_ready": {
+    "supplements": [
+      {
+        "provider_file_id": "90",
+        "display_name": "90",
+        "state": "left_out",
+        "reason_code": "paper_busy_when_ready",
+        "observed_at": "2026-11-24T15:05:00+00:00",
+        "file_id": null,
+        "measured_value": null,
+        "limit_value": null
+      }
+    ]
+  },
+  "finished_with_wait_timestamp": {
+    "job_kind": "supplement_wait",
+    "supplements": [
+      {
+        "provider_file_id": "10",
+        "display_name": "Done_S1.xlsx",
+        "state": "added",
+        "reason_code": null,
+        "observed_at": null,
+        "file_id": "22222222-2222-2222-2222-222222222223",
+        "measured_value": null,
+        "limit_value": null
+      },
+      {
+        "provider_file_id": "11",
+        "display_name": "Failed_S2.xlsx",
+        "state": "left_out",
+        "reason_code": "supplement_stage_failed",
+        "observed_at": "2026-11-24T15:05:00+00:00",
+        "file_id": null,
+        "measured_value": null,
+        "limit_value": null
+      }
+    ],
+    "supplement_wait_ends_at": "2026-11-24T15:30:00+00:00"
+  }
+}

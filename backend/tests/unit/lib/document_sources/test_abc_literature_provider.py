@@ -47,6 +47,9 @@ from src.lib.document_sources.models import ProviderBearerKind
 def test_abc_registration_owns_public_identifier_guidance() -> None:
     registration = get_document_source_provider_registrations()[0]
 
+    assert registration.presentation.display_label == "ABC Literature"
+    assert registration.presentation.short_label == "ABC"
+    assert registration.presentation.as_public_dict()["short_label"] == "ABC"
     assert registration.presentation.identifier_help_label == (
         "PMID, PubMed ID, AGRKB, or ABC identifiers; comma or newline separated."
     )

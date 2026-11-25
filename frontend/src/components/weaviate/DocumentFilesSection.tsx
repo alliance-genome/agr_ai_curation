@@ -32,8 +32,6 @@ import {
  * a provider, the provider's other files for it come from the per-paper listing, each
  * with why it is not in the paper (codes worded in `paperFileReasonText.ts`).
  * Adding and removing files are later parts.
- *
- * All texts are proposals awaiting sign-off.
  */
 
 /** Query keys, shared with the dialog's "Refresh details". */

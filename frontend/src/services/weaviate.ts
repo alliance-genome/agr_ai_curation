@@ -9,6 +9,35 @@ import {
 import { logger } from './logger';
 import { clearAllNamespacedChatLocalStorage } from '../lib/chatCacheKeys';
 import { safeSetItem } from '../lib/browserStorage';
+import type {
+  AddPaperFileInput,
+  AddPaperFilesRequest,
+  ChosenSupplementInput,
+  DocumentFileRemovalCheckResponse,
+  DocumentFileRemovalResponse,
+  FileRemovalRefusalCode,
+  RecognizedSupplementProgressEntry,
+  SupplementJobKind,
+  SupplementJobProgress,
+  SupplementProgressEntry,
+  SupplementState,
+  UnrecognizedSupplementProgressEntry,
+} from '../features/documents/supplementProgress';
+
+export type {
+  AddPaperFileInput,
+  AddPaperFilesRequest,
+  ChosenSupplementInput,
+  DocumentFileRemovalCheckResponse,
+  DocumentFileRemovalResponse,
+  FileRemovalRefusalCode,
+  RecognizedSupplementProgressEntry,
+  SupplementJobKind,
+  SupplementJobProgress,
+  SupplementProgressEntry,
+  SupplementState,
+  UnrecognizedSupplementProgressEntry,
+};
 
 const API_BASE_URL = '/api/weaviate';
 
@@ -69,6 +98,7 @@ interface RawDocumentSourceProvenance {
 
 interface RawDocumentSourceProviderMetadata {
   display_label?: string | null;
+  short_label?: string | null;
   reference_label_priority?: string[] | null;
   identifier_help_label?: string | null;
   identifier_examples?: string[] | null;
@@ -87,6 +117,7 @@ interface RawDocumentListItem {
   weaviate_tenant: string;
   chunk_count: number | null;
   vector_count: number | null;
+  ready_file_count?: number | null;
   embedding_status: string;
   error_message: string | null;
   source_provenance: RawDocumentSourceProvenance | null;
@@ -132,6 +163,7 @@ export interface DocumentDetailResponse {
   file_size_bytes: number | null;
   weaviate_tenant: string;
   chunk_count: number | null;
+  ready_file_count?: number | null;
   error_message: string | null;
   source_provenance: RawDocumentSourceProvenance | null;
 }
@@ -158,6 +190,7 @@ export interface DocumentSourceProvenance {
 
 export interface DocumentSourceProviderMetadata {
   displayLabel?: string | null;
+  shortLabel?: string | null;
   referenceLabelPriority?: string[] | null;
   identifierHelpLabel?: string | null;
   identifierExamples?: string[] | null;
@@ -180,6 +213,7 @@ export interface DocumentSummary {
   errorMessage?: string | null;
   chunkCount: number | null;
   vectorCount: number | null;
+  ready_file_count?: number | null;
   sourceProvenance?: DocumentSourceProvenance | null;
 }
 
@@ -406,6 +440,10 @@ const normalizeDocumentSourceProviderMetadata = (
         ? referenceLabelPriority
         : null,
   };
+  const shortLabel = toStringOrNull(record.short_label);
+  if (shortLabel) {
+    metadata.shortLabel = shortLabel;
+  }
   const identifierHelpLabel = toStringOrNull(record.identifier_help_label);
   if (identifierHelpLabel) {
     metadata.identifierHelpLabel = identifierHelpLabel;
@@ -415,6 +453,7 @@ const normalizeDocumentSourceProviderMetadata = (
   }
 
   return metadata.displayLabel
+    || metadata.shortLabel
     || metadata.referenceLabelPriority
     || metadata.identifierHelpLabel
     || metadata.identifierExamples
@@ -467,6 +506,9 @@ export const normalizeDocumentListResponse = (
     errorMessage: document.error_message,
     chunkCount: document.chunk_count,
     vectorCount: document.vector_count,
+    ...(document.ready_file_count !== undefined
+      ? { ready_file_count: document.ready_file_count }
+      : {}),
     sourceProvenance: normalizeDocumentSourceProvenance(document.source_provenance),
   })),
   total: response.total,
@@ -487,6 +529,9 @@ export const normalizeDocumentDetailResponse = (
       processingStatus: payload.status.toLowerCase(),
       errorMessage: payload.error_message,
       chunkCount: payload.chunk_count,
+      ...(payload.ready_file_count !== undefined
+        ? { ready_file_count: payload.ready_file_count }
+        : {}),
       sourceProvenance: normalizeDocumentSourceProvenance(payload.source_provenance),
     },
   };

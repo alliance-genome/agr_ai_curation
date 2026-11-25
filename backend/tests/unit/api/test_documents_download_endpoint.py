@@ -537,6 +537,7 @@ async def test_get_download_info_reports_pdf_backed_provider_markdown(monkeypatc
         "provider": "abc_literature",
         "provider_metadata": {
             "display_label": "ABC Literature",
+            "short_label": "ABC",
             "identifier_help_label": (
                 "PMID, PubMed ID, AGRKB, or ABC identifiers; comma or newline separated."
             ),

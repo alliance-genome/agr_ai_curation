@@ -46,11 +46,13 @@ class DocumentSourceProviderPresentation:
     reference_label_priority: tuple[str, ...] = ()
     identifier_help_label: str = ""
     identifier_examples: tuple[str, ...] = ()
+    short_label: str = ""
 
     def __post_init__(self) -> None:
         display_label = self.display_label.strip()
         if not display_label:
             raise ValueError("document-source provider display_label must not be empty")
+        short_label = self.short_label.strip()
         priorities = tuple(item.strip() for item in self.reference_label_priority)
         if any(not item for item in priorities):
             raise ValueError(
@@ -75,6 +77,7 @@ class DocumentSourceProviderPresentation:
                 "document-source identifier help label and examples must be configured together"
             )
         object.__setattr__(self, "display_label", display_label)
+        object.__setattr__(self, "short_label", short_label)
         object.__setattr__(self, "reference_label_priority", priorities)
         object.__setattr__(self, "identifier_help_label", identifier_help_label)
         object.__setattr__(self, "identifier_examples", identifier_examples)
@@ -86,6 +89,8 @@ class DocumentSourceProviderPresentation:
             "display_label": self.display_label,
             "reference_label_priority": list(self.reference_label_priority),
         }
+        if self.short_label:
+            metadata["short_label"] = self.short_label
         if self.identifier_help_label:
             metadata["identifier_help_label"] = self.identifier_help_label
             metadata["identifier_examples"] = list(self.identifier_examples)

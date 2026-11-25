@@ -1,0 +1,147 @@
+{
+  "provider": "literature_archive",
+  "reference_id": "101",
+  "reference_curie": "REF:101",
+  "main_status": "ready",
+  "not_shown_count": 2,
+  "duplicate_copies_count": 1,
+  "check_version": "1",
+  "existing_document_id": null,
+  "files": [
+    {
+      "provider_file_id": "10",
+      "converted_text_id": "11",
+      "display_name": "Made_up_main",
+      "file_role": "main",
+      "md5": "main-md5",
+      "converted_md5": "main-converted-md5",
+      "format": "pdf",
+      "category": null,
+      "status": "ready",
+      "in_this_paper": true,
+      "tickable": false,
+      "not_tickable_reason": "already_in_paper",
+      "last_provider_observation": null,
+      "check": {
+        "status": "passed",
+        "reason": null,
+        "measured_value": null,
+        "limit_value": null,
+        "few_characters_count": null
+      }
+    },
+    {
+      "provider_file_id": "20",
+      "converted_text_id": "21",
+      "display_name": "Made_up_S20",
+      "file_role": "supplement",
+      "md5": "original-md5-20",
+      "converted_md5": "converted-md5-20",
+      "format": "unknown",
+      "category": "convertible",
+      "status": "ready",
+      "in_this_paper": false,
+      "tickable": true,
+      "not_tickable_reason": null,
+      "last_provider_observation": null,
+      "check": {
+        "status": "passed",
+        "reason": null,
+        "measured_value": null,
+        "limit_value": null,
+        "few_characters_count": 120
+      }
+    },
+    {
+      "provider_file_id": "30",
+      "converted_text_id": "31",
+      "display_name": "Made_up_S30",
+      "file_role": "supplement",
+      "md5": "original-md5-30",
+      "converted_md5": "converted-md5-30",
+      "format": "unknown",
+      "category": "convertible",
+      "status": "ready",
+      "in_this_paper": false,
+      "tickable": false,
+      "not_tickable_reason": "check_not_passed",
+      "last_provider_observation": null,
+      "check": {
+        "status": "refused",
+        "reason": "table_cells_mismatch",
+        "measured_value": null,
+        "limit_value": null,
+        "few_characters_count": null
+      }
+    },
+    {
+      "provider_file_id": "40",
+      "converted_text_id": null,
+      "display_name": "Made_up_S40",
+      "file_role": null,
+      "md5": "original-md5-40",
+      "converted_md5": null,
+      "format": "unknown",
+      "category": "convertible",
+      "status": "no_converted_text",
+      "in_this_paper": false,
+      "tickable": false,
+      "not_tickable_reason": "provider_not_converted_yet",
+      "last_provider_observation": {
+        "code": "not_converted_in_time",
+        "observed_at": "2026-11-22T14:05:00+00:00"
+      },
+      "check": {
+        "status": "not_checked",
+        "reason": null,
+        "measured_value": null,
+        "limit_value": null,
+        "few_characters_count": null
+      }
+    },
+    {
+      "provider_file_id": "50",
+      "converted_text_id": null,
+      "display_name": "Made_up_S50",
+      "file_role": null,
+      "md5": "original-md5-50",
+      "converted_md5": null,
+      "format": "unknown",
+      "category": "large_data_file",
+      "status": "large_data_file",
+      "in_this_paper": false,
+      "tickable": false,
+      "not_tickable_reason": "large_data_file",
+      "last_provider_observation": null,
+      "check": {
+        "status": "not_checked",
+        "reason": null,
+        "measured_value": null,
+        "limit_value": null,
+        "few_characters_count": null
+      }
+    },
+    {
+      "provider_file_id": "60",
+      "converted_text_id": null,
+      "display_name": "Made_up_S60",
+      "file_role": null,
+      "md5": "original-md5-60",
+      "converted_md5": null,
+      "format": "unknown",
+      "category": "unsupported_type",
+      "status": "type_not_supported",
+      "in_this_paper": false,
+      "tickable": false,
+      "not_tickable_reason": "type_not_supported",
+      "last_provider_observation": null,
+      "check": {
+        "status": "not_checked",
+        "reason": null,
+        "measured_value": null,
+        "limit_value": null,
+        "few_characters_count": null
+      }
+    }
+  ]
+}

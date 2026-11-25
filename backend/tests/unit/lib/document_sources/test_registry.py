@@ -81,6 +81,31 @@ def test_provider_presentation_exposes_paired_identifier_guidance() -> None:
     }
 
 
+def test_provider_presentation_exposes_stripped_short_label_only_when_non_empty() -> None:
+    with_short = DocumentSourceProviderPresentation(
+        display_label="Example Source",
+        short_label="  EXS  ",
+    )
+    assert with_short.short_label == "EXS"
+    assert with_short.as_public_dict() == {
+        "display_label": "Example Source",
+        "short_label": "EXS",
+        "reference_label_priority": [],
+    }
+
+    without_short = DocumentSourceProviderPresentation(
+        display_label="Example Source",
+        short_label="   ",
+    )
+    assert without_short.short_label == ""
+    assert "short_label" not in without_short.as_public_dict()
+
+    positional = DocumentSourceProviderPresentation("Example Literature", ("reference_curie",))
+    assert positional.display_label == "Example Literature"
+    assert positional.reference_label_priority == ("reference_curie",)
+    assert positional.short_label == ""
+
+
 def test_provider_presentation_rejects_partial_identifier_guidance() -> None:
     with pytest.raises(ValueError, match="must be configured together"):
         DocumentSourceProviderPresentation(
