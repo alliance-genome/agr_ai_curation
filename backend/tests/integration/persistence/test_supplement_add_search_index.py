@@ -1359,3 +1359,84 @@ async def test_a_pool_timeout_while_reading_the_papers_index_object_is_the_delet
 
     _wire_delete(monkeypatch, owner_id)  # the lock was released: the next delete goes ahead
     assert (await _delete(paper)).success is True
+
+
+@pytest.mark.asyncio
+async def test_competing_supplement_add_and_committed_upload_compensation_never_interleave(
+    owner_id, index, tmp_path,
+):
+    """Committed-paper compensation holds paper_operation_lock and checks active jobs on real Postgres."""
+    from unittest.mock import MagicMock
+    from src.lib.pdf_jobs.upload_intake_service import UploadIntakeService
+    from src.lib.weaviate_client import documents as weaviate_docs
+
+    # Case 1: Compensation acquires paper_operation_lock first; a competing supplement add
+    # during its chunk wipe is refused immediately with ActiveJobExistsError.
+    paper_a = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    staged_a_dir = tmp_path / TEST_USER_ID / str(paper_a)
+    staged_a_dir.mkdir(parents=True)
+    staged_a = staged_a_dir / "paper_a.pdf"
+    staged_a.write_bytes(b"%PDF-1.7\n")
+
+    wipe_entered = asyncio.Event()
+    resume_wipe = asyncio.Event()
+
+    async def _pausing_delete_document(user_sub: str, document_id: str):
+        wipe_entered.set()
+        await resume_wipe.wait()
+        return await weaviate_docs.delete_document(user_sub, document_id)
+
+    service_a = UploadIntakeService(
+        upload_execution_service=MagicMock(),
+        delete_document_fn=_pausing_delete_document,
+    )
+
+    comp_task = asyncio.create_task(
+        service_a._compensate_job_creation_failure(
+            user_sub=TEST_USER_ID,
+            document_id=str(paper_a),
+            saved_path=staged_a,
+            weaviate_document_created=True,
+        )
+    )
+    try:
+        await asyncio.wait_for(wipe_entered.wait(), timeout=5)
+        with pytest.raises(ActiveJobExistsError):
+            await asyncio.to_thread(
+                supplement_add.start_supplement_add, paper_a, owner_id, [_chosen(20)],
+            )
+    finally:
+        resume_wipe.set()
+
+    await asyncio.wait_for(comp_task, timeout=10)
+    assert not staged_a.exists()
+    assert _rows(paper_a) == [] and _indexes(index, str(paper_a)) == []
+
+    # Case 2: A competing supplement add already committed its active job before
+    # compensation acquires paper_operation_lock; compensation must leave the paper intact.
+    paper_b = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    staged_b_dir = tmp_path / TEST_USER_ID / str(paper_b)
+    staged_b_dir.mkdir(parents=True)
+    staged_b = staged_b_dir / "paper_b.pdf"
+    staged_b.write_bytes(b"%PDF-1.7\n")
+
+    add_job = await asyncio.to_thread(
+        supplement_add.start_supplement_add, paper_b, owner_id, [_chosen(20)],
+    )
+    service_b = UploadIntakeService(
+        upload_execution_service=MagicMock(),
+        delete_document_fn=weaviate_docs.delete_document,
+    )
+    await service_b._compensate_job_creation_failure(
+        user_sub=TEST_USER_ID,
+        document_id=str(paper_b),
+        saved_path=staged_b,
+        weaviate_document_created=True,
+    )
+
+    assert staged_b.exists()
+    assert [row.role for row in _rows(paper_b)] == ["main"]
+    assert _indexes(index, str(paper_b)) == [0, 1, 2]
+    with SessionLocal() as db:
+        job_row = db.get(PdfProcessingJob, UUID(add_job.job_id))
+        assert job_row is not None and job_row.status == PdfJobStatus.PENDING.value

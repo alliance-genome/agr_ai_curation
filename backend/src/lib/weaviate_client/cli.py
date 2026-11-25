@@ -1,14 +1,25 @@
 """CLI interface for Weaviate operations."""
 
+import asyncio
 import json
 import logging
+from pathlib import Path
 import sys
-from typing import Optional
+from typing import Any, Optional
+from uuid import UUID
 
 import click
 
 from .connection import connect_to_weaviate, health_check, get_collection_info
-from .documents import list_documents, get_document, delete_document, re_embed_document
+from .documents import (
+    _delete_sql_row,
+    delete_document as delete_document,
+    delete_paper_chunks,
+    delete_paper_object,
+    get_document,
+    list_documents,
+    re_embed_document,
+)
 from .chunks import get_chunks
 from .settings import get_embedding_config, get_available_models
 
@@ -152,6 +163,208 @@ def get_document_cmd(document_id: str, user_id: str, show_chunks: bool, output_f
         sys.exit(1)
 
 
+_REAL_DELETE_PAPER_CHUNKS = delete_paper_chunks
+
+
+def _inspect_cli_sql_owner(user_id: str, document_uuid: UUID) -> tuple[str | None, bool]:
+    """Validate SQL ownership and removable paths before starting destructive CLI delete.
+
+    Returns ``(error_message, has_sql_owner)``.
+    """
+    from sqlalchemy import select
+    from src.config import get_pdf_storage_path
+    from src.lib.document_files.service import (
+        paper_cleanup_snapshot,
+        require_removable_paper_paths,
+    )
+    from src.lib.document_files.storage_paths import StoredPathOutsideOwnerStorage
+    from src.models.sql.database import get_db
+    from src.models.sql.pdf_document import PDFDocument
+    from src.models.sql.user import User
+
+    db = next(get_db())
+    try:
+        pdf_doc = db.get(PDFDocument, document_uuid)
+        if pdf_doc is None:
+            return None, False
+        db_user = db.execute(select(User).where(User.auth_sub == user_id)).scalar_one_or_none()
+        if db_user is None or pdf_doc.user_id != db_user.id:
+            return "Document ownership mismatch in PostgreSQL", False
+        cleanup_snapshot = paper_cleanup_snapshot(pdf_doc)
+        try:
+            require_removable_paper_paths(cleanup_snapshot, Path(get_pdf_storage_path()), user_id)
+        except StoredPathOutsideOwnerStorage:
+            return "Access denied: file path validation failed", True
+        return None, True
+    finally:
+        db.close()
+
+
+def _remove_cli_owned_paper_files(user_id: str, document_uuid: UUID) -> None:
+    """Lock the owned SQL paper row and remove all stored files before owner deletion."""
+    from sqlalchemy import select
+    from src.config import get_pdf_storage_path
+    from src.lib.document_files.service import (
+        paper_cleanup_snapshot,
+        remove_paper_stored_files,
+    )
+    from src.models.sql.database import get_db
+    from src.models.sql.pdf_document import PDFDocument
+    from src.models.sql.user import User
+
+    db = next(get_db())
+    try:
+        pdf_doc = db.execute(
+            select(PDFDocument).where(PDFDocument.id == document_uuid).with_for_update()
+        ).scalar_one_or_none()
+        if pdf_doc is None:
+            return
+        db_user = db.execute(select(User).where(User.auth_sub == user_id)).scalar_one_or_none()
+        if db_user is None or pdf_doc.user_id != db_user.id:
+            raise PermissionError("Document ownership mismatch in PostgreSQL")
+        cleanup_values = paper_cleanup_snapshot(pdf_doc)
+        remove_paper_stored_files(
+            cleanup_values,
+            base_storage=Path(get_pdf_storage_path()),
+            user_sub=user_id,
+            document_id=str(document_uuid),
+        )
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+async def _delete_document_for_cli(user_id: str, document_id: str) -> dict[str, Any]:
+    """Delete a document via CLI under paper_operation_lock with active-job and files-before-owner checks."""
+    from src.lib.document_cleanup import delete_drain_context, drain_shielded
+    from src.lib.document_files.paper_lock import PaperOperationInProgress, paper_operation_lock
+    from src.lib.pdf_jobs import service as pdf_job_service
+
+    if not user_id:
+        raise ValueError("user_id is required for tenant-scoped document deletion (FR-011, FR-014)")
+    document_uuid = UUID(str(document_id))
+
+    try:
+        async with paper_operation_lock(document_uuid):
+            active_job = await asyncio.to_thread(
+                pdf_job_service.get_active_job_for_document,
+                document_id=document_uuid,
+                reconcile_stale=True,
+            )
+            if active_job is not None:
+                return {
+                    "success": False,
+                    "message": (
+                        "Cannot delete document while processing job is active "
+                        f"(status '{active_job.status}')"
+                    ),
+                    "documentId": document_id,
+                    "postgres_deleted": False,
+                }
+
+            preflight_error, has_sql_owner = await asyncio.to_thread(
+                _inspect_cli_sql_owner,
+                user_id,
+                document_uuid,
+            )
+            if preflight_error is not None:
+                return {
+                    "success": False,
+                    "message": preflight_error,
+                    "documentId": document_id,
+                    "postgres_deleted": False,
+                }
+
+            with delete_drain_context() as drain_state:
+                async def _complete() -> dict[str, Any]:
+                    if delete_paper_chunks is not _REAL_DELETE_PAPER_CHUNKS:
+                        drain_state.started = True
+                    chunk_result = await delete_paper_chunks(user_id, document_id)
+                    if not chunk_result.get("success"):
+                        return {**chunk_result, "postgres_deleted": False}
+
+                    if has_sql_owner:
+                        try:
+                            await asyncio.to_thread(
+                                _remove_cli_owned_paper_files,
+                                user_id,
+                                document_uuid,
+                            )
+                        except Exception as file_err:
+                            logger.warning(
+                                "CLI delete failed to remove stored files (%s)",
+                                type(file_err).__name__,
+                                extra={"sentry_skip_event": True},
+                            )
+                            return {
+                                "success": False,
+                                "message": f"Failed to remove stored files ({type(file_err).__name__})",
+                                "documentId": document_id,
+                                "chunks_deleted": chunk_result.get("chunks_deleted", 0),
+                                "chunks_matched": chunk_result.get("chunks_matched", 0),
+                                "postgres_deleted": False,
+                            }
+
+                    parent_result = await delete_paper_object(
+                        user_id,
+                        document_id,
+                        allow_missing=True,
+                    )
+                    if not parent_result.get("success"):
+                        return {
+                            **parent_result,
+                            "chunks_deleted": chunk_result.get("chunks_deleted", 0),
+                            "chunks_matched": chunk_result.get("chunks_matched", 0),
+                            "postgres_deleted": False,
+                        }
+
+                    try:
+                        postgres_deleted = await asyncio.to_thread(
+                            _delete_sql_row,
+                            user_id,
+                            document_id,
+                        )
+                    except Exception as db_err:
+                        logger.warning(
+                            "CLI delete failed to remove PostgreSQL record (%s)",
+                            type(db_err).__name__,
+                            extra={"sentry_skip_event": True},
+                        )
+                        postgres_deleted = False
+
+                    deleted_any = bool(parent_result.get("deleted") or postgres_deleted)
+                    return {
+                        "success": deleted_any,
+                        "message": (
+                            "Document and chunks deleted successfully"
+                            if deleted_any
+                            else "Document deletion reported as unsuccessful"
+                        ),
+                        "documentId": document_id,
+                        "chunks_deleted": chunk_result.get("chunks_deleted", 0),
+                        "chunks_matched": chunk_result.get("chunks_matched", 0),
+                        "postgres_deleted": postgres_deleted,
+                    }
+
+                def _mark_cancelled() -> None:
+                    drain_state.cancelled = True
+
+                return await drain_shielded(
+                    _complete(),
+                    started=lambda: drain_state.started,
+                    on_cancel=_mark_cancelled,
+                )
+    except PaperOperationInProgress:
+        return {
+            "success": False,
+            "message": "Another operation on this paper is in progress; try again in a moment.",
+            "documentId": document_id,
+            "postgres_deleted": False,
+        }
+
+
 @cli.command()
 @click.argument('document_id')
 @click.option('--user-id', required=True, help='User ID for tenant scoping (FR-011, FR-014)')
@@ -162,8 +375,7 @@ def delete_document_cmd(document_id: str, user_id: str):
     Requires --user-id to enforce tenant isolation (FR-011, FR-014).
     """
     try:
-        import asyncio
-        result = asyncio.run(delete_document(user_id, document_id))
+        result = asyncio.run(_delete_document_for_cli(user_id, document_id))
 
         if result['success']:
             click.echo(f"✓ {result['message']}")

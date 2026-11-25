@@ -30,6 +30,9 @@ from src.lib.curation_workspace.models import (
     DomainValidationFinding,
 )
 
+from src.lib.observability import runtime
+from src.lib.observability.sentry import hash_sentry_identifier
+
 logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
 
@@ -40,6 +43,8 @@ class DeleteDrainState:
 
     started: bool = False
     cancelled: bool = False
+    owner_task: asyncio.Task[Any] | None = None
+    owner_initial_cancels: int = 0
 
 
 _DELETE_DRAIN_STATE: ContextVar[DeleteDrainState | None] = ContextVar(
@@ -72,6 +77,62 @@ def is_cancelled_delete_drain() -> bool:
     return bool(state is not None and state.cancelled)
 
 
+def is_delete_cancelled_before_start() -> bool:
+    """Return whether the owning delete task was cancelled before destructive work started."""
+    state = _DELETE_DRAIN_STATE.get()
+    if state is None or state.started:
+        return False
+    if state.cancelled:
+        return True
+    return (
+        state.owner_task is not None
+        and state.owner_task.cancelling() > state.owner_initial_cancels
+    )
+
+
+def report_compensation_file_cleanup_failure(
+    *,
+    component: str,
+    document_id: str,
+    sql_record_committed: bool,
+    weaviate_document_created: bool,
+) -> None:
+    """Emit one sanitized Sentry report and companion warning when compensation unlink fails."""
+    document_id_hash = hash_sentry_identifier(document_id)
+    logger.warning(
+        "Retaining remaining document ownership during compensation because staged PDF cleanup failed "
+        "(document_id_hash=%s, sql_committed=%s, weaviate_retained=%s)",
+        document_id_hash,
+        sql_record_committed,
+        weaviate_document_created,
+        extra={"sentry_skip_event": True},
+    )
+    try:
+        runtime.report_runtime_exception(
+            runtime.sanitized_runtime_error(
+                "Staged PDF artifact removal failed during intake compensation"
+            ),
+            component=component,
+            operation="intake_compensation_file_cleanup_failed",
+            context={
+                "document_id_hash": document_id_hash,
+                "sql_committed": sql_record_committed,
+                "weaviate_retained": weaviate_document_created,
+            },
+            fingerprint=[
+                "intake_compensation_file_cleanup_failed",
+                component,
+                "post_commit" if sql_record_committed else "pre_commit",
+            ],
+            include_request=False,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to report intake compensation file cleanup failure",
+            extra={"sentry_skip_event": True},
+        )
+
+
 async def drain_shielded(
     coro: Coroutine[Any, Any, _T],
     *,
@@ -83,9 +144,10 @@ async def drain_shielded(
 
     When ``started`` is provided, cancellation arriving before ``started()`` becomes
     True aborts before destructive work begins (including across the ``create_task``
-    scheduling gap). Once ``started()`` is True (or when omitted because the first
-    destructive worker was already submitted synchronously), cancellation drains the
-    inner task to completion before re-raising the original ``CancelledError``.
+    scheduling gap and any pre-submission yield in the child). Once ``started()`` is
+    True (or when omitted because the first destructive worker was already submitted
+    synchronously), cancellation drains the inner task to completion before re-raising
+    the original ``CancelledError``.
     """
     caller = asyncio.current_task()
     if started is not None and not started():
@@ -96,6 +158,12 @@ async def drain_shielded(
             raise
 
     initial_cancels = caller.cancelling() if caller is not None else 0
+    drain_state = _DELETE_DRAIN_STATE.get() if started is not None else None
+    previous_owner_task = drain_state.owner_task if drain_state is not None else None
+    previous_initial_cancels = drain_state.owner_initial_cancels if drain_state is not None else 0
+    if drain_state is not None:
+        drain_state.owner_task = caller
+        drain_state.owner_initial_cancels = initial_cancels
 
     async def _guarded() -> _T:
         if (
@@ -110,25 +178,33 @@ async def drain_shielded(
 
     task = asyncio.create_task(_guarded())
     cancelled: asyncio.CancelledError | None = None
-    while not task.done():
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError as exc:
-            if cancelled is None:
-                cancelled = exc
-                if on_cancel is not None:
-                    try:
-                        on_cancel()
-                    except (Exception, asyncio.CancelledError):
-                        logger.warning(
-                            "Cancelled cleanup notification callback failed",
-                            extra={"sentry_skip_event": True},
-                        )
-            if started is not None and not started():
-                task.cancel()
-        except Exception:
-            if cancelled is None:
-                raise
+    try:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError as exc:
+                if cancelled is None:
+                    cancelled = exc
+                    if on_cancel is not None:
+                        try:
+                            on_cancel()
+                        except (Exception, asyncio.CancelledError):
+                            logger.warning(
+                                "Cancelled cleanup notification callback failed",
+                                extra={"sentry_skip_event": True},
+                            )
+                if started is not None and not started():
+                    task.cancel()
+            except Exception:
+                if cancelled is None:
+                    raise
+        if task.cancelled():
+            # Defensively close coro if the child task was cancelled before awaiting it.
+            coro.close()
+    finally:
+        if drain_state is not None:
+            drain_state.owner_task = previous_owner_task
+            drain_state.owner_initial_cancels = previous_initial_cancels
     if cancelled is None:
         return task.result()
     if not task.cancelled():

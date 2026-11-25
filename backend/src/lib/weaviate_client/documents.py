@@ -17,6 +17,7 @@ from ..document_cleanup import (
     cleanup_document_curation_dependencies,
     drain_shielded,
     is_cancelled_delete_drain,
+    is_delete_cancelled_before_start,
     mark_destructive_delete_started,
 )
 from ..document_sources.provenance import (
@@ -687,17 +688,25 @@ async def delete_paper_chunks(user_id: str, document_id: str) -> Dict[str, Any]:
 
     # Deliver any already-pending cancellation before opening a session or submitting work.
     await asyncio.sleep(0)
+    if is_delete_cancelled_before_start():
+        raise asyncio.CancelledError
 
     connection = get_connection()
     if not connection:
         raise RuntimeError("No Weaviate connection established")
 
-    session_cm = connection.session()
+    session_cm = (
+        connection.session(caller_reports_failure=True)
+        if is_cancelled_delete_drain()
+        else connection.session()
+    )
     client = session_cm.__enter__()
     try:
         chunk_collection, _ = get_user_collections(client, user_id)
-        # Submit synchronously after the cancellation checkpoint so cancellation drains
-        # only once the destructive worker is actually in flight.
+        # Re-check owning request cancellation synchronously immediately before submitting
+        # with zero intervening await so cancellation drains only once work is in flight.
+        if is_delete_cancelled_before_start():
+            raise asyncio.CancelledError
         delete_future = _submit_chunk_wipe(chunk_collection, document_id)
         mark_destructive_delete_started()
     except Exception as e:
@@ -758,7 +767,11 @@ async def delete_paper_object(
     if not connection:
         raise RuntimeError("No Weaviate connection established")
 
-    session_cm = connection.session()
+    session_cm = (
+        connection.session(caller_reports_failure=True)
+        if is_cancelled_delete_drain()
+        else connection.session()
+    )
     client = session_cm.__enter__()
     try:
         _, pdf_collection = get_user_collections(client, user_id)
@@ -949,7 +962,11 @@ def _delete_sql_row(user_id: str, document_id: str) -> bool:
 
 
 async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
-    """Delete the search entries, then clean up SQL for import compensation and CLI deletes."""
+    """Delete the search entries, then clean up SQL.
+
+    Callers that own committed papers or stored files must hold ``paper_operation_lock``,
+    verify no active job is running, and remove stored files before calling this helper.
+    """
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped document deletion (FR-011, FR-014)")
 
@@ -972,7 +989,11 @@ async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
         try:
             postgres_deleted = await asyncio.to_thread(_delete_sql_row, user_id, document_id)
         except Exception as e:
-            logger.warning("Failed to delete from PostgreSQL: %s", e)
+            logger.warning(
+                "Failed to delete document from PostgreSQL (%s)",
+                type(e).__name__,
+                extra={"sentry_skip_event": True},
+            )
             postgres_deleted = False
 
         logger.info(

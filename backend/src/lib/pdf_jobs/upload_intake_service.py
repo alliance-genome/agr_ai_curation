@@ -12,6 +12,7 @@ The intake output contract is `UploadIntakeResult`, which includes:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import shutil
@@ -28,7 +29,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from src.config import get_pdf_storage_path
-from src.lib.document_cleanup import cleanup_document_curation_dependencies
+from src.lib.document_cleanup import (
+    cleanup_document_curation_dependencies,
+    report_compensation_file_cleanup_failure,
+)
+from src.lib.document_files.paper_lock import PaperOperationInProgress, paper_operation_lock
 from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.import_selection import (
     ChecksumImportCandidate,
@@ -55,6 +60,7 @@ from src.lib.document_sources.registry import (
     get_document_source_provider_metadata,
 )
 from src.lib.observability import runtime
+from src.lib.observability.sentry import hash_sentry_identifier
 from src.lib.openai_agents.config import (
     get_document_source_import_enabled,
     get_document_source_provider,
@@ -267,6 +273,8 @@ class UploadIntakeService:
         ] = select_checksum_import_candidate,
         find_existing_source_document_fn: Callable[..., Any] = find_existing_document_by_source,
         max_page_count_provider: Callable[[], int] = get_pdf_upload_max_page_count,
+        get_active_job_fn: Callable[..., Any] | None = None,
+        paper_operation_lock_fn: Callable[[uuid.UUID | str], Any] | None = None,
     ) -> None:
         self.upload_execution_service = upload_execution_service
         self._session_factory = session_factory
@@ -285,6 +293,8 @@ class UploadIntakeService:
         self._checksum_import_selector = checksum_import_selector
         self._find_existing_source_document = find_existing_source_document_fn
         self._max_page_count_provider = max_page_count_provider
+        self._get_active_job_fn = get_active_job_fn
+        self._paper_operation_lock_fn = paper_operation_lock_fn
 
     @staticmethod
     def _default_upload_handler_factory(storage_path: Path) -> PDFUploadHandler:
@@ -842,60 +852,109 @@ class UploadIntakeService:
         saved_path: Path,
         weaviate_document_created: bool,
     ) -> None:
-        # Remove staged file artifacts first; if the private PDF cannot be removed,
-        # retain SQL and Weaviate ownership so the curator/cleanup can retry deletion.
-        if not self._cleanup_saved_file_artifacts(saved_path):
+        lock_fn = self._paper_operation_lock_fn or paper_operation_lock
+        get_active_job = self._get_active_job_fn or pdf_job_service.get_active_job_for_document
+        document_id_hash = hash_sentry_identifier(document_id)
+
+        try:
+            async with lock_fn(document_id):
+                try:
+                    active_job = await asyncio.to_thread(
+                        get_active_job,
+                        document_id=document_id,
+                        reconcile_stale=False,
+                    )
+                except Exception as job_check_err:
+                    logger.warning(
+                        "Skipping job-creation compensation because active-job check failed "
+                        "(%s, document_id_hash=%s)",
+                        type(job_check_err).__name__,
+                        document_id_hash,
+                        extra={"sentry_skip_event": True},
+                    )
+                    return
+                if active_job is not None:
+                    logger.warning(
+                        "Skipping job-creation compensation because an active job exists "
+                        "(document_id_hash=%s)",
+                        document_id_hash,
+                        extra={"sentry_skip_event": True},
+                    )
+                    return
+
+                # Remove staged file artifacts first; if the private PDF cannot be removed,
+                # retain SQL and Weaviate ownership so the curator/cleanup can retry deletion.
+                if not self._cleanup_saved_file_artifacts(saved_path):
+                    report_compensation_file_cleanup_failure(
+                        component="pdf_jobs",
+                        document_id=document_id,
+                        sql_record_committed=True,
+                        weaviate_document_created=weaviate_document_created,
+                    )
+                    return
+
+                # Let the Weaviate wipe outcome govern SQL owner deletion: an incomplete wipe
+                # or Weaviate failure retains both the Weaviate parent and the SQL owner.
+                weaviate_cleanup_ok = True
+                postgres_already_deleted = False
+                if weaviate_document_created:
+                    try:
+                        delete_result = await self._delete_document(user_sub, document_id)
+                    except Exception as cleanup_err:
+                        logger.warning(
+                            "Best-effort Weaviate cleanup failed for document %s: %s",
+                            document_id,
+                            cleanup_err,
+                        )
+                        weaviate_cleanup_ok = False
+                    else:
+                        if isinstance(delete_result, dict):
+                            if "error" in delete_result or "chunks_failed" in delete_result:
+                                weaviate_cleanup_ok = False
+                            elif delete_result.get("postgres_deleted") is True:
+                                postgres_already_deleted = True
+
+                if not weaviate_cleanup_ok or postgres_already_deleted:
+                    return
+
+                cleanup_session = self._session_factory()
+                try:
+                    persisted = (
+                        cleanup_session.execute(
+                            select(ViewerPDFDocument).where(
+                                ViewerPDFDocument.id == uuid.UUID(document_id),
+                            )
+                        )
+                        .scalars()
+                        .first()
+                    )
+                    if persisted:
+                        cleanup_session.delete(persisted)
+                        cleanup_session.commit()
+                except Exception as cleanup_err:
+                    cleanup_session.rollback()
+                    logger.warning(
+                        "Best-effort SQL cleanup failed after durable job creation error for document %s: %s",
+                        document_id,
+                        cleanup_err,
+                    )
+                finally:
+                    cleanup_session.close()
+        except PaperOperationInProgress:
             logger.warning(
-                "Retaining SQL and Weaviate ownership during job-creation compensation because staged PDF cleanup failed",
+                "Skipping job-creation compensation because another operation holds the paper lock "
+                "(document_id_hash=%s)",
+                document_id_hash,
                 extra={"sentry_skip_event": True},
             )
-            return
-
-        # Let the Weaviate wipe outcome govern SQL owner deletion: an incomplete wipe
-        # or Weaviate failure retains both the Weaviate parent and the SQL owner.
-        weaviate_cleanup_ok = True
-        if weaviate_document_created:
-            try:
-                delete_result = await self._delete_document(user_sub, document_id)
-            except Exception as cleanup_err:
-                logger.warning(
-                    "Best-effort Weaviate cleanup failed for document %s: %s",
-                    document_id,
-                    cleanup_err,
-                )
-                weaviate_cleanup_ok = False
-            else:
-                if isinstance(delete_result, dict) and (
-                    "error" in delete_result or "chunks_failed" in delete_result
-                ):
-                    weaviate_cleanup_ok = False
-
-        if not weaviate_cleanup_ok:
-            return
-
-        cleanup_session = self._session_factory()
-        try:
-            persisted = (
-                cleanup_session.execute(
-                    select(ViewerPDFDocument).where(
-                        ViewerPDFDocument.id == uuid.UUID(document_id),
-                    )
-                )
-                .scalars()
-                .first()
-            )
-            if persisted:
-                cleanup_session.delete(persisted)
-                cleanup_session.commit()
-        except Exception as cleanup_err:
-            cleanup_session.rollback()
+        except Exception as lock_err:
             logger.warning(
-                "Best-effort SQL cleanup failed after durable job creation error for document %s: %s",
-                document_id,
-                cleanup_err,
+                "Skipping job-creation compensation because acquiring the paper lock failed "
+                "(%s, document_id_hash=%s)",
+                type(lock_err).__name__,
+                document_id_hash,
+                extra={"sentry_skip_event": True},
             )
-        finally:
-            cleanup_session.close()
 
     async def _resolve_phantom_duplicate(
         self,
@@ -940,21 +999,25 @@ class UploadIntakeService:
         weaviate_document_created: bool,
     ) -> None:
         """Best-effort compensation for partial persistence failures."""
-        # Remove staged file artifacts before deleting Weaviate/SQL ownership so
-        # cancellation during Weaviate cleanup cannot strand a private PDF on disk.
-        self._cleanup_saved_file_artifacts(saved_path)
-        try:
-            if weaviate_document_created:
-                try:
-                    await self._delete_document(user_sub, document_id)
-                except Exception as cleanup_err:
-                    logger.warning(
-                        "Best-effort Weaviate cleanup failed for document %s: %s",
-                        document_id,
-                        cleanup_err,
-                    )
-        finally:
-            self._cleanup_saved_file_artifacts(saved_path)
+        # Remove staged file artifacts before deleting Weaviate ownership so
+        # cancellation or persistent unlink failure never strands a private PDF on disk.
+        if not self._cleanup_saved_file_artifacts(saved_path):
+            report_compensation_file_cleanup_failure(
+                component="pdf_jobs",
+                document_id=document_id,
+                sql_record_committed=False,
+                weaviate_document_created=weaviate_document_created,
+            )
+            return
+        if weaviate_document_created:
+            try:
+                await self._delete_document(user_sub, document_id)
+            except Exception as cleanup_err:
+                logger.warning(
+                    "Best-effort Weaviate cleanup failed for document %s: %s",
+                    document_id,
+                    cleanup_err,
+                )
 
     @staticmethod
     def _cleanup_saved_file_artifacts(saved_path: Path) -> bool:

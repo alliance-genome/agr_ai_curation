@@ -827,15 +827,28 @@ delivering `asyncio.CancelledError`. An incomplete chunk wipe stays owned solely
 by `weaviate_client` / `paper_delete_chunk_wipe_incomplete` with
 `include_request=False` and no second capture. Any other failure encountered
 while draining a cancelled paper delete (such as a chunk or parent worker error,
-stored-file removal error, Weaviate parent delete failure, or database pool
-timeout) suppresses raw worker log-event promotion and reports once under
-component `documents` and operation `paper_delete_cancelled_drain_failed` with
-`include_request=False`, a fixed, chain-free error, a low-cardinality
-fingerprint of `(operation, step, exception_type)`, and context holding only
+Weaviate session reconnect failure whose connection delegates failure reporting
+via `caller_reports_failure=True`, stored-file removal error, Weaviate parent
+delete failure, or database pool timeout) suppresses raw worker log-event
+promotion and reports once under component `documents` and operation
+`paper_delete_cancelled_drain_failed` with `include_request=False`, a fixed,
+chain-free error, a low-cardinality fingerprint of
+`(operation, step, exception_type)`, and context holding only
 `document_id_hash`, `step`, and `exception_type`. Companion warnings skip
 log-event promotion (`sentry_skip_event=True`), omit raw document IDs and raw
 exception details, and never prevent the original cancellation from propagating
 even if reporting fails.
+
+When upload intake (`upload_intake_service.py`) or identifier import
+(`identifier_import.py`) compensates after a pre-commit or post-commit failure
+and staged PDF removal fails, compensation retains any remaining Weaviate and
+SQL document ownership rather than stranding a private PDF on disk, logs a
+sanitized companion warning (`sentry_skip_event=True`), and reports once under
+component `pdf_jobs` or `document_sources` and operation
+`intake_compensation_file_cleanup_failed` with `include_request=False`, a fixed,
+chain-free error, a low-cardinality fingerprint of
+`(operation, component, pre_commit|post_commit)`, and context holding only
+`document_id_hash`, `sql_committed`, and `weaviate_retained`.
 
 Adding converted supplements to a paper (`supplement_add.py`) sends no event for
 a file it leaves out. When every chosen file is left out, it reports one warning

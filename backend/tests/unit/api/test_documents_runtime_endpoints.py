@@ -2045,7 +2045,90 @@ async def test_delete_document_endpoint_cancel_during_real_chunk_wipe_checkpoint
     assert _FakeLockConnection.held == set()
 
 
-@pytest.mark.parametrize("failure_mode", ["chunk_error", "parent_error", "incomplete_wipe"])
+@pytest.mark.asyncio
+async def test_delete_document_endpoint_cancel_at_chunk_wipe_yield_before_submit_aborts(
+    monkeypatch, tmp_path,
+):
+    """Cancel arriving right at delete_paper_chunks's own yield aborts with zero wipe."""
+    from contextlib import contextmanager
+    from src.lib.weaviate_client import documents as weaviate_docs
+
+    doc_id = str(uuid4())
+    pdf_dir = tmp_path / "user-1" / doc_id
+    pdf_dir.mkdir(parents=True)
+    pdf_file = pdf_dir / "paper.pdf"
+    pdf_file.write_bytes(b"%PDF-1.7\n")
+
+    verify_session = _FakeSession()
+    paper = _doc(id=doc_id, user_id=42, file_path=f"user-1/{doc_id}/paper.pdf")
+    snapshot_session = _FakeSession(execute_doc=paper)
+    _patch_session_factory(monkeypatch, [verify_session, snapshot_session])
+
+    chunks, papers = MagicMock(), MagicMock()
+
+    @contextmanager
+    def _unexpected_session(*_args, **_kwargs):
+        raise AssertionError("Weaviate session must not open when cancelled at chunk-wipe yield")
+        yield MagicMock()
+
+    connection = MagicMock()
+    connection.session.side_effect = _unexpected_session
+    monkeypatch.setattr(weaviate_docs, "get_connection", lambda: connection)
+    monkeypatch.setattr(weaviate_docs, "get_user_collections", lambda *_: (chunks, papers))
+
+    request_task: asyncio.Task[Any] | None = None
+    real_sleep = weaviate_docs.asyncio.sleep
+    sleep_zero_calls = 0
+    cancelled_in_chunk_wipe = False
+
+    async def _cancel_after_chunk_wipe_yield(delay, *args, **kwargs):
+        nonlocal sleep_zero_calls, cancelled_in_chunk_wipe
+        result = await real_sleep(delay, *args, **kwargs)
+        if delay == 0:
+            sleep_zero_calls += 1
+            # Call 1 is drain_shielded's entry yield; call 2 is delete_paper_chunks's
+            # pre-submission yield inside the shielded child task. Cancelling the
+            # owning request_task right as call 2 resumes reproduces the exact scheduling
+            # order where the child steps before the owner runs task.cancel().
+            if sleep_zero_calls == 2 and request_task is not None:
+                cancelled_in_chunk_wipe = True
+                request_task.cancel("cancelled at chunk-wipe yield")
+        return result
+
+    monkeypatch.setattr(weaviate_docs.asyncio, "sleep", _cancel_after_chunk_wipe_yield)
+    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
+    monkeypatch.setattr(
+        documents,
+        "verify_document_ownership",
+        lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42),
+    )
+    monkeypatch.setattr(
+        documents,
+        "get_document",
+        lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}),
+    )
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
+
+    request_task = asyncio.create_task(documents.delete_document_endpoint(doc_id, {"sub": "user-1"}))
+    with pytest.raises(asyncio.CancelledError, match="cancelled at chunk-wipe yield"):
+        await asyncio.wait_for(request_task, timeout=2)
+
+    assert cancelled_in_chunk_wipe is True
+    assert sleep_zero_calls == 2
+    connection.session.assert_not_called()
+    chunks.data.delete_many.assert_not_called()
+    papers.data.delete_by_id.assert_not_called()
+    assert pdf_file.exists()
+    assert _FakeLockConnection.held == set()
+
+
+@pytest.mark.parametrize(
+    "failure_mode",
+    ["chunk_error", "parent_error", "parent_reconnect_error", "incomplete_wipe"],
+)
 def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_without_request_url(
     failure_mode,
 ):
@@ -2068,9 +2151,11 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
 
         import sentry_sdk
         from sentry_sdk.integrations.logging import LoggingIntegration
+        import weaviate
 
         from src.api import documents
         from src.lib.observability.sentry import before_send, hash_sentry_identifier
+        from src.lib.weaviate_client.connection import WeaviateConnection
         from src.lib.weaviate_client import documents as weaviate_docs
         import src.models.sql.database as sql_db
 
@@ -2137,13 +2222,27 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
 
         wipe_entered = threading.Event()
         resume_wipe = threading.Event()
+        ready_state = {{"ready": True}}
 
-        @contextmanager
-        def _weaviate_session():
-            yield MagicMock()
+        if {failure_mode!r} == "parent_reconnect_error":
+            WeaviateConnection._instance = None
+            conn = WeaviateConnection(url="http://localhost:8080")
+            fake_client = MagicMock()
+            fake_client.is_ready.side_effect = lambda: ready_state["ready"]
+            conn._client = fake_client
 
-        conn = MagicMock()
-        conn.session.side_effect = _weaviate_session
+            def _refuse_reconnect(**_kw):
+                raise ConnectionRefusedError(f"{{secret_detail}} {{doc_id}}")
+
+            weaviate.connect_to_local = _refuse_reconnect
+        else:
+            @contextmanager
+            def _weaviate_session(*_args, **_kwargs):
+                yield MagicMock()
+
+            conn = MagicMock()
+            conn.session.side_effect = _weaviate_session
+
         chunks, papers = MagicMock(), MagicMock()
 
         def _delete_many(**_kw):
@@ -2153,6 +2252,8 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
                 raise RuntimeError(f"{{secret_detail}} {{doc_id}}")
             if {failure_mode!r} == "incomplete_wipe":
                 return SimpleNamespace(successful=1, matches=2, failed=1)
+            if {failure_mode!r} == "parent_reconnect_error":
+                ready_state["ready"] = False
             return SimpleNamespace(successful=2, matches=2, failed=0)
 
         def _delete_by_id(_doc_id):
@@ -2195,12 +2296,17 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
             assert runtime_ctx["operation"] == "paper_delete_chunk_wipe_incomplete"
         else:
             expected_step = "chunk_wipe" if {failure_mode!r} == "chunk_error" else "parent_object"
+            expected_exc_type = (
+                "ConnectionRefusedError"
+                if {failure_mode!r} == "parent_reconnect_error"
+                else "HTTPException"
+            )
             assert runtime_ctx == {{
                 "component": "documents",
                 "operation": "paper_delete_cancelled_drain_failed",
                 "document_id_hash": hash_sentry_identifier(doc_id),
                 "step": expected_step,
-                "exception_type": "HTTPException",
+                "exception_type": expected_exc_type,
             }}
     """)
     result = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True)

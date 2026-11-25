@@ -1042,6 +1042,39 @@ def end_supplement_wait_for_delete(*, document_id: UUID | str, user_id: int) -> 
         session.close()
 
 
+def get_active_job_for_document(
+    *,
+    document_id: UUID | str,
+    reconcile_stale: bool = False,
+) -> Optional[PdfJobResponse]:
+    """Return the active job (pending/running/cancel_requested) for a document, if any."""
+    session = SessionLocal()
+    try:
+        statement = select(PdfProcessingJob).where(
+            PdfProcessingJob.document_id == _to_uuid(document_id),
+            PdfProcessingJob.status.in_(tuple(_ACTIVE_STATUSES)),
+        )
+        if reconcile_stale:
+            statement = statement.with_for_update()
+        job = session.execute(statement).scalar_one_or_none()
+        if job and reconcile_stale:
+            now = datetime.now(timezone.utc)
+            if _reconcile_stale_job(
+                session,
+                job,
+                stale_after_seconds=_stale_timeout_seconds(),
+                now=now,
+            ):
+                session.commit()
+                session.refresh(job)
+        return _to_response(job) if (job and job.status in _ACTIVE_STATUSES) else None
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
 def get_latest_job_for_document(
     *,
     document_id: UUID | str,

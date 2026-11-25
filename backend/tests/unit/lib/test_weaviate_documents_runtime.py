@@ -945,6 +945,217 @@ async def test_drain_shielded_preserves_cancellation_when_callbacks_raise_cancel
 
 
 @pytest.mark.asyncio
+async def test_drain_shielded_closes_coro_when_child_cancelled_before_start(monkeypatch):
+    import gc
+    import warnings
+    from src.lib import document_cleanup
+
+    coro_started = False
+
+    async def _never_started():
+        nonlocal coro_started
+        coro_started = True
+        return "done"
+
+    real_create_task = document_cleanup.asyncio.create_task
+    task_holder: list[asyncio.Task] = []
+
+    def _cancel_immediately_after_create(coro, *args, **kwargs):
+        child = real_create_task(coro, *args, **kwargs)
+        if getattr(getattr(coro, "cr_code", None), "co_name", None) == "_guarded":
+            child.cancel("child cancelled before first step")
+            if task_holder:
+                task_holder[0].cancel("owner cancelled after create_task")
+        return child
+
+    monkeypatch.setattr(document_cleanup.asyncio, "create_task", _cancel_immediately_after_create)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        task = real_create_task(
+            document_cleanup.drain_shielded(_never_started(), started=lambda: False)
+        )
+        task_holder.append(task)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+        gc.collect()
+
+    assert coro_started is False
+    unawaited = [
+        w for w in caught
+        if issubclass(w.category, RuntimeWarning) and "was never awaited" in str(w.message)
+    ]
+    assert unawaited == []
+
+
+@pytest.mark.asyncio
+async def test_delete_document_sanitizes_postgres_cleanup_warning(monkeypatch, caplog):
+    import logging
+
+    chunks, papers = MagicMock(), MagicMock()
+    chunks.data.delete_many.return_value = SimpleNamespace(successful=0, matches=0, failed=0)
+    papers.data.delete_by_id.return_value = True
+    monkeypatch.setattr(documents, "get_connection", lambda: _connection_with_client(MagicMock()))
+    monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
+    secret_sql_detail = "private-sql-param-value-for-curator"
+    monkeypatch.setattr(
+        documents,
+        "_delete_sql_row",
+        MagicMock(side_effect=RuntimeError(secret_sql_detail)),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="src.lib.weaviate_client.documents"):
+        result = await documents.delete_document("user-1", "doc-1")
+
+    assert result["success"] is True
+    assert result["postgres_deleted"] is False
+    assert secret_sql_detail not in caplog.text
+    pg_warnings = [
+        record for record in caplog.records
+        if "Failed to delete document from PostgreSQL" in record.getMessage()
+    ]
+    assert len(pg_warnings) == 1
+    assert "RuntimeError" in pg_warnings[0].getMessage()
+    assert getattr(pg_warnings[0], "sentry_skip_event", False) is True
+
+
+@pytest.mark.asyncio
+async def test_cli_delete_enforces_lock_active_job_and_files_before_owner(monkeypatch, tmp_path):
+    from uuid import uuid4
+    from src.lib.weaviate_client import cli as weaviate_cli
+
+    doc_id = str(uuid4())
+    user_id = "user-cli-1"
+    pdf_dir = tmp_path / user_id / doc_id
+    pdf_dir.mkdir(parents=True)
+    pdf_file = pdf_dir / "paper.pdf"
+    pdf_file.write_bytes(b"%PDF-1.7\n")
+
+    held: set[int] = set()
+
+    class _FakeLockConn:
+        def execute(self, statement, params):
+            sql = str(statement)
+            key = params["key"]
+            if "pg_try_advisory_lock" in sql:
+                taken = key not in held
+                held.add(key)
+                return SimpleNamespace(scalar_one=lambda: taken)
+            if "pg_advisory_unlock" in sql:
+                held.discard(key)
+                return SimpleNamespace(scalar_one=lambda: True)
+            raise AssertionError(f"unexpected sql {sql}")
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+        def invalidate(self):
+            pass
+
+    monkeypatch.setattr(
+        "src.models.sql.database.engine",
+        SimpleNamespace(connect=lambda: _FakeLockConn()),
+        raising=False,
+    )
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
+
+    main_file = SimpleNamespace(
+        role="main",
+        display_mode="local_pdf",
+        file_path=f"{user_id}/{doc_id}/paper.pdf",
+        pdfx_json_path=None,
+        processed_json_path=None,
+        source_markdown_path=None,
+    )
+    pdf_doc = SimpleNamespace(id=UUID(doc_id), user_id=42, files=[main_file])
+    db_user = SimpleNamespace(id=42, auth_sub=user_id)
+
+    class _FakeDb:
+        def get(self, _model, _pk):
+            return pdf_doc
+
+        def execute(self, statement):
+            sql = str(statement)
+            if "pdf_documents" in sql:
+                return SimpleNamespace(scalar_one_or_none=lambda: pdf_doc)
+            return SimpleNamespace(scalar_one_or_none=lambda: db_user)
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("src.models.sql.database.get_db", lambda: iter([_FakeDb()]))
+
+    events: list[str] = []
+
+    async def _fake_chunks(_uid, _did):
+        assert held, "CLI delete must hold paper_operation_lock during chunk wipe"
+        events.append("chunks")
+        return {"success": True, "chunks_deleted": 2, "chunks_matched": 2}
+
+    async def _fake_parent(_uid, _did, *, allow_missing=False):
+        assert allow_missing is True
+        assert not pdf_file.exists(), "Stored PDF must be removed before deleting Weaviate parent"
+        events.append("parent")
+        return {"success": True, "deleted": True}
+
+    def _fake_sql(_uid, _did):
+        assert not pdf_file.exists(), "Stored PDF must be removed before deleting SQL owner"
+        events.append("sql")
+        return True
+
+    monkeypatch.setattr(weaviate_cli, "delete_paper_chunks", _fake_chunks)
+    monkeypatch.setattr(weaviate_cli, "delete_paper_object", _fake_parent)
+    monkeypatch.setattr(weaviate_cli, "_delete_sql_row", _fake_sql)
+
+    # 1. Active job refuses CLI delete before touching Weaviate, files, or SQL.
+    monkeypatch.setattr(
+        "src.lib.pdf_jobs.service.get_active_job_for_document",
+        lambda **_kwargs: SimpleNamespace(status="running"),
+    )
+    active_result = await weaviate_cli._delete_document_for_cli(user_id, doc_id)
+    assert active_result["success"] is False
+    assert "active" in active_result["message"].lower()
+    assert pdf_file.exists()
+    assert events == []
+    assert held == set()
+
+    # 2. Persistent unlink failure retains Weaviate parent and SQL owner for retry.
+    monkeypatch.setattr(
+        "src.lib.pdf_jobs.service.get_active_job_for_document",
+        lambda **_kwargs: None,
+    )
+    from src.lib.document_files import service as doc_files_service
+    orig_rmtree = doc_files_service.shutil.rmtree
+    monkeypatch.setattr(
+        doc_files_service.shutil,
+        "rmtree",
+        lambda *_a, **_kw: (_ for _ in ()).throw(PermissionError("locked")),
+    )
+    unlink_fail_result = await weaviate_cli._delete_document_for_cli(user_id, doc_id)
+    assert unlink_fail_result["success"] is False
+    assert unlink_fail_result["postgres_deleted"] is False
+    assert pdf_file.exists()
+    assert events == ["chunks"]
+    assert held == set()
+
+    # 3. Normal CLI delete completes chunks -> files -> parent -> SQL and releases lock.
+    monkeypatch.setattr(doc_files_service.shutil, "rmtree", orig_rmtree)
+    events.clear()
+    ok_result = await weaviate_cli._delete_document_for_cli(user_id, doc_id)
+    assert ok_result["success"] is True
+    assert ok_result["postgres_deleted"] is True
+    assert events == ["chunks", "parent", "sql"]
+    assert not pdf_file.exists()
+    assert held == set()
+
+
+@pytest.mark.asyncio
 async def test_get_document_handles_no_chunks_after_uuid_filter_failure():
     doc_uuid = "00000000-0000-0000-0000-000000000999"
     doc_response = SimpleNamespace(
