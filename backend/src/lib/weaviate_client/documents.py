@@ -494,11 +494,11 @@ async def get_document(
 
     tenant_name = await run_thread_drained(check_owner_and_kind)
 
-    connection = get_connection()
-    if not connection:
+    weaviate_connection = get_connection()
+    if not weaviate_connection:
         raise RuntimeError("No Weaviate connection established")
 
-    with connection.session() as client:
+    with weaviate_connection.session() as client:
         try:
             # Get tenant-scoped collections (FR-011: user-specific data isolation)
             chunk_collection, pdf_collection = get_user_collections(client, user_id)

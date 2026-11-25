@@ -459,3 +459,91 @@ async def test_remove_paper_file_cancel_drains_mark_removed_worker_before_lock_r
         await asyncio.wait_for(task, timeout=5)
 
     assert events == ["worker_finished", "lock_released"]
+
+
+@pytest.mark.asyncio
+async def test_remove_paper_file_cancel_drains_piece_count_update_before_lock_release(monkeypatch):
+    """Cancelling remove_paper_file() during piece-count update drains the worker before paper_lock._release."""
+    import asyncio
+    from contextlib import contextmanager
+    import threading
+    from unittest.mock import MagicMock
+    import src.models.sql.database as sql_db
+    from src.lib.document_files.paper_lock import paper_operation_lock
+
+    document_id = uuid4()
+    file_id = uuid4()
+    events: list[str] = []
+    update_entered = threading.Event()
+    resume_update = threading.Event()
+
+    class _LockConn:
+        def execute(self, statement, _params=None):
+            if "pg_advisory_unlock" in str(statement):
+                events.append("lock_released")
+            return SimpleNamespace(scalar_one=lambda: True)
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+        def invalidate(self):
+            pass
+
+    monkeypatch.setattr(sql_db, "engine", SimpleNamespace(connect=lambda: _LockConn()))
+
+    removed = _make_removed(
+        document_id,
+        file_id,
+        owner_subject="user-1",
+        stored_path=f"user-1/{document_id}/supp.pdf",
+    )
+    monkeypatch.setattr(file_removal, "_mark_removed_or_busy", lambda *_a, **_kw: removed)
+    monkeypatch.setattr("src.lib.weaviate_client.chunks.delete_chunk_range", lambda *_a, **_kw: None)
+    monkeypatch.setattr("src.lib.document_files.service.remove_stored_files", lambda *_a, **_kw: None)
+
+    pdf_collection = MagicMock()
+
+    def _blocking_update(**_kwargs):
+        update_entered.set()
+        assert resume_update.wait(timeout=5)
+        events.append("piece_count_finished")
+
+    pdf_collection.data.update.side_effect = _blocking_update
+    monkeypatch.setattr(
+        "src.lib.weaviate_helpers.get_user_collections",
+        lambda *_a, **_kw: (MagicMock(), pdf_collection),
+    )
+
+    @contextmanager
+    def _weaviate_session(*_a, **_kw):
+        yield MagicMock()
+
+    weaviate_client = MagicMock()
+    weaviate_client.session.side_effect = _weaviate_session
+
+    async def _run():
+        async with paper_operation_lock(document_id) as lock_conn:
+            await remove_paper_file(
+                document_id,
+                42,
+                file_id,
+                weaviate_client=weaviate_client,
+                lock_connection=lock_conn,
+            )
+
+    task = asyncio.create_task(_run())
+    try:
+        assert await asyncio.to_thread(update_entered.wait, 5)
+        task.cancel("client disconnected during piece count update")
+        await asyncio.sleep(0.05)
+        assert "lock_released" not in events
+    finally:
+        resume_update.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=5)
+
+    assert events == ["piece_count_finished", "lock_released"]

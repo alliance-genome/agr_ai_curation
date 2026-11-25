@@ -2834,3 +2834,107 @@ async def test_duplicate_upload_staged_cleanup_failure_reports_sanitized_sentry_
         "fingerprint": ["intake_compensation_file_cleanup_failed", "pdf_jobs", "pre_commit"],
         "include_request": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_provider_duplicate_staged_cleanup_failure_reports_sanitized_sentry_event(
+    tmp_path, monkeypatch,
+):
+    """Provider-matched duplicate staged cleanup failure reports once while preserving UploadIntakeDuplicateError."""
+    from datetime import datetime, timezone
+    from src.lib.observability.sentry import hash_sentry_identifier
+    from src.lib.pdf_jobs import upload_intake_service as module
+
+    doc_id = str(uuid4())
+    existing_doc = SimpleNamespace(
+        id=uuid4(),
+        filename="existing.pdf",
+        upload_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    report_mock = Mock(return_value=True)
+    monkeypatch.setattr("src.lib.document_cleanup.runtime.report_runtime_exception", report_mock)
+    monkeypatch.setattr(
+        module.UploadIntakeService,
+        "_cleanup_saved_file_artifacts",
+        classmethod(lambda cls, *_a, **_kw: False),
+    )
+
+    source_artifact = SourceArtifact(
+        provider="abc_literature",
+        artifact_id="src-1",
+        role=SourceArtifactRole.SOURCE_PDF,
+        artifact_format=SourceArtifactFormat.PDF,
+        status=SourceArtifactStatus.AVAILABLE,
+        reference_id="101000001296197",
+        reference_curie="AGRKB:101000001296197",
+        display_name="paper.pdf",
+        md5sum="d41d8cd98f00b204e9800998ecf8427e",
+        access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+    )
+    converted_artifact = SourceArtifact(
+        provider="abc_literature",
+        artifact_id="conv-1",
+        role=SourceArtifactRole.CONVERTED_TEXT,
+        artifact_format=SourceArtifactFormat.MARKDOWN,
+        status=SourceArtifactStatus.AVAILABLE,
+        reference_id="101000001296197",
+        reference_curie="AGRKB:101000001296197",
+        display_name="paper.md",
+        access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+    )
+    candidate = ChecksumImportCandidate(
+        source_artifact=source_artifact,
+        converted_artifact=converted_artifact,
+    )
+    decision = ChecksumImportDecision(
+        provider="abc_literature",
+        checksum="d41d8cd98f00b204e9800998ecf8427e",
+        status=ChecksumImportDecisionStatus.READY,
+        selected=candidate,
+        candidates=(candidate,),
+        source_artifacts=(source_artifact,),
+    )
+
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: _FakeSession(),
+        storage_path_provider=lambda: tmp_path,
+        document_source_import_enabled_fn=lambda: True,
+        document_source_provider_factory=lambda: _FakeDocumentSourceProvider(),
+        checksum_import_selector=AsyncMock(return_value=decision),
+        find_existing_source_document_fn=lambda *_a, **_kw: existing_doc,
+    )
+
+    staged_pdf = tmp_path / "user-1" / doc_id / "paper.pdf"
+    staged_pdf.parent.mkdir(parents=True, exist_ok=True)
+    staged_pdf.write_bytes(b"%PDF-1.7\n")
+
+    with pytest.raises(UploadIntakeDuplicateError):
+        await service._select_provider_checksum_import_or_raise(
+            checksum="d41d8cd98f00b204e9800998ecf8427e",
+            document_source_context=DocumentSourceRequestContext(
+                bearer_kind=ProviderBearerKind.CURATOR,
+                provider_groups=("FBStaff",),
+                authorized_group_ids=("FB",),
+                curator_token="curator-token",
+            ),
+            saved_path=staged_pdf,
+            session=_FakeSession(),
+            owner_user_id=42,
+            base_storage=tmp_path,
+            user_sub="user-1",
+            document_id=doc_id,
+        )
+
+    report_mock.assert_called_once()
+    assert report_mock.call_args.kwargs == {
+        "component": "pdf_jobs",
+        "operation": "intake_compensation_file_cleanup_failed",
+        "context": {
+            "document_id_hash": hash_sentry_identifier(doc_id),
+            "sql_committed": False,
+            "weaviate_retained": False,
+        },
+        "fingerprint": ["intake_compensation_file_cleanup_failed", "pdf_jobs", "pre_commit"],
+        "include_request": False,
+    }

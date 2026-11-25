@@ -632,12 +632,18 @@ class UploadIntakeService:
         document_id: str,
     ) -> ProviderChecksumImportPlan | None:
         def _cleanup_staged() -> None:
-            self._cleanup_saved_file_artifacts(
+            if not self._cleanup_saved_file_artifacts(
                 saved_path,
                 base_storage=base_storage,
                 user_sub=user_sub,
                 document_id=document_id,
-            )
+            ):
+                report_compensation_file_cleanup_failure(
+                    component="pdf_jobs",
+                    document_id=document_id,
+                    sql_record_committed=False,
+                    weaviate_document_created=False,
+                )
 
         if document_source_context is None:
             _cleanup_staged()

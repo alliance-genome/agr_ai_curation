@@ -765,7 +765,9 @@ async def update_document_piece_count(
                 uuid=document_id, properties={"chunkCount": piece_count, "vectorCount": piece_count},
             )
 
-    await asyncio.to_thread(sync_update)
+    from src.lib.document_cleanup import run_thread_drained
+
+    await run_thread_drained(sync_update, cancellable_before_start=True)
 
 
 async def update_processing_status(

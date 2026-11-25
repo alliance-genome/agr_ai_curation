@@ -322,12 +322,14 @@ def require_removable_paper_paths(
     base_storage: Path,
     user_sub: str,
 ) -> None:
-    """Raise ``StoredPathOutsideOwnerStorage`` if any stored path escapes owner storage or names a directory."""
+    """Raise ``StoredPathOutsideOwnerStorage`` if owner storage or any stored path escapes storage or names a directory."""
     from src.lib.document_files.storage_paths import (
         StoredPathOutsideOwnerStorage,
         owner_storage_entry,
+        owner_storage_path,
     )
 
+    owner_storage_path(base_storage / user_sub, base_storage, user_sub)
     for file_values in cleanup_values["files"]:
         for relative in removed_stored_paths(file_values):
             path = owner_storage_entry(base_storage / relative, base_storage, user_sub)
@@ -343,10 +345,10 @@ def remove_paper_stored_files(
     document_id: str,
 ) -> None:
     """Validate and delete all stored files belonging to one paper without ignoring unlink errors."""
-    from src.lib.document_files.storage_paths import owner_storage_entry
+    from src.lib.document_files.storage_paths import owner_storage_entry, owner_storage_path
 
     require_removable_paper_paths(cleanup_values, base_storage, user_sub)
-    user_storage_root = (base_storage.resolve() / user_sub).resolve()
+    user_storage_root = owner_storage_path(base_storage / user_sub, base_storage, user_sub)
     paper_dir = user_storage_root / document_id
     single_files: list[str] = []
 
@@ -376,9 +378,10 @@ def remove_paper_stored_files(
             single_files.extend(removed_stored_paths(file_values))
 
     remove_stored_files(single_files, owner_subject=user_sub, storage_root=base_storage)
-    for folder in (paper_dir / "supplement_pdf", paper_dir):
-        if folder.is_dir() and not folder.is_symlink() and not any(folder.iterdir()):
-            folder.rmdir()
+    if not paper_dir.is_symlink() and paper_dir.resolve() == paper_dir:
+        for folder in (paper_dir / "supplement_pdf", paper_dir):
+            if folder.is_dir() and not folder.is_symlink() and not any(folder.iterdir()):
+                folder.rmdir()
 
 
 def remove_committed_paper_stored_files(

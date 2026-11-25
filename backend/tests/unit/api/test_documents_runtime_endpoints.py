@@ -1376,7 +1376,7 @@ async def test_delete_document_endpoint_raises_when_cleanup_fails(monkeypatch, t
             raise RuntimeError("source cleanup failed")
 
     monkeypatch.setattr(documents, "remove_stored_files", _raise_cleanup)
-    caplog.set_level(logging.ERROR, logger=documents.logger.name)
+    caplog.set_level(logging.WARNING, logger=documents.logger.name)
 
     with pytest.raises(HTTPException) as exc:
         await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
@@ -1387,7 +1387,11 @@ async def test_delete_document_endpoint_raises_when_cleanup_fails(monkeypatch, t
     assert file_session.rollbacks == 1
     assert file_session.commits == 0
     assert file_session.deleted == []
-    assert "source cleanup failed" in caplog.text
+    assert "Paper delete cleanup failed" in caplog.text
+    assert "step=stored_files" in caplog.text
+    assert "exception_type=RuntimeError" in caplog.text
+    assert "source cleanup failed" not in caplog.text
+    assert doc_id not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -2420,6 +2424,7 @@ def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_withou
     script = textwrap.dedent(f"""
         import asyncio
         from contextlib import contextmanager
+        import io
         import logging
         import os
         import tempfile
@@ -2441,7 +2446,10 @@ def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_withou
         secret_detail = "private-db-constraint-value-secret"
         events = []
 
-        logging.basicConfig(level=logging.INFO)
+        log_buffer = io.StringIO()
+        log_handler = logging.StreamHandler(log_buffer)
+        log_handler.setLevel(logging.INFO)
+        logging.basicConfig(level=logging.INFO, handlers=[log_handler], force=True)
         sentry_sdk.init(
             dsn="http://public@example.invalid/1",
             transport=events.append,
@@ -2551,6 +2559,11 @@ def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_withou
             "step": {failure_step!r},
             "exception_type": "RuntimeError",
         }}
+        log_output = log_buffer.getvalue()
+        assert "Paper delete cleanup failed" in log_output
+        assert f"step={failure_step}" in log_output
+        assert doc_id not in log_output, f"raw doc_id leaked into logs: {{log_output!r}}"
+        assert secret_detail not in log_output, f"secret leaked into logs: {{log_output!r}}"
     """)
     result = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stdout + result.stderr

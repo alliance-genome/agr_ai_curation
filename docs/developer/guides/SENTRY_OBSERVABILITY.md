@@ -845,9 +845,9 @@ and `raise_sanitized_http_exception` double-capture: it reports once under
 component `documents` and operation `paper_delete_cleanup_failed` with
 `include_request=False`, a fixed, chain-free error, a low-cardinality
 fingerprint of `(operation, step, exception_type)`, and context holding only
-`document_id_hash`, `step`, and `exception_type`, then logs the companion
-server error with `sentry_skip_event=True` and answers the client with the
-same sanitized HTTP 500 response.
+`document_id_hash`, `step`, and `exception_type`, logs one sanitized companion
+warning (`sentry_skip_event=True`, omitting raw document IDs and raw exception
+details), and answers the client with the same sanitized HTTP 500 response.
 
 When upload intake (`upload_intake_service.py`) or identifier import
 (`identifier_import.py`) compensates after a pre-commit or post-commit failure

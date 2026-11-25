@@ -778,7 +778,14 @@ def _removed_paths(file_values: dict[str, Any]) -> tuple[str, ...]:
 
 
 def _require_removable_paths(cleanup_values: dict[str, Any], base_storage: FilePath, user_sub: str) -> None:
-    """Refuse (403) when any path a paper delete would remove lies outside the curator's storage."""
+    """Refuse (403) when owner storage or any path a paper delete would remove lies outside the curator's storage."""
+    from ..lib.document_files.storage_paths import StoredPathOutsideOwnerStorage, owner_storage_path
+
+    try:
+        owner_storage_path(base_storage / user_sub, base_storage, user_sub)
+    except StoredPathOutsideOwnerStorage as exc:
+        logger.warning("Owner storage validation failed for %s", user_sub)
+        raise HTTPException(status_code=403, detail="Access denied: file path validation failed") from exc
 
     for file_values in cleanup_values["files"]:
         for relative in _removed_paths(file_values):
@@ -826,8 +833,10 @@ def _delete_user_document_directory_or_file_if_present(
     """
     if not relative_path:
         return
+    from ..lib.document_files.storage_paths import owner_storage_path
+
     file_path = _removable_path(base_storage, relative_path, user_sub)
-    user_storage_root = (base_storage.resolve() / user_sub).resolve()
+    user_storage_root = owner_storage_path(base_storage / user_sub, base_storage, user_sub)
     paper_dir = user_storage_root / document_id
     owns_folder = (
         file_path.relative_to(user_storage_root).parts[:1] == (document_id,)
@@ -847,10 +856,15 @@ def _delete_user_document_directory_or_file_if_present(
 def _remove_empty_paper_folders(base_storage: FilePath, user_sub: str, document_id: str) -> None:
     """Remove ``{user}/{paper}/supplement_pdf/`` and then ``{user}/{paper}/`` when they are empty.
 
-    Only empty folders, with ``rmdir``: never a folder that still holds anything.
+    Only empty folders, with ``rmdir``: never a folder that still holds anything, and never
+    through a symlinked owner or paper directory.
     """
+    from ..lib.document_files.storage_paths import owner_storage_path
 
-    paper_dir = base_storage.resolve() / user_sub / document_id
+    user_storage_root = owner_storage_path(base_storage / user_sub, base_storage, user_sub)
+    paper_dir = user_storage_root / document_id
+    if paper_dir.is_symlink() or paper_dir.resolve() != paper_dir:
+        return
     for folder in (paper_dir / "supplement_pdf", paper_dir):
         if folder.is_dir() and not folder.is_symlink() and not any(folder.iterdir()):
             folder.rmdir()
@@ -1791,10 +1805,12 @@ async def delete_document_endpoint(
                                 "Failed to report paper delete cleanup failure",
                                 extra={"sentry_skip_event": True},
                             )
-                        log_exception(
-                            logger,
-                            message=f"Paper delete failed at {step} (document_id_hash={document_id_hash})",
-                            exc=exc,
+                        logger.warning(
+                            "Paper delete cleanup failed step=%s document_id_hash=%s exception_type=%s",
+                            step,
+                            document_id_hash,
+                            exc_type,
+                            extra={"sentry_skip_event": True},
                         )
 
                     async def complete_delete() -> OperationResult:
@@ -2310,9 +2326,13 @@ async def remove_paper_file_endpoint(
         raise HTTPException(status_code=404, detail={"error": "file_not_in_paper"}) from None
     try:
         db_user = await provision_user_async(principal_from_claims(user))
-        async with paper_operation_lock(document_uuid):
+        async with paper_operation_lock(document_uuid) as lock_conn:
             removed = await remove_paper_file(
-                document_uuid, db_user.id, file_uuid, weaviate_client=get_connection(),
+                document_uuid,
+                db_user.id,
+                file_uuid,
+                weaviate_client=get_connection(),
+                lock_connection=lock_conn,
             )
     except (PaperOperationInProgress, PaperRowsBusy):
         raise HTTPException(
