@@ -138,9 +138,10 @@ function AgentBrowser({
   const isTemplateEligible = useMemo(() => {
     return (agent: PromptInfo): boolean => {
       if (agent.agent_id === 'task_input' || agent.agent_id.startsWith('ca_')) return false
+      if (agent.template_eligible !== undefined) return agent.template_eligible
       const metadataShow = agentMetadata[agent.agent_id]?.show_in_palette
       if (metadataShow !== undefined) return metadataShow !== false
-      return agent.show_in_palette !== false
+      return true
     }
   }, [agentMetadata])
 

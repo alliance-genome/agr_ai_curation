@@ -186,7 +186,7 @@ def test_topic_tag_agent_is_excluded_from_agent_studio_templates(monkeypatch):
 
 def test_get_prompt_diagnostic_hides_topic_tag_from_non_wb_and_allows_wb(monkeypatch):
     import src.api.agent_studio as api_module
-    from src.lib.agent_studio import catalog_service
+    from src.lib.agent_studio import catalog_service, diagnostic_tools
     from src.lib.agent_studio.diagnostic_tools import tool_definitions
     from src.lib.agent_studio.models import ChatContext
     from src.lib.prompts import cache as prompt_cache
@@ -301,6 +301,50 @@ def test_get_prompt_diagnostic_hides_topic_tag_from_non_wb_and_allows_wb(monkeyp
         )
         assert wb_result["status"] == "ok"
         assert wb_result["agent_id"] == "gene_expression_topic_tag"
+    finally:
+        diagnostic_tools.reset_registry()
+        agent_loader.reset_cache()
+
+
+def test_get_domain_pack_validation_plan_enforces_wb_access_for_topic_tag(monkeypatch):
+    from src.lib.agent_studio import catalog_service, domain_envelope_tools
+
+    try:
+        _load_shipped_agents(monkeypatch)
+        monkeypatch.setattr(catalog_service, "AGENT_REGISTRY", build_agent_registry())
+
+        non_wb_plan = domain_envelope_tools.get_domain_pack_validation_plan(
+            agent_id="gene_expression_topic_tag",
+            active_group_ids=["FB"],
+        )
+        non_wb_with_pack = domain_envelope_tools.get_domain_pack_validation_plan(
+            agent_id="gene_expression_topic_tag",
+            domain_pack_id="agr.alliance.topic_entity_tag",
+            active_group_ids=["FB"],
+        )
+        unknown_plan = domain_envelope_tools.get_domain_pack_validation_plan(
+            agent_id="unknown_agent",
+            active_group_ids=["FB"],
+        )
+        assert non_wb_plan == {
+            "success": False,
+            "error": "Agent gene_expression_topic_tag was not found.",
+        }
+        assert non_wb_with_pack == {
+            "success": False,
+            "error": "Agent gene_expression_topic_tag was not found.",
+        }
+        assert unknown_plan == {
+            "success": False,
+            "error": "Agent unknown_agent was not found.",
+        }
+
+        wb_plan = domain_envelope_tools.get_domain_pack_validation_plan(
+            agent_id="gene_expression_topic_tag",
+            active_group_ids=["WB"],
+        )
+        assert wb_plan["success"] is True
+        assert wb_plan["domain_pack_id"] == "agr.alliance.topic_entity_tag"
     finally:
         agent_loader.reset_cache()
 

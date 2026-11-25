@@ -87,7 +87,9 @@ def _is_agent_accessible_for_groups(
     from src.lib.agent_access import is_resource_access_allowed
     from src.lib.agent_studio import catalog_service
 
-    entry = catalog_service.AGENT_REGISTRY.get(agent_id) or {}
+    entry = catalog_service.AGENT_REGISTRY.get(agent_id)
+    if entry is None:
+        return False
     allowed_group_ids = list(entry.get("allowed_group_ids") or [])
     return is_resource_access_allowed(
         visibility_allowed=True,

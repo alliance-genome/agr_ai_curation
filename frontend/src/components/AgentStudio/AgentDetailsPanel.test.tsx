@@ -353,15 +353,14 @@ describe('AgentDetailsPanel', () => {
     expect(effective).toHaveTextContent('Curator overlay guidance')
   })
 
-  it('hides Clone to Workshop for show_in_palette=false system agents while preserving Guide tab', () => {
-    metadataMocks.agents = {
-      hidden_agent: { allowed_group_ids: ['group_a'], show_in_palette: false },
-    }
+  it('hides Clone to Workshop for template_eligible=false agents and keeps it for validators without metadata', () => {
+    metadataMocks.agents = {}
     const hiddenAgent: PromptInfo = {
       ...buildDocumentedAgent(),
       agent_id: 'hidden_agent',
       agent_name: 'Hidden Agent',
       show_in_palette: false,
+      template_eligible: false,
       documentation: {
         summary: 'Hidden agent summary.',
         capabilities: [],
@@ -373,7 +372,7 @@ describe('AgentDetailsPanel', () => {
       },
     }
 
-    render(
+    const { rerender } = render(
       <AgentDetailsPanel
         agent={hiddenAgent}
         selectedGroupId={null}
@@ -387,5 +386,24 @@ describe('AgentDetailsPanel', () => {
     expect(screen.getByText('Not offered in release 0.12.0.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Clone to Workshop' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Discuss with AI Chat' })).toBeInTheDocument()
+
+    // Attachment-only validator (Flow Builder show_in_palette=false, Workshop template_eligible=true)
+    // retains Clone to Workshop even when metadata is absent/loading.
+    rerender(
+      <AgentDetailsPanel
+        agent={{
+          ...buildDocumentedAgent(),
+          agent_id: 'gene_validation',
+          agent_name: 'Gene Validator',
+          show_in_palette: false,
+          template_eligible: true,
+        }}
+        selectedGroupId={null}
+        onGroupSelect={vi.fn()}
+        onDiscussWithClaude={vi.fn()}
+        onCloneToWorkshop={vi.fn()}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Clone to Workshop' })).toBeInTheDocument()
   })
 })

@@ -207,16 +207,14 @@ describe('AgentBrowser', () => {
     expect(screen.queryByRole('button', { name: 'Back to Agents' })).not.toBeInTheDocument()
   })
 
-  it('excludes show_in_palette=false system agents from Templates while keeping their Guide readable in All', () => {
-    metadataMocks.agents = {
-      hidden_agent: { allowed_group_ids: ['group_a'], show_in_palette: false },
-      validator_template: { allowed_group_ids: [], show_in_palette: true },
-    }
+  it('excludes template_eligible=false agents from Templates and keeps validators even when metadata is absent', () => {
+    metadataMocks.agents = {}
     render(
       <AgentBrowser
         catalog={buildCatalog([
           buildAgent('hidden_agent', 'Hidden Template Agent', {
             show_in_palette: false,
+            template_eligible: false,
             subcategory: 'PDF Extraction',
             documentation: {
               summary: 'Hidden agent summary.',
@@ -230,6 +228,7 @@ describe('AgentBrowser', () => {
           }),
           buildAgent('validator_template', 'Validator Template', {
             show_in_palette: false,
+            template_eligible: true,
             subcategory: 'Data Validation',
           }),
         ])}
@@ -245,8 +244,9 @@ describe('AgentBrowser', () => {
     expect(screen.getByText('Not offered in release 0.12.0.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Clone to Workshop' })).not.toBeInTheDocument()
 
-    // Templates tab excludes show_in_palette=false system agents, while keeping
-    // template-eligible validators whose metadata show_in_palette is true.
+    // Templates tab excludes template_eligible=false system agents, while keeping
+    // attachment-only validators (show_in_palette=false, template_eligible=true)
+    // even while agentMetadata has not loaded yet.
     const filterTabs = within(screen.getByRole('tablist', { name: 'Agent list filter' })).getAllByRole('tab')
     expect(filterTabs.map((tab) => tab.textContent)).toEqual(['All (2)', 'Shared (0)', 'Templates (1)'])
 

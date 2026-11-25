@@ -229,7 +229,13 @@ function AgentDetailsPanel({
   const metadataShowInPalette = agentMetadata[agent.agent_id]?.show_in_palette
   const isTemplateEligible =
     agent.agent_id !== 'task_input'
-    && (metadataShowInPalette !== undefined ? metadataShowInPalette !== false : agent.show_in_palette !== false)
+    && (
+      agent.template_eligible !== undefined
+        ? agent.template_eligible
+        : metadataShowInPalette !== undefined
+          ? metadataShowInPalette !== false
+          : true
+    )
   const canCloneToWorkshop = agent.agent_id.startsWith('ca_') || isTemplateEligible
   const summary = documentation?.summary || agent.description
 

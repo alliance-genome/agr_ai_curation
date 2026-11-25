@@ -549,14 +549,30 @@ def test_diagnostic_prompt_and_tool_reads_enforce_scoped_group_access(monkeypatc
 
     with tool_definitions.scoped_diagnostic_active_groups(["GROUP_B"]):
         denied_prompt = prompt_handler(agent_id="restricted_agent")
+        unknown_prompt = prompt_handler(agent_id="unknown_agent")
         denied_inventory = inventory_handler(agent_id="restricted_agent")
+        unknown_inventory = inventory_handler(agent_id="unknown_agent")
         denied_details = details_handler(
             tool_id="search_document", agent_id="restricted_agent"
         )
+        unknown_details = details_handler(
+            tool_id="search_document", agent_id="unknown_agent"
+        )
     assert denied_prompt["status"] == "error"
+    assert unknown_prompt["status"] == "error"
     assert denied_prompt["available_agents"] == ["demo_agent"]
-    assert denied_inventory["success"] is False
-    assert denied_details["success"] is False
+    assert unknown_prompt["available_agents"] == ["demo_agent"]
+    assert denied_prompt.keys() == unknown_prompt.keys()
+    assert denied_inventory == {"success": False, "error": "Agent restricted_agent was not found."}
+    assert unknown_inventory == {"success": False, "error": "Agent unknown_agent was not found."}
+    assert denied_details == {
+        "success": False,
+        "error": "Tool search_document for agent restricted_agent was not found.",
+    }
+    assert unknown_details == {
+        "success": False,
+        "error": "Tool search_document for agent unknown_agent was not found.",
+    }
 
     # Authorized group can discover and inspect the restricted agent.
     desc_allowed, _ = tool_definitions._get_prompt_diagnostic_contract(

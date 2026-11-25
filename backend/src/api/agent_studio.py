@@ -446,6 +446,7 @@ async def _merge_custom_agents_into_catalog(
                 custom_id,
                 custom_flow_policy_entry,
             ),
+            template_eligible=False,
             documentation=None,
             prompt_id=str(custom.id),
             prompt_version=None,

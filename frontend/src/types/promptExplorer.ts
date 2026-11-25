@@ -113,6 +113,7 @@ export interface PromptInfo {
   model?: string
   subcategory?: string  // Subcategory for palette grouping
   show_in_palette?: boolean  // Whether agent appears in Flow Builder palette (default true)
+  template_eligible?: boolean  // Whether system agent is eligible as an Agent Workshop template (default true)
 
   // Curator-friendly documentation
   documentation?: AgentDocumentation

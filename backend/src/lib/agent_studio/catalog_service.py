@@ -1629,6 +1629,7 @@ def _build_catalog() -> PromptCatalog:
                 tools=expand_tools_for_agent(agent_id, config.get("tools", [])),
                 subcategory=config.get("subcategory"),
                 show_in_palette=flow_palette_show_in_palette(agent_id, config),
+                template_eligible=False,
                 documentation=_convert_documentation(config.get("documentation")),
                 prompt_id=None,
                 prompt_version=None,
@@ -1690,6 +1691,7 @@ def _build_catalog() -> PromptCatalog:
             tools=expand_tools_for_agent(agent_id, config.get("tools", [])),
             subcategory=config.get("subcategory"),
             show_in_palette=flow_palette_show_in_palette(agent_id, config),
+            template_eligible=(config.get("frontend") or {}).get("show_in_palette", True) is not False,
             documentation=_convert_documentation(config.get("documentation")),
             # Version metadata from database
             prompt_id=str(system_prompt.id) if system_prompt.id else None,
