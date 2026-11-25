@@ -3,7 +3,10 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { fireEvent, screen } from '../../test/test-utils';
 import { render, userEvent } from '../../test/test-utils';
 import { uploadPdfDocument } from '@/features/documents/pdfUploadFlow';
+import { WAITING_FOR_SUPPLEMENTS_STAGE } from '@/features/documents/supplementProgress';
 import { emitGlobalToast } from '@/lib/globalNotifications';
+import supplementWaitMetadataFixture from '@/test/fixtures/supplements/supplement_wait_metadata.json';
+import { formatSupplementWaitEndTime } from '../../components/weaviate/paperFileReasonText';
 import AddLiteraturePage from './AddLiteraturePage';
 
 const mockNavigate = vi.fn();
@@ -647,5 +650,80 @@ describe('AddLiteraturePage', () => {
     await user.click(await screen.findByRole('button', { name: 'View paper-from-api.pdf in Library' }));
 
     expect(mockNavigate).toHaveBeenCalledWith('/weaviate/documents');
+  });
+
+  it('passes configured provider presentation labels to PdfJobsPanel and updates supplement metadata from SSE', async () => {
+    const now = '2026-11-24T15:00:00.000Z';
+    const initialJob = {
+      job_id: 'job-supp-wait',
+      document_id: 'doc-supp-1',
+      user_id: 1,
+      filename: 'paper-with-supplements.pdf',
+      status: 'running',
+      current_stage: WAITING_FOR_SUPPLEMENTS_STAGE,
+      progress_percentage: 0,
+      message: 'Main paper ready. Waiting for EXS to convert 1 supplement; you can use the paper and leave this page.',
+      cancel_requested: false,
+      metadata: supplementWaitMetadataFixture.mixed_waiting,
+      created_at: now,
+      updated_at: now,
+      completed_at: null,
+    };
+    stubRoutedFetch(
+      [defaultImportResponse],
+      {
+        provider: 'example_source',
+        import_enabled: true,
+        presentation: {
+          display_label: 'Example Source',
+          short_label: 'EXS',
+          identifier_help_label: 'Use Example Source identifiers.',
+          identifier_examples: ['EXS:123'],
+        },
+      },
+      {
+        jobs: [initialJob],
+        pagination: { total: 1, limit: 50, offset: 0 },
+      },
+    );
+
+    render(<AddLiteraturePage />);
+
+    const expectedTime = formatSupplementWaitEndTime(
+      supplementWaitMetadataFixture.mixed_waiting.supplement_wait_ends_at,
+    );
+    expect(await screen.findByText(`EXS has until ${expectedTime} to convert them.`)).toBeInTheDocument();
+    expect(screen.getByText('Waiting for EXS')).toBeInTheDocument();
+    expect(screen.getByText('Converted_S1.xlsx')).toBeInTheDocument();
+    expect(screen.getByText('Waiting to be added')).toBeInTheDocument();
+    expect(screen.queryByText(/ABC/)).not.toBeInTheDocument();
+
+    // Verify metadata-only SSE updates re-render supplement entries even when updated_at matches.
+    act(() => {
+      mockEventSources[0]?.onmessage?.(
+        new MessageEvent('message', {
+          data: JSON.stringify({
+            jobs: [
+              {
+                ...initialJob,
+                metadata: {
+                  ...supplementWaitMetadataFixture.mixed_waiting,
+                  supplements: [
+                    {
+                      ...supplementWaitMetadataFixture.mixed_waiting.supplements[0],
+                      state: 'added',
+                      file_id: '22222222-2222-2222-2222-222222222223',
+                    },
+                    supplementWaitMetadataFixture.mixed_waiting.supplements[1],
+                  ],
+                },
+              },
+            ],
+          }),
+        }),
+      );
+    });
+
+    expect(screen.getByText('Added')).toBeInTheDocument();
   });
 });

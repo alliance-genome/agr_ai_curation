@@ -138,6 +138,45 @@ const canOpenInDocuments = (result: LiteratureImportResult) => (
   Boolean(result.documentId) && result.status !== 'conversion_running'
 );
 
+const areJsonValuesEquivalent = (previous: unknown, next: unknown): boolean => {
+  if (Object.is(previous, next)) {
+    return true;
+  }
+  if (typeof previous !== 'object' || typeof next !== 'object' || previous === null || next === null) {
+    return false;
+  }
+  if (Array.isArray(previous) || Array.isArray(next)) {
+    if (!Array.isArray(previous) || !Array.isArray(next) || previous.length !== next.length) {
+      return false;
+    }
+    return previous.every((entry, index) => areJsonValuesEquivalent(entry, next[index]));
+  }
+  const prevRecord = previous as Record<string, unknown>;
+  const nextRecord = next as Record<string, unknown>;
+  const prevKeys = Object.keys(prevRecord);
+  const nextKeys = Object.keys(nextRecord);
+  if (prevKeys.length !== nextKeys.length) {
+    return false;
+  }
+  return prevKeys.every(
+    (key) => Object.prototype.hasOwnProperty.call(nextRecord, key)
+      && areJsonValuesEquivalent(prevRecord[key], nextRecord[key]),
+  );
+};
+
+const areJobMetadataEquivalent = (
+  previous: PdfProcessingJob['metadata'],
+  next: PdfProcessingJob['metadata'],
+): boolean => {
+  if (previous === next) {
+    return true;
+  }
+  if (!previous || !next) {
+    return (previous ?? null) === (next ?? null);
+  }
+  return areJsonValuesEquivalent(previous, next);
+};
+
 const areJobsEquivalent = (previous: PdfProcessingJob[], next: PdfProcessingJob[]): boolean => {
   if (previous === next) {
     return true;
@@ -159,7 +198,8 @@ const areJobsEquivalent = (previous: PdfProcessingJob[], next: PdfProcessingJob[
       prevJob.error_message !== nextJob.error_message ||
       prevJob.cancel_requested !== nextJob.cancel_requested ||
       prevJob.updated_at !== nextJob.updated_at ||
-      prevJob.completed_at !== nextJob.completed_at
+      prevJob.completed_at !== nextJob.completed_at ||
+      !areJobMetadataEquivalent(prevJob.metadata, nextJob.metadata)
     ) {
       return false;
     }
@@ -926,7 +966,13 @@ const AddLiteraturePage: React.FC = () => {
           </TableContainer>
         </Paper>
 
-        <PdfJobsPanel jobs={jobs} loading={jobsLoading} onCancelJob={handleCancelJob} />
+        <PdfJobsPanel
+          jobs={jobs}
+          loading={jobsLoading}
+          onCancelJob={handleCancelJob}
+          providerShortLabel={providerPresentation?.shortLabel}
+          providerLabel={providerPresentation?.displayLabel}
+        />
       </Stack>
     </Box>
   );
