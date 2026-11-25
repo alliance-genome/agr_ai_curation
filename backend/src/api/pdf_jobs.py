@@ -60,6 +60,7 @@ def _normalize_status_filters(statuses: Optional[List[str]]) -> List[str]:
 async def list_pdf_jobs(
     user: Dict[str, Any] = get_auth_dependency(),
     status: Optional[List[str]] = Query(default=None, description="Filter by one or more statuses"),
+    document_id: Optional[uuid.UUID] = Query(default=None, description="Filter by document UUID"),
     window_days: int = Query(default=7, ge=1, le=90, description="History window in days"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -67,10 +68,12 @@ async def list_pdf_jobs(
     """List durable background PDF processing jobs for the authenticated user."""
     user_id = await _resolve_db_user_id(user)
     statuses = _normalize_status_filters(status)
+    normalized_document_id = document_id if isinstance(document_id, uuid.UUID) else None
     return job_service.list_jobs(
         user_id=user_id,
         window_days=window_days,
         statuses=statuses,
+        document_id=normalized_document_id,
         limit=limit,
         offset=offset,
     )

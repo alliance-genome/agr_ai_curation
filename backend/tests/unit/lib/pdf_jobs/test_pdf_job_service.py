@@ -206,6 +206,61 @@ def test_list_jobs_reconciles_stale_cancel_requested_job(monkeypatch):
     assert session.commit_calls == 1
 
 
+def test_list_jobs_filters_by_document_id_before_pagination_and_skips_window_for_active_only(
+    monkeypatch,
+):
+    job = _build_job(status=PdfJobStatus.RUNNING.value)
+    target_doc_id = job.document_id
+    session = _FakeSession([[], 1, [job]])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+    monkeypatch.setattr(service_module, "_stale_timeout_seconds", lambda: 60)
+
+    response = service_module.list_jobs(
+        user_id=job.user_id,
+        statuses=["pending", "running", "cancel_requested"],
+        document_id=target_doc_id,
+        limit=10,
+        offset=5,
+    )
+
+    assert response.total == 1
+    assert len(response.jobs) == 1
+    assert response.jobs[0].document_id == str(target_doc_id)
+    assert len(session.statements) == 3
+
+    compiled_sql = [str(stmt.compile()) for stmt in session.statements]
+    # All three statements (stale reconcile, count, paginated rows) scope to document_id
+    # and skip the history window_days created_at cutoff for strictly active-status queries.
+    for sql, stmt in zip(compiled_sql, session.statements, strict=True):
+        assert "pdf_processing_jobs.user_id =" in sql
+        assert "pdf_processing_jobs.document_id =" in sql
+        assert "pdf_processing_jobs.created_at >=" not in sql
+        assert target_doc_id in stmt.compile().params.values()
+
+    rows_sql = compiled_sql[2]
+    assert rows_sql.index("pdf_processing_jobs.document_id =") < rows_sql.index("LIMIT")
+    assert "OFFSET" in rows_sql
+
+
+def test_list_jobs_keeps_history_window_for_unfiltered_or_terminal_status_queries(monkeypatch):
+    doc_id = uuid4()
+    for statuses in (None, ["completed"], ["running", "completed"]):
+        session = _FakeSession([[], 0, []])
+        monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+        monkeypatch.setattr(service_module, "_stale_timeout_seconds", lambda: 60)
+
+        service_module.list_jobs(
+            user_id=42,
+            statuses=statuses,
+            document_id=doc_id,
+        )
+
+        compiled_sql = [str(stmt.compile()) for stmt in session.statements]
+        for sql in compiled_sql:
+            assert "pdf_processing_jobs.created_at >=" in sql
+            assert "pdf_processing_jobs.document_id =" in sql
+
+
 @pytest.mark.parametrize("terminal_status", ["completed", "failed"])
 def test_stale_job_reconciliation_leaves_terminal_document_unchanged(
     monkeypatch,

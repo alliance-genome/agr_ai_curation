@@ -333,25 +333,31 @@ describe('approved supplement screen texts (N1–N29, N33–N44, N46–N47, Card
       'You can read this file\'s text in Genome Archive but not its PDF, so it was not added.',
     )
 
-    // Card 40 conversion wait outcomes (first sentence only until Part 4 ships)
+    // Card 40 conversion wait outcomes (second sentence restored in Part 4 when Library Add ships)
     expect(supplementOutcomeReasonText('provider_not_converted', abc)).toBe(
-      'ABC has not converted this file.',
+      'ABC has not converted this file. You can add it later from the Library once ABC shows it as converted.',
     )
     expect(supplementOutcomeReasonText('provider_conversion_failed', abc)).toBe(
       'ABC tried and could not convert this file.',
     )
     expect(supplementOutcomeReasonText('not_converted_in_time', abc)).toBe(
-      'ABC had not converted this file when the import stopped waiting.',
+      'ABC had not converted this file when the import stopped waiting. You can add it later from the Library once ABC shows it as converted.',
     )
     expect(supplementOutcomeReasonText('provider_not_converted', other)).toBe(
-      'Genome Archive has not converted this file.',
+      'Genome Archive has not converted this file. You can add it later from the Library once Genome Archive shows it as converted.',
+    )
+    expect(supplementOutcomeReasonText('not_converted_in_time', other)).toBe(
+      'Genome Archive had not converted this file when the import stopped waiting. You can add it later from the Library once Genome Archive shows it as converted.',
     )
     expect(supplementOutcomeReasonText('provider_not_converted')).toBe(
-      'The literature source has not converted this file.',
+      'The literature source has not converted this file. You can add it later from the Library once the literature source shows it as converted.',
     )
-    for (const code of ['provider_not_converted', 'not_converted_in_time'] as const) {
-      expect(supplementOutcomeReasonText(code, abc)).not.toContain('add it later from the Library')
-    }
+    expect(supplementOutcomeReasonText('not_converted_in_time')).toBe(
+      'The literature source had not converted this file when the import stopped waiting. You can add it later from the Library once the literature source shows it as converted.',
+    )
+    expect(supplementOutcomeReasonText('provider_conversion_failed', abc)).not.toContain(
+      'add it later from the Library',
+    )
 
     // Card 8 check refusals emitted during add
     expect(supplementOutcomeReasonText('too_large')).toBe('This file is too large to read reliably')
@@ -554,7 +560,7 @@ describe('approved supplement screen texts (N1–N29, N33–N44, N46–N47, Card
       'You can read this file\'s text in ABC but not its PDF, so it was not added.',
     )
     expect(supplementOutcomeReasonText('not_converted_in_time', { providerShortLabel: shortLabel })).toBe(
-      'ABC had not converted this file when the import stopped waiting.',
+      'ABC had not converted this file when the import stopped waiting. You can add it later from the Library once ABC shows it as converted.',
     )
   })
 

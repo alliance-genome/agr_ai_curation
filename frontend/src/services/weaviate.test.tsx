@@ -2,9 +2,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
+  ACTIVE_PDF_JOB_STATUSES,
+  AddDocumentSourceFilesError,
+  ApiHttpError,
+  AuthenticationError,
+  addDocumentSourceFiles,
+  fetchActivePdfJobsForDocument,
   fetchDocumentList,
   fetchDocumentSourceProviderConfiguration,
+  fetchPdfJob,
+  fetchPdfJobs,
   importSourceIdentifiers,
+  isActivePdfJobStatus,
   resolveSourceIdentifiers,
   useDocument,
   useDocumentChunks,
@@ -224,6 +233,243 @@ describe('weaviate service', () => {
           referenceLabelPriority: null,
         },
       });
+    });
+
+    it('posts exact supplement files to addDocumentSourceFiles and returns the accepted 202 job', async () => {
+      const acceptedJob = {
+        job_id: 'job-add-1',
+        document_id: 'doc-1',
+        user_id: 7,
+        filename: 'paper.pdf',
+        status: 'pending',
+        progress_percentage: 0,
+        cancel_requested: false,
+        metadata: { job_kind: 'supplement_add' },
+        created_at: '2026-11-24T12:00:00Z',
+        updated_at: '2026-11-24T12:00:00Z',
+      };
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 202,
+        json: async () => acceptedJob,
+      });
+
+      const controller = new AbortController();
+      await expect(
+        addDocumentSourceFiles(
+          'doc-1',
+          {
+            files: [
+              {
+                provider_file_id: '20',
+                md5: 'original-md5-20',
+                converted_md5: 'converted-md5-20',
+              },
+              {
+                provider_file_id: '22',
+                md5: null,
+                converted_md5: 'converted-md5-22',
+              },
+            ],
+          },
+          { signal: controller.signal },
+        ),
+      ).resolves.toEqual(acceptedJob);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/weaviate/documents/doc-1/files',
+        expect.objectContaining({
+          method: 'POST',
+          credentials: 'include',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            files: [
+              {
+                provider_file_id: '20',
+                md5: 'original-md5-20',
+                converted_md5: 'converted-md5-20',
+              },
+              {
+                provider_file_id: '22',
+                md5: null,
+                converted_md5: 'converted-md5-22',
+              },
+            ],
+          }),
+        }),
+      );
+    });
+
+    it('preserves structured HTTP status, code, and limit_value on addDocumentSourceFiles refusals', async () => {
+      const cases = [
+        {
+          status: 422,
+          payload: { detail: { error: 'paper_file_limit', limit_value: 20 } },
+          expected: { httpStatus: 422, code: 'paper_file_limit', limitValue: 20 },
+        },
+        {
+          status: 409,
+          payload: { detail: { error: 'import_in_progress' } },
+          expected: { httpStatus: 409, code: 'import_in_progress', limitValue: null },
+        },
+        {
+          status: 409,
+          payload: { detail: { error: 'file_removal_unfinished' } },
+          expected: { httpStatus: 409, code: 'file_removal_unfinished', limitValue: null },
+        },
+        {
+          status: 409,
+          payload: { detail: { error: 'document_source_curator_token_unavailable' } },
+          expected: { httpStatus: 409, code: 'document_source_curator_token_unavailable', limitValue: null },
+        },
+        {
+          status: 503,
+          payload: { detail: { error: 'document_source_import_disabled' } },
+          expected: { httpStatus: 503, code: 'document_source_import_disabled', limitValue: null },
+        },
+        {
+          status: 503,
+          payload: {
+            detail: {
+              error: 'document_source_curator_token_unavailable',
+              message: 'Document-source authentication is unavailable.',
+            },
+          },
+          expected: { httpStatus: 503, code: 'document_source_curator_token_unavailable', limitValue: null },
+        },
+      ];
+
+      for (const testCase of cases) {
+        mockFetch.mockResolvedValueOnce({
+          ok: false,
+          status: testCase.status,
+          json: async () => testCase.payload,
+        });
+
+        let caught: unknown = null;
+        try {
+          await addDocumentSourceFiles('doc-1', {
+            files: [{ provider_file_id: '20', md5: 'm1', converted_md5: 'c1' }],
+          });
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBeInstanceOf(AddDocumentSourceFilesError);
+        const refusal = caught as AddDocumentSourceFilesError;
+        expect(refusal.httpStatus).toBe(testCase.expected.httpStatus);
+        expect(refusal.code).toBe(testCase.expected.code);
+        expect(refusal.limitValue).toBe(testCase.expected.limitValue);
+      }
+    });
+
+    it('raises AuthenticationError aligned with fetchApi on 401 and rejects malformed 202 job payloads from addDocumentSourceFiles', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({ detail: 'Unauthorized' }) })
+        .mockResolvedValueOnce({ ok: true, status: 202, json: async () => ({ unexpected: true }) });
+
+      await expect(
+        addDocumentSourceFiles('doc-1', {
+          files: [{ provider_file_id: '20', md5: 'm1', converted_md5: 'c1' }],
+        }),
+      ).rejects.toThrow(new AuthenticationError('Session expired - redirecting to login'));
+      await expect(
+        addDocumentSourceFiles('doc-1', {
+          files: [{ provider_file_id: '20', md5: 'm1', converted_md5: 'c1' }],
+        }),
+      ).rejects.toThrow('Add files response is missing required job fields.');
+    });
+
+    it('paginates across all active jobs in fetchActivePdfJobsForDocument, preserves ApiHttpError status on fetchPdfJob, and forwards AbortSignal', async () => {
+      expect(ACTIVE_PDF_JOB_STATUSES).toEqual(['pending', 'running', 'cancel_requested']);
+      expect(isActivePdfJobStatus('pending')).toBe(true);
+      expect(isActivePdfJobStatus('running')).toBe(true);
+      expect(isActivePdfJobStatus('cancel_requested')).toBe(true);
+      expect(isActivePdfJobStatus('completed')).toBe(false);
+      expect(isActivePdfJobStatus('failed')).toBe(false);
+      expect(isActivePdfJobStatus('cancelled')).toBe(false);
+
+      const otherJob = {
+        job_id: 'job-other',
+        document_id: 'doc-b',
+        user_id: 7,
+        status: 'running',
+        progress_percentage: 20,
+        cancel_requested: false,
+        created_at: '2026-11-24T12:00:00Z',
+        updated_at: '2026-11-24T12:01:00Z',
+      };
+      const targetJobOnPage2 = {
+        ...otherJob,
+        job_id: 'job-target-page2',
+        document_id: 'doc-a',
+      };
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ jobs: [otherJob], total: 2, limit: 1, offset: 0 }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ jobs: [targetJobOnPage2], total: 2, limit: 1, offset: 1 }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => targetJobOnPage2,
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 404,
+          json: async () => ({ detail: 'PDF job missing not found' }),
+        });
+
+      const controller = new AbortController();
+      const activeForDocA = await fetchActivePdfJobsForDocument('doc-a', {
+        pageSize: 1,
+        signal: controller.signal,
+      });
+      expect(activeForDocA).toEqual([targetJobOnPage2]);
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        '/api/weaviate/pdf-jobs?status=pending&status=running&status=cancel_requested&document_id=doc-a&limit=1',
+        expect.objectContaining({ signal: controller.signal }),
+      );
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        '/api/weaviate/pdf-jobs?status=pending&status=running&status=cancel_requested&document_id=doc-a&limit=1&offset=1',
+        expect.objectContaining({ signal: controller.signal }),
+      );
+
+      await expect(fetchPdfJob('job-target-page2', { signal: controller.signal })).resolves.toEqual(
+        targetJobOnPage2,
+      );
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        3,
+        '/api/weaviate/pdf-jobs/job-target-page2',
+        expect.objectContaining({ signal: controller.signal }),
+      );
+
+      let caught: unknown = null;
+      try {
+        await fetchPdfJob('missing');
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(ApiHttpError);
+      expect((caught as ApiHttpError).httpStatus).toBe(404);
+
+      // fetchPdfJobs forwards document_id and preserves the server payload's total.
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ jobs: [otherJob], total: 75, limit: 50, offset: 0 }),
+      });
+      const rawPage = await fetchPdfJobs({ status: ['running'], documentId: 'doc-b', limit: 50 });
+      expect(mockFetch).toHaveBeenLastCalledWith(
+        '/api/weaviate/pdf-jobs?status=running&document_id=doc-b&limit=50',
+        expect.any(Object),
+      );
+      expect(rawPage.total).toBe(75);
+      expect(rawPage.jobs).toEqual([otherJob]);
     });
   });
 

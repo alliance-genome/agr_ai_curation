@@ -9,6 +9,7 @@ import {
 import { logger } from './logger';
 import { clearAllNamespacedChatLocalStorage } from '../lib/chatCacheKeys';
 import { safeSetItem } from '../lib/browserStorage';
+import { PDF_JOB_LIMIT } from '../features/documents/documentIntakeConfig';
 import type {
   AddPaperFileInput,
   AddPaperFilesRequest,
@@ -51,6 +52,45 @@ export class AuthenticationError extends Error {
     this.name = 'AuthenticationError';
   }
 }
+
+/**
+ * HTTP error thrown by `fetchApi` preserving the numeric HTTP status alongside the message.
+ */
+export class ApiHttpError extends Error {
+  readonly httpStatus: number;
+
+  constructor(message: string, httpStatus: number) {
+    super(message);
+    this.name = 'ApiHttpError';
+    this.httpStatus = httpStatus;
+  }
+}
+
+const handleUnauthorizedResponse = (url: string, method: string, action: string): never => {
+  logger.warn('Authentication required - session expired, redirecting to login', {
+    component: 'weaviate-service',
+    action,
+    metadata: {
+      url,
+      method,
+      status: 401,
+    },
+  });
+
+  // Clear auth-bound browser state before redirecting to login.
+  clearAllNamespacedChatLocalStorage();
+  safeSetItem(() => window.sessionStorage, 'intendedPath', window.location.pathname + window.location.search, {
+    owner: 'auth',
+    key: 'intendedPath',
+    workflowCritical: true,
+  });
+
+  // Redirect to login endpoint (backend will redirect to Cognito)
+  window.location.href = '/api/auth/login';
+
+  // Throw error for any pending promises (though redirect will interrupt execution)
+  throw new AuthenticationError('Session expired - redirecting to login');
+};
 
 export interface OperationResult {
   success: boolean;
@@ -267,6 +307,40 @@ export type PdfJobStatus =
   | 'failed'
   | 'cancel_requested'
   | 'cancelled';
+
+export const ACTIVE_PDF_JOB_STATUSES: readonly PdfJobStatus[] = [
+  'pending',
+  'running',
+  'cancel_requested',
+];
+
+export const isActivePdfJobStatus = (status: PdfJobStatus | string | null | undefined): boolean =>
+  status === 'pending' || status === 'running' || status === 'cancel_requested';
+
+/**
+ * Structured refusal error raised by `POST /api/weaviate/documents/{document_id}/files`.
+ * Preserves the HTTP status (`422`, `409`, `503`), machine `code`, and optional numeric `limitValue`.
+ */
+export class AddDocumentSourceFilesError extends Error {
+  readonly httpStatus: number;
+  readonly code: string | null;
+  readonly limitValue: number | null;
+
+  constructor(
+    message: string,
+    options: {
+      httpStatus: number;
+      code: string | null;
+      limitValue?: number | null;
+    },
+  ) {
+    super(message);
+    this.name = 'AddDocumentSourceFilesError';
+    this.httpStatus = options.httpStatus;
+    this.code = options.code;
+    this.limitValue = options.limitValue ?? null;
+  }
+}
 
 export interface PdfProcessingJob {
   job_id: string;
@@ -602,29 +676,7 @@ export const fetchApi = async <T>(
     if (!response.ok) {
       // Special handling for 401 Unauthorized - session expired or invalid
       if (response.status === 401) {
-        logger.warn('Authentication required - session expired, redirecting to login', {
-          component: 'weaviate-service',
-          action: 'fetchApi',
-          metadata: {
-            url,
-            method,
-            status: 401,
-          },
-        });
-
-        // Clear auth-bound browser state before redirecting to login.
-        clearAllNamespacedChatLocalStorage();
-        safeSetItem(() => window.sessionStorage, 'intendedPath', window.location.pathname + window.location.search, {
-          owner: 'auth',
-          key: 'intendedPath',
-          workflowCritical: true,
-        });
-
-        // Redirect to login endpoint (backend will redirect to Cognito)
-        window.location.href = '/api/auth/login';
-
-        // Throw error for any pending promises (though redirect will interrupt execution)
-        throw new AuthenticationError('Session expired - redirecting to login');
+        handleUnauthorizedResponse(url, method, 'fetchApi');
       }
 
       const error = await response.json().catch(() => ({
@@ -650,7 +702,7 @@ export const fetchApi = async <T>(
         },
       });
 
-      throw new Error(errorMessage);
+      throw new ApiHttpError(errorMessage, response.status);
     }
 
     const data = await response.json();
@@ -792,15 +844,90 @@ export const importSourceIdentifiers = (
 ): Promise<IdentifierImportResponse> => postIdentifierBatch('import', rawIdentifiers);
 
 export const fetchDocumentSourceProviderConfiguration = async (
+  options?: RequestInit,
 ): Promise<DocumentSourceProviderConfiguration> => {
   const response = await fetchApi<RawDocumentSourceProviderConfiguration>(
     '/documents/source-provider',
+    options,
   );
   return {
     provider: toStringOrNull(response.provider),
     importEnabled: response.import_enabled === true,
     presentation: normalizeDocumentSourceProviderMetadata(response.presentation),
   };
+};
+
+export const addDocumentSourceFiles = async (
+  documentId: string,
+  request: AddPaperFilesRequest,
+  options?: RequestInit,
+): Promise<PdfProcessingJob> => {
+  const payloadBody: AddPaperFilesRequest = {
+    files: request.files.map(({ provider_file_id, md5, converted_md5 }) => ({
+      provider_file_id,
+      md5,
+      converted_md5,
+    })),
+  };
+
+  const url = `${API_BASE_URL}/documents/${encodeURIComponent(documentId)}/files`;
+  const response = await fetch(
+    url,
+    {
+      ...options,
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...options?.headers,
+      },
+      body: JSON.stringify(payloadBody),
+    },
+  );
+
+  if (response.status === 401) {
+    handleUnauthorizedResponse(url, 'POST', 'addDocumentSourceFiles');
+  }
+
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    const payloadRecord = toRecordOrNull(payload);
+    const detailRecord = toRecordOrNull(payloadRecord?.detail);
+    const rawCode = detailRecord?.error;
+    const code = typeof rawCode === 'string' && rawCode.trim().length > 0 ? rawCode.trim() : null;
+    const rawLimit = detailRecord?.limit_value;
+    const limitValue =
+      typeof rawLimit === 'number' && Number.isInteger(rawLimit) ? rawLimit : null;
+    const detailMessage =
+      detailRecord && typeof detailRecord.message === 'string' && detailRecord.message.trim().length > 0
+        ? detailRecord.message.trim()
+        : typeof payloadRecord?.detail === 'string' && payloadRecord.detail.trim().length > 0
+          ? payloadRecord.detail.trim()
+          : undefined;
+    throw new AddDocumentSourceFilesError(
+      detailMessage || code || `Failed to add files to paper (${response.status})`,
+      {
+        httpStatus: response.status,
+        code,
+        limitValue,
+      },
+    );
+  }
+
+  const jobRecord = toRecordOrNull(payload);
+  if (
+    !jobRecord
+    || typeof jobRecord.job_id !== 'string'
+    || jobRecord.job_id.trim().length === 0
+    || typeof jobRecord.document_id !== 'string'
+    || jobRecord.document_id.trim().length === 0
+    || typeof jobRecord.status !== 'string'
+  ) {
+    throw new Error('Add files response is missing required job fields.');
+  }
+
+  return payload as PdfProcessingJob;
 };
 
 export const buildDocumentListSearchParams = (
@@ -907,22 +1034,66 @@ export const usePdfExtractionHealth = (
 export const fetchPdfJobs = async (
   params: {
     status?: PdfJobStatus[];
+    documentId?: string;
     windowDays?: number;
     limit?: number;
     offset?: number;
-  } = {}
+  } = {},
+  options?: RequestInit,
 ): Promise<PdfJobListResponse> => {
   const query = new URLSearchParams();
   (params.status ?? []).forEach((statusValue) => query.append('status', statusValue));
+  if (params.documentId) query.set('document_id', params.documentId);
   if (params.windowDays) query.set('window_days', String(params.windowDays));
   if (params.limit) query.set('limit', String(params.limit));
   if (params.offset) query.set('offset', String(params.offset));
   const suffix = query.toString() ? `?${query.toString()}` : '';
-  return fetchApi<PdfJobListResponse>(`/pdf-jobs${suffix}`);
+  return fetchApi<PdfJobListResponse>(`/pdf-jobs${suffix}`, options);
 };
 
-export const fetchPdfJob = async (jobId: string): Promise<PdfProcessingJob> => {
-  return fetchApi<PdfProcessingJob>(`/pdf-jobs/${jobId}`);
+/**
+ * Query active PDF jobs for `documentId` using server-side `document_id` filtering and
+ * paginate across pages using the configured `PDF_JOB_LIMIT` page size.
+ */
+export const fetchActivePdfJobsForDocument = async (
+  documentId: string,
+  options?: {
+    pageSize?: number;
+    signal?: AbortSignal;
+  },
+): Promise<PdfProcessingJob[]> => {
+  const pageSize = options?.pageSize ?? PDF_JOB_LIMIT;
+  const matched: PdfProcessingJob[] = [];
+  let offset = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const page = await fetchPdfJobs(
+      {
+        status: [...ACTIVE_PDF_JOB_STATUSES],
+        documentId,
+        limit: pageSize,
+        offset,
+      },
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+    for (const job of page.jobs) {
+      if (job.document_id === documentId) {
+        matched.push(job);
+      }
+    }
+    offset += page.jobs.length;
+    hasMore = page.jobs.length > 0 && offset < page.total;
+  }
+
+  return matched;
+};
+
+export const fetchPdfJob = async (
+  jobId: string,
+  options?: RequestInit,
+): Promise<PdfProcessingJob> => {
+  return fetchApi<PdfProcessingJob>(`/pdf-jobs/${encodeURIComponent(jobId)}`, options);
 };
 
 export const cancelPdfJob = async (jobId: string): Promise<CancelPdfJobResponse> => {

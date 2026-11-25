@@ -81,8 +81,8 @@ export interface PaperSourceFileCheck {
 
 /** A file is either tickable with no reason, or not tickable with one (checked when parsed). */
 export type PaperSourceFileTickability =
-  | { tickable: true; not_tickable_reason: null }
-  | { tickable: false; not_tickable_reason: NotTickableReasonCode }
+  | { tickable: true; not_tickable_reason: null; converted_md5: string }
+  | { tickable: false; not_tickable_reason: NotTickableReasonCode; converted_md5: string | null }
 
 export type PaperSourceFile = PaperSourceFileFields & PaperSourceFileTickability
 
@@ -91,8 +91,8 @@ interface PaperSourceFileFields {
   provider_file_id: string
   display_name: string | null
   file_role: (typeof FILE_ROLES)[number] | null
-  /** The converted text's MD5; null when the provider holds no converted text. */
-  converted_md5: string | null
+  /** The original file's MD5 as listed by the provider; null when unavailable. */
+  md5: string | null
   category: (typeof CATEGORIES)[number] | null
   status: (typeof FILE_STATUSES)[number]
   in_this_paper: boolean
@@ -223,11 +223,12 @@ function parseFile(value: unknown): PaperSourceListedFile {
     throw new PaperSourceFilesContractError('Listing field "last_provider_observation" is malformed')
   }
   const fileRole = oneOfOrNull(value.file_role, FILE_ROLES, 'file_role')
+  const md5 = stringOrNull(value.md5, 'md5')
   const convertedMd5 = stringOrNull(value.converted_md5, 'converted_md5')
   if (value.tickable && fileRole === 'main') {
     throw new PaperSourceFilesContractError('The per-paper listing never offers the main file for adding')
   }
-  if (value.tickable && convertedMd5 === null) {
+  if (value.tickable && (convertedMd5 === null || convertedMd5.length === 0)) {
     throw new PaperSourceFilesContractError('A supplement that can be added must have converted text')
   }
   const tickable = value.tickable
@@ -235,7 +236,7 @@ function parseFile(value: unknown): PaperSourceListedFile {
     provider_file_id: value.provider_file_id,
     display_name: displayName,
     file_role: fileRole,
-    converted_md5: convertedMd5,
+    md5,
     category: oneOfOrNull(value.category, CATEGORIES, 'category'),
     status: oneOf(value.status, FILE_STATUSES, 'status'),
     in_this_paper: value.in_this_paper,
@@ -243,10 +244,10 @@ function parseFile(value: unknown): PaperSourceListedFile {
   try {
     const reason = codeOrNull(value.not_tickable_reason, NOT_TICKABLE_REASON_CODES, 'not_tickable_reason')
     let tickability: PaperSourceFileTickability
-    if (tickable && reason === null) {
-      tickability = { tickable: true, not_tickable_reason: null }
+    if (tickable && reason === null && convertedMd5 !== null && convertedMd5.length > 0) {
+      tickability = { tickable: true, not_tickable_reason: null, converted_md5: convertedMd5 }
     } else if (!tickable && reason !== null) {
-      tickability = { tickable: false, not_tickable_reason: reason }
+      tickability = { tickable: false, not_tickable_reason: reason, converted_md5: convertedMd5 }
     } else {
       throw new PaperSourceFilesContractError('A listed file must be either tickable or give a reason, not both or neither')
     }

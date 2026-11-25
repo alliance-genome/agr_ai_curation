@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import fileListingFixture from '@/test/fixtures/supplements/file_listing.json'
+
 import {
   PaperSourceFilesContractError,
   fetchPaperSourceFiles,
@@ -67,6 +69,27 @@ describe('paperSourceFiles', () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ detail: { error: 'paper_reference_mismatch' } }, 409)))
 
     await expect(fetchPaperSourceFiles('doc-1')).resolves.toEqual({ kind: 'refused', code: 'paper_reference_mismatch', httpStatus: 409 })
+  })
+
+  it('preserves md5 and converted_md5 from backend-generated file_listing fixtures', () => {
+    const listing = parsePaperSourceListing(fileListingFixture)
+    const tickable = recognized(listing.files[1])
+    expect(tickable.tickable).toBe(true)
+    expect(tickable.md5).toBe('original-md5-20')
+    expect(tickable.converted_md5).toBe('converted-md5-20')
+
+    const nullMd5Listing = parsePaperSourceListing({
+      ...fileListingFixture,
+      files: [{ ...fileListingFixture.files[1], md5: null }],
+    })
+    expect(recognized(nullMd5Listing.files[0]).md5).toBeNull()
+  })
+
+  it('refuses a tickable supplement with an empty converted_md5', () => {
+    expect(() => parsePaperSourceListing({
+      ...fileListingFixture,
+      files: [{ ...fileListingFixture.files[1], converted_md5: '' }],
+    })).toThrow(PaperSourceFilesContractError)
   })
 
   it('fails loudly on any other failure', async () => {

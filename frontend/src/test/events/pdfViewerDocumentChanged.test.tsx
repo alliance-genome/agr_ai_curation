@@ -5,8 +5,12 @@ import {
   FILES_NOT_READY_MESSAGE,
   HOME_PDF_VIEWER_OWNER,
   MAIN_FILE_UNAVAILABLE_MESSAGE,
+  PAPER_FILES_REFRESH_CHANNEL,
+  PAPER_FILES_REFRESH_STORAGE_KEY,
   onPDFDocumentChanged,
   onPDFViewerDocumentCleared,
+  onPaperFilesRefresh,
+  publishPaperFilesRefresh,
   showPaperFilesInViewer,
 } from '@/components/pdfViewer/pdfEvents'
 import {
@@ -109,6 +113,144 @@ describe('pdf-viewer-document-changed event contract (paper files)', () => {
     showPaperFilesInViewer(DOCUMENT_ID, [mainPdfFileNotReady(), ...FOUR_FILES_PAYLOAD.files.slice(1)])
 
     expect(handler.mock.calls[0]![0]).toMatchObject({ activeFileId: TEXT_SUPPLEMENT_FILE_ID, mainFileUnavailable: true })
+  })
+
+  it('propagates refreshOnlyIfOpen and never clears the viewer when no file has a URL during refresh', () => {
+    const changed = vi.fn()
+    const cleared = vi.fn()
+    cleanups.push(onPDFDocumentChanged((event) => changed(event.detail)))
+    cleanups.push(onPDFViewerDocumentCleared((event) => cleared(event.detail)))
+
+    expect(
+      showPaperFilesInViewer(DOCUMENT_ID, FOUR_FILES_PAYLOAD.files, { refreshOnlyIfOpen: true }),
+    ).toBe(true)
+    expect(changed).toHaveBeenCalledTimes(1)
+    expect(changed.mock.calls[0]![0]).toMatchObject({
+      documentId: DOCUMENT_ID,
+      refreshOnlyIfOpen: true,
+    })
+
+    expect(
+      showPaperFilesInViewer(DOCUMENT_ID, [FOUR_FILES_PAYLOAD.files[3]!], { refreshOnlyIfOpen: true }),
+    ).toBe(false)
+    expect(cleared).not.toHaveBeenCalled()
+  })
+
+  it('broadcasts cross-tab refresh via BroadcastChannel and falls back to localStorage storage events', () => {
+    const received: Array<{ documentId: string; nonce: string }> = []
+    const posted: Array<{ channel: string; payload: unknown }> = []
+    const teardownOrder: string[] = []
+
+    class FakeBroadcastChannel {
+      static instances: FakeBroadcastChannel[] = []
+      readonly name: string
+      private listeners = new Set<(event: MessageEvent) => void>()
+
+      constructor(name: string) {
+        this.name = name
+        FakeBroadcastChannel.instances.push(this)
+      }
+
+      addEventListener(type: string, listener: (event: MessageEvent) => void) {
+        if (type === 'message') {
+          this.listeners.add(listener)
+        }
+      }
+
+      removeEventListener(type: string, listener: (event: MessageEvent) => void) {
+        if (type === 'message') {
+          this.listeners.delete(listener)
+          teardownOrder.push('removeEventListener')
+        }
+      }
+
+      postMessage(data: unknown) {
+        posted.push({ channel: this.name, payload: data })
+        for (const instance of FakeBroadcastChannel.instances) {
+          if (instance !== this && instance.name === this.name) {
+            instance.listeners.forEach((listener) => listener({ data } as MessageEvent))
+          }
+        }
+      }
+
+      close() {
+        teardownOrder.push('close')
+        this.listeners.clear()
+        FakeBroadcastChannel.instances = FakeBroadcastChannel.instances.filter((item) => item !== this)
+      }
+    }
+
+    vi.stubGlobal('BroadcastChannel', FakeBroadcastChannel)
+    try {
+      const unsubscribe = onPaperFilesRefresh((signal) => {
+        received.push({ documentId: signal.documentId, nonce: signal.nonce })
+      })
+
+      // Same-tab publish posts to BroadcastChannel, and our own tab ignores its own senderId.
+      showPaperFilesInViewer(DOCUMENT_ID, FOUR_FILES_PAYLOAD.files, { refreshOnlyIfOpen: true })
+      expect(posted).toHaveLength(1)
+      expect(posted[0]).toMatchObject({
+        channel: PAPER_FILES_REFRESH_CHANNEL,
+        payload: { documentId: DOCUMENT_ID },
+      })
+      expect(received).toHaveLength(0)
+
+      // Passing broadcast: false prevents ping-pong loops when applying a received refresh.
+      showPaperFilesInViewer(DOCUMENT_ID, FOUR_FILES_PAYLOAD.files, {
+        refreshOnlyIfOpen: true,
+        broadcast: false,
+      })
+      expect(posted).toHaveLength(1)
+
+      // Message from another tab (different senderId) IS delivered.
+      const remoteChannel = new FakeBroadcastChannel(PAPER_FILES_REFRESH_CHANNEL)
+      remoteChannel.postMessage({
+        documentId: DOCUMENT_ID,
+        timestamp: Date.now(),
+        nonce: 'remote-nonce-1',
+        senderId: 'other-tab',
+      })
+      remoteChannel.close()
+      expect(received).toEqual([{ documentId: DOCUMENT_ID, nonce: 'remote-nonce-1' }])
+
+      // StorageEvent from another tab is also delivered.
+      window.dispatchEvent(
+        new StorageEvent('storage', {
+          key: PAPER_FILES_REFRESH_STORAGE_KEY,
+          newValue: JSON.stringify({
+            documentId: DOCUMENT_ID,
+            timestamp: Date.now(),
+            nonce: 'storage-nonce-2',
+            senderId: 'other-tab-2',
+          }),
+        }),
+      )
+      expect(received).toEqual([
+        { documentId: DOCUMENT_ID, nonce: 'remote-nonce-1' },
+        { documentId: DOCUMENT_ID, nonce: 'storage-nonce-2' },
+      ])
+
+      // Unsubscribing removes the message listener before closing the BroadcastChannel.
+      teardownOrder.length = 0
+      unsubscribe()
+      expect(teardownOrder).toEqual(['removeEventListener', 'close'])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    // When BroadcastChannel is absent, publishPaperFilesRefresh falls back to localStorage.
+    vi.stubGlobal('BroadcastChannel', undefined)
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem')
+    try {
+      publishPaperFilesRefresh(DOCUMENT_ID)
+      expect(setItemSpy).toHaveBeenCalledWith(
+        PAPER_FILES_REFRESH_STORAGE_KEY,
+        expect.stringContaining(`"documentId":"${DOCUMENT_ID}"`),
+      )
+    } finally {
+      setItemSpy.mockRestore()
+      vi.unstubAllGlobals()
+    }
   })
 
   it('stops calling a listener once it is unregistered', () => {

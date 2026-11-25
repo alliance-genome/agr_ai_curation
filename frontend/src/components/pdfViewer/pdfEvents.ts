@@ -12,6 +12,11 @@ export interface PDFViewerDocumentChangedDetail {
   /** Listed files without a tab, including their status for evidence navigation. */
   unavailableFiles: ViewerFile[]
   ownerToken?: string
+  /**
+   * When true, update the viewer ONLY if it currently shows `documentId`; never switch
+   * away from another open paper and never open into an empty viewer.
+   */
+  refreshOnlyIfOpen?: boolean
   viewerState?: {
     currentPage?: number
     scrollPosition?: number
@@ -47,15 +52,144 @@ export const MAIN_FILE_UNAVAILABLE_MESSAGE = 'This paper\'s main file is not ava
 export const FILES_NOT_READY_MESSAGE = 'This paper\'s files are still being added.'
 export const ALL_FILES_FAILED_MESSAGE = "None of this paper's files could be added."
 
+export const PAPER_FILES_REFRESH_CHANNEL = 'agr-paper-files-refresh'
+export const PAPER_FILES_REFRESH_STORAGE_KEY = 'agr:paper-files-refresh'
+
+const TAB_INSTANCE_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+
+export interface PaperFilesRefreshSignal {
+  documentId: string
+  timestamp: number
+  nonce: string
+  senderId?: string
+}
+
+function parsePaperFilesRefreshSignal(raw: unknown): PaperFilesRefreshSignal | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return null
+  }
+  const record = raw as Record<string, unknown>
+  if (typeof record.documentId !== 'string' || record.documentId.trim().length === 0) {
+    return null
+  }
+  if (typeof record.timestamp !== 'number' || !Number.isFinite(record.timestamp)) {
+    return null
+  }
+  if (typeof record.nonce !== 'string' || record.nonce.trim().length === 0) {
+    return null
+  }
+  const senderId = typeof record.senderId === 'string' ? record.senderId : undefined
+  return {
+    documentId: record.documentId,
+    timestamp: record.timestamp,
+    nonce: record.nonce,
+    senderId,
+  }
+}
+
+/**
+ * Notify other browser tabs displaying `documentId` that its files changed.
+ * Uses `BroadcastChannel` when available and falls back to `localStorage` `storage` events.
+ */
+export function publishPaperFilesRefresh(documentId: string): void {
+  const signal: PaperFilesRefreshSignal = {
+    documentId,
+    timestamp: Date.now(),
+    nonce: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
+    senderId: TAB_INSTANCE_ID,
+  }
+
+  if (typeof BroadcastChannel !== 'undefined') {
+    try {
+      const channel = new BroadcastChannel(PAPER_FILES_REFRESH_CHANNEL)
+      channel.postMessage(signal)
+      channel.close()
+      return
+    } catch {
+      // Fall through to localStorage fallback if BroadcastChannel construction fails.
+    }
+  }
+
+  try {
+    window.localStorage.setItem(PAPER_FILES_REFRESH_STORAGE_KEY, JSON.stringify(signal))
+  } catch {
+    // Best-effort cross-tab hint; storage may be unavailable in restricted contexts.
+  }
+}
+
+/**
+ * Subscribe to cross-tab paper-file refresh signals emitted by `publishPaperFilesRefresh`.
+ * Signals originating from the current tab (`senderId === TAB_INSTANCE_ID`) are ignored
+ * because same-tab listeners are updated directly via `pdf-viewer-document-changed`.
+ */
+export function onPaperFilesRefresh(
+  handler: (signal: PaperFilesRefreshSignal) => void,
+): () => void {
+  const deliver = (raw: unknown) => {
+    const parsed = parsePaperFilesRefreshSignal(raw)
+    if (!parsed || parsed.senderId === TAB_INSTANCE_ID) {
+      return
+    }
+    handler(parsed)
+  }
+
+  let channel: BroadcastChannel | null = null
+  const handleMessage = (event: MessageEvent) => deliver(event.data)
+  if (typeof BroadcastChannel !== 'undefined') {
+    try {
+      channel = new BroadcastChannel(PAPER_FILES_REFRESH_CHANNEL)
+      channel.addEventListener('message', handleMessage)
+    } catch {
+      channel = null
+    }
+  }
+
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key !== PAPER_FILES_REFRESH_STORAGE_KEY || !event.newValue) {
+      return
+    }
+    try {
+      deliver(JSON.parse(event.newValue) as unknown)
+    } catch {
+      // Ignore malformed storage entries.
+    }
+  }
+  window.addEventListener('storage', handleStorage)
+
+  return () => {
+    window.removeEventListener('storage', handleStorage)
+    if (channel) {
+      try {
+        channel.removeEventListener('message', handleMessage)
+        channel.close()
+      } catch {
+        // Ignore channel close failures on teardown.
+      }
+    }
+  }
+}
+
 export interface PaperFilesViewerOptions {
   ownerToken?: string
   viewerState?: PDFViewerDocumentChangedDetail['viewerState']
+  /**
+   * When true, update the viewer only if it currently shows this paper; never switch away
+   * from a different paper or open into an idle viewer.
+   */
+  refreshOnlyIfOpen?: boolean
+  /**
+   * When `refreshOnlyIfOpen` is true, controls whether a cross-tab refresh hint is also
+   * broadcast. Defaults to `true`; pass `false` when applying a received cross-tab refresh
+   * so tabs never ping-pong.
+   */
+  broadcast?: boolean
 }
 
 /**
  * Show a paper's files in the viewer: one tab per file with a URL, the main file
  * first (or the first file with a URL). When no file has a URL yet (all being added,
- * or failed), the viewer is cleared instead. Returns whether a file is shown.
+ * or failed), the viewer is cleared instead unless `refreshOnlyIfOpen` is true.
+ * Returns whether a file is shown.
  */
 export function showPaperFilesInViewer(
   documentId: string,
@@ -68,6 +202,9 @@ export function showPaperFilesInViewer(
   const activeFileId = defaultActiveFileId(tabFiles)
   const mainFileUnavailable = files.some((file) => file.role === 'main' && !tabFiles.includes(file))
   if (activeFileId === null) {
+    if (options?.refreshOnlyIfOpen) {
+      return false
+    }
     let notice = FILES_NOT_READY_MESSAGE
     if (files.length > 0 && files.every((file) => file.status === 'failed')) {
       notice = ALL_FILES_FAILED_MESSAGE
@@ -86,10 +223,14 @@ export function showPaperFilesInViewer(
         mainFileUnavailable,
         unavailableFiles: files.filter((file) => !tabFiles.includes(file)),
         ownerToken: options?.ownerToken,
+        ...(options?.refreshOnlyIfOpen ? { refreshOnlyIfOpen: true } : {}),
         viewerState: options?.viewerState,
       },
     }),
   )
+  if (options?.refreshOnlyIfOpen && options.broadcast !== false) {
+    publishPaperFilesRefresh(documentId)
+  }
   return true
 }
 

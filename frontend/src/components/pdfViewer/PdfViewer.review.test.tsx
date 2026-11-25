@@ -11,8 +11,15 @@ import type { EvidenceNavigationCommand } from '@/features/curation/evidence'
 import { buildNavigationCommandFromChatEvidenceRecord } from '@/features/curation/evidence/navigationSourceAdapters'
 import { fuzzyMatchPdfEvidenceQuote } from '@/features/curation/services/pdfEvidenceMatcherService'
 import { DOCUMENT_LOAD_COMPLETE_EVENT, DOCUMENT_LOAD_ERROR_EVENT } from '@/features/documents/documentLoadEvents'
+import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 import PdfViewer from './PdfViewer'
-import { ALL_FILES_FAILED_MESSAGE, HOME_PDF_VIEWER_OWNER, dispatchPDFViewerNavigateEvidence, showPaperFilesInViewer } from './pdfEvents'
+import {
+  ALL_FILES_FAILED_MESSAGE,
+  HOME_PDF_VIEWER_OWNER,
+  PAPER_FILES_REFRESH_STORAGE_KEY,
+  dispatchPDFViewerNavigateEvidence,
+  showPaperFilesInViewer,
+} from './pdfEvents'
 import { TextFileBlocks } from './TextFileBlocks'
 import { FILE_FAILED_MESSAGE, fileFailedNote } from './viewerFileNavigation'
 import { parseViewerFile, type DisplayBlock, type ViewerFile } from './viewerFiles'
@@ -377,6 +384,196 @@ describe('P9b review fixes', () => {
       await new Promise((resolve) => setTimeout(resolve, 400))
       expect({ scale: app.pdfViewer.currentScaleValue, page: app.pdfViewer.currentPageNumber })
         .toEqual({ scale: '1.5', page: 2 })
+    })
+
+    it('refreshOnlyIfOpen updates the open paper without owner token and never hijacks another paper or idle viewer', async () => {
+      stubViewerFetch()
+      render(<PdfViewer activeDocumentOwnerToken={HOME_PDF_VIEWER_OWNER} />)
+
+      // Idle viewer ignores refreshOnlyIfOpen so Library add never unexpectedly opens a paper.
+      act(() => {
+        showPaperFilesInViewer(DOCUMENT_ID, FOUR_FILES_PAYLOAD.files.slice(0, 2), { refreshOnlyIfOpen: true })
+      })
+      expect(screen.queryAllByRole('tab')).toHaveLength(0)
+
+      // Open DOCUMENT_ID in the viewer, then refresh its files without knowing the route owner token.
+      act(() => {
+        showPaperFilesInViewer(DOCUMENT_ID, [FOUR_FILES_PAYLOAD.files[0]!], { ownerToken: HOME_PDF_VIEWER_OWNER })
+      })
+      expect(await screen.findAllByRole('tab')).toHaveLength(1)
+
+      act(() => {
+        showPaperFilesInViewer(DOCUMENT_ID, FOUR_FILES_PAYLOAD.files.slice(0, 2), { refreshOnlyIfOpen: true })
+      })
+      expect(await screen.findAllByRole('tab')).toHaveLength(2)
+
+      // A refreshOnlyIfOpen event for a DIFFERENT paper must not hijack the currently open paper.
+      act(() => {
+        showPaperFilesInViewer(
+          'bbbbbbbb-0000-0000-0000-000000000009',
+          [singleMainPdfFile({ documentId: 'bbbbbbbb-0000-0000-0000-000000000009', displayName: 'other-paper.pdf', pageCount: 3 })],
+          { refreshOnlyIfOpen: true },
+        )
+      })
+      const tabs = screen.getAllByRole('tab')
+      expect(tabs).toHaveLength(2)
+      expect(screen.queryByRole('tab', { name: /other-paper\.pdf/ })).not.toBeInTheDocument()
+    })
+
+    it('cross-tab refresh refetches files only for the open paper, ignoring idle viewers and other papers', async () => {
+      let viewerFilesFetches = 0
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === `/api/pdf-viewer/documents/${DOCUMENT_ID}/files`) {
+          viewerFilesFetches += 1
+          return new Response(
+            JSON.stringify({
+              document_id: DOCUMENT_ID,
+              files: FOUR_FILES_PAYLOAD.files.slice(0, 2),
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          )
+        }
+        return new Response(JSON.stringify(TEXT_SUPPLEMENT_BLOCKS), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      render(<PdfViewer activeDocumentOwnerToken={HOME_PDF_VIEWER_OWNER} />)
+
+      // Idle viewer ignores cross-tab refresh signals with zero fetch.
+      act(() => {
+        window.dispatchEvent(
+          new StorageEvent('storage', {
+            key: PAPER_FILES_REFRESH_STORAGE_KEY,
+            newValue: JSON.stringify({
+              documentId: DOCUMENT_ID,
+              timestamp: Date.now(),
+              nonce: 'idle-nonce',
+              senderId: 'library-tab',
+            }),
+          }),
+        )
+      })
+      expect(viewerFilesFetches).toBe(0)
+
+      // Open DOCUMENT_ID with 1 tab.
+      act(() => {
+        showPaperFilesInViewer(DOCUMENT_ID, [FOUR_FILES_PAYLOAD.files[0]!], { ownerToken: HOME_PDF_VIEWER_OWNER })
+      })
+      expect(await screen.findAllByRole('tab')).toHaveLength(1)
+
+      // Signal for a DIFFERENT document is ignored with zero fetch.
+      act(() => {
+        window.dispatchEvent(
+          new StorageEvent('storage', {
+            key: PAPER_FILES_REFRESH_STORAGE_KEY,
+            newValue: JSON.stringify({
+              documentId: 'bbbbbbbb-0000-0000-0000-000000000099',
+              timestamp: Date.now(),
+              nonce: 'other-doc-nonce',
+              senderId: 'library-tab',
+            }),
+          }),
+        )
+      })
+      expect(viewerFilesFetches).toBe(0)
+
+      // Signal for the open DOCUMENT_ID refetches /files and adds the new supplement tab in place.
+      act(() => {
+        window.dispatchEvent(
+          new StorageEvent('storage', {
+            key: PAPER_FILES_REFRESH_STORAGE_KEY,
+            newValue: JSON.stringify({
+              documentId: DOCUMENT_ID,
+              timestamp: Date.now(),
+              nonce: 'matching-doc-nonce',
+              senderId: 'library-tab',
+            }),
+          }),
+        )
+      })
+      await waitFor(() => expect(screen.getAllByRole('tab')).toHaveLength(2))
+      expect(viewerFilesFetches).toBe(1)
+    })
+
+    it('pdf.js pagechanging persists the refreshed activeDocument with newly added tabs instead of a stale closure', async () => {
+      stubViewerFetch()
+      const storageKey = getChatLocalStorageKeys('user-refresh').pdfViewerSession
+      window.localStorage.removeItem(storageKey)
+
+      render(<PdfViewer activeDocumentOwnerToken={HOME_PDF_VIEWER_OWNER} storageUserId="user-refresh" />)
+      act(() => {
+        showPaperFilesInViewer(DOCUMENT_ID, [FOUR_FILES_PAYLOAD.files[0]!], { ownerToken: HOME_PDF_VIEWER_OWNER })
+      })
+      await screen.findAllByRole('tab')
+      const { app } = installPdfApp(MAIN_PAGES)
+      await waitFor(() => expect(screen.getByRole('textbox', { name: 'Find in PDF' })).toBeEnabled())
+
+      // Add a supplement tab in-place after pdf.js listeners are already attached.
+      act(() => {
+        showPaperFilesInViewer(DOCUMENT_ID, FOUR_FILES_PAYLOAD.files.slice(0, 2), { refreshOnlyIfOpen: true })
+      })
+      await waitFor(() => expect(screen.getAllByRole('tab')).toHaveLength(2))
+
+      // A subsequent page change must persist BOTH tabs, never reverting to the pre-refresh 1-tab closure.
+      const pageChangingCall = app.eventBus.on.mock.calls.find(([event]) => event === 'pagechanging')
+      expect(pageChangingCall).toBeDefined()
+      act(() => {
+        ;(pageChangingCall![1] as (event: { pageNumber: number }) => void)({ pageNumber: 2 })
+      })
+
+      const stored = JSON.parse(window.localStorage.getItem(storageKey) || 'null')
+      expect(stored).not.toBeNull()
+      expect(stored.currentPage).toBe(2)
+      expect(stored.files.map((file: { file_id: string }) => file.file_id)).toEqual([
+        FOUR_FILES_PAYLOAD.files[0]!.file_id,
+        FOUR_FILES_PAYLOAD.files[1]!.file_id,
+      ])
+    })
+
+    it('refreshOnlyIfOpen keeps an errored supplement tab active when new tabs join', async () => {
+      stubViewerFetch({ headStatus: (url) => (url.includes(PDF_SUPPLEMENT_FILE_ID) ? 404 : 200) })
+      render(<PdfViewer activeDocumentOwnerToken={HOME_PDF_VIEWER_OWNER} />)
+      act(() => {
+        showPaperFilesInViewer(DOCUMENT_ID, FOUR_FILES_PAYLOAD.files.slice(0, 3), { ownerToken: HOME_PDF_VIEWER_OWNER })
+      })
+      const tabs = await screen.findAllByRole('tab')
+      expect(tabs).toHaveLength(3)
+      installPdfApp(MAIN_PAGES)
+      await waitFor(() => expect(screen.getByRole('textbox', { name: 'Find in PDF' })).toBeEnabled())
+
+      // Switch to the PDF supplement tab (Figure_S2.pdf) which returns 404 on HEAD, entering status='error'.
+      fireEvent.click(screen.getByRole('tab', { name: 'Figure_S2.pdf, file 3 of 3' }))
+      expect(await screen.findByText('This supplement could not be loaded.')).toBeInTheDocument()
+
+      // Refresh adds a new supplement tab; the errored supplement tab stays active instead of snapping back to main.
+      const extraSupplement = {
+        file_id: 'aaaaaaaa-0000-0000-0000-000000000099',
+        role: 'supplement' as const,
+        display_name: 'Table_S9.xlsx',
+        display_mode: 'text' as const,
+        status: 'ready' as const,
+        tab_order: 9,
+        page_count: null,
+        content_url: null,
+        text_url: `/api/pdf-viewer/documents/${DOCUMENT_ID}/files/aaaaaaaa-0000-0000-0000-000000000099/text`,
+      }
+      act(() => {
+        showPaperFilesInViewer(
+          DOCUMENT_ID,
+          [...FOUR_FILES_PAYLOAD.files.slice(0, 3), extraSupplement],
+          { refreshOnlyIfOpen: true },
+        )
+      })
+
+      await waitFor(() => expect(screen.getAllByRole('tab')).toHaveLength(4))
+      const refreshedTabs = screen.getAllByRole('tab')
+      expect(refreshedTabs[2]).toHaveAttribute('aria-selected', 'true')
+      expect(refreshedTabs[0]).toHaveAttribute('aria-selected', 'false')
+      expect(screen.getByText('This supplement could not be loaded.')).toBeInTheDocument()
     })
   })
 
