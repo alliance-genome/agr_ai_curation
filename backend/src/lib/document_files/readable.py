@@ -131,6 +131,10 @@ class ReadableFile:
     label: str
     # Whether its pieces' pages are real (``file_pages_trusted``); otherwise no page is shown or recorded.
     pages_trusted: bool
+    # The provider's converted artifact the text came from and that text's sha256 (none
+    # for an upload), as the files-read history records them when the file is read.
+    converted_artifact_id: str | None
+    converted_artifact_sha256: str | None
 
     def page_of(self, page: int | None) -> int | None:
         """A piece's page as it may be shown or recorded: ``None`` for a file without real pages."""
@@ -247,6 +251,7 @@ def readable_files_in_session(
             str(row.id), row.display_name, row.role, start, end,
             file_kind(row.display_mode, row.source_file_extension), label,
             file_pages_trusted(row.display_mode, row.source_markdown_path),
+            row.source_provider_converted_artifact_id, row.source_converted_artifact_sha256,
         ))
     being_added = sum(1 for row, _label in in_scope if row.status == FILE_STATUS_PENDING)
     converting = False

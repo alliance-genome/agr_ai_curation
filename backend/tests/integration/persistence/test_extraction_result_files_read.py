@@ -1,15 +1,16 @@
 """The paper files an extraction result read, on real PostgreSQL (KANBAN-1976 / ALL-1460, P8b2).
 
-Reads write one history row per newly shown file per agent invocation; a saved
+Reads write one history row per newly shown file per agent invocation, with the
+file's name, role and converted artifact as they were when it was read; a saved
 result stores the files of its producing invocation (or of its whole run), in
-tab order, with role and converted artifact from the file row; a file removed
-before the result was saved keeps the name captured when it was read; a result
-saved before this release has NULL and its served record has no ``files_read``
-key. All values are made up.
+tab order, and marks a file that is no longer a ready file of the paper as
+removed while keeping what was read; a result saved before files were recorded
+has NULL and its served record has no ``files_read`` key. All values are made up.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from uuid import uuid4
@@ -25,8 +26,9 @@ from src.lib.curation_workspace.extraction_results import (
 )
 from src.lib.curation_workspace.models import CurationExtractionResultRecord as ExtractionResultModel
 from src.lib.document_cleanup import cleanup_document_curation_dependencies
-from src.lib.document_files.files_read import FILES_READ_KIND
+from src.lib.document_files.files_read import FILES_READ_KIND, FilesReadIntegrityError
 from src.lib.openai_agents.run_history import HistoryScope, HistoryStore
+from src.models.sql.agent_run_history import AgentHistoryEvent, AgentHistoryPayload
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument, PDFDocumentFile
 from src.schemas.curation_workspace import (
@@ -77,10 +79,35 @@ def paper():
             db.delete(stored)
 
 
-def _read(document_id: str, scope: HistoryScope, files: list[tuple[str, str]]) -> None:
-    payload = {"document_id": document_id, "generation": "generation-a",
-               "files": [{"file_id": file_id, "file_name": name} for file_id, name in files]}
+def _read(document_id: str, scope: HistoryScope, files: list[dict]) -> None:
+    """A files-read history row as the source binding writes it."""
+    payload = {"document_id": document_id, "generation": "generation-a", "files": files}
     HistoryStore(SessionLocal).append(scope, FILES_READ_KIND, json.dumps(payload, sort_keys=True))
+
+
+def _shown(
+    file_id: str,
+    name: str,
+    role: str | None = "supplement",
+    artifact_id: str | None = None,
+    sha256: str | None = None,
+):
+    """One entry of a files-read row: the file as it was when read."""
+    return {"file_id": file_id, "file_name": name, "role": role,
+            "converted_artifact_id": artifact_id, "converted_artifact_sha256": sha256}
+
+
+def _saved(
+    file_id: str,
+    name: str,
+    role: str | None = "supplement",
+    artifact_id: str | None = None,
+    sha256: str | None = None,
+    *,
+    removed: bool | None = False,
+):
+    """One stored entry of a result's files read."""
+    return {**_shown(file_id, name, role, artifact_id, sha256), "removed": removed}
 
 
 def _request(document_id: str, owner: str, run_id: str, *, invocation_id: str | None, writers=()):
@@ -97,9 +124,9 @@ def test_a_result_stores_the_files_its_invocation_read_in_tab_order(paper):
     owner, run_id = f"owner-{uuid4()}", str(uuid4())
     extractor = HistoryScope(owner, run_id, str(uuid4()), "extractor", "x/", "chat-a")
     other = HistoryScope(owner, run_id, str(uuid4()), "other", "y/", "chat-a")
-    _read(document_id, extractor, [(file_ids["Data S2.docx"], "Data S2.docx")])
-    _read(document_id, extractor, [(file_ids["paper.pdf"], "paper.pdf")])
-    _read(document_id, other, [(file_ids["Table S1.xlsx"], "Table S1.xlsx")])
+    _read(document_id, extractor, [_shown(file_ids["Data S2.docx"], "Data S2.docx", "supplement", "artifact-2", "2" * 64)])
+    _read(document_id, extractor, [_shown(file_ids["paper.pdf"], "paper.pdf", "main")])
+    _read(document_id, other, [_shown(file_ids["Table S1.xlsx"], "Table S1.xlsx", "supplement", "artifact-1", "1" * 64)])
 
     with SessionLocal.begin() as db:
         saved = persist_extraction_result(
@@ -115,10 +142,8 @@ def test_a_result_stores_the_files_its_invocation_read_in_tab_order(paper):
 
     assert saved.files_read is not None
     assert [entry.model_dump() for entry in saved.files_read] == [
-        {"file_id": file_ids["paper.pdf"], "file_name": "paper.pdf", "role": "main",
-         "converted_artifact_id": None, "converted_artifact_sha256": None},
-        {"file_id": file_ids["Data S2.docx"], "file_name": "Data S2.docx", "role": "supplement",
-         "converted_artifact_id": "artifact-2", "converted_artifact_sha256": "2" * 64},
+        _saved(file_ids["paper.pdf"], "paper.pdf", "main"),
+        _saved(file_ids["Data S2.docx"], "Data S2.docx", "supplement", "artifact-2", "2" * 64),
     ]
     assert [entry.file_name for entry in whole_run.files_read] == ["paper.pdf", "Table S1.xlsx", "Data S2.docx"]
     # A fan-out writer's reads count toward the extraction agent's result.
@@ -137,12 +162,12 @@ def test_a_result_whose_invocation_read_nothing_records_an_empty_list(paper):
     assert saved.model_dump(mode="json")["files_read"] == []
 
 
-def test_a_file_removed_before_saving_keeps_the_name_read(paper):
+def test_a_file_deleted_before_saving_keeps_what_was_read_and_is_marked_removed(paper):
     document_id, _ = paper
     owner, run_id = f"owner-{uuid4()}", str(uuid4())
     scope = HistoryScope(owner, run_id, str(uuid4()), "extractor", "x/", "chat-a")
     removed = str(uuid4())
-    _read(document_id, scope, [(removed, "Removed S3.csv")])
+    _read(document_id, scope, [_shown(removed, "Removed S3.csv", "supplement", "artifact-3", "3" * 64)])
 
     with SessionLocal.begin() as db:
         saved = persist_extraction_result(
@@ -150,20 +175,139 @@ def test_a_file_removed_before_saving_keeps_the_name_read(paper):
         ).extraction_result
 
     assert [entry.model_dump() for entry in saved.files_read] == [
-        {"file_id": removed, "file_name": "Removed S3.csv", "role": None,
-         "converted_artifact_id": None, "converted_artifact_sha256": None},
+        _saved(removed, "Removed S3.csv", "supplement", "artifact-3", "3" * 64, removed=True),
     ]
 
 
-@pytest.mark.parametrize("status", ["removed", "failed", "pending"])
-def test_a_file_that_is_no_longer_ready_reads_like_a_removed_file(paper, status):
-    # A file row in any state but ready (`removed` while its stored files are cleaned
-    # up, a failed leftover) reads exactly like a file that is gone.
+def test_a_main_file_imported_again_after_the_read_keeps_the_fingerprint_read(paper):
+    # Re-importing the main file rewrites its row in place (a new converted artifact,
+    # its sha256 cleared until ingested): the result keeps what the AI was shown.
+    document_id, file_ids = paper
+    owner, run_id = f"owner-{uuid4()}", str(uuid4())
+    scope = HistoryScope(owner, run_id, str(uuid4()), "extractor", "x/", "chat-a")
+    main = file_ids["paper.pdf"]
+    _read(document_id, scope, [_shown(main, "paper.pdf", "main", "artifact-main-a", "a" * 64)])
+    with SessionLocal.begin() as db:
+        db.execute(
+            text("UPDATE pdf_document_files SET source_provider_converted_artifact_id = 'artifact-main-b', "
+                 "source_converted_artifact_sha256 = NULL WHERE id = :id"),
+            {"id": main},
+        )
+
+    with SessionLocal.begin() as db:
+        saved = persist_extraction_result(
+            _request(document_id, owner, run_id, invocation_id=scope.invocation_id), db=db,
+        ).extraction_result
+
+    assert [entry.model_dump() for entry in saved.files_read] == [
+        _saved(main, "paper.pdf", "main", "artifact-main-a", "a" * 64),
+    ]
+
+
+def test_a_files_read_row_written_before_read_time_values_reads_them_as_unknown(paper):
+    # Forward-only: a row from a run in flight across the deploy names files only; its
+    # entries say nothing about role or converted text and nothing is looked up.
     document_id, file_ids = paper
     owner, run_id = f"owner-{uuid4()}", str(uuid4())
     scope = HistoryScope(owner, run_id, str(uuid4()), "extractor", "x/", "chat-a")
     sheet = file_ids["Table S1.xlsx"]
-    _read(document_id, scope, [(sheet, "Table S1.xlsx"), (file_ids["paper.pdf"], "paper.pdf")])
+    _read(document_id, scope, [{"file_id": sheet, "file_name": "Table S1.xlsx"}])
+
+    with SessionLocal.begin() as db:
+        saved = persist_extraction_result(
+            _request(document_id, owner, run_id, invocation_id=scope.invocation_id), db=db,
+        ).extraction_result
+
+    assert [entry.model_dump() for entry in saved.files_read] == [
+        _saved(sheet, "Table S1.xlsx", None),
+    ]
+
+
+def test_a_partial_files_read_history_entry_raises_integrity_error(paper):
+    document_id, file_ids = paper
+    owner, run_id = f"owner-{uuid4()}", str(uuid4())
+    scope = HistoryScope(owner, run_id, str(uuid4()), "extractor", "x/", "chat-a")
+    sheet = file_ids["Table S1.xlsx"]
+    _read(document_id, scope, [{"file_id": sheet, "file_name": "Table S1.xlsx", "role": "supplement"}])
+
+    with pytest.raises(FilesReadIntegrityError, match="only some of its read-time values"):
+        with SessionLocal.begin() as db:
+            persist_extraction_result(
+                _request(document_id, owner, run_id, invocation_id=scope.invocation_id), db=db,
+            )
+
+
+@pytest.mark.parametrize("raw_content", [
+    "{not valid json",
+    json.dumps(["not", "an", "object"]),
+    json.dumps({"generation": "generation-a", "files": []}),
+    json.dumps({"document_id": "", "generation": "generation-a", "files": []}),
+    json.dumps({"document_id": "placeholder", "generation": "generation-a", "files": {}}),
+    json.dumps({"document_id": "placeholder", "generation": "generation-a", "files": ["not-a-dict"]}),
+])
+def test_a_malformed_files_read_history_payload_raises_integrity_error(paper, raw_content):
+    document_id, _ = paper
+    owner, run_id = f"owner-{uuid4()}", str(uuid4())
+    scope = HistoryScope(owner, run_id, str(uuid4()), "extractor", "x/", "chat-a")
+    content = raw_content.replace('"placeholder"', json.dumps(document_id))
+    sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    with SessionLocal.begin() as db:
+        db.merge(AgentHistoryPayload(sha256=sha256, content=content, search_text=""))
+        db.flush()
+        db.add(AgentHistoryEvent(
+            event_id=str(uuid4()), owner_id=scope.owner_id, session_id=scope.session_id,
+            run_id=scope.run_id, invocation_id=scope.invocation_id, lineage=scope.lineage,
+            agent_key=scope.agent_key, kind=FILES_READ_KIND, payload_sha256=sha256,
+        ))
+
+    with pytest.raises(FilesReadIntegrityError):
+        with SessionLocal.begin() as db:
+            persist_extraction_result(
+                _request(document_id, owner, run_id, invocation_id=scope.invocation_id), db=db,
+            )
+
+
+@pytest.mark.parametrize("bad_entry", [
+    {"file_name": "Table S1.xlsx"},
+    {"file_id": "placeholder"},
+    {"file_id": "placeholder", "file_name": "Table S1.xlsx", "role": "invalid",
+     "converted_artifact_id": None, "converted_artifact_sha256": None},
+    {"file_id": "placeholder", "file_name": "Table S1.xlsx", "role": None,
+     "converted_artifact_id": None, "converted_artifact_sha256": None},
+    {"file_id": "placeholder", "file_name": "Table S1.xlsx", "role": "supplement",
+     "converted_artifact_id": 123, "converted_artifact_sha256": None},
+    {"file_id": "placeholder", "file_name": "Table S1.xlsx", "role": "supplement",
+     "converted_artifact_id": None, "converted_artifact_sha256": ["bad"]},
+])
+def test_a_corrupt_files_read_history_entry_raises_integrity_error(paper, bad_entry):
+    document_id, file_ids = paper
+    owner, run_id = f"owner-{uuid4()}", str(uuid4())
+    scope = HistoryScope(owner, run_id, str(uuid4()), "extractor", "x/", "chat-a")
+    entry = {
+        key: (file_ids["Table S1.xlsx"] if key == "file_id" and value == "placeholder" else value)
+        for key, value in bad_entry.items()
+    }
+    _read(document_id, scope, [entry])
+
+    with pytest.raises(FilesReadIntegrityError):
+        with SessionLocal.begin() as db:
+            persist_extraction_result(
+                _request(document_id, owner, run_id, invocation_id=scope.invocation_id), db=db,
+            )
+
+
+@pytest.mark.parametrize("status", ["removed", "failed", "pending"])
+def test_a_file_that_is_no_longer_ready_is_marked_removed_with_what_was_read(paper, status):
+    # A file row in any state but ready (`removed` while its stored files are cleaned
+    # up, a failed leftover) is marked removed exactly like a file that is gone.
+    document_id, file_ids = paper
+    owner, run_id = f"owner-{uuid4()}", str(uuid4())
+    scope = HistoryScope(owner, run_id, str(uuid4()), "extractor", "x/", "chat-a")
+    sheet = file_ids["Table S1.xlsx"]
+    _read(document_id, scope, [
+        _shown(sheet, "Table S1.xlsx", "supplement", "artifact-1", "1" * 64),
+        _shown(file_ids["paper.pdf"], "paper.pdf", "main"),
+    ])
     with SessionLocal.begin() as db:
         db.execute(text("UPDATE pdf_document_files SET status = :status WHERE id = :id"), {"status": status, "id": sheet})
 
@@ -172,17 +316,18 @@ def test_a_file_that_is_no_longer_ready_reads_like_a_removed_file(paper, status)
             _request(document_id, owner, run_id, invocation_id=scope.invocation_id), db=db,
         ).extraction_result
         derived = persist_extraction_result(
-            _derived(document_id, [[_entry(sheet, "Table S1.xlsx"), _entry(file_ids["paper.pdf"], "paper.pdf", "main")]]),
+            _derived(document_id, [[
+                _saved(sheet, "Table S1.xlsx", "supplement", "artifact-1", "1" * 64),
+                _saved(file_ids["paper.pdf"], "paper.pdf", "main"),
+            ]]),
             db=db,
         ).extraction_result
 
-    assert [entry.model_dump() for entry in saved.files_read] == [
-        _entry(file_ids["paper.pdf"], "paper.pdf", "main"),
-        {"file_id": sheet, "file_name": "Table S1.xlsx", "role": None,
-         "converted_artifact_id": None, "converted_artifact_sha256": None},
-    ]
-    # A prepared result keeps its inputs' entries as saved; the gone file goes last.
-    assert [entry.file_id for entry in derived.files_read] == [file_ids["paper.pdf"], sheet]
+    gone = _saved(sheet, "Table S1.xlsx", "supplement", "artifact-1", "1" * 64, removed=True)
+    assert [entry.model_dump() for entry in saved.files_read] == [_saved(file_ids["paper.pdf"], "paper.pdf", "main"), gone]
+    # A prepared result keeps its inputs' entries as saved, marks removed again at its
+    # own save, and puts the gone file last.
+    assert [entry.model_dump() for entry in derived.files_read] == [_saved(file_ids["paper.pdf"], "paper.pdf", "main"), gone]
 
 
 def test_a_result_saved_before_files_were_recorded_is_served_unchanged(paper):
@@ -202,11 +347,6 @@ def test_a_result_saved_before_files_were_recorded_is_served_unchanged(paper):
     assert "files_read" not in json.loads(served.model_dump_json())
 
 
-def _entry(file_id, name, role="supplement"):
-    return {"file_id": file_id, "file_name": name, "role": role,
-            "converted_artifact_id": None, "converted_artifact_sha256": None}
-
-
 def _derived(document_id, inputs):
     return CurationExtractionPersistenceRequest(
         document_id=document_id, adapter_key="reference_adapter", agent_key="curation_prep",
@@ -219,28 +359,68 @@ def test_a_prepared_result_reads_the_union_of_its_inputs_in_tab_order(paper):
     # ALL-1460: a Prepare for Curation result takes its inputs' files, never a run's reads.
     document_id, file_ids = paper
     removed = str(uuid4())
-    word = _entry(file_ids["Data S2.docx"], "Data S2.docx")
+    word = _saved(file_ids["Data S2.docx"], "Data S2.docx", "supplement", "artifact-2", "2" * 64)
     inputs = [
-        [word, _entry(removed, "Removed S3.csv")],
-        [_entry(file_ids["paper.pdf"], "paper.pdf", "main"), dict(word, file_name="renamed later")],
+        [word, _saved(removed, "Removed S3.csv", "supplement", "artifact-3", "3" * 64)],
+        [_saved(file_ids["paper.pdf"], "paper.pdf", "main"), dict(word, file_name="renamed later")],
     ]
     owner, run_id = f"owner-{uuid4()}", str(uuid4())
     # Reads in the prep request's own run must not be used.
     _read(document_id, HistoryScope(owner, run_id, str(uuid4()), "supervisor", "s/", "chat-a"),
-          [(file_ids["Table S1.xlsx"], "Table S1.xlsx")])
+          [_shown(file_ids["Table S1.xlsx"], "Table S1.xlsx", "supplement", "artifact-1", "1" * 64)])
     request = _derived(document_id, inputs).model_copy(update={"user_id": owner, "trace_id": run_id})
 
     with SessionLocal.begin() as db:
         saved = persist_extraction_result(request, db=db).extraction_result
 
     assert [entry.model_dump() for entry in saved.files_read] == [
-        _entry(file_ids["paper.pdf"], "paper.pdf", "main"), word, _entry(removed, "Removed S3.csv"),
+        _saved(file_ids["paper.pdf"], "paper.pdf", "main"), word,
+        _saved(removed, "Removed S3.csv", "supplement", "artifact-3", "3" * 64, removed=True),
+    ]
+
+
+def test_a_prepared_result_from_inputs_saved_before_removed_was_recorded_marks_it(paper):
+    # An input saved before 0.12.0 has entries without ``removed`` (the field reads null);
+    # the prepared result decides it at its own save.
+    document_id, file_ids = paper
+    before = [{"file_id": file_ids["paper.pdf"], "file_name": "paper.pdf", "role": "main",
+               "converted_artifact_id": None, "converted_artifact_sha256": None},
+              {"file_id": str(uuid4()), "file_name": "Removed S3.csv", "role": None,
+               "converted_artifact_id": None, "converted_artifact_sha256": None}]
+    request = _derived(document_id, [before])
+    assert [entry.removed for entry in request.input_files_read[0]] == [None, None]
+
+    with SessionLocal.begin() as db:
+        saved = persist_extraction_result(request, db=db).extraction_result
+
+    assert [entry.removed for entry in saved.files_read] == [False, True]
+
+
+def test_a_result_saved_before_removed_was_recorded_loads_with_removed_null(paper):
+    document_id, file_ids = paper
+    with SessionLocal.begin() as db:
+        saved = persist_extraction_result(
+            _request(document_id, f"owner-{uuid4()}", str(uuid4()), invocation_id=None), db=db,
+        ).extraction_result
+        # As stored by 0.11.x: entries without ``removed``.
+        db.execute(
+            text("UPDATE extraction_results SET files_read = CAST(:files AS jsonb) WHERE id = :id"),
+            {"id": saved.extraction_result_id, "files": json.dumps([
+                {"file_id": file_ids["paper.pdf"], "file_name": "paper.pdf", "role": "main",
+                 "converted_artifact_id": None, "converted_artifact_sha256": None},
+            ])},
+        )
+    with SessionLocal() as db:
+        served = _record_to_schema(db.get(ExtractionResultModel, saved.extraction_result_id))
+
+    assert [entry.model_dump() for entry in served.files_read] == [
+        _saved(file_ids["paper.pdf"], "paper.pdf", "main", removed=None),
     ]
 
 
 def test_a_prepared_result_with_an_unrecorded_input_is_unrecorded(paper):
     document_id, file_ids = paper
-    inputs = [[_entry(file_ids["paper.pdf"], "paper.pdf", "main")], None]
+    inputs = [[_saved(file_ids["paper.pdf"], "paper.pdf", "main")], None]
 
     with SessionLocal.begin() as db:
         saved = persist_extraction_result(_derived(document_id, inputs), db=db).extraction_result

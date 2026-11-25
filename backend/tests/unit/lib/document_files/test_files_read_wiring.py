@@ -11,18 +11,27 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from src.lib.curation_workspace import extraction_results as results
+from src.lib.document_files.files_read import (
+    FilesReadIntegrityError,
+    _as_read,
+    _decode_payload,
+    _validated_payload,
+)
 from src.schemas.curation_workspace import (
     CurationExtractionPersistenceRequest,
     CurationExtractionResultRecord,
     CurationExtractionSourceKind,
 )
 
+# As a result stores them: each file as it was when read, and whether it was removed by the save.
 FILES = [
     {"file_id": "file-0", "file_name": "paper.pdf", "role": "main",
-     "converted_artifact_id": None, "converted_artifact_sha256": None},
+     "converted_artifact_id": None, "converted_artifact_sha256": None, "removed": False},
     {"file_id": "file-1", "file_name": "Table S1.xlsx", "role": "supplement",
-     "converted_artifact_id": "artifact-1", "converted_artifact_sha256": "1" * 64},
+     "converted_artifact_id": "artifact-1", "converted_artifact_sha256": "1" * 64, "removed": True},
 ]
 
 
@@ -176,3 +185,92 @@ def test_the_trace_metadata_carries_file_ids_and_names_only(monkeypatch):
         {"file_id": "file-0", "file_name": "paper.pdf"},
         {"file_id": "file-1", "file_name": "Table S1.xlsx"},
     ]}}]
+
+
+def test_as_read_accepts_full_and_pre_012_entries_and_rejects_partial_entries():
+    full = {
+        "file_id": "file-1", "file_name": "Table S1.xlsx", "role": "supplement",
+        "converted_artifact_id": "artifact-1", "converted_artifact_sha256": "1" * 64,
+    }
+    assert _as_read(full) == full
+    assert _as_read({"file_id": "file-1", "file_name": "Table S1.xlsx"}) == {
+        "file_id": "file-1", "file_name": "Table S1.xlsx", "role": None,
+        "converted_artifact_id": None, "converted_artifact_sha256": None,
+    }
+
+
+@pytest.mark.parametrize("partial", [
+    {"file_id": "file-1", "file_name": "Table S1.xlsx", "role": "supplement"},
+    {"file_id": "file-1", "file_name": "Table S1.xlsx", "converted_artifact_id": "artifact-1"},
+    {"file_id": "file-1", "file_name": "Table S1.xlsx", "converted_artifact_sha256": "1" * 64},
+    {"file_id": "file-1", "file_name": "Table S1.xlsx", "role": "supplement", "converted_artifact_id": "artifact-1"},
+])
+def test_as_read_raises_integrity_error_for_partial_read_time_values(partial):
+    with pytest.raises(FilesReadIntegrityError, match="only some of its read-time values"):
+        _as_read(partial)
+
+
+@pytest.mark.parametrize("raw", [
+    "{not valid json",
+    "[]",
+    '"a string"',
+    "123",
+    "null",
+])
+def test_decode_payload_raises_integrity_error_for_malformed_or_non_object_json(raw):
+    with pytest.raises(FilesReadIntegrityError):
+        _decode_payload(raw)
+
+
+@pytest.mark.parametrize("payload", [
+    {"files": []},
+    {"document_id": None, "files": []},
+    {"document_id": "", "files": []},
+    {"document_id": "   ", "files": []},
+    {"document_id": 123, "files": []},
+    {"document_id": "doc-1"},
+    {"document_id": "doc-1", "files": {}},
+    {"document_id": "doc-1", "files": "paper.pdf"},
+    {"document_id": "doc-1", "files": ["not-a-dict"]},
+    {"document_id": "doc-1", "files": [None]},
+])
+def test_validated_payload_raises_integrity_error_for_malformed_container(payload):
+    with pytest.raises(FilesReadIntegrityError):
+        _validated_payload(payload)
+
+
+@pytest.mark.parametrize("bad_entry", [
+    "not-a-dict",
+    None,
+    {"file_name": "Table S1.xlsx"},
+    {"file_id": "", "file_name": "Table S1.xlsx"},
+    {"file_id": 123, "file_name": "Table S1.xlsx"},
+    {"file_id": "file-1"},
+    {"file_id": "file-1", "file_name": ""},
+    {"file_id": "file-1", "file_name": None},
+    {"file_id": "file-1", "file_name": "Table S1.xlsx", "role": "invalid",
+     "converted_artifact_id": None, "converted_artifact_sha256": None},
+    {"file_id": "file-1", "file_name": "Table S1.xlsx", "role": None,
+     "converted_artifact_id": None, "converted_artifact_sha256": None},
+    {"file_id": "file-1", "file_name": "Table S1.xlsx", "role": True,
+     "converted_artifact_id": None, "converted_artifact_sha256": None},
+    {"file_id": "file-1", "file_name": "Table S1.xlsx", "role": "supplement",
+     "converted_artifact_id": 123, "converted_artifact_sha256": None},
+    {"file_id": "file-1", "file_name": "Table S1.xlsx", "role": "supplement",
+     "converted_artifact_id": True, "converted_artifact_sha256": None},
+    {"file_id": "file-1", "file_name": "Table S1.xlsx", "role": "supplement",
+     "converted_artifact_id": None, "converted_artifact_sha256": {"sha": "bad"}},
+])
+def test_as_read_raises_integrity_error_for_corrupt_entry_fields(bad_entry):
+    with pytest.raises(FilesReadIntegrityError):
+        _as_read(bad_entry)
+
+
+def test_files_read_for_result_rejects_malformed_container_before_filtering(monkeypatch):
+    from src.lib.document_files import files_read as module
+
+    monkeypatch.setattr(module, "_rows", lambda *args, **kwargs: [{"files": []}])
+    with pytest.raises(FilesReadIntegrityError, match="document_id"):
+        module.files_read_for_result(
+            object(), owner_id="owner-1", run_id="run-1", document_id="doc-1", invocation_ids=None,
+        )

@@ -789,7 +789,8 @@ def test_files_read_of_saved_results_are_shown(tmp_path, monkeypatch):
     monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
     files_read = {"extraction_result_id": "result-1",
                   "files_read": [{"file_id": "file-1", "file_name": "paper.pdf", "role": "main",
-                                  "converted_artifact_id": None, "converted_artifact_sha256": None}]}
+                                  "converted_artifact_id": None, "converted_artifact_sha256": None,
+                                  "removed": False}]}
     _write_event(tmp_path, "trace-files", _event("trace-files", 1, "extraction.files_read",
                  output_summary={"preview": files_read}))
 
@@ -799,9 +800,10 @@ def test_files_read_of_saved_results_are_shown(tmp_path, monkeypatch):
 
     [event] = timeline["files_read"]["events"]
     assert event["output"]["preview"] == files_read
-    # Approved by Chris, 23 Nov 2026 (decision 5).
+    # Approved by Chris, 24 Nov 2026 (ALL-1752 / ALL-1460, Option B); replaces the note
+    # approved 23 Nov 2026 (decision 5).
     assert timeline["files_read"]["note"] == (
-        "For each saved extraction result, the paper files the AI was shown text from while producing it, "
-        "with each file's name, whether it is the main paper or a supplement, and a fingerprint of the "
-        "converted text."
+        "For each saved extraction result, the paper files the AI was shown text from while producing it. "
+        "The name, main paper or supplement, and the fingerprint of the converted text are recorded when the "
+        "AI read the file; removed means the file was no longer in the paper when the result was saved."
     )

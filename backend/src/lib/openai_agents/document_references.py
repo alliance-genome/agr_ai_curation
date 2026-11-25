@@ -252,19 +252,29 @@ class SourceBinding:
         One row per newly shown set of files (ALL-1460, Q8), so a long run writes at
         most one row per file per invocation, written by ``record_files_read`` once the
         call stands. The "already shown" set comes from the bindings scanned under the
-        same lock.
+        same lock. The first read's values stand for the invocation: a file's role and
+        converted text change in place only when the paper is processed again, which
+        gives it a new generation that every later read in the session refuses.
         Every agent run with history enabled has its own invocation; with history
         disabled each tool call gets a fresh one, so each read then writes a row.
         """
-        shown: dict[str, str] = {}
+        shown = {}
         for index in chunk_indexes:
             file = self._shown_file(index)
-            shown.setdefault(file.file_id, file.display_name)
+            shown.setdefault(file.file_id, file)
         invocation_id = self.history_scope.invocation_id
         already = self._files_recorded()
+        # Each file as it is now, when it is read: a saved result keeps these values even
+        # if the file is later removed or its row rewritten (ALL-1460, decision 6).
         new_files = [
-            {"file_id": file_id, "file_name": name}
-            for file_id, name in shown.items()
+            {
+                "file_id": file_id,
+                "file_name": file.display_name,
+                "role": file.role,
+                "converted_artifact_id": file.converted_artifact_id,
+                "converted_artifact_sha256": file.converted_artifact_sha256,
+            }
+            for file_id, file in shown.items()
             if file_id not in already
         ]
         if new_files:
