@@ -24,7 +24,7 @@ from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.file_reasons import FileReason
 from src.lib.document_sources.models import ProviderBearerKind
 from src.lib.document_sources.supplement_add import AddResult, ChosenFile, SupplementAddError
-from src.lib.exceptions import PDFCancellationError, StorageError
+from src.lib.exceptions import PDFCancellationError
 from src.lib.pipeline.store import store_added_file_pieces
 from tests.unit.lib.document_sources.test_abc_literature_provider import (
     _abc_reference_record,
@@ -502,19 +502,22 @@ async def test_pdf_cancellation_drains_rollback_and_preserves_cancellation(monke
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rollback_fails", [False, True])
 async def test_deadline_cancelling_failure_rollback_preserves_deadline_and_reports_displaced_failure(
-    monkeypatch, storage, rollback_fails,
+    monkeypatch, storage, caplog, rollback_fails,
 ):
+    from src.lib.pipeline import store
+
     entered = asyncio.Event()
     release = asyncio.Event()
     report = Mock()
     monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+    monkeypatch.setattr(store, "store_added_file_pieces", store_added_file_pieces)
     _, provider = _provider(ROWS, GOOD)
     _paper_lookup(monkeypatch)
 
-    async def fail_store(*_args, **_kwargs):
-        raise StorageError("private-write-secret")
+    async def fail_chunk_write(*_args, **_kwargs):
+        raise OSError("private-write-secret")
 
-    monkeypatch.setattr("src.lib.pipeline.store.store_added_file_pieces", fail_store)
+    monkeypatch.setattr(store, "store_chunks_to_weaviate", fail_chunk_write)
     undo = supplement_add._undo
 
     async def paused_undo(*args, **kwargs):
@@ -528,18 +531,25 @@ async def test_deadline_cancelling_failure_rollback_preserves_deadline_and_repor
             supplement_add, "_remove_stored_files", Mock(side_effect=OSError("private-rollback-secret")),
         )
 
-    add = asyncio.create_task(_add(provider, [_chosen(20)]))
-    try:
-        await asyncio.wait_for(entered.wait(), timeout=10)
-        add.cancel("deadline")
-        await asyncio.sleep(0)
-        assert not add.done()
-    finally:
-        release.set()
+    with caplog.at_level(logging.ERROR):
+        add = asyncio.create_task(_add(provider, [_chosen(20)]))
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=10)
+            add.cancel("deadline")
+            await asyncio.sleep(0)
+            assert not add.done()
+        finally:
+            release.set()
 
-    with pytest.raises(asyncio.CancelledError, match="deadline"):
-        await add
+        with pytest.raises(asyncio.CancelledError, match="deadline"):
+            await add
 
+    promotable_errors = [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.ERROR and not getattr(record, "sentry_skip_event", False)
+    ]
+    assert promotable_errors == []
     assert storage.deleted_ranges
     if not rollback_fails:
         assert storage.deleted_rows == [row.id for row in storage.inserted]

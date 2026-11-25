@@ -798,12 +798,13 @@ chunk write failures once range reservation finishes. If rollback of an uncommit
 add fails while handling cancellation, it reports
 `supplement_add_cancelled_rollback_failed`, including Weaviate reconnect failures
 whose connection reporting is delegated to the caller so no duplicate error log is
-promoted. If a deadline cancels rollback of a write failure, rollback finishes
-draining, the displaced write failure reports once as
-`supplement_add_displaced_write_failed`, and cancellation propagates. These
-supplement reports use `document_files`, group by operation, omit request metadata,
-and carry only the exception class as failure detail. The caller receives the
-original cancellation after cleanup.
+promoted. `store_added_file_pieces` also marks its companion `StorageError` log to
+skip event promotion because the supplement add or job boundary owns reporting. If
+a deadline cancels rollback of a write failure, rollback finishes draining, the
+displaced write failure reports once as `supplement_add_displaced_write_failed`,
+and cancellation propagates. These supplement reports use `document_files`, group
+by operation, omit request metadata, and carry only the exception class as failure
+detail. The caller receives the original cancellation after cleanup.
 
 The supplement stage of an import (`supplement_wait.py`) sends no event for a
 supplement left out for the provider's reasons or for time (not converted,

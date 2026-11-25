@@ -113,6 +113,24 @@ async def test_store_to_weaviate_marks_failed_and_raises_when_storage_fails(capl
 
 
 @pytest.mark.asyncio
+async def test_store_added_file_pieces_skips_sentry_log_promotion_on_storage_error(caplog):
+    chunks = [{"chunk_index": 0, "content": "hello"}]
+    weaviate_client = MagicMock()
+
+    async def fake_chunks_store(chunks_arg, doc_id, client, user_id, *, chunk_range):  # noqa: ANN001
+        raise store_module.BatchInsertError("failed", failed_objects=[{"chunk_index": 0}])
+
+    with patch("src.lib.pipeline.store.store_chunks_to_weaviate", new=fake_chunks_store):
+        with pytest.raises(store_module.StorageError, match="Weaviate storage failed: failed"):
+            await store_module.store_added_file_pieces(
+                chunks, "doc-1", weaviate_client, "test_user", chunk_range=(0, 0),
+            )
+
+    failure_log, = [r for r in caplog.records if r.name == store_module.logger.name and r.levelno == logging.ERROR]
+    assert getattr(failure_log, "sentry_skip_event", False) is True
+
+
+@pytest.mark.asyncio
 async def test_store_chunks_to_weaviate_raises_when_collection_missing():
     weaviate_client = MagicMock()
     session_client = weaviate_client.session.return_value.__enter__.return_value
