@@ -36,7 +36,7 @@ import asyncio
 import hashlib
 import weakref
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -506,41 +506,11 @@ async def list_reference_files(
             converted_artifact=converted,
         ))
 
-    candidates: dict[str, _Candidate] = {}
-    for artifact in artifacts:
-        category = provider.supplement_file_category(artifact)
-        if category is not None:
-            candidates[artifact.artifact_id] = _Candidate(
-                original=artifact, category=category,
-                profile=FileProfile(single_title_required=provider.converted_text_has_single_title(artifact)),
-            )
-    converted_by_parent: dict[str, list[SourceArtifact]] = {}
-    for artifact in artifacts:
-        if provider.is_listed_converted_supplement_text(artifact):
-            converted_by_parent.setdefault(artifact.parent_artifact_id or "", []).append(artifact)
-
-    not_shown = 0
-    openable: list[_Candidate] = []
-    for candidate in sorted(candidates.values(), key=lambda item: _id_order(item.original)):
-        if not _authorized(candidate.original, groups):
-            not_shown += 1
-            continue
-        texts = converted_by_parent.get(candidate.original.artifact_id, [])
-        if texts:
-            # Both rules, separately: the original's (already passed) and the text's own.
-            readable = [
-                text for text in texts
-                if converted_text_access_allowed(text, candidate.original, authorized_group_ids=groups)
-            ]
-            if not readable:
-                not_shown += 1
-                continue
-            # A provider can hold more than one listed converted text for one original
-            # (ABC: a legacy TEI-derived text next to the merged one). The provider's
-            # rank decides; within one rank the newest, highest provider file id.
-            newest_first = sorted(readable, key=_id_order, reverse=True)
-            candidate.converted = min(newest_first, key=provider.supplement_text_artifact_sort_key)
-        openable.append(candidate)
+    openable, not_shown = visible_supplement_candidates(
+        provider,
+        artifacts,
+        authorized_group_ids=groups,
+    )
 
     by_md5: dict[str, _Candidate] = {}
     duplicate_copies = 0
@@ -704,6 +674,62 @@ async def _paper_refusal(
     if existing is not None:
         return FileReason.PAPER_ALREADY_IN_LIBRARY, existing
     return None, None
+
+
+def visible_supplement_candidates(
+    provider: DocumentSourceProvider,
+    artifacts: Sequence[SourceArtifact],
+    *,
+    authorized_group_ids: tuple[str, ...] | list[str] | set[str],
+) -> tuple[list[_Candidate], int]:
+    """Return supplementary originals visible to ``authorized_group_ids`` and hidden count.
+
+    Single source of truth for supplement visibility (used by both the file listing
+    and identifier-import display-name resolution): an original must be classified as
+    a supplement, authorized for the caller, and when converted supplement texts are
+    listed for it, at least one must pass ``converted_text_access_allowed``.
+    """
+
+    groups = tuple(authorized_group_ids)
+    candidates: dict[str, _Candidate] = {}
+    for artifact in artifacts:
+        category = provider.supplement_file_category(artifact)
+        if category is not None:
+            candidates[artifact.artifact_id] = _Candidate(
+                original=artifact,
+                category=category,
+                profile=FileProfile(
+                    single_title_required=provider.converted_text_has_single_title(artifact)
+                ),
+            )
+    converted_by_parent: dict[str, list[SourceArtifact]] = {}
+    for artifact in artifacts:
+        if provider.is_listed_converted_supplement_text(artifact):
+            converted_by_parent.setdefault(artifact.parent_artifact_id or "", []).append(artifact)
+
+    not_shown = 0
+    openable: list[_Candidate] = []
+    for candidate in sorted(candidates.values(), key=lambda item: _id_order(item.original)):
+        if not _authorized(candidate.original, groups):
+            not_shown += 1
+            continue
+        texts = converted_by_parent.get(candidate.original.artifact_id, [])
+        if texts:
+            # Both rules, separately: the original's (already passed) and the text's own.
+            readable = [
+                text for text in texts
+                if converted_text_access_allowed(text, candidate.original, authorized_group_ids=groups)
+            ]
+            if not readable:
+                not_shown += 1
+                continue
+            # A provider can hold more than one listed converted text for one original
+            # (ABC: a legacy TEI-derived text next to the merged one). The provider's
+            # rank decides; within one rank the newest, highest provider file id.
+            newest_first = sorted(readable, key=_id_order, reverse=True)
+            candidate.converted = min(newest_first, key=provider.supplement_text_artifact_sort_key)
+        openable.append(candidate)
+    return openable, not_shown
 
 
 def _main_not_tickable_reason(route: ListingRoute, *, main_in_paper: bool) -> FileReason | None:

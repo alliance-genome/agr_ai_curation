@@ -351,7 +351,14 @@ async def remove_paper_file(
     if removed.chunk_range is not None:
         start, end = removed.chunk_range
         try:
-            await asyncio.to_thread(delete_chunk_range, str(document_id), subject, start=start, end=end)
+            await asyncio.to_thread(
+                delete_chunk_range,
+                str(document_id),
+                subject,
+                start=start,
+                end=end,
+                caller_reports_failure=True,
+            )
         except Exception as exc:
             removed.cleanup_failures.append("pieces")
             _report_cleanup_failure(exc, document_id, "pieces")
@@ -361,7 +368,13 @@ async def remove_paper_file(
         removed.cleanup_failures.append("stored_files")
         _report_cleanup_failure(exc, document_id, "stored_files")
     try:
-        await update_document_piece_count(str(document_id), removed.ready_piece_total, weaviate_client, subject)
+        await update_document_piece_count(
+            str(document_id),
+            removed.ready_piece_total,
+            weaviate_client,
+            subject,
+            caller_reports_failure=True,
+        )
     except Exception as exc:
         removed.cleanup_failures.append("piece_count")
         _report_cleanup_failure(exc, document_id, "piece_count")

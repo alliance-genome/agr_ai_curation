@@ -131,7 +131,8 @@ class DocumentSourceSupplementChoice(BaseModel):
     )
     display_name: Optional[str] = Field(
         None,
-        description="The listing entry's human-readable display name when known",
+        max_length=255,
+        description="Optional client hint for the listing entry's display name; authoritative name is resolved from the provider listing",
     )
 
 

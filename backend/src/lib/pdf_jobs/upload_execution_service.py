@@ -15,11 +15,12 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from fastapi import BackgroundTasks
 from src.lib.observability.cost_context import costed_document_processing
+from src.lib.document_sources.file_reasons import FileReason
 from src.lib.document_sources.ingestion import (
     DocumentSourceIngestionError,
     ProviderMarkdownIngestionRequest,
@@ -257,34 +258,58 @@ def _format_conversion_wait_duration(seconds: float) -> str:
     return f"{hour_part} {minute_part}"
 
 
+@dataclass
+class _ConversionExecutionState:
+    """In-flight conversion execution state used to classify bounded timeouts accurately."""
+
+    started_at: float
+    ingesting_markdown: bool = False
+
+
+def _timestamp_from_datetime(value: Any) -> float | None:
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc).timestamp()
+    return value.timestamp()
+
+
+def _recorded_import_started_at(job: Any, fallback_started_at: float) -> float:
+    """Return the earliest recorded import start timestamp (including queue wait)."""
+    candidates: list[float] = []
+    if job is not None:
+        sent = pdf_job_service.conversion_requests_sent(job)
+        raw_sent_at = sent.get("on_demand_sent_at")
+        if isinstance(raw_sent_at, str) and raw_sent_at.strip():
+            try:
+                candidates.append(datetime.fromisoformat(raw_sent_at).timestamp())
+            except ValueError:
+                pass
+        created_ts = _timestamp_from_datetime(getattr(job, "created_at", None))
+        if created_ts is not None:
+            candidates.append(created_ts)
+    return min(candidates) if candidates else fallback_started_at
+
+
 def _conversion_provider_label(
     *,
     source_provenance: Mapping[str, Any] | None = None,
-    provider: DocumentSourceProvider | None = None,
 ) -> str:
-    """Resolve the provider's short label from registration metadata without hardcoding a package in core."""
-    metadata: Mapping[str, Any] | None = None
-    for candidate_id in (
-        _non_empty_string(getattr(provider, "provider_id", None)),
-        _non_empty_string(
-            source_provenance.get("provider") if isinstance(source_provenance, Mapping) else None
-        ),
-    ):
-        if candidate_id:
-            metadata = get_document_source_provider_metadata(candidate_id)
-            if isinstance(metadata, Mapping):
-                break
-    if isinstance(metadata, Mapping):
-        short_label = metadata.get("short_label")
-        if isinstance(short_label, str) and short_label.strip():
-            return short_label.strip()
-    provider_short = getattr(provider, "short_label", None)
-    if isinstance(provider_short, str) and provider_short.strip():
-        return provider_short.strip()
-    if isinstance(metadata, Mapping):
-        display_label = metadata.get("display_label")
-        if isinstance(display_label, str) and display_label.strip():
-            return display_label.strip()
+    """Resolve the provider's short label from canonical registration metadata."""
+    provider_id = _non_empty_string(
+        source_provenance.get("provider") if isinstance(source_provenance, Mapping) else None
+    )
+    if provider_id:
+        metadata = get_document_source_provider_metadata(provider_id)
+        if isinstance(metadata, Mapping):
+            for key in ("short_label", "display_label"):
+                label = _non_empty_string(metadata.get(key))
+                if label:
+                    return label
+        logger.warning(
+            "Document-source provider '%s' has no registered presentation label; using neutral wording",
+            provider_id,
+        )
     return "The document source"
 
 
@@ -292,13 +317,9 @@ def _conversion_timeout_message(
     elapsed_seconds: float,
     *,
     source_provenance: Mapping[str, Any] | None = None,
-    provider: DocumentSourceProvider | None = None,
 ) -> str:
     """Approved N32 timeout wording (Card 7, 24 Nov 2026)."""
-    provider_label = _conversion_provider_label(
-        source_provenance=source_provenance,
-        provider=provider,
-    )
+    provider_label = _conversion_provider_label(source_provenance=source_provenance)
     duration = _format_conversion_wait_duration(elapsed_seconds)
     return (
         f"{provider_label} had not converted this paper {duration} after the import started, "
@@ -307,16 +328,14 @@ def _conversion_timeout_message(
 
 
 def _conversion_exceeded_message(
-    requested_at: float,
+    started_at: float,
     *,
     source_provenance: Mapping[str, Any] | None = None,
-    provider: DocumentSourceProvider | None = None,
 ) -> str:
-    """The timeout message for the time waited since the paper's own import request."""
+    """The timeout message for the time waited since the import started."""
     return _conversion_timeout_message(
-        time.time() - requested_at,
+        max(0.0, time.time() - started_at),
         source_provenance=source_provenance,
-        provider=provider,
     )
 
 
@@ -375,7 +394,7 @@ class UploadExecutionService:
         self._queues_by_job: weakref.WeakValueDictionary[str, _RequestJobQueue] = (
             weakref.WeakValueDictionary()
         )
-        self._conversion_providers_by_job: dict[str, DocumentSourceProvider] = {}
+        self._conversion_state_by_job: dict[str, _ConversionExecutionState] = {}
 
     def _record_queued_job(self, background_tasks: BackgroundTasks, job_id: str) -> None:
         queue = self._queues_by_request.setdefault(background_tasks, _RequestJobQueue())
@@ -649,6 +668,8 @@ class UploadExecutionService:
 
     async def _execute_provider_conversion_bounded(self, request: ProviderConversionExecutionRequest) -> None:
         timeout_seconds = get_document_source_import_timeout_seconds()
+        state = _ConversionExecutionState(started_at=time.time())
+        self._conversion_state_by_job[request.job_id] = state
         try:
             await asyncio.wait_for(
                 self._execute_provider_conversion_unbounded(request),
@@ -661,25 +682,37 @@ class UploadExecutionService:
                 task_name="pdf_jobs.execute_provider_conversion",
             )
         except asyncio.TimeoutError:
-            if _job_was_finalized_elsewhere(request.job_id):
+            existing_job = pdf_job_service.get_job_by_id(job_id=request.job_id, reconcile_stale=False)
+            if existing_job is not None and existing_job.status in TERMINAL_PDF_JOB_STATUSES:
                 logger.info(
                     "Provider conversion job %s was finalized elsewhere; nothing written at its deadline",
                     request.job_id,
                 )
                 return
-            timeout_error = RuntimeError(
-                _conversion_timeout_message(
-                    timeout_seconds,
-                    source_provenance=getattr(request, "source_provenance", None),
-                    provider=self._conversion_providers_by_job.get(request.job_id),
+            if state.ingesting_markdown:
+                timeout_error = RuntimeError(
+                    f"Provider Markdown import exceeded {timeout_seconds:g} seconds"
                 )
-            )
-            logger.error(
-                "Provider conversion timed out for document %s after %s seconds",
-                request.document_id,
-                timeout_seconds,
-                extra={"sentry_skip_event": True},
-            )
+                logger.error(
+                    "Provider Markdown import timed out for document %s after %s seconds",
+                    request.document_id,
+                    timeout_seconds,
+                    extra={"sentry_skip_event": True},
+                )
+            else:
+                import_started_at = _recorded_import_started_at(existing_job, state.started_at)
+                timeout_error = RuntimeError(
+                    _conversion_timeout_message(
+                        max(0.0, time.time() - import_started_at),
+                        source_provenance=getattr(request, "source_provenance", None),
+                    )
+                )
+                logger.error(
+                    "Provider conversion timed out for document %s after %s seconds",
+                    request.document_id,
+                    timeout_seconds,
+                    extra={"sentry_skip_event": True},
+                )
             self._report_execution_failure(
                 timeout_error,
                 task_name="pdf_jobs.execute_provider_conversion",
@@ -705,7 +738,7 @@ class UploadExecutionService:
                 stage=ProcessingStage.FAILED.value,
             )
         finally:
-            self._conversion_providers_by_job.pop(request.job_id, None)
+            self._conversion_state_by_job.pop(request.job_id, None)
 
     async def _execute_provider_conversion_unbounded(
         self,
@@ -748,7 +781,6 @@ class UploadExecutionService:
             _refuse_if_login_expired(request)
 
             provider = self._document_source_provider_factory()
-            self._conversion_providers_by_job[request.job_id] = provider
             # The provider's on-demand request is sent once per import: by the import
             # itself (recorded on the job), or here when the import did not need to.
             # Each request is recorded before it is sent, so it is never repeated.
@@ -761,6 +793,7 @@ class UploadExecutionService:
                 last_result = await provider.request_conversion(
                     request.reference, wait=False, request_bearer_token=curator_token,
                 )
+            import_started_at = _recorded_import_started_at(existing_job, requested_at)
             wait_ends_at = requested_at + deadline_seconds
             request_timeout_seconds = get_document_source_request_timeout_seconds()
             # The end request goes out when another read would no longer fit.
@@ -791,9 +824,8 @@ class UploadExecutionService:
                     if time.time() >= wait_ends_at:
                         raise RuntimeError(
                             _conversion_exceeded_message(
-                                requested_at,
+                                import_started_at,
                                 source_provenance=getattr(request, "source_provenance", None),
-                                provider=provider,
                             )
                         ) from None
                     if _job_was_finalized_elsewhere(request.job_id):
@@ -846,6 +878,9 @@ class UploadExecutionService:
                         request,
                         selected_artifact,
                     )
+                    state = self._conversion_state_by_job.get(request.job_id)
+                    if state is not None:
+                        state.ingesting_markdown = True
                     await self._execute_provider_markdown_unbounded(
                         ProviderMarkdownExecutionRequest(
                             document_id=request.document_id,
@@ -878,9 +913,8 @@ class UploadExecutionService:
                     # it was read once above, and nothing is asked outside the hold.
                     raise RuntimeError(
                         _conversion_exceeded_message(
-                            requested_at,
+                            import_started_at,
                             source_provenance=getattr(request, "source_provenance", None),
-                            provider=provider,
                         )
                     )
                 if not sent.get("end_sent_at") and now >= end_request_at:
@@ -889,9 +923,8 @@ class UploadExecutionService:
                         # end as a paper past its deadline does, asking nothing.
                         raise RuntimeError(
                             _conversion_exceeded_message(
-                                requested_at,
+                                import_started_at,
                                 source_provenance=getattr(request, "source_provenance", None),
-                                provider=provider,
                             )
                         )
                     # Nothing appeared in time: ask the provider once more, only to
@@ -908,9 +941,8 @@ class UploadExecutionService:
                         # The record write took the room: recorded, never sent.
                         raise RuntimeError(
                             _conversion_exceeded_message(
-                                requested_at,
+                                import_started_at,
                                 source_provenance=getattr(request, "source_provenance", None),
-                                provider=provider,
                             )
                         )
                     last_result = await provider.request_conversion(
@@ -990,6 +1022,11 @@ class UploadExecutionService:
                     request,
                     message=str(exc),
                     stage=ProcessingStage.FAILED.value,
+                    supplement_failure_reason=(
+                        FileReason.LOGIN_EXPIRED.value
+                        if isinstance(exc, DocumentSourceLoginExpired)
+                        else None
+                    ),
                 )
         finally:
             if provider is not None:
@@ -1192,6 +1229,11 @@ class UploadExecutionService:
                     request,
                     message=str(exc),
                     stage=ProcessingStage.FAILED.value,
+                    supplement_failure_reason=(
+                        FileReason.LOGIN_EXPIRED.value
+                        if isinstance(exc, DocumentSourceLoginExpired)
+                        else None
+                    ),
                 )
         finally:
             if provider is not None:
@@ -1363,38 +1405,48 @@ class UploadExecutionService:
         under a job of its own kind (it never stands for the paper's state) in its
         own task, so the next paper of the request starts meanwhile.
         """
-        await self._mark_completed_and_sync_tracker(
-            request, message=message, observability_receipt=observability_receipt,
-        )
         plan = request.supplements
         if plan is None:
+            await self._mark_completed_and_sync_tracker(
+                request, message=message, observability_receipt=observability_receipt,
+            )
             return
         from src.lib.document_sources import supplement_wait
         from src.lib.document_sources.file_listing_service import list_files_for_paper
         from src.lib.document_sources.supplement_add import add_files_to_paper
 
-        try:
-            stage_job = await asyncio.to_thread(
-                pdf_job_service.start_supplement_wait_job,
-                document_id=request.document_id,
-                user_id=plan.owner_user_id,
-                filename=getattr(request, "filename", None),
-                supplements=supplement_wait.queued_entries(plan),
-                source_job_id=request.job_id,
-            )
-        except pdf_job_service.ActiveJobExistsError:
-            # The curator deleted the paper, or started an add or a delete on it,
-            # in the moment after it became ready: its supplements are not waited
-            # for, and the import's own job says so for each chosen file.
-            logger.info(
-                "Supplement stage of document %s not started: the paper is busy or gone",
-                request.document_id,
-            )
-            await asyncio.to_thread(
-                pdf_job_service.record_supplement_outcomes_on_finished_job,
-                job_id=request.job_id,
-                supplements=supplement_wait.not_started_entries(plan),
-            )
+        terminal_metadata = (
+            {PDF_PROCESSING_RECEIPT_KEY: observability_receipt}
+            if observability_receipt
+            else None
+        )
+        stored_job, stage_job = await asyncio.to_thread(
+            pdf_job_service.complete_import_and_start_supplement_wait,
+            job_id=request.job_id,
+            document_id=request.document_id,
+            user_id=plan.owner_user_id,
+            filename=getattr(request, "filename", None),
+            message=message,
+            metadata=terminal_metadata,
+            fallback_supplements=supplement_wait.queued_entries(plan),
+        )
+        await self._sync_tracker_from_terminal_job(
+            request,
+            stored_job=stored_job,
+        )
+        if stage_job is None:
+            if stored_job is not None and stored_job.status == PdfJobStatus.COMPLETED.value:
+                logger.info(
+                    "Supplement stage of document %s not started: the paper is busy or gone",
+                    request.document_id,
+                )
+            else:
+                logger.info(
+                    "Supplement stage of document %s not started: import job %s already finalized as %s",
+                    request.document_id,
+                    request.job_id,
+                    stored_job.status if stored_job is not None else "missing",
+                )
             return
         stage_job_id = str(stage_job.job_id)
 
@@ -1475,6 +1527,7 @@ class UploadExecutionService:
         message: str,
         stage: str,
         observability_receipt: dict[str, Any] | None = None,
+        supplement_failure_reason: str | None = None,
     ) -> None:
         terminal_kwargs: dict[str, Any] = {
             "job_id": request.job_id,
@@ -1485,6 +1538,8 @@ class UploadExecutionService:
             terminal_kwargs["metadata"] = {
                 PDF_PROCESSING_RECEIPT_KEY: observability_receipt,
             }
+        if supplement_failure_reason is not None:
+            terminal_kwargs["supplement_failure_reason"] = supplement_failure_reason
         stored_job = pdf_job_service.mark_failed(**terminal_kwargs)
         await self._sync_tracker_from_terminal_job(
             request,

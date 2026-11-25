@@ -30,9 +30,10 @@ def _make_removed(document_id, file_id, *, owner_subject: str, stored_path: str)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("redaction_enabled", ["true", "false"])
 @pytest.mark.parametrize("failing_step", ["pieces", "stored_files", "piece_count", "file_row", "cache"])
 async def test_cleanup_failure_reports_sanitized_sentry_event_once_with_no_sensitive_leaks(
-    monkeypatch, caplog, failing_step
+    monkeypatch, caplog, failing_step, redaction_enabled
 ):
     document_id = uuid4()
     file_id = uuid4()
@@ -80,7 +81,7 @@ async def test_cleanup_failure_reports_sanitized_sentry_event_once_with_no_sensi
 
     captured_events: list[dict] = []
 
-    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "true")
+    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", redaction_enabled)
     sentry_sdk.init(
         dsn="https://public@example.invalid/1",
         transport=captured_events.append,
@@ -194,3 +195,101 @@ async def test_cleanup_report_preserves_sanitized_traceback_and_survives_capture
     assert err.__cause__ is None and err.__context__ is None
     assert "/private/path/file.pdf" not in caplog.text
     assert all(getattr(r, "sentry_skip_event", False) for r in caplog.records if r.name == file_removal.__name__)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failing_step", ["pieces", "piece_count"])
+async def test_real_weaviate_reconnect_failure_emits_single_sanitized_event_without_url_leak(
+    monkeypatch, caplog, failing_step
+):
+    """Real WeaviateConnection.session(caller_reports_failure=True) avoids promoted-log URL leaks."""
+    from src.lib.weaviate_client.connection import WeaviateConnection
+
+    document_id = uuid4()
+    file_id = uuid4()
+    fake_subject = "sub-real-weaviate-curator@example.org"
+    raw_weaviate_secret = f"Weaviate refused connection for {fake_subject} doc={document_id} file={file_id}"
+    removed = _make_removed(
+        document_id,
+        file_id,
+        owner_subject=fake_subject,
+        stored_path=f"{fake_subject}/{document_id}/Secret_Supplement.pdf",
+    )
+    monkeypatch.setattr(file_removal, "_mark_removed_or_busy", lambda *_args: removed)
+    monkeypatch.setattr("src.lib.document_files.service.remove_stored_files", lambda *_a, **_k: None)
+    monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_a, **_k: None)
+
+    broken_conn = WeaviateConnection(url="http://weaviate.invalid:8080")
+    monkeypatch.setattr(
+        "src.lib.weaviate_client.connection.weaviate.connect_to_custom",
+        Mock(side_effect=ConnectionError(raw_weaviate_secret)),
+    )
+
+    if failing_step == "pieces":
+        monkeypatch.setattr("src.lib.weaviate_client.chunks.get_connection", lambda: broken_conn)
+
+        async def _ok_piece_count(*_a, **_k):
+            return None
+
+        monkeypatch.setattr("src.lib.pipeline.store.update_document_piece_count", _ok_piece_count)
+        weaviate_arg = SimpleNamespace()
+    else:
+        monkeypatch.setattr("src.lib.weaviate_client.chunks.delete_chunk_range", lambda *_a, **_k: 0)
+        weaviate_arg = broken_conn
+
+    captured_events: list[dict] = []
+    # Production default: content redaction off; sanitization must not depend on redaction.
+    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "false")
+    sentry_sdk.init(
+        dsn="https://public@example.invalid/1",
+        transport=captured_events.append,
+        before_send=before_send,
+        send_default_pii=False,
+        include_local_variables=False,
+        default_integrations=False,
+        integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+    )
+    caplog.set_level(logging.WARNING)
+    try:
+        with sentry_sdk.isolation_scope() as scope:
+            def _attach_delete_request(event, _hint):
+                event.setdefault(
+                    "request",
+                    {
+                        "method": "DELETE",
+                        "url": f"https://app.example.org/api/weaviate/documents/{document_id}/files/{file_id}",
+                    },
+                )
+                return event
+
+            scope.add_event_processor(_attach_delete_request)
+            result = await remove_paper_file(document_id, 42, file_id, weaviate_client=weaviate_arg)
+        sentry_sdk.flush(timeout=2.0)
+    finally:
+        sentry_sdk.init()
+
+    assert result.cleanup_finished is False
+    assert result.cleanup_failures == [failing_step]
+    # Exactly ONE Sentry event: WeaviateConnection.session(caller_reports_failure=True)
+    # must NOT emit an unmarked ERROR log that LoggingIntegration promotes with the DELETE URL.
+    assert len(captured_events) == 1
+    event = captured_events[0]
+    assert event["tags"]["operation"] == "file_removal_cleanup_failed"
+    assert event["fingerprint"] == ["file_removal_cleanup_failed", failing_step]
+    assert "request" not in event
+    assert event["contexts"]["runtime_exception"]["document_id"] == hash_sentry_identifier(str(document_id))
+    assert event["exception"]["values"][0]["value"] == (
+        f"Clearing a removed file's {failing_step} failed (ConnectionError)"
+    )
+
+    serialized = json.dumps(event)
+    for sensitive in (
+        str(document_id),
+        str(file_id),
+        fake_subject,
+        "Secret_Supplement.pdf",
+        "Weaviate refused connection",
+        "/api/weaviate/documents/",
+    ):
+        assert sensitive not in serialized
+        assert sensitive not in caplog.text

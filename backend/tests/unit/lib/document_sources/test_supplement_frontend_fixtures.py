@@ -2,6 +2,7 @@
 
 Serializes real outputs from ``file_listing.listing_to_payload``,
 ``supplement_wait._Stage.record`` / ``pdf_job_service.record_supplement_outcomes_on_finished_job``,
+``supplement_wait.queued_entries`` / ``pdf_job_service.mark_cancelled`` / ``pdf_job_service.mark_failed``,
 ``supplement_add.run_supplement_add_job``, and ``file_removal.removal_check`` and asserts
 that checked-in ``frontend/src/test/fixtures/supplements/*.json`` files match
 byte-for-byte. Uses neutral provider/reference values so core tests stay project-agnostic.
@@ -130,6 +131,7 @@ def _sample_plan() -> SupplementPlan:
                 provider_file_id="90",
                 md5="md5-90",
                 converted_md5="conv-md5-90",
+                display_name="Busy_S90.xlsx",
             ),
         ),
         request_context=_sample_context(),
@@ -394,8 +396,99 @@ class _FakeJobRowSession:
     def rollback(self) -> None:
         pass
 
+    def refresh(self, _obj: Any) -> None:
+        pass
+
     def close(self) -> None:
         pass
+
+
+class _FixedDatetime(datetime):
+    @classmethod
+    def now(cls, tz: Any = None) -> datetime:
+        fixed = datetime(2026, 11, 24, 15, 5, 0, tzinfo=timezone.utc)
+        return fixed if tz is None else fixed.astimezone(tz)
+
+
+def _queued_import_plan() -> SupplementPlan:
+    return SupplementPlan(
+        chosen=(
+            ChosenSupplement(
+                provider_file_id="30",
+                md5="md5-30",
+                converted_md5="conv-md5-30",
+                display_name="Table_S1.xlsx",
+            ),
+            ChosenSupplement(
+                provider_file_id="40",
+                md5="md5-40",
+                converted_md5=None,
+                display_name=None,
+            ),
+        ),
+        request_context=_sample_context(),
+        login_expires_at=None,
+        owner_user_id=1,
+        reference="REF:101",
+    )
+
+
+def _fake_queued_import_job(queued: list[dict[str, Any]]) -> SimpleNamespace:
+    started_at = datetime(2026, 11, 24, 15, 0, 0, tzinfo=timezone.utc)
+    return SimpleNamespace(
+        id=JOB_UUID,
+        document_id=DOC_UUID,
+        user_id=1,
+        filename="Made_up_main.pdf",
+        status="pending",
+        current_stage="pending",
+        progress_percentage=0,
+        message="Queued for background processing",
+        process_id=None,
+        cancel_requested=False,
+        error_message=None,
+        metadata_json={"supplements": [dict(entry) for entry in queued]},
+        created_at=started_at,
+        started_at=started_at,
+        updated_at=started_at,
+        completed_at=None,
+    )
+
+
+def _build_cancel_while_queued_metadata_fixture() -> dict[str, Any]:
+    """Capture exact G3 queued, cancelled-while-queued, and login-expired main-job metadata."""
+
+    queued = supplement_wait.queued_entries(_queued_import_plan())
+
+    cancelled_job = _fake_queued_import_job(queued)
+    with (
+        patch.object(pdf_job_service, "SessionLocal", return_value=_FakeJobRowSession(cancelled_job)),
+        patch.object(pdf_job_service, "_reconcile_terminal_document", return_value=False),
+        patch.object(pdf_job_service, "datetime", _FixedDatetime),
+    ):
+        pdf_job_service.mark_cancelled(
+            job_id=JOB_UUID,
+            reason="Cancelled before processing started",
+        )
+
+    login_expired_job = _fake_queued_import_job(queued)
+    with (
+        patch.object(pdf_job_service, "SessionLocal", return_value=_FakeJobRowSession(login_expired_job)),
+        patch.object(pdf_job_service, "_reconcile_terminal_document", return_value=False),
+        patch.object(pdf_job_service, "datetime", _FixedDatetime),
+    ):
+        pdf_job_service.mark_failed(
+            job_id=JOB_UUID,
+            message="Your login expired.",
+            stage="failed",
+            supplement_failure_reason=FileReason.LOGIN_EXPIRED.value,
+        )
+
+    return {
+        "accepted_queued": {"supplements": queued},
+        "cancelled_while_queued": dict(cancelled_job.metadata_json),
+        "failed_login_expired_while_queued": dict(login_expired_job.metadata_json),
+    }
 
 
 def _capture_not_started_job_metadata() -> dict[str, Any]:
@@ -747,6 +840,7 @@ def build_fixtures() -> dict[str, str]:
     payloads: dict[str, Any] = {
         "file_listing.json": _build_file_listing_fixture(),
         "supplement_wait_metadata.json": _build_supplement_wait_metadata_fixture(),
+        "cancel_while_queued_metadata.json": _build_cancel_while_queued_metadata_fixture(),
         "supplement_add_metadata.json": _build_supplement_add_metadata_fixture(),
         "removal_check.json": _build_removal_check_fixture(),
     }

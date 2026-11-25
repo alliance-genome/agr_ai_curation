@@ -221,3 +221,156 @@ def test_handoff_transfers_queued_entries_atomically_and_cancel_while_queued_clo
     }
     assert all(observed)
 
+
+def test_atomic_complete_and_handoff_transfers_persisted_queued_entries(owner):
+    owner_id, _ = owner
+    paper = _ready_paper(owner_id)
+    queued = [_entry("30", "queued"), _entry("40", "queued")]
+    main_job = job_service.create_job(
+        document_id=paper.id,
+        user_id=owner_id,
+        filename=paper.filename,
+        metadata={"supplements": queued},
+    )
+
+    completed_main, stage_job = job_service.complete_import_and_start_supplement_wait(
+        job_id=main_job.job_id,
+        document_id=paper.id,
+        user_id=owner_id,
+        filename=paper.filename,
+        message="Processing completed",
+        fallback_supplements=[_entry("99", "queued")],  # persisted entries win over fallback
+    )
+
+    assert completed_main is not None and completed_main.status == "completed"
+    assert stage_job is not None and stage_job.status == "pending"
+    with SessionLocal() as db:
+        main_meta = db.get(PdfProcessingJob, main_job.job_id).metadata_json or {}
+        stage_meta = db.get(PdfProcessingJob, stage_job.job_id).metadata_json or {}
+    assert "supplements" not in main_meta
+    assert [(e["provider_file_id"], e["display_name"], e["state"]) for e in stage_meta["supplements"]] == [
+        ("30", "Made_up_S30", "queued"),
+        ("40", "Made_up_S40", "queued"),
+    ]
+
+
+def test_atomic_complete_when_paper_busy_closes_entries_on_main_job_atomically(owner):
+    from src.lib.document_files.paper_lock import try_lock_paper_for_add
+
+    owner_id, _ = owner
+    paper = _ready_paper(owner_id)
+    queued = [_entry("30", "queued"), _entry("40", "queued")]
+    main_job = job_service.create_job(
+        document_id=paper.id,
+        user_id=owner_id,
+        filename=paper.filename,
+        metadata={"supplements": queued},
+    )
+
+    # Hold the paper's operation advisory lock from a separate connection to simulate a concurrent delete/add.
+    with SessionLocal() as holder:
+        assert try_lock_paper_for_add(holder, paper.id) is True
+        completed_main, stage_job = job_service.complete_import_and_start_supplement_wait(
+            job_id=main_job.job_id,
+            document_id=paper.id,
+            user_id=owner_id,
+            filename=paper.filename,
+            message="Processing completed",
+        )
+        holder.rollback()
+
+    assert completed_main is not None and completed_main.status == "completed"
+    assert stage_job is None
+    status, entries, observed = _entries(main_job.job_id)
+    assert status == "completed"
+    assert entries == {
+        "30": ("left_out", "paper_busy_when_ready"),
+        "40": ("left_out", "paper_busy_when_ready"),
+    }
+    assert all(observed)
+    with SessionLocal() as db:
+        saved = db.get(PdfProcessingJob, main_job.job_id).metadata_json["supplements"]
+        all_jobs = db.query(PdfProcessingJob).filter(PdfProcessingJob.document_id == paper.id).all()
+    assert [entry["display_name"] for entry in saved] == ["Made_up_S30", "Made_up_S40"]
+    assert [j for j in all_jobs if (j.metadata_json or {}).get("job_kind") == "supplement_wait"] == []
+
+
+@pytest.mark.parametrize("terminal_kind", ["cancelled", "failed"])
+def test_late_worker_after_cancel_or_fail_never_reopens_or_erases_supplement_outcomes(owner, terminal_kind):
+    owner_id, _ = owner
+    paper = _ready_paper(owner_id)
+    queued = [_entry("30", "queued"), _entry("40", "queued")]
+    main_job = job_service.create_job(
+        document_id=paper.id,
+        user_id=owner_id,
+        filename=paper.filename,
+        metadata={"supplements": queued},
+    )
+    if terminal_kind == "cancelled":
+        job_service.mark_cancelled(job_id=main_job.job_id, reason="Cancelled by user")
+        expected_reason = "import_cancelled"
+    else:
+        job_service.mark_failed(job_id=main_job.job_id, message="Main import failed", stage="failed")
+        expected_reason = "supplement_stage_failed"
+
+    # Late worker attempts atomic completion+handoff: terminal winner must be preserved untouched.
+    returned_main, stage_job = job_service.complete_import_and_start_supplement_wait(
+        job_id=main_job.job_id,
+        document_id=paper.id,
+        user_id=owner_id,
+        filename=paper.filename,
+        message="Processing completed",
+        fallback_supplements=queued,
+    )
+    assert returned_main is not None and returned_main.status == terminal_kind
+    assert stage_job is None
+
+    # Direct start_supplement_wait_job with source_job_id must also refuse handoff without mutating outcomes.
+    with pytest.raises(job_service.SupplementHandoffRefusedError):
+        job_service.start_supplement_wait_job(
+            document_id=paper.id,
+            user_id=owner_id,
+            filename=paper.filename,
+            supplements=queued,
+            source_job_id=main_job.job_id,
+        )
+
+    status, entries, observed = _entries(main_job.job_id)
+    assert status == terminal_kind
+    assert entries == {
+        "30": ("left_out", expected_reason),
+        "40": ("left_out", expected_reason),
+    }
+    assert all(observed)
+    with SessionLocal() as db:
+        all_jobs = db.query(PdfProcessingJob).filter(PdfProcessingJob.document_id == paper.id).all()
+    assert [j for j in all_jobs if (j.metadata_json or {}).get("job_kind") == "supplement_wait"] == []
+
+
+def test_main_import_login_expired_closes_queued_supplements_with_login_expired(owner):
+    from src.lib.document_sources.file_reasons import FileReason
+
+    owner_id, _ = owner
+    paper = _ready_paper(owner_id)
+    import_job = job_service.create_job(
+        document_id=paper.id,
+        user_id=owner_id,
+        filename=paper.filename,
+        metadata={"supplements": [_entry("30", "queued"), _entry("40", "queued")]},
+    )
+
+    job_service.mark_failed(
+        job_id=import_job.job_id,
+        message="Your login expired.",
+        stage="failed",
+        supplement_failure_reason=FileReason.LOGIN_EXPIRED.value,
+    )
+
+    status, entries, observed = _entries(import_job.job_id)
+    assert status == "failed"
+    assert entries == {
+        "30": ("left_out", "login_expired"),
+        "40": ("left_out", "login_expired"),
+    }
+    assert all(observed)
+

@@ -175,7 +175,8 @@ class _SpooledPdf:
 @dataclass(slots=True)
 class _Accepted:
     listed: ListedFile
-    display_name: str
+    storage_name: str
+    public_display_name: str | None
     markdown: str
     sha256: str
     prepared: Any  # ingestion.PreparedFile
@@ -186,14 +187,29 @@ class _Accepted:
 Checkpoint = Callable[[str], Awaitable[None]]
 
 
-def _display_name(listed: ListedFile) -> str:
-    """The provider's display name with the original's extension (``Table_S1.xlsx``)."""
-
-    name = (listed.display_name or listed.provider_file_id).strip()
+def _with_extension(name: str, listed: ListedFile) -> str:
     extension = str(listed.source_artifact.metadata.get("file_extension") or "").strip().lower()
     if extension and not name.lower().endswith(f".{extension}"):
         name = f"{name}.{extension}"
     return name[:255]
+
+
+def _public_display_name(listed: ListedFile) -> str | None:
+    """The provider's human-readable name with extension, or ``None`` when unnamed."""
+
+    raw = (listed.display_name or "").strip()
+    if not raw:
+        return None
+    return _with_extension(raw, listed)
+
+
+def _storage_display_name(listed: ListedFile) -> str:
+    """Required non-empty internal filename for SQL storage and text section fallback."""
+
+    public = _public_display_name(listed)
+    if public is not None:
+        return public
+    return _with_extension(listed.provider_file_id.strip(), listed)
 
 
 def _scoped_file_hash(owner_user_id: int, sha256: str) -> str:
@@ -300,12 +316,13 @@ async def _check_and_write(
         if listed is None:
             outcomes[file_id] = FileOutcome(file_id, "left_out", FileReason.FILE_NOT_IN_REFERENCE)
             continue
-        display_name = _display_name(listed)
+        public_display_name = _public_display_name(listed)
+        storage_name = _storage_display_name(listed)
 
         def left_out(reason: FileReason, measured: int | None = None, limit: int | None = None) -> FileOutcome:
             return FileOutcome(
                 file_id, "left_out", reason, measured_value=measured, limit_value=limit,
-                display_name=display_name,
+                display_name=public_display_name,
             )
 
         if listed.in_this_paper:
@@ -336,7 +353,7 @@ async def _check_and_write(
             continue
         markdown, sha256 = checked
 
-        prepared = await _prepare(listed, markdown, document_id=document_id, display_name=display_name)
+        prepared = await _prepare(listed, markdown, document_id=document_id, display_name=storage_name)
         if prepared is None:
             outcomes[file_id] = left_out(FileReason.MARKDOWN_INVALID)
             continue
@@ -354,8 +371,14 @@ async def _check_and_write(
         text_total += prepared.text_bytes
         file_count += 1
         accepted.append(_Accepted(
-            listed=listed, display_name=display_name, markdown=markdown, sha256=sha256, prepared=prepared,
-            file_id=uuid.uuid4(), pdf=pdf,
+            listed=listed,
+            storage_name=storage_name,
+            public_display_name=public_display_name,
+            markdown=markdown,
+            sha256=sha256,
+            prepared=prepared,
+            file_id=uuid.uuid4(),
+            pdf=pdf,
         ))
 
     if accepted:
@@ -366,7 +389,10 @@ async def _check_and_write(
         )
         for item in accepted:
             outcomes[item.listed.provider_file_id] = FileOutcome(
-                item.listed.provider_file_id, "added", file_id=item.file_id, display_name=item.display_name,
+                item.listed.provider_file_id,
+                "added",
+                file_id=item.file_id,
+                display_name=item.public_display_name,
             )
 
 
@@ -779,7 +805,7 @@ def _new_row(
         id=item.file_id,
         document_id=document_id,
         role=FILE_ROLE_SUPPLEMENT,
-        display_name=item.display_name,
+        display_name=item.storage_name,
         status=FILE_STATUS_PENDING,
         tab_order=tab_order,
         **stored,

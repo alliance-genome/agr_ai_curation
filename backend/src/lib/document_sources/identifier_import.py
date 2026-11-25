@@ -1024,6 +1024,7 @@ class IdentifierImportService:
                 resolved_chosen = _resolve_chosen_display_names(
                     chosen,
                     decision.artifacts,
+                    provider=provider,
                     authorized_group_ids=document_source_context.authorized_group_ids,
                 )
                 plan = SupplementPlan(
@@ -1649,27 +1650,33 @@ def _resolve_chosen_display_names(
     chosen: Sequence[ChosenSupplement],
     artifacts: Sequence[SourceArtifact],
     *,
+    provider: DocumentSourceProvider,
     authorized_group_ids: tuple[str, ...] | list[str] | set[str],
 ) -> tuple[ChosenSupplement, ...]:
-    """Attach the authoritative human-readable display name from authorized listed artifacts.
+    """Attach the authoritative human-readable display name from visible listed supplements.
 
-    Falls back to a caller-supplied display name if the listing was not attached, and
-    remains ``None`` when unnamed — never substituting the raw ``provider_file_id``.
+    Applies the exact visible-supplement access rule from ``file_listing`` (checking
+    both the original and any listed converted supplement text access policies) and
+    never falls back to untrusted caller-supplied display names or raw ``provider_file_id``.
     """
+    from src.lib.document_sources.file_listing import visible_supplement_candidates
 
+    visible_candidates, _ = visible_supplement_candidates(
+        provider,
+        artifacts,
+        authorized_group_ids=authorized_group_ids,
+    )
     listed_names: dict[str, str] = {}
-    for artifact in artifacts:
-        if not source_artifact_is_authorized(artifact, authorized_group_ids=authorized_group_ids):
-            continue
-        name = _normalize_display_name(artifact.display_name)
+    for candidate in visible_candidates:
+        name = _normalize_display_name(candidate.original.display_name)
         if name is not None:
-            listed_names[artifact.artifact_id] = name
+            listed_names[candidate.original.artifact_id] = name
     return tuple(
         ChosenSupplement(
             provider_file_id=item.provider_file_id,
             md5=item.md5,
             converted_md5=item.converted_md5,
-            display_name=listed_names.get(item.provider_file_id) or item.display_name,
+            display_name=listed_names.get(item.provider_file_id),
         )
         for item in chosen
     )
@@ -1690,7 +1697,6 @@ def _chosen_supplements_by_identifier(
                 provider_file_id=choice.provider_file_id,
                 md5=choice.md5,
                 converted_md5=choice.converted_md5,
-                display_name=_normalize_display_name(getattr(choice, "display_name", None)),
             )
         )
     file_limit = get_document_max_files_per_paper()

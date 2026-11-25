@@ -217,15 +217,49 @@ async def test_an_import_without_supplements_dispatches_as_today(tmp_path):
     assert "supplements" not in (created_jobs[0].get("metadata") or {})
 
 
+def _supplement_converted_text_artifact(
+    artifact_id: str,
+    *,
+    parent_artifact_id: str,
+    group_ids: tuple[str, ...] = ("FB",),
+):
+    from src.lib.document_sources.models import (
+        SourceAccessPolicy,
+        SourceAccessScope,
+        SourceArtifact,
+        SourceArtifactFormat,
+        SourceArtifactRole,
+        SourceArtifactStatus,
+    )
+
+    return SourceArtifact(
+        provider="abc_literature",
+        artifact_id=artifact_id,
+        role=SourceArtifactRole.CONVERTED_TEXT,
+        artifact_format=SourceArtifactFormat.MARKDOWN,
+        status=SourceArtifactStatus.AVAILABLE,
+        reference_id="123",
+        reference_curie="AGRKB:123",
+        display_name=f"converted-{artifact_id}.md",
+        md5sum=f"md5-{artifact_id}",
+        parent_artifact_id=parent_artifact_id,
+        access_policy=SourceAccessPolicy(scope=SourceAccessScope.RESTRICTED, group_ids=group_ids),
+    )
+
+
 @pytest.mark.asyncio
-async def test_display_name_resolution_prefers_authorized_listing_and_never_falls_back_to_id(tmp_path):
+async def test_display_name_resolution_uses_visible_listing_only_and_never_trusts_caller_or_id(tmp_path):
     provider = _FakeProvider(
         artifacts=(
             *_ready_artifacts(),
             _provider_metadata_artifact(),
             _supplement_artifact("40", "Authoritative_S40.xlsx", group_ids=("FB",)),
+            _supplement_converted_text_artifact("41", parent_artifact_id="40", group_ids=("FB",)),
             _supplement_artifact("50", "Secret_Other_Group.xlsx", group_ids=("OTHER",)),
             _supplement_artifact("60", None, group_ids=("FB",)),
+            # Mixed access: original is FB-authorized, converted text is OTHER-restricted -> hidden!
+            _supplement_artifact("80", "Secret_Mixed_Access.xlsx", group_ids=("FB",)),
+            _supplement_converted_text_artifact("81", parent_artifact_id="80", group_ids=("OTHER",)),
         ),
     )
     dispatch = _DispatchRecorder()
@@ -236,25 +270,50 @@ async def test_display_name_resolution_prefers_authorized_listing_and_never_fall
         user={"sub": "user-1"}, document_source_context=_context(),
         supplements=[
             _choice("40", converted_md5="md5-41", display_name="Stale_Caller_Name.xlsx"),
-            _choice("50", converted_md5="md5-51"),
-            _choice("60", converted_md5="md5-61"),
-            _choice("70", converted_md5="md5-71", display_name="Caller_Provided.docx"),
+            _choice("50", converted_md5="md5-51", display_name="Spoofed_Unauthorized.xlsx"),
+            _choice("60", converted_md5="md5-61", display_name="Spoofed_Unnamed.xlsx"),
+            _choice("70", converted_md5="md5-71", display_name="Spoofed_Absent.docx"),
+            _choice("80", converted_md5="md5-81", display_name="Spoofed_Mixed.xlsx"),
         ],
     )
 
     plan = dispatch.provider_markdown_calls[0]["request"].supplements
     assert [(item.provider_file_id, item.display_name) for item in plan.chosen] == [
         ("40", "Authoritative_S40.xlsx"),
-        ("50", None),  # unauthorized artifact display_name is never leaked
-        ("60", None),  # unnamed artifact stays None, never "60"
-        ("70", "Caller_Provided.docx"),
+        ("50", None),  # unauthorized original: never disclosed or spoofed
+        ("60", None),  # unnamed visible supplement stays None, never "60" or caller value
+        ("70", None),  # absent from listing: never falls back to untrusted caller display_name
+        ("80", None),  # mixed-access (authorized original + restricted converted text): hidden!
     ]
     assert [entry["display_name"] for entry in created_jobs[0]["metadata"]["supplements"]] == [
         "Authoritative_S40.xlsx",
         None,
         None,
-        "Caller_Provided.docx",
+        None,
+        None,
     ]
+
+
+def test_supplement_choice_display_name_is_optional_and_bounded_to_255_chars():
+    from pydantic import ValidationError
+
+    valid = DocumentSourceSupplementChoice(
+        identifier="123",
+        provider_file_id="40",
+        md5="md5-40",
+        converted_md5="md5-41",
+        display_name="A" * 255,
+    )
+    assert len(valid.display_name) == 255
+
+    with pytest.raises(ValidationError):
+        DocumentSourceSupplementChoice(
+            identifier="123",
+            provider_file_id="40",
+            md5="md5-40",
+            converted_md5="md5-41",
+            display_name="A" * 256,
+        )
 
 
 @pytest.mark.asyncio

@@ -273,6 +273,38 @@ async def test_a_refused_second_file_of_three_is_left_out_and_the_other_two_are_
 
 
 @pytest.mark.asyncio
+async def test_unnamed_supplement_keeps_public_display_name_null_on_add_and_refusal(monkeypatch, storage):
+    """Unnamed supplements keep required SQL storage names internal and emit display_name=None publicly."""
+    pair_20 = _pair(20, "WB")
+    pair_20[0]["display_name"] = ""
+    pair_30 = _pair(30, "WB")
+    pair_30[0]["display_name"] = "   "
+    rows = [_abc_show_all_main_pdf(10, "WB"), *pair_20, *pair_30]
+    _, provider = _provider(rows, GOOD)
+    _paper_lookup(monkeypatch)
+
+    result = await _add(provider, [_chosen(20), _chosen(30)])
+    outcomes = _by_id(result)
+
+    # Added unnamed file: SQL row has non-empty storage name, public FileOutcome has display_name=None.
+    assert outcomes["20"].outcome == "added"
+    assert outcomes["20"].display_name is None
+    assert [row.display_name for row in storage.inserted] == ["20.xlsx"]
+
+    # Refused unnamed file: public FileOutcome has display_name=None (never "30" or "30.xlsx").
+    assert outcomes["30"].outcome == "left_out"
+    assert outcomes["30"].reason_code is FileReason.TITLE_COUNT
+    assert outcomes["30"].display_name is None
+
+    # Serialized job metadata entries never substitute raw provider_file_id.
+    entries = supplement_add._supplement_entries(result)
+    assert [(e["provider_file_id"], e["display_name"], e["state"]) for e in entries] == [
+        ("20", None, "added"),
+        ("30", None, "left_out"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_rows_have_the_full_supplement_shape(monkeypatch, storage):
     _, provider = _provider(ROWS, GOOD)
     _paper_lookup(monkeypatch)

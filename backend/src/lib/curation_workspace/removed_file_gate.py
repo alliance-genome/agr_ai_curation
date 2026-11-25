@@ -27,8 +27,8 @@ from src.models.sql.pdf_document import FILE_STATUS_READY, PDFDocumentFile
 
 RESULT_QUOTES_REMOVED_FILE = "result_quotes_removed_file"
 # The exception's own text, for logs: routes send only the code, and a flow or batch
-# shows ``curator_errors``' message for it. No model reads it. A proposal awaiting
-# Chris's sign-off (ALL-1460 P10b-api).
+# shows ``curator_errors``' message for it. No model reads it. Approved wording
+# (Card 8, 24 Nov 2026).
 _MESSAGE = "This result quotes a file that was removed from the paper. Run the extraction again to review it."
 
 
