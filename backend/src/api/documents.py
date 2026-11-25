@@ -137,8 +137,6 @@ from ..services.user_service import principal_from_claims, provision_user, provi
 from .auth import get_auth_dependency
 
 logger = logging.getLogger(__name__)
-_REAL_DELETE_PAPER_CHUNKS = delete_paper_chunks
-_REAL_GET_DOCUMENT = get_document
 router = APIRouter(prefix="/weaviate")
 pipeline_tracker = PipelineTracker()
 upload_execution_service = UploadExecutionService(pipeline_tracker=pipeline_tracker)
@@ -1552,7 +1550,6 @@ async def delete_document_endpoint(
     # Nobody waits for it: when another delete or add holds it, this answers 409 at once.
     # Every database session of this delete is opened in a worker thread, so waiting for a
     # pooled connection never blocks the event loop; a pool timeout is a 503.
-    from sqlalchemy.engine import Connection as SqlAlchemyConnection
     from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
     from ..lib.document_files.paper_lock import (
@@ -1584,16 +1581,15 @@ async def delete_document_endpoint(
         async with paper_operation_lock(canonical_document_id) as lock_conn:
             # Only proceed with Weaviate query if ownership verified.
             # Every SQL worker under paper_operation_lock reuses lock_conn explicitly
-            # (when backed by a real SQLAlchemy connection) and drains before exiting so
-            # lock_conn is never released/closed concurrently with an in-flight worker thread.
-            lock_kwargs = {"connection": lock_conn} if isinstance(lock_conn, SqlAlchemyConnection) else {}
+            # and drains before exiting so lock_conn is never released/closed concurrently
+            # with an in-flight worker thread.
             try:
                 latest_job = await run_thread_drained(
                     lambda: pdf_job_service.get_latest_job_for_document(
                         document_id=canonical_document_id,
                         user_id=pg_doc.user_id,
                         reconcile_stale=True,
-                        **lock_kwargs,
+                        connection=lock_conn,
                     )
                 )
                 # A new paper's supplement stage that only waits for the provider
@@ -1602,7 +1598,7 @@ async def delete_document_endpoint(
                     lambda: pdf_job_service.end_supplement_wait_for_delete(
                         document_id=canonical_document_id,
                         user_id=pg_doc.user_id,
-                        **lock_kwargs,
+                        connection=lock_conn,
                     )
                 ):
                     latest_job = await run_thread_drained(
@@ -1610,7 +1606,7 @@ async def delete_document_endpoint(
                             document_id=canonical_document_id,
                             user_id=pg_doc.user_id,
                             reconcile_stale=True,
-                            **lock_kwargs,
+                            connection=lock_conn,
                         )
                     )
                 pipeline_status = await pipeline_tracker.get_pipeline_status(canonical_document_id)
@@ -1625,14 +1621,11 @@ async def delete_document_endpoint(
                 document_processing_status = "missing"
                 document_missing_in_weaviate = False
                 try:
-                    if get_document is _REAL_GET_DOCUMENT:
-                        document = await get_document(
-                            user["sub"],
-                            canonical_document_id,
-                            connection=lock_conn,
-                        )
-                    else:
-                        document = await get_document(user["sub"], canonical_document_id)
+                    document = await get_document(
+                        user["sub"],
+                        canonical_document_id,
+                        connection=lock_conn,
+                    )
                 except ValueError as exc:
                     if "not found" in str(exc).lower():
                         document_missing_in_weaviate = True
@@ -1817,14 +1810,12 @@ async def delete_document_endpoint(
                         nonlocal failure_step, failure_already_reported
                         # Always run the tenant-scoped chunk wipe, even when the parent index object
                         # is already absent, so a retry clears any stray chunks before files and SQL.
-                        # The real ``delete_paper_chunks`` flips ``drain_state.started`` immediately
-                        # upon submitting its executor worker (after its own pre-submission
-                        # cancellation checkpoint); substituted test doubles mark start on entry.
+                        # ``delete_paper_chunks`` flips ``drain_state.started`` via
+                        # ``mark_destructive_delete_started()`` immediately upon submitting its
+                        # executor worker (after its pre-submission cancellation checkpoint).
                         # Preflight checks above (including ending a waiting supplement stage)
                         # remain cancellable before the wipe starts.
                         failure_step = "chunk_wipe"
-                        if delete_paper_chunks is not _REAL_DELETE_PAPER_CHUNKS:
-                            drain_state.started = True
                         chunk_result = await delete_paper_chunks(user["sub"], canonical_document_id)
                         if not chunk_result.get("success"):
                             if "chunks_failed" in chunk_result:

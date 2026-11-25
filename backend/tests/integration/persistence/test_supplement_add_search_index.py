@@ -756,10 +756,13 @@ def _wire_delete(monkeypatch, owner_id, *, in_wipe=None, wipe_seconds: float = 0
     async def provision(_principal):
         return type("User", (), {"id": owner_id})()
 
-    async def present(_sub, _document_id):
+    async def present(_sub, _document_id, **_kwargs):
         return {"document": {"processingStatus": "completed"}}
 
     async def wipe(user_sub, document_id):
+        from src.lib.document_cleanup import mark_destructive_delete_started
+
+        mark_destructive_delete_started()
         if in_wipe is not None:
             in_wipe.set()
         await asyncio.sleep(wipe_seconds)
@@ -899,7 +902,7 @@ async def test_the_lock_is_released_when_the_delete_request_is_cancelled(owner_i
     in_read = asyncio.Event()
     wipe_started = False
 
-    async def slow_get_document(_sub, _document_id):
+    async def slow_get_document(_sub, _document_id, **_kwargs):
         in_read.set()
         await asyncio.sleep(5.0)
         return {"document": {"processingStatus": "completed"}}
@@ -1347,7 +1350,7 @@ async def test_a_pool_timeout_while_reading_the_papers_index_object_is_the_delet
     paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
     _wire_delete(monkeypatch, owner_id)
 
-    async def no_connection(_sub, _document_id):
+    async def no_connection(_sub, _document_id, **_kwargs):
         raise PoolTimeoutError("made-up: QueuePool limit reached")
 
     monkeypatch.setattr(documents_api, "get_document", no_connection)
@@ -1381,10 +1384,10 @@ async def test_competing_supplement_add_and_committed_upload_compensation_never_
     wipe_entered = asyncio.Event()
     resume_wipe = asyncio.Event()
 
-    async def _pausing_delete_document(user_sub: str, document_id: str):
+    async def _pausing_delete_document(user_sub: str, document_id: str, *, connection=None):
         wipe_entered.set()
         await resume_wipe.wait()
-        return await weaviate_docs.delete_document(user_sub, document_id)
+        return await weaviate_docs.delete_document(user_sub, document_id, connection=connection)
 
     service_a = UploadIntakeService(
         upload_execution_service=MagicMock(),

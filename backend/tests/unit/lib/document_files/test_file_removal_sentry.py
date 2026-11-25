@@ -51,7 +51,7 @@ async def test_cleanup_failure_reports_sanitized_sentry_event_once_with_no_sensi
         owner_subject=fake_subject,
         stored_path=f"{fake_subject}/{document_id}/{fake_filename}",
     )
-    monkeypatch.setattr(file_removal, "_mark_removed_or_busy", lambda *_args: removed)
+    monkeypatch.setattr(file_removal, "_mark_removed_or_busy", lambda *_args, **_kwargs: removed)
 
     def _delete_chunks(*_args, **_kwargs):
         if failing_step == "pieces":
@@ -161,7 +161,7 @@ async def test_cleanup_report_preserves_sanitized_traceback_and_survives_capture
     removed = _make_removed(
         document_id, file_id, owner_subject="curator-sub", stored_path="curator-sub/doc/supp.md",
     )
-    monkeypatch.setattr(file_removal, "_mark_removed_or_busy", lambda *_args: removed)
+    monkeypatch.setattr(file_removal, "_mark_removed_or_busy", lambda *_args, **_kwargs: removed)
     monkeypatch.setattr(
         "src.lib.weaviate_client.chunks.delete_chunk_range",
         Mock(side_effect=OSError("raw storage secret /private/path/file.pdf")),
@@ -216,7 +216,7 @@ async def test_real_weaviate_reconnect_failure_emits_single_sanitized_event_with
         owner_subject=fake_subject,
         stored_path=f"{fake_subject}/{document_id}/Secret_Supplement.pdf",
     )
-    monkeypatch.setattr(file_removal, "_mark_removed_or_busy", lambda *_args: removed)
+    monkeypatch.setattr(file_removal, "_mark_removed_or_busy", lambda *_args, **_kwargs: removed)
     monkeypatch.setattr("src.lib.document_files.service.remove_stored_files", lambda *_a, **_k: None)
     monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_a, **_k: None)
 
@@ -429,7 +429,10 @@ async def test_remove_paper_file_cancel_drains_mark_removed_worker_before_lock_r
 
     monkeypatch.setattr(sql_db, "engine", SimpleNamespace(connect=lambda: _LockConn()))
 
-    def _blocking_mark_removed(*_args):
+    seen_lock_connections: list[object] = []
+
+    def _blocking_mark_removed(*_args, lock_connection=None):
+        seen_lock_connections.append(lock_connection)
         worker_entered.set()
         assert resume_worker.wait(timeout=5)
         events.append("worker_finished")
@@ -443,8 +446,14 @@ async def test_remove_paper_file_cancel_drains_mark_removed_worker_before_lock_r
     monkeypatch.setattr(file_removal, "_mark_removed_or_busy", _blocking_mark_removed)
 
     async def _run():
-        async with paper_operation_lock(document_id):
-            await remove_paper_file(document_id, 42, file_id, weaviate_client=SimpleNamespace())
+        async with paper_operation_lock(document_id) as lock_conn:
+            await remove_paper_file(
+                document_id,
+                42,
+                file_id,
+                weaviate_client=SimpleNamespace(),
+                lock_connection=lock_conn,
+            )
 
     task = asyncio.create_task(_run())
     try:
@@ -458,6 +467,7 @@ async def test_remove_paper_file_cancel_drains_mark_removed_worker_before_lock_r
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, timeout=5)
 
+    assert len(seen_lock_connections) == 1 and isinstance(seen_lock_connections[0], _LockConn)
     assert events == ["worker_finished", "lock_released"]
 
 

@@ -163,10 +163,6 @@ def get_document_cmd(document_id: str, user_id: str, show_chunks: bool, output_f
         sys.exit(1)
 
 
-_REAL_DELETE_PAPER_CHUNKS = delete_paper_chunks
-_REAL_DELETE_SQL_ROW = _delete_sql_row
-
-
 def _tenant_paper_dir_has_artifacts(base_storage: Path, user_id: str, document_id: str) -> tuple[bool, str | None]:
     """Return ``(has_artifacts_or_unverifiable, error_message)`` for an orphan tenant paper dir."""
     from src.lib.document_files.storage_paths import (
@@ -365,8 +361,6 @@ async def _delete_document_for_cli(user_id: str, document_id: str) -> dict[str, 
 
             with delete_drain_context() as drain_state:
                 async def _complete() -> dict[str, Any]:
-                    if delete_paper_chunks is not _REAL_DELETE_PAPER_CHUNKS:
-                        drain_state.started = True
                     chunk_result = await delete_paper_chunks(user_id, canonical_document_id)
                     if not chunk_result.get("success"):
                         return {**chunk_result, "postgres_deleted": False}
@@ -410,21 +404,13 @@ async def _delete_document_for_cli(user_id: str, document_id: str) -> dict[str, 
 
                     sql_delete_failed = False
                     try:
-                        if _delete_sql_row is _REAL_DELETE_SQL_ROW:
-                            postgres_deleted = await run_thread_drained(
-                                _delete_sql_row,
-                                user_id,
-                                canonical_document_id,
-                                connection=lock_conn,
-                                cancellable_before_start=False,
-                            )
-                        else:
-                            postgres_deleted = await run_thread_drained(
-                                _delete_sql_row,
-                                user_id,
-                                canonical_document_id,
-                                cancellable_before_start=False,
-                            )
+                        postgres_deleted = await run_thread_drained(
+                            _delete_sql_row,
+                            user_id,
+                            canonical_document_id,
+                            connection=lock_conn,
+                            cancellable_before_start=False,
+                        )
                     except Exception as db_err:
                         report_sql_cleanup_failure(
                             component="weaviate_client",

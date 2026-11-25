@@ -177,7 +177,14 @@ def _patch_session_factory(monkeypatch, sessions):
         assert stack, "SessionLocal called more times than expected"
         return stack.pop(0)
 
+    def _open_lock_session(connection=None):
+        if connection is None:
+            return None
+        assert isinstance(connection, _FakeLockConnection)
+        return _factory()
+
     monkeypatch.setattr(documents, "SessionLocal", _factory)
+    monkeypatch.setattr("src.lib.document_files.paper_lock.open_paper_lock_session", _open_lock_session)
 
 
 def _patch_indexed_document_status(monkeypatch, status="completed"):
@@ -1499,6 +1506,9 @@ async def test_delete_document_endpoint_cancel_during_chunk_wipe_drains_under_lo
     order: list[str] = []
 
     async def _wipe_chunks(*_args, **_kwargs):
+        from src.lib.document_cleanup import mark_destructive_delete_started
+
+        mark_destructive_delete_started()
         wipe_entered.set()
         await resume_wipe.wait()
         assert lock_key in _FakeLockConnection.held
@@ -1628,6 +1638,9 @@ async def test_delete_document_endpoint_cancel_during_incomplete_chunk_wipe_reta
     resume_wipe = asyncio.Event()
 
     async def _incomplete_wipe(*_args, **_kwargs):
+        from src.lib.document_cleanup import mark_destructive_delete_started
+
+        mark_destructive_delete_started()
         wipe_entered.set()
         await resume_wipe.wait()
         assert lock_key in _FakeLockConnection.held
@@ -1708,6 +1721,9 @@ async def test_delete_document_endpoint_cancel_during_file_unlink_failure_retain
     unlink_saw_lock = False
 
     async def _wipe_chunks(*_args, **_kwargs):
+        from src.lib.document_cleanup import mark_destructive_delete_started
+
+        mark_destructive_delete_started()
         wipe_entered.set()
         await resume_wipe.wait()
         return {"success": True, "chunks_deleted": 2}
@@ -1799,6 +1815,9 @@ async def test_delete_document_endpoint_cancel_during_pool_timeout_emits_one_san
     resume_wipe = asyncio.Event()
 
     async def _wipe_chunks(*_args, **_kwargs):
+        from src.lib.document_cleanup import mark_destructive_delete_started
+
+        mark_destructive_delete_started()
         wipe_entered.set()
         await resume_wipe.wait()
         return {"success": True, "chunks_deleted": 1}
@@ -1951,6 +1970,9 @@ async def test_delete_document_endpoint_cancel_preserves_cancellation_when_repor
     resume_wipe = asyncio.Event()
 
     async def _wipe_chunks(*_args, **_kwargs):
+        from src.lib.document_cleanup import mark_destructive_delete_started
+
+        mark_destructive_delete_started()
         wipe_entered.set()
         await resume_wipe.wait()
         return {"success": True, "chunks_deleted": 1}
@@ -2166,6 +2188,7 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
         import weaviate
 
         from src.api import documents
+        from src.lib.document_files import paper_lock
         from src.lib.observability.sentry import before_send, hash_sentry_identifier
         from src.lib.weaviate_client.connection import WeaviateConnection
         from src.lib.weaviate_client import documents as weaviate_docs
@@ -2237,6 +2260,12 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
             _Session(paper, fail_on_delete=({failure_mode!r} == "sql_cleanup_cancel_before_on_cancel")),
         ]
         documents.SessionLocal = lambda: sessions.pop(0)
+        def _open_lock_session(conn=None):
+            if conn is None:
+                return None
+            assert isinstance(conn, _LockConn)
+            return sessions.pop(0)
+        paper_lock.open_paper_lock_session = _open_lock_session
         documents.provision_user_async = lambda _p: asyncio.sleep(0, result=SimpleNamespace(id=42))
         documents.verify_document_ownership = lambda *_a, **_kw: SimpleNamespace(id=doc_id, user_id=42)
         documents.get_document = lambda *_a, **_kw: asyncio.sleep(0, result={{"document": {{"processing_status": "completed"}}}})
@@ -2438,6 +2467,7 @@ def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_withou
         from fastapi import HTTPException
 
         from src.api import documents
+        from src.lib.document_files import paper_lock
         from src.lib.observability.sentry import before_send, hash_sentry_identifier
         from src.lib.weaviate_client import documents as weaviate_docs
         import src.models.sql.database as sql_db
@@ -2511,6 +2541,12 @@ def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_withou
             _Session(paper, fail_on_delete=({failure_step!r} == "sql_cleanup")),
         ]
         documents.SessionLocal = lambda: sessions.pop(0)
+        def _open_lock_session(conn=None):
+            if conn is None:
+                return None
+            assert isinstance(conn, _LockConn)
+            return sessions.pop(0)
+        paper_lock.open_paper_lock_session = _open_lock_session
         documents.provision_user_async = lambda _p: asyncio.sleep(0, result=SimpleNamespace(id=42))
         documents.verify_document_ownership = lambda *_a, **_kw: SimpleNamespace(id=doc_id, user_id=42)
         documents.get_document = lambda *_a, **_kw: asyncio.sleep(0, result={{"document": {{"processing_status": "completed"}}}})
@@ -3426,7 +3462,10 @@ async def test_a_delete_during_a_supplement_wait_ends_the_wait_and_deletes_the_p
 
     result = await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
 
-    assert ended == [{"document_id": doc_id, "user_id": 42}]
+    assert len(ended) == 1
+    assert ended[0]["document_id"] == doc_id
+    assert ended[0]["user_id"] == 42
+    assert isinstance(ended[0]["connection"], _FakeLockConnection)
     assert result.success is True
 
 

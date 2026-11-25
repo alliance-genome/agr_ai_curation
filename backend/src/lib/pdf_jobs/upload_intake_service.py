@@ -112,7 +112,6 @@ from src.services.user_service import principal_from_claims, provision_user_asyn
 from . import service as pdf_job_service
 
 logger = logging.getLogger(__name__)
-_REAL_DELETE_DOCUMENT = delete_document
 
 _PDF_DOCUMENT_DUPLICATE_CONSTRAINTS = frozenset(
     {
@@ -275,8 +274,8 @@ class UploadIntakeService:
         principal_from_claims_fn: Callable[[dict[str, Any]], Any] = principal_from_claims,
         provision_user_fn: Callable[[Any], Awaitable[ProvisionedUser]] = provision_user_async,
         create_document_fn: Callable[[str, Any], Any] = create_document,
-        get_document_fn: Callable[[str, str], Any] = get_document,
-        delete_document_fn: Callable[[str, str], Any] = delete_document,
+        get_document_fn: Callable[..., Any] = get_document,
+        delete_document_fn: Callable[..., Any] = delete_document,
         create_job_fn: Callable[..., Any] = pdf_job_service.create_job,
         tenant_name_resolver: Callable[[str], str] = get_tenant_name,
         cleanup_document_dependencies_fn: Callable[[Session, uuid.UUID], Any] = cleanup_document_curation_dependencies,
@@ -1043,14 +1042,11 @@ class UploadIntakeService:
                     sql_owned_by_delete_document = False
                     if weaviate_document_created:
                         try:
-                            if self._delete_document is _REAL_DELETE_DOCUMENT:
-                                delete_result = await _REAL_DELETE_DOCUMENT(
-                                    user_sub,
-                                    document_id,
-                                    connection=lock_conn,
-                                )
-                            else:
-                                delete_result = await self._delete_document(user_sub, document_id)
+                            delete_result = await self._delete_document(
+                                user_sub,
+                                document_id,
+                                connection=lock_conn,
+                            )
                         except Exception as cleanup_err:
                             logger.warning(
                                 "Best-effort Weaviate cleanup failed for document %s: %s",

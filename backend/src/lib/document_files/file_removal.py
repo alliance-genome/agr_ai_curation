@@ -268,12 +268,11 @@ def _mark_removed(
 
     # A stale job is reconciled first, as the paper delete does, so a dead add does
     # not block a removal for ever.
-    job_kwargs = {"connection": lock_connection} if lock_connection is not None else {}
     pdf_job_service.get_latest_job_for_document(
         document_id=document_id,
         user_id=owner_user_id,
         reconcile_stale=True,
-        **job_kwargs,
+        connection=lock_connection,
     )
     bound_session = open_paper_lock_session(lock_connection)
     session = bound_session if bound_session is not None else SessionLocal()
@@ -342,9 +341,6 @@ def _mark_removed_or_busy(
         raise
 
 
-_REAL_MARK_REMOVED_OR_BUSY = _mark_removed_or_busy
-
-
 def _delete_removed_row(
     document_id: UUID,
     file_id: UUID,
@@ -368,9 +364,6 @@ def _delete_removed_row(
         session.delete(file_row)
 
 
-_REAL_DELETE_REMOVED_ROW = _delete_removed_row
-
-
 async def remove_paper_file(
     document_id: UUID,
     owner_user_id: int,
@@ -387,23 +380,14 @@ async def remove_paper_file(
     from src.lib.pipeline.store import update_document_piece_count
     from src.lib.weaviate_client.chunks import delete_chunk_range
 
-    if lock_connection is not None and _mark_removed_or_busy is _REAL_MARK_REMOVED_OR_BUSY:
-        removed = await run_thread_drained(
-            _mark_removed_or_busy,
-            document_id,
-            owner_user_id,
-            file_id,
-            lock_connection=lock_connection,
-            cancellable_before_start=True,
-        )
-    else:
-        removed = await run_thread_drained(
-            _mark_removed_or_busy,
-            document_id,
-            owner_user_id,
-            file_id,
-            cancellable_before_start=True,
-        )
+    removed = await run_thread_drained(
+        _mark_removed_or_busy,
+        document_id,
+        owner_user_id,
+        file_id,
+        lock_connection=lock_connection,
+        cancellable_before_start=True,
+    )
     # From here a cancelled request stops the clean-up part way between phases (the row stays
     # ``removed`` with its range and paths, and a retry or the paper delete finishes it), while
     # any already-submitted mutation drains before ``paper_operation_lock`` releases ``lock_connection``.
@@ -469,23 +453,14 @@ async def remove_paper_file(
     if removed.cleanup_finished:
         # Only now: until here the row is how a retry or the paper delete finds the leftovers.
         try:
-            if lock_connection is not None and _delete_removed_row is _REAL_DELETE_REMOVED_ROW:
-                await run_thread_drained(
-                    _delete_removed_row,
-                    document_id,
-                    file_id,
-                    lock_connection=lock_connection,
-                    cancellable_before_start=True,
-                    on_cancelled_error=lambda exc: _report_cleanup_failure(exc, document_id, "file_row"),
-                )
-            else:
-                await run_thread_drained(
-                    _delete_removed_row,
-                    document_id,
-                    file_id,
-                    cancellable_before_start=True,
-                    on_cancelled_error=lambda exc: _report_cleanup_failure(exc, document_id, "file_row"),
-                )
+            await run_thread_drained(
+                _delete_removed_row,
+                document_id,
+                file_id,
+                lock_connection=lock_connection,
+                cancellable_before_start=True,
+                on_cancelled_error=lambda exc: _report_cleanup_failure(exc, document_id, "file_row"),
+            )
         except Exception as exc:
             removed.cleanup_failures.append("file_row")
             _report_cleanup_failure(exc, document_id, "file_row")

@@ -93,6 +93,17 @@ def _compensation_lock_and_jobs_fixture(monkeypatch):
         "get_active_job_for_document",
         lambda **_kwargs: None,
     )
+
+    def _open_lock_session(conn=None):
+        if conn is not None:
+            assert isinstance(conn, _FakePaperLockConnection)
+        return None
+
+    monkeypatch.setattr(upload_intake_module, "open_paper_lock_session", _open_lock_session)
+    monkeypatch.setattr(
+        "src.lib.document_files.paper_lock.open_paper_lock_session",
+        _open_lock_session,
+    )
     yield _FakePaperLockConnection
     assert _FakePaperLockConnection.held == set(), "compensation left paper lock held"
 
@@ -1470,7 +1481,7 @@ async def test_intake_upload_integrity_error_compensates_and_returns_duplicate_e
     dispatch = _DispatchRecorder()
     delete_document_calls = []
 
-    async def _delete_document(user_sub, document_id):
+    async def _delete_document(user_sub, document_id, **_kwargs):
         delete_document_calls.append((user_sub, document_id))
 
     create_document_calls = []
@@ -1530,7 +1541,7 @@ async def test_intake_upload_file_size_constraint_error_is_not_misreported_as_li
     dispatch = _DispatchRecorder()
     delete_document_calls = []
 
-    async def _delete_document(user_sub, document_id):
+    async def _delete_document(user_sub, document_id, **_kwargs):
         delete_document_calls.append((user_sub, document_id))
 
     service = UploadIntakeService(
@@ -1571,7 +1582,7 @@ async def test_intake_upload_generic_commit_failure_rolls_back_and_cleans_up(tmp
     dispatch = _DispatchRecorder()
     delete_document_calls = []
 
-    async def _delete_document(user_sub, document_id):
+    async def _delete_document(user_sub, document_id, **_kwargs):
         delete_document_calls.append((user_sub, document_id))
 
     service = UploadIntakeService(
@@ -1613,7 +1624,7 @@ async def test_intake_upload_runtime_error_rolls_back_and_compensates_without_di
     delete_document_calls = []
     create_job_calls = []
 
-    async def _delete_document(user_sub, document_id):
+    async def _delete_document(user_sub, document_id, **_kwargs):
         delete_document_calls.append((user_sub, document_id))
 
     service = UploadIntakeService(
@@ -1692,7 +1703,7 @@ async def test_intake_upload_non_integrity_persistence_error_rolls_back_and_clea
     dispatch = _DispatchRecorder()
     delete_document_calls = []
 
-    async def _delete_document(user_sub, document_id):
+    async def _delete_document(user_sub, document_id, **_kwargs):
         delete_document_calls.append((user_sub, document_id))
 
     def _boom_on_add(_row):
@@ -1740,7 +1751,7 @@ async def test_intake_upload_job_creation_failure_compensates_sql_weaviate_and_f
     dispatch = _DispatchRecorder()
     delete_document_calls = []
 
-    async def _delete_document(user_sub, document_id):
+    async def _delete_document(user_sub, document_id, **_kwargs):
         delete_document_calls.append((user_sub, document_id))
 
     def _session_factory():
@@ -1923,7 +1934,7 @@ async def test_intake_upload_job_creation_compensation_cancelled_during_chunk_wi
 
     sql_owner_deleted = False
 
-    def _delete_sql_row(*_args):
+    def _delete_sql_row(*_args, **_kwargs):
         nonlocal sql_owner_deleted
         sql_owner_deleted = True
         events.append("sql")
@@ -2364,7 +2375,8 @@ async def test_committed_compensation_cancel_during_file_removal_drains_worker_a
         def execute(self, *_args, **_kwargs):
             return _ExecuteResult(persisted_records[0] if persisted_records else None)
 
-    async def _delete_document(_user_sub, _doc_id):
+    async def _delete_document(_user_sub, _doc_id, *, connection=None):
+        assert isinstance(connection, _FakePaperLockConnection)
         events.append("weaviate_and_sql_done")
         return {"success": True, "postgres_deleted": True}
 
@@ -2551,6 +2563,13 @@ def test_intake_upload_compensation_reports_one_sanitized_sentry_event_when_dele
 
         sql_db.engine = SimpleNamespace(connect=lambda: _LockConn())
         module.pdf_job_service.get_active_job_for_document = lambda **_kw: None
+        seen_lock_conns = []
+        def _open_lock_session(conn=None):
+            if conn is not None:
+                assert isinstance(conn, _LockConn)
+                seen_lock_conns.append(conn)
+            return None
+        module.open_paper_lock_session = _open_lock_session
 
         @contextmanager
         def _w_session(*_a, **_kw):
@@ -2566,8 +2585,9 @@ def test_intake_upload_compensation_reports_one_sanitized_sentry_event_when_dele
 
         sql_delete_calls = 0
 
-        def _failing_sql_row(*_a):
+        def _failing_sql_row(*_a, **_kw):
             global sql_delete_calls
+            assert isinstance(_kw.get("connection"), _LockConn)
             sql_delete_calls += 1
             raise RuntimeError(f"{secret_detail} {doc_id}")
 

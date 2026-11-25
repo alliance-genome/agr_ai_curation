@@ -90,6 +90,17 @@ def _compensation_lock_and_jobs_fixture(monkeypatch):
         "mark_failed",
         lambda **_kwargs: None,
     )
+
+    def _open_lock_session(conn=None):
+        if conn is not None:
+            assert isinstance(conn, _FakePaperLockConnection)
+        return None
+
+    monkeypatch.setattr(import_module, "open_paper_lock_session", _open_lock_session)
+    monkeypatch.setattr(
+        "src.lib.document_files.paper_lock.open_paper_lock_session",
+        _open_lock_session,
+    )
     yield _FakePaperLockConnection
     assert _FakePaperLockConnection.held == set(), "compensation left paper lock held"
 
@@ -1784,7 +1795,7 @@ async def test_post_commit_import_compensation_cancelled_during_chunk_wipe_clean
 
     sql_owner_deleted = False
 
-    def _delete_sql_row(_user_id, _document_id):
+    def _delete_sql_row(_user_id, _document_id, **_kwargs):
         nonlocal sql_owner_deleted
         sql_owner_deleted = True
         events.append("sql")
@@ -2142,7 +2153,8 @@ async def test_post_commit_import_compensation_fails_undispatched_job_and_holds_
         order.append("get_active_job")
         return None
 
-    async def _delete_document(_user_sub, doc_id):
+    async def _delete_document(_user_sub, doc_id, *, connection=None):
+        assert isinstance(connection, _FakePaperLockConnection)
         assert paper_lock_key(doc_id) in _FakePaperLockConnection.held
         assert not list(tmp_path.rglob("*.pdf"))
         order.append("delete_document")
@@ -2494,8 +2506,9 @@ async def test_post_commit_import_compensation_reports_one_sanitized_sentry_even
     secret_detail = "private-import-sql-failure-detail"
     sql_delete_calls = 0
 
-    def _failing_sql_row(*_args):
+    def _failing_sql_row(*_args, **_kwargs):
         nonlocal sql_delete_calls
+        assert isinstance(_kwargs.get("connection"), _FakePaperLockConnection)
         sql_delete_calls += 1
         raise RuntimeError(secret_detail)
 

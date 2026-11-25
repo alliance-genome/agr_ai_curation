@@ -503,7 +503,7 @@ async def test_delete_document_cleans_sql_when_index_object_is_already_absent(mo
 
     assert result["success"] is False
     assert result["postgres_deleted"] is True
-    delete_sql_row.assert_called_once_with("user-1", "doc-1")
+    delete_sql_row.assert_called_once_with("user-1", "doc-1", connection=None)
 
 
 @pytest.mark.asyncio
@@ -631,7 +631,7 @@ async def test_delete_document_cancel_during_chunk_wipe_drains_index_and_sql(mon
         events.append("parent")
         return True
 
-    def _delete_sql(_user_id, _document_id):
+    def _delete_sql(_user_id, _document_id, **_kwargs):
         sql_entered.set()
         assert resume_sql.wait(timeout=5)
         events.append("sql")
@@ -1058,6 +1058,10 @@ async def test_cli_delete_enforces_lock_active_job_and_files_before_owner(monkey
             pass
 
     monkeypatch.setattr("src.models.sql.database.get_db", lambda: iter([_FakeDb()]))
+    monkeypatch.setattr(
+        "src.lib.document_files.paper_lock.open_paper_lock_session",
+        lambda conn=None: _FakeDb() if conn is not None else None,
+    )
 
     events: list[str] = []
 
@@ -1072,7 +1076,8 @@ async def test_cli_delete_enforces_lock_active_job_and_files_before_owner(monkey
         events.append("parent")
         return {"success": True, "deleted": True}
 
-    def _fake_sql(_uid, _did):
+    def _fake_sql(_uid, _did, *, connection=None):
+        assert connection is not None
         assert not pdf_file.exists(), "Stored PDF must be removed before deleting SQL owner"
         events.append("sql")
         return True
@@ -1178,6 +1183,10 @@ async def test_cli_delete_ownership_preflight_runs_before_active_job_reconciliat
             pass
 
     monkeypatch.setattr("src.models.sql.database.get_db", lambda: iter([_FakeDb()]))
+    monkeypatch.setattr(
+        "src.lib.document_files.paper_lock.open_paper_lock_session",
+        lambda conn=None: _FakeDb() if conn is not None else None,
+    )
     active_job_spy = MagicMock(side_effect=AssertionError("must not query/reconcile another owner's jobs"))
     monkeypatch.setattr("src.lib.pdf_jobs.service.get_active_job_for_document", active_job_spy)
     chunks_spy = MagicMock()
@@ -1246,6 +1255,10 @@ async def test_cli_delete_refuses_orphan_weaviate_delete_when_tenant_dir_has_art
             pass
 
     monkeypatch.setattr("src.models.sql.database.get_db", lambda: iter([_FakeDb()]))
+    monkeypatch.setattr(
+        "src.lib.document_files.paper_lock.open_paper_lock_session",
+        lambda conn=None: _FakeDb() if conn is not None else None,
+    )
     chunks_spy = MagicMock()
     parent_spy = MagicMock()
     monkeypatch.setattr(weaviate_cli, "delete_paper_chunks", chunks_spy)
@@ -1317,6 +1330,10 @@ def test_cli_delete_cmd_exits_nonzero_when_sql_owner_delete_fails(monkeypatch, t
             pass
 
     monkeypatch.setattr("src.models.sql.database.get_db", lambda: iter([_FakeDb()]))
+    monkeypatch.setattr(
+        "src.lib.document_files.paper_lock.open_paper_lock_session",
+        lambda conn=None: _FakeDb() if conn is not None else None,
+    )
     monkeypatch.setattr("src.lib.pdf_jobs.service.get_active_job_for_document", lambda **_kw: None)
 
     async def _ok_chunks(_uid, _did):
@@ -1471,6 +1488,10 @@ async def test_cli_delete_normalizes_undashed_uuid_for_weaviate_calls(monkeypatc
             pass
 
     monkeypatch.setattr("src.models.sql.database.get_db", lambda: iter([_FakeDb()]))
+    monkeypatch.setattr(
+        "src.lib.document_files.paper_lock.open_paper_lock_session",
+        lambda conn=None: _FakeDb() if conn is not None else None,
+    )
     monkeypatch.setattr("src.lib.pdf_jobs.service.get_active_job_for_document", lambda **_kw: None)
 
     seen_ids: dict[str, str] = {}
@@ -1483,7 +1504,8 @@ async def test_cli_delete_normalizes_undashed_uuid_for_weaviate_calls(monkeypatc
         seen_ids["parent"] = did
         return {"success": True, "deleted": True}
 
-    def _fake_sql(_uid, did):
+    def _fake_sql(_uid, did, *, connection=None):
+        assert connection is not None
         seen_ids["sql"] = did
         return True
 

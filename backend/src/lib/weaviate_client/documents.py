@@ -985,9 +985,6 @@ def _delete_sql_row(user_id: str, document_id: str, *, connection: Any = None) -
             close_gen()
 
 
-_REAL_DELETE_SQL_ROW = _delete_sql_row
-
-
 async def delete_document(
     user_id: str,
     document_id: str,
@@ -1019,21 +1016,13 @@ async def delete_document(
 
         # A complete chunk wipe allows SQL cleanup even when delete_by_id found no index object.
         try:
-            if connection is not None and _delete_sql_row is _REAL_DELETE_SQL_ROW:
-                postgres_deleted = await run_thread_drained(
-                    _delete_sql_row,
-                    user_id,
-                    document_id,
-                    connection=connection,
-                    cancellable_before_start=False,
-                )
-            else:
-                postgres_deleted = await run_thread_drained(
-                    _delete_sql_row,
-                    user_id,
-                    document_id,
-                    cancellable_before_start=False,
-                )
+            postgres_deleted = await run_thread_drained(
+                _delete_sql_row,
+                user_id,
+                document_id,
+                connection=connection,
+                cancellable_before_start=False,
+            )
         except Exception as e:
             report_sql_cleanup_failure(
                 component="weaviate_client",

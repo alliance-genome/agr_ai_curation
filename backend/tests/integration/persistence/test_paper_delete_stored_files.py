@@ -56,7 +56,7 @@ def provisioned_owner(monkeypatch):
 
 @pytest.fixture
 def owner_id(provisioned_owner, monkeypatch):
-    async def present(_sub, _document_id):
+    async def present(_sub, _document_id, **_kwargs):
         return {"document": {"processingStatus": "completed"}}
 
     async def wipe_chunks(_user_sub, _document_id):

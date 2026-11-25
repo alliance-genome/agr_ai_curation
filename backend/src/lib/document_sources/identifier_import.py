@@ -108,7 +108,6 @@ from src.models.sql.pdf_document import (
 from src.services.user_service import principal_from_claims, provision_user_async, ProvisionedUser
 
 logger = logging.getLogger(__name__)
-_REAL_DELETE_DOCUMENT = delete_document
 
 _PMID_RE = re.compile(r"^(?:PMID|PUBMED(?:\s+ID)?)\s*[:#]?\s*(\d+)$", re.IGNORECASE)
 
@@ -754,8 +753,8 @@ class IdentifierImportService:
         reference_import_selector: Callable[..., Awaitable[ReferenceImportDecision]] = select_reference_import_candidate,
         create_document_fn: Callable[[str, Any], Awaitable[dict[str, Any]]] = create_document,
         create_job_fn: Callable[..., Any] = pdf_job_service.create_job,
-        get_document_fn: Callable[[str, str], Awaitable[Any]] = get_document,
-        delete_document_fn: Callable[[str, str], Awaitable[Any]] = delete_document,
+        get_document_fn: Callable[..., Awaitable[Any]] = get_document,
+        delete_document_fn: Callable[..., Awaitable[Any]] = delete_document,
         find_existing_source_document_fn: Callable[..., Any] = find_existing_document_by_source,
         cleanup_document_dependencies_fn: Callable[[Session, uuid.UUID], Any] = cleanup_document_curation_dependencies,
         tenant_name_resolver: Callable[[str], str] = get_tenant_name,
@@ -1717,14 +1716,11 @@ class IdentifierImportService:
                     sql_owned_by_delete_document = False
                     if weaviate_document_created:
                         try:
-                            if self._delete_document is _REAL_DELETE_DOCUMENT:
-                                delete_result = await _REAL_DELETE_DOCUMENT(
-                                    user_sub,
-                                    document_id,
-                                    connection=lock_conn,
-                                )
-                            else:
-                                delete_result = await self._delete_document(user_sub, document_id)
+                            delete_result = await self._delete_document(
+                                user_sub,
+                                document_id,
+                                connection=lock_conn,
+                            )
                         except Exception as cleanup_err:
                             logger.warning(
                                 "Best-effort Weaviate cleanup failed for identifier import %s: %s",

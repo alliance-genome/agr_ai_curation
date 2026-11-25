@@ -789,6 +789,9 @@ async def test_get_document_waits_for_its_database_session_off_the_event_loop():
             time.sleep(1.0)  # waiting for a pooled connection
             raise ValueError("made-up: user not found")
 
+        def rollback(self):
+            pass
+
         def close(self):
             pass
 

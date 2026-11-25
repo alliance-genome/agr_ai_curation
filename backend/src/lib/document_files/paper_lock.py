@@ -38,7 +38,6 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
-from sqlalchemy.engine import Connection as SqlAlchemyConnection
 from sqlalchemy.orm import Session
 
 from src.lib.observability import runtime
@@ -49,15 +48,15 @@ _detached_releases: set[asyncio.Task[None]] = set()
 
 
 def open_paper_lock_session(connection: Any = None) -> Session | None:
-    """Open an ORM Session bound to an explicit SQLAlchemy lock connection without checking out another pool slot."""
-    if isinstance(connection, SqlAlchemyConnection):
-        return Session(
-            bind=connection,
-            autocommit=False,
-            autoflush=False,
-            expire_on_commit=False,
-        )
-    return None
+    """Open an ORM Session bound to an explicit lock connection without checking out another pool slot."""
+    if connection is None:
+        return None
+    return Session(
+        bind=connection,
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+    )
 
 
 class PaperOperationInProgress(RuntimeError):
