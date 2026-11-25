@@ -113,9 +113,13 @@ describe('SupplementFilesList', () => {
     expect(rows[3]).toHaveTextContent('Added')
     expect(rows[4]).toHaveTextContent('Not added: the import was cancelled.')
     expect(rows[5]).toHaveTextContent('Not added: adding this paper\'s supplements failed.')
-    expect(rows[6]).toHaveTextContent('ABC has not converted this file.')
+    expect(rows[6]).toHaveTextContent(
+      'ABC has not converted this file. You can add it later from the Library once ABC shows it as converted.',
+    )
     expect(rows[7]).toHaveTextContent('ABC tried and could not convert this file.')
-    expect(rows[8]).toHaveTextContent('ABC had not converted this file when the import stopped waiting.')
+    expect(rows[8]).toHaveTextContent(
+      'ABC had not converted this file when the import stopped waiting. You can add it later from the Library once ABC shows it as converted.',
+    )
   })
 
   it('renders paper_busy_when_ready outcomes captured from record_supplement_outcomes_on_finished_job', () => {

@@ -378,6 +378,40 @@ describe('P9b review fixes', () => {
       expect({ scale: app.pdfViewer.currentScaleValue, page: app.pdfViewer.currentPageNumber })
         .toEqual({ scale: '1.5', page: 2 })
     })
+
+    it('refreshOnlyIfOpen updates the open paper without owner token and never hijacks another paper or idle viewer', async () => {
+      stubViewerFetch()
+      render(<PdfViewer activeDocumentOwnerToken={HOME_PDF_VIEWER_OWNER} />)
+
+      // Idle viewer ignores refreshOnlyIfOpen so Library add never unexpectedly opens a paper.
+      act(() => {
+        showPaperFilesInViewer(DOCUMENT_ID, FOUR_FILES_PAYLOAD.files.slice(0, 2), { refreshOnlyIfOpen: true })
+      })
+      expect(screen.queryAllByRole('tab')).toHaveLength(0)
+
+      // Open DOCUMENT_ID in the viewer, then refresh its files without knowing the route owner token.
+      act(() => {
+        showPaperFilesInViewer(DOCUMENT_ID, [FOUR_FILES_PAYLOAD.files[0]!], { ownerToken: HOME_PDF_VIEWER_OWNER })
+      })
+      expect(await screen.findAllByRole('tab')).toHaveLength(1)
+
+      act(() => {
+        showPaperFilesInViewer(DOCUMENT_ID, FOUR_FILES_PAYLOAD.files.slice(0, 2), { refreshOnlyIfOpen: true })
+      })
+      expect(await screen.findAllByRole('tab')).toHaveLength(2)
+
+      // A refreshOnlyIfOpen event for a DIFFERENT paper must not hijack the currently open paper.
+      act(() => {
+        showPaperFilesInViewer(
+          'bbbbbbbb-0000-0000-0000-000000000009',
+          [singleMainPdfFile({ documentId: 'bbbbbbbb-0000-0000-0000-000000000009', displayName: 'other-paper.pdf', pageCount: 3 })],
+          { refreshOnlyIfOpen: true },
+        )
+      })
+      const tabs = screen.getAllByRole('tab')
+      expect(tabs).toHaveLength(2)
+      expect(screen.queryByRole('tab', { name: /other-paper\.pdf/ })).not.toBeInTheDocument()
+    })
   })
 
   describe('F3: one parser for both paths', () => {

@@ -1295,7 +1295,15 @@ export function PdfViewer({
   useEffect(() => {
     const unregisterDocument = onPDFDocumentChanged((event: PDFViewerDocumentChangedEvent) => {
       console.debug('[PDF DEBUG] pdf-viewer-document-changed event received', event.detail)
-      if (
+      if (event.detail.refreshOnlyIfOpen) {
+        if (!activeDocument || activeDocument.documentId !== event.detail.documentId) {
+          console.debug('[PDF DEBUG] Ignoring refresh-only document update for non-open paper', {
+            activeDocumentId: activeDocument?.documentId ?? null,
+            eventDocumentId: event.detail.documentId,
+          })
+          return
+        }
+      } else if (
         activeDocumentOwnerToken
         && event.detail.ownerToken !== activeDocumentOwnerToken
       ) {
@@ -1344,13 +1352,15 @@ export function PdfViewer({
             && activeDocument.mainFileUnavailable === event.detail.mainFileUnavailable
             && sameViewerFiles(activeDocument.unavailableFiles, event.detail.unavailableFiles)
           if (!unchanged) {
-            setActiveDocument({
+            const updatedDoc: ViewerDocument = {
               ...activeDocument,
               // Keep the page count pdf.js found for the file on screen.
               files: files.map((file) => (file.file_id === current.file_id ? { ...file, page_count: current.page_count } : file)),
               mainFileUnavailable: event.detail.mainFileUnavailable,
               unavailableFiles: event.detail.unavailableFiles,
-            })
+            }
+            setActiveDocument(updatedDoc)
+            persistViewerSession(updatedDoc, viewerStateRef.current)
           }
           if (!isPdfFile(stillThere) && status === 'loading') {
             // A chat load marked the viewer loading; a text file has nothing to wait for.
@@ -1438,6 +1448,7 @@ export function PdfViewer({
     activeDocument,
     activeDocumentOwnerToken,
     beginDocumentLoad,
+    persistViewerSession,
     resetViewerToIdle,
     signalLoadComplete,
     signalLoadError,

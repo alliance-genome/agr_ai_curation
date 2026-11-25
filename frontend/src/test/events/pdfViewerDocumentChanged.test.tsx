@@ -111,6 +111,27 @@ describe('pdf-viewer-document-changed event contract (paper files)', () => {
     expect(handler.mock.calls[0]![0]).toMatchObject({ activeFileId: TEXT_SUPPLEMENT_FILE_ID, mainFileUnavailable: true })
   })
 
+  it('propagates refreshOnlyIfOpen and never clears the viewer when no file has a URL during refresh', () => {
+    const changed = vi.fn()
+    const cleared = vi.fn()
+    cleanups.push(onPDFDocumentChanged((event) => changed(event.detail)))
+    cleanups.push(onPDFViewerDocumentCleared((event) => cleared(event.detail)))
+
+    expect(
+      showPaperFilesInViewer(DOCUMENT_ID, FOUR_FILES_PAYLOAD.files, { refreshOnlyIfOpen: true }),
+    ).toBe(true)
+    expect(changed).toHaveBeenCalledTimes(1)
+    expect(changed.mock.calls[0]![0]).toMatchObject({
+      documentId: DOCUMENT_ID,
+      refreshOnlyIfOpen: true,
+    })
+
+    expect(
+      showPaperFilesInViewer(DOCUMENT_ID, [FOUR_FILES_PAYLOAD.files[3]!], { refreshOnlyIfOpen: true }),
+    ).toBe(false)
+    expect(cleared).not.toHaveBeenCalled()
+  })
+
   it('stops calling a listener once it is unregistered', () => {
     const handler = vi.fn()
     const unsubscribe = onPDFDocumentChanged(handler)

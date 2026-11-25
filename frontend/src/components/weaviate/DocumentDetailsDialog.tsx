@@ -34,9 +34,11 @@ import {
 } from '../../utils/documentSourcePresentation';
 import DocumentFilesSection, {
   listedProviderLabel,
+  paperActiveJobsQueryKey,
   paperFilesQueryKey,
   paperSourceFilesQueryKey,
 } from './DocumentFilesSection';
+import { resolveSupplementProviderShortLabel } from './paperFileReasonText';
 
 interface DocumentDetailsDialogProps {
   open: boolean;
@@ -143,7 +145,18 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
     // The Files section too; this asks the provider again on purpose.
     void queryClient.invalidateQueries({ queryKey: paperFilesQueryKey(documentId) });
     void queryClient.invalidateQueries({ queryKey: paperSourceFilesQueryKey(documentId) });
+    void queryClient.invalidateQueries({ queryKey: paperActiveJobsQueryKey(documentId) });
   }, [documentId, queryClient, refetch]);
+
+  const handleFilesChanged = React.useCallback(() => {
+    if (!documentId) {
+      return;
+    }
+    void refetch();
+    if (onRefreshRequested) {
+      void onRefreshRequested();
+    }
+  }, [documentId, onRefreshRequested, refetch]);
 
   const handleReembed = React.useCallback(async () => {
     if (!documentId || !onReembed) {
@@ -300,7 +313,9 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                   <DocumentFilesSection
                     documentId={documentId}
                     providerLabel={listedProviderLabel(sourceProvenance)}
+                    providerShortLabel={resolveSupplementProviderShortLabel(sourceProvenance)}
                     open={open}
+                    onFilesChanged={handleFilesChanged}
                   />
                 </Grid>
               )}

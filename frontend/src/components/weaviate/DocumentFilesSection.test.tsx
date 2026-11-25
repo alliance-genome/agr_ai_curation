@@ -1,10 +1,16 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { onPDFDocumentChanged, type PDFViewerDocumentChangedDetail } from '@/components/pdfViewer/pdfEvents'
 import type { ViewerFilesPayload } from '@/components/pdfViewer/viewerFiles'
 import { DOCUMENT_ID, FOUR_FILES_PAYLOAD } from '@/components/pdfViewer/viewerFilesFixtures'
-import { PAPER_LISTING } from '@/features/documents/paperSourceFilesFixtures'
+import { WAITING_FOR_SUPPLEMENTS_STAGE } from '@/features/documents/supplementProgress'
+import type { PdfProcessingJob } from '@/services/weaviate'
+import fileListingFixture from '@/test/fixtures/supplements/file_listing.json'
+import supplementAddMetadataFixture from '@/test/fixtures/supplements/supplement_add_metadata.json'
+import supplementWaitMetadataFixture from '@/test/fixtures/supplements/supplement_wait_metadata.json'
 
 import DocumentFilesSection, { listedProviderLabel } from './DocumentFilesSection'
 
@@ -13,8 +19,12 @@ function jsonResponse(payload: unknown, status = 200): Response {
 }
 
 const PROVIDER = 'ABC Literature'
+const PROVIDER_SHORT = 'ABC'
 const SOURCE_FILES_URL = `/api/weaviate/documents/${DOCUMENT_ID}/source-files`
+const ADD_FILES_URL = `/api/weaviate/documents/${DOCUMENT_ID}/files`
 const PAPER_FILES_URL = `/api/pdf-viewer/documents/${DOCUMENT_ID}/files`
+const SOURCE_PROVIDER_URL = '/api/weaviate/documents/source-provider'
+const ACTIVE_JOBS_URL_PREFIX = '/api/weaviate/pdf-jobs?'
 
 /**
  * A failed supplement in the files route's real shape: a file that is not ready has no
@@ -38,35 +48,158 @@ const FAILED_SUPPLEMENT_PAYLOAD: ViewerFilesPayload = {
   ],
 }
 
-function listingWith(files: Array<Record<string, unknown>>) {
-  return { ...PAPER_LISTING, files }
+const UPDATED_FIVE_FILES_PAYLOAD: ViewerFilesPayload = {
+  ...FOUR_FILES_PAYLOAD,
+  files: [
+    ...FOUR_FILES_PAYLOAD.files,
+    {
+      file_id: '22222222-2222-2222-2222-222222222223',
+      role: 'supplement',
+      display_name: 'Made_up_S20.xlsx',
+      display_mode: 'text',
+      status: 'ready',
+      tab_order: 4,
+      page_count: null,
+      content_url: null,
+      text_url: `/api/pdf-viewer/documents/${DOCUMENT_ID}/files/22222222-2222-2222-2222-222222222223/text`,
+    },
+  ],
 }
 
-function stubApi(listing: { status: number; payload: unknown }, paperFiles: ViewerFilesPayload = FOUR_FILES_PAYLOAD) {
-  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+const SECOND_TICKABLE_FILE = {
+  ...fileListingFixture.files[1],
+  provider_file_id: '22',
+  converted_text_id: '23',
+  display_name: 'Made_up_S22',
+  md5: null,
+  converted_md5: 'converted-md5-22',
+  check: {
+    status: 'passed',
+    reason: null,
+    measured_value: null,
+    limit_value: null,
+    few_characters_count: null,
+  },
+}
+
+function makeJob(overrides: Partial<PdfProcessingJob> = {}): PdfProcessingJob {
+  return {
+    job_id: 'job-add-1',
+    document_id: DOCUMENT_ID,
+    user_id: 7,
+    filename: 'made-up-paper.pdf',
+    status: 'pending',
+    current_stage: null,
+    progress_percentage: 0,
+    message: null,
+    cancel_requested: false,
+    error_message: null,
+    metadata: { job_kind: 'supplement_add' },
+    created_at: '2026-11-24T12:00:00Z',
+    updated_at: '2026-11-24T12:00:00Z',
+    completed_at: null,
+    ...overrides,
+  }
+}
+
+function listingWith(files: Array<Record<string, unknown>>) {
+  return { ...fileListingFixture, files }
+}
+
+interface StubApiOptions {
+  listing?: { status: number; payload: unknown } | (() => Response)
+  paperFiles?: ViewerFilesPayload | (() => Response)
+  activeJobs?: PdfProcessingJob[] | (() => Response)
+  sourceProvider?: Record<string, unknown>
+  onAddFiles?: (body: unknown, init?: RequestInit) => Response
+  onFetchJob?: (jobId: string, init?: RequestInit) => Response
+}
+
+function stubApi(options: StubApiOptions = {}) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
-    if (url === PAPER_FILES_URL) return jsonResponse(paperFiles)
-    if (url === `/api/weaviate/documents/${DOCUMENT_ID}/source-files`) return jsonResponse(listing.payload, listing.status)
-    throw new Error(`Unexpected fetch: ${url}`)
+    const method = (init?.method ?? 'GET').toUpperCase()
+
+    if (url === PAPER_FILES_URL && method === 'GET') {
+      if (typeof options.paperFiles === 'function') return options.paperFiles()
+      return jsonResponse(options.paperFiles ?? FOUR_FILES_PAYLOAD)
+    }
+    if (url === SOURCE_FILES_URL && method === 'GET') {
+      if (typeof options.listing === 'function') return options.listing()
+      const listing = options.listing ?? { status: 200, payload: fileListingFixture }
+      return jsonResponse(listing.payload, listing.status)
+    }
+    if (url.startsWith(ACTIVE_JOBS_URL_PREFIX) && method === 'GET') {
+      if (typeof options.activeJobs === 'function') return options.activeJobs()
+      const jobs = options.activeJobs ?? []
+      return jsonResponse({ jobs, total: jobs.length, limit: 50, offset: 0 })
+    }
+    if (url === SOURCE_PROVIDER_URL && method === 'GET') {
+      return jsonResponse(
+        options.sourceProvider ?? {
+          provider: 'abc_literature',
+          import_enabled: true,
+          presentation: {
+            display_label: 'ABC Literature',
+            short_label: 'ABC',
+          },
+        },
+      )
+    }
+    if (url === ADD_FILES_URL && method === 'POST') {
+      if (!options.onAddFiles) {
+        throw new Error('Unexpected POST to add files without handler')
+      }
+      const parsedBody = typeof init?.body === 'string' ? JSON.parse(init.body) : null
+      return options.onAddFiles(parsedBody, init)
+    }
+    if (url.startsWith('/api/weaviate/pdf-jobs/') && method === 'GET') {
+      if (!options.onFetchJob) {
+        throw new Error(`Unexpected job poll without handler: ${url}`)
+      }
+      const jobId = decodeURIComponent(url.slice('/api/weaviate/pdf-jobs/'.length))
+      return options.onFetchJob(jobId, init)
+    }
+    throw new Error(`Unexpected fetch: ${method} ${url}`)
   })
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
 }
 
-function renderSection(providerLabel: string | null, client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+function renderSection(
+  props: {
+    providerLabel: string | null
+    providerShortLabel?: string | null
+    configuredProviderShortLabel?: string | null
+    open?: boolean
+    onFilesChanged?: () => void
+    pollIntervalMs?: number
+  },
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+) {
   return render(
     <QueryClientProvider client={client}>
-      <DocumentFilesSection documentId={DOCUMENT_ID} providerLabel={providerLabel} open />
+      <DocumentFilesSection
+        documentId={DOCUMENT_ID}
+        providerLabel={props.providerLabel}
+        providerShortLabel={props.providerShortLabel}
+        configuredProviderShortLabel={props.configuredProviderShortLabel}
+        open={props.open ?? true}
+        onFilesChanged={props.onFilesChanged}
+        pollIntervalMs={props.pollIntervalMs ?? 20}
+      />
     </QueryClientProvider>,
   )
 }
 
-describe('DocumentFilesSection (read only)', () => {
-  afterEach(() => vi.unstubAllGlobals())
+describe('DocumentFilesSection (Library Files + Add)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
 
   it('lists the paper\'s files with their role, kind and state', async () => {
-    stubApi({ status: 200, payload: PAPER_LISTING })
-    renderSection(PROVIDER)
+    stubApi()
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
 
     const list = await screen.findByRole('list', { name: 'Files in this paper' })
     const rows = within(list).getAllByRole('listitem')
@@ -78,13 +211,13 @@ describe('DocumentFilesSection (read only)', () => {
     ])
   })
 
-  it('lists the provider\'s files not in the paper, each with why, its last observation and the counts', async () => {
-    stubApi({ status: 200, payload: PAPER_LISTING })
-    renderSection(PROVIDER)
+  it('lists the provider\'s other files with tickboxes only on addable supplements, keeping descriptions and counts', async () => {
+    stubApi()
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
 
     const list = await screen.findByRole('list', { name: 'Files in ABC Literature not in this paper' })
     const rows = within(list).getAllByRole('listitem')
-    expect(rows).toHaveLength(4)
+    expect(rows).toHaveLength(5)
     expect(rows[0]).toHaveTextContent('Converted by ABC Literature; not added to this paper')
     expect(rows[0]).toHaveTextContent('Little text: about 120 characters')
     expect(rows[1]).toHaveTextContent('A table in its converted text has rows that do not match its header')
@@ -93,50 +226,462 @@ describe('DocumentFilesSection (read only)', () => {
       `ABC Literature had not converted this file when the import stopped waiting (${new Date('2026-11-22T14:05:00+00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })})`,
     )
     expect(rows[3]).toHaveTextContent('Large data file. Files like this are not read.')
+    expect(rows[4]).toHaveTextContent('File type not supported')
     expect(screen.getByText('2 more files in ABC Literature are not listed because you cannot open them.')).toBeInTheDocument()
     expect(screen.getByText('1 further copy of a listed file is not listed again.')).toBeInTheDocument()
-    // Read only: nothing here adds or removes a file.
-    expect(screen.queryByRole('button')).not.toBeInTheDocument()
-    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+
+    // Only the tickable converted supplement gets a checkbox, and the Add button starts disabled at 0.
+    const checkboxes = await screen.findAllByRole('checkbox')
+    expect(checkboxes).toHaveLength(1)
+    expect(screen.getByRole('checkbox', { name: 'Made_up_S20' })).not.toBeChecked()
+    expect(screen.getByRole('button', { name: 'Add 0 files' })).toBeDisabled()
   })
 
-  it('does not ask the provider about an uploaded paper', async () => {
-    const fetchMock = stubApi({ status: 200, payload: PAPER_LISTING })
-    renderSection(null)
+  it('ticks multiple files without duplicates, posts exact {files:[{provider_file_id,md5,converted_md5}]}, polls to terminal, renders SupplementFilesList, refreshes both lists, notifies parent, and refreshes open viewer only for this paper', async () => {
+    const user = userEvent.setup()
+    const onFilesChanged = vi.fn()
+    const viewerEvents: PDFViewerDocumentChangedDetail[] = []
+    const unsubscribeViewer = onPDFDocumentChanged((event) => viewerEvents.push(event.detail))
+
+    let listingCalls = 0
+    let paperFilesCalls = 0
+    let pollCalls = 0
+    let submittedBody: unknown = null
+
+    const initialListing = listingWith([
+      fileListingFixture.files[0],
+      fileListingFixture.files[1],
+      SECOND_TICKABLE_FILE,
+      fileListingFixture.files[3],
+    ])
+    const refreshedListing = listingWith([
+      fileListingFixture.files[0],
+      { ...fileListingFixture.files[1], in_this_paper: true, tickable: false, not_tickable_reason: 'already_in_paper' },
+      fileListingFixture.files[3],
+    ])
+
+    stubApi({
+      paperFiles: () => {
+        paperFilesCalls += 1
+        return jsonResponse(paperFilesCalls === 1 ? FOUR_FILES_PAYLOAD : UPDATED_FIVE_FILES_PAYLOAD)
+      },
+      listing: () => {
+        listingCalls += 1
+        return jsonResponse(listingCalls === 1 ? initialListing : refreshedListing)
+      },
+      onAddFiles: (body) => {
+        submittedBody = body
+        return jsonResponse(makeJob({ status: 'pending' }), 202)
+      },
+      onFetchJob: () => {
+        pollCalls += 1
+        if (pollCalls === 1) {
+          return jsonResponse(makeJob({ status: 'running', current_stage: 'checking_files', message: 'Checking files...' }))
+        }
+        return jsonResponse(
+          makeJob({
+            status: 'completed',
+            message: 'Added 1 of 2 files.',
+            metadata: supplementAddMetadataFixture,
+          }),
+        )
+      },
+    })
+
+    try {
+      renderSection({
+        providerLabel: PROVIDER,
+        providerShortLabel: PROVIDER_SHORT,
+        onFilesChanged,
+      })
+
+      const firstBox = await screen.findByRole('checkbox', { name: 'Made_up_S20' })
+      const secondBox = screen.getByRole('checkbox', { name: 'Made_up_S22' })
+      expect(screen.getByRole('button', { name: 'Add 0 files' })).toBeDisabled()
+
+      // Toggle twice on firstBox to verify selection deduplication / toggle behavior.
+      await user.click(firstBox)
+      expect(screen.getByRole('button', { name: 'Add 1 file' })).toBeEnabled()
+      await user.click(firstBox)
+      expect(screen.getByRole('button', { name: 'Add 0 files' })).toBeDisabled()
+
+      await user.click(firstBox)
+      await user.click(secondBox)
+      const addButton = screen.getByRole('button', { name: 'Add 2 files' })
+      expect(addButton).toBeEnabled()
+
+      await user.click(addButton)
+
+      // Exact backend AddFilesRequest schema: ONLY provider_file_id, md5, converted_md5.
+      await waitFor(() => {
+        expect(submittedBody).toEqual({
+          files: [
+            {
+              provider_file_id: '20',
+              md5: 'original-md5-20',
+              converted_md5: 'converted-md5-20',
+            },
+            {
+              provider_file_id: '22',
+              md5: null,
+              converted_md5: 'converted-md5-22',
+            },
+          ],
+        })
+      })
+
+      // N37 heading appears immediately and polling reaches terminal SupplementFilesList outcomes.
+      expect(await screen.findByText('Adding files')).toBeInTheDocument()
+      const progressList = await screen.findByRole('list', { name: 'Supplement files' })
+      expect(within(progressList).getByText('Table_S1.xlsx')).toBeInTheDocument()
+      expect(within(progressList).getByText('This PDF is larger than 20 MB, so it was not added.')).toBeInTheDocument()
+      expect(within(progressList).getByText('Not added: ABC no longer lists this file for the paper.')).toBeInTheDocument()
+
+      // Both lists refreshed, parent notified, and open viewer notified with refreshOnlyIfOpen: true.
+      await waitFor(() => {
+        expect(paperFilesCalls).toBe(2)
+        expect(listingCalls).toBe(2)
+        expect(onFilesChanged).toHaveBeenCalledTimes(1)
+        expect(viewerEvents).toHaveLength(1)
+      })
+      expect(screen.getByText('Made_up_S20.xlsx')).toBeInTheDocument()
+      expect(screen.queryByRole('checkbox', { name: 'Made_up_S20' })).not.toBeInTheDocument()
+      expect(viewerEvents[0]).toMatchObject({
+        documentId: DOCUMENT_ID,
+        refreshOnlyIfOpen: true,
+      })
+      expect(viewerEvents[0]!.files.map((file) => file.file_id)).toContain('22222222-2222-2222-2222-222222222223')
+    } finally {
+      unsubscribeViewer()
+    }
+  })
+
+  it('shows N34 and renders NO tickboxes when an active job exists on mount, follows SupplementFilesList, and refreshes when terminal', async () => {
+    let activeJobPhase: 'active' | 'done' = 'active'
+    let listingCalls = 0
+    let paperFilesCalls = 0
+
+    const waitingJob = makeJob({
+      job_id: 'job-wait-1',
+      status: 'running',
+      current_stage: WAITING_FOR_SUPPLEMENTS_STAGE,
+      metadata: supplementWaitMetadataFixture.mixed_waiting,
+    })
+
+    stubApi({
+      activeJobs: () =>
+        jsonResponse({
+          jobs: activeJobPhase === 'active' ? [waitingJob] : [],
+          total: activeJobPhase === 'active' ? 1 : 0,
+          limit: 50,
+          offset: 0,
+        }),
+      paperFiles: () => {
+        paperFilesCalls += 1
+        return jsonResponse(paperFilesCalls === 1 ? FOUR_FILES_PAYLOAD : UPDATED_FIVE_FILES_PAYLOAD)
+      },
+      listing: () => {
+        listingCalls += 1
+        return jsonResponse(fileListingFixture)
+      },
+      onFetchJob: () => {
+        activeJobPhase = 'done'
+        return jsonResponse(
+          makeJob({
+            job_id: 'job-wait-1',
+            status: 'completed',
+            current_stage: 'completed',
+            metadata: supplementWaitMetadataFixture.finished_with_wait_timestamp,
+          }),
+        )
+      },
+    })
+
+    renderSection({
+      providerLabel: PROVIDER,
+      providerShortLabel: PROVIDER_SHORT,
+      pollIntervalMs: 30,
+    })
+
+    expect(
+      await screen.findByText("This paper's import is still running. You can add or remove files when it has finished."),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Add \d+ file/ })).not.toBeInTheDocument()
+    expect(await screen.findByText('Waiting for ABC')).toBeInTheDocument()
+
+    // Once the active job finishes, both lists refresh and tickboxes appear.
+    expect(await screen.findByRole('checkbox', { name: 'Made_up_S20' })).toBeInTheDocument()
+    await waitFor(() => {
+      expect(paperFilesCalls).toBe(2)
+      expect(listingCalls).toBe(2)
+    })
+  })
+
+  it('ignores active jobs belonging to other documents so tickboxes stay available for this paper', async () => {
+    stubApi({
+      activeJobs: [
+        makeJob({
+          job_id: 'job-other-doc',
+          document_id: 'bbbbbbbb-0000-0000-0000-000000000099',
+          status: 'running',
+        }),
+      ],
+    })
+
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+
+    expect(await screen.findByRole('checkbox', { name: 'Made_up_S20' })).toBeInTheDocument()
+    expect(
+      screen.queryByText("This paper's import is still running. You can add or remove files when it has finished."),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows Card 34 on an uploaded paper without asking the provider listing, using configured short label (Alliance & non-ABC) and hides when import disabled', async () => {
+    const fetchMock = stubApi({
+      sourceProvider: {
+        provider: 'abc_literature',
+        import_enabled: true,
+        presentation: { display_label: 'ABC Literature', short_label: 'ABC' },
+      },
+    })
+    const first = renderSection({ providerLabel: null })
 
     await screen.findByRole('list', { name: 'Files in this paper' })
-    expect(fetchMock.mock.calls.map(([url]) => String(url))).not.toContain(`/api/weaviate/documents/${DOCUMENT_ID}/source-files`)
+    expect(await screen.findByText('Files can be added only to papers imported from ABC.')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).not.toContain(SOURCE_FILES_URL)
     expect(screen.queryByText(/Also in/)).not.toBeInTheDocument()
+    first.unmount()
+
+    // Non-ABC deployment configured provider label (zero hardcoded ABC).
+    stubApi({
+      sourceProvider: {
+        provider: 'genome_archive',
+        import_enabled: true,
+        presentation: { display_label: 'Genome Archive', short_label: 'GA' },
+      },
+    })
+    const second = renderSection({ providerLabel: null })
+    expect(await screen.findByText('Files can be added only to papers imported from GA.')).toBeInTheDocument()
+    expect(screen.queryByText(/ABC/)).not.toBeInTheDocument()
+    second.unmount()
+
+    // When external import is disabled on this server, nothing is shown for uploaded papers.
+    stubApi({
+      sourceProvider: {
+        provider: null,
+        import_enabled: false,
+        presentation: null,
+      },
+    })
+    renderSection({ providerLabel: null })
+    await screen.findByRole('list', { name: 'Files in this paper' })
+    await waitFor(() => {
+      expect(screen.queryByText(/Files can be added only/)).not.toBeInTheDocument()
+    })
+  })
+
+  it('shows Card 34 with configured short provider label when source-files listing returns not_imported_from_provider', async () => {
+    stubApi({
+      listing: { status: 409, payload: { detail: { error: 'not_imported_from_provider' } } },
+    })
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+
+    expect(await screen.findByText('Files can be added only to papers imported from ABC.')).toBeInTheDocument()
+  })
+
+  it.each([
+    {
+      name: '422 paper_file_limit with limit_value (Card 41)',
+      status: 422,
+      payload: { detail: { error: 'paper_file_limit', limit_value: 20 } },
+      expectedText: 'Too many files for one paper: at most 20, including the main paper.',
+      expectTryAgain: false,
+    },
+    {
+      name: '409 import_in_progress (N35)',
+      status: 409,
+      payload: { detail: { error: 'import_in_progress' } },
+      expectedText: "This paper's import is still running. You can add or remove files when it has finished.",
+      expectTryAgain: false,
+    },
+    {
+      name: '409 file_removal_unfinished (N36)',
+      status: 409,
+      payload: { detail: { error: 'file_removal_unfinished' } },
+      expectedText: 'A file of this paper is still being removed. Try again in a moment.',
+      expectTryAgain: true,
+    },
+    {
+      name: '409 document_source_curator_token_unavailable (Card 9 sign-in)',
+      status: 409,
+      payload: { detail: { error: 'document_source_curator_token_unavailable' } },
+      expectedText: "Sign in again to see this paper's files in ABC Literature.",
+      expectTryAgain: false,
+    },
+    {
+      name: '503 document_source_curator_token_unavailable (Card 9 reader down)',
+      status: 503,
+      payload: { detail: { error: 'document_source_curator_token_unavailable' } },
+      expectedText: "This server cannot reach ABC Literature just now, so this paper's files there cannot be listed.",
+      expectTryAgain: true,
+    },
+    {
+      name: '500 generic failure with Card 38 Try again',
+      status: 500,
+      payload: { detail: 'Internal error' },
+      expectedText: 'Could not add files to this paper.',
+      expectTryAgain: true,
+    },
+  ])('renders approved refusal text for $name', async ({ status, payload, expectedText, expectTryAgain }) => {
+    const user = userEvent.setup()
+    let attempts = 0
+    stubApi({
+      onAddFiles: () => {
+        attempts += 1
+        return jsonResponse(payload, status)
+      },
+    })
+
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+
+    await user.click(await screen.findByRole('checkbox', { name: 'Made_up_S20' }))
+    await user.click(screen.getByRole('button', { name: 'Add 1 file' }))
+
+    expect(await screen.findByText(expectedText)).toBeInTheDocument()
+    expect(attempts).toBe(1)
+
+    if (expectTryAgain) {
+      const tryAgain = screen.getByRole('button', { name: 'Try again' })
+      await user.click(tryAgain)
+      await waitFor(() => expect(attempts).toBe(2))
+    } else {
+      expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
+    }
+  })
+
+  it('hides the provider add UI cleanly when POST /files returns 503 document_source_import_disabled', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      onAddFiles: () => jsonResponse({ detail: { error: 'document_source_import_disabled' } }, 503),
+    })
+
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+
+    await user.click(await screen.findByRole('checkbox', { name: 'Made_up_S20' }))
+    await user.click(screen.getByRole('button', { name: 'Add 1 file' }))
+
+    await waitFor(() => {
+      expect(screen.queryByText('Also in ABC Literature')).not.toBeInTheDocument()
+    })
+    expect(screen.queryByText(/document_source_import_disabled/)).not.toBeInTheDocument()
+    expect(screen.queryByText('This screen cannot describe this file yet.')).not.toBeInTheDocument()
+  })
+
+  it('cancels polling timers and in-flight poll requests cleanly on unmount', async () => {
+    const user = userEvent.setup()
+    let pollCalls = 0
+    const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout')
+
+    stubApi({
+      onAddFiles: () => jsonResponse(makeJob({ status: 'pending' }), 202),
+      onFetchJob: () => {
+        pollCalls += 1
+        return jsonResponse(makeJob({ status: 'running', current_stage: 'checking_files' }))
+      },
+    })
+
+    try {
+      const view = renderSection({
+        providerLabel: PROVIDER,
+        providerShortLabel: PROVIDER_SHORT,
+        pollIntervalMs: 30,
+      })
+
+      await user.click(await screen.findByRole('checkbox', { name: 'Made_up_S20' }))
+      await user.click(screen.getByRole('button', { name: 'Add 1 file' }))
+
+      await waitFor(() => expect(pollCalls).toBe(1))
+
+      view.unmount()
+      const callsAtUnmount = pollCalls
+      await new Promise((resolve) => setTimeout(resolve, 120))
+
+      expect(pollCalls).toBe(callsAtUnmount)
+      expect(clearTimeoutSpy).toHaveBeenCalled()
+    } finally {
+      clearTimeoutSpy.mockRestore()
+    }
+  })
+
+  it('renders every label, progress entry, and refusal with a non-ABC provider label and zero ABC text', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      onAddFiles: () => jsonResponse(makeJob({ status: 'pending' }), 202),
+      onFetchJob: () =>
+        jsonResponse(
+          makeJob({
+            status: 'completed',
+            message: 'Added 1 of 1 files.',
+            metadata: supplementAddMetadataFixture,
+          }),
+        ),
+    })
+
+    const { container } = renderSection({
+      providerLabel: 'Genome Archive',
+      providerShortLabel: 'GA',
+    })
+
+    expect(await screen.findByText('Also in Genome Archive')).toBeInTheDocument()
+    expect(screen.getByText('Converted by Genome Archive; not added to this paper')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('checkbox', { name: 'Made_up_S20' }))
+    await user.click(screen.getByRole('button', { name: 'Add 1 file' }))
+
+    expect(await screen.findByText('Not added: GA no longer lists this file for the paper.')).toBeInTheDocument()
+    expect(screen.getByText("You can read this file's text in GA but not its PDF, so it was not added.")).toBeInTheDocument()
+    expect(container.textContent).not.toContain('ABC')
   })
 
   it('says why the provider\'s files cannot be listed when the paper\'s entry was merged', async () => {
-    stubApi({ status: 409, payload: { detail: { error: 'paper_reference_mismatch' } } })
-    renderSection(PROVIDER)
+    stubApi({ listing: { status: 409, payload: { detail: { error: 'paper_reference_mismatch' } } } })
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
 
     expect(await screen.findByText(
       'This paper\'s entry in ABC Literature has been merged into another entry, so its files cannot be listed here.',
     )).toBeInTheDocument()
   })
 
-  it('says plainly when the provider could not be checked', async () => {
-    stubApi({ status: 500, payload: { detail: { error: 'file_listing_failed' } } })
-    renderSection(PROVIDER)
+  it('says plainly when the provider could not be checked and offers Try again', async () => {
+    const user = userEvent.setup()
+    let listingCalls = 0
+    stubApi({
+      listing: () => {
+        listingCalls += 1
+        return jsonResponse({ detail: { error: 'file_listing_failed' } }, 500)
+      },
+    })
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
 
     expect(await screen.findByText('Could not check ABC Literature for this paper\'s files.')).toBeInTheDocument()
     expect(await screen.findByRole('list', { name: 'Files in this paper' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(listingCalls).toBe(2))
   })
 
   it('shows a file that could not be added as such, in the files route\'s real shape', async () => {
-    stubApi({ status: 200, payload: PAPER_LISTING }, FAILED_SUPPLEMENT_PAYLOAD)
-    renderSection(PROVIDER)
+    stubApi({ paperFiles: FAILED_SUPPLEMENT_PAYLOAD })
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
 
     const list = await screen.findByRole('list', { name: 'Files in this paper' })
     expect(within(list).getAllByRole('listitem')[4]).toHaveTextContent('Table_S4.xlsxSupplementTextCould not be added')
   })
 
   it('words each state of a paper file differently', async () => {
-    stubApi({ status: 200, payload: PAPER_LISTING }, FAILED_SUPPLEMENT_PAYLOAD)
-    renderSection(PROVIDER)
+    stubApi({ paperFiles: FAILED_SUPPLEMENT_PAYLOAD })
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
 
     const list = await screen.findByRole('list', { name: 'Files in this paper' })
     const states = within(list).getAllByRole('listitem').map((row) => row.lastElementChild?.textContent)
@@ -144,24 +689,34 @@ describe('DocumentFilesSection (read only)', () => {
   })
 
   it('words the main paper by what is true, never as a converted supplement', async () => {
-    // ABC Literature now names another main file than the paper's stored one (P6f's code).
-    const main = { ...PAPER_LISTING.files[0], in_this_paper: false, tickable: false, not_tickable_reason: 'main_differs_from_paper', converted_text_id: null, converted_md5: null }
-    stubApi({ status: 200, payload: listingWith([main]) })
-    renderSection(PROVIDER)
+    const main = {
+      ...fileListingFixture.files[0],
+      in_this_paper: false,
+      tickable: false,
+      not_tickable_reason: 'main_differs_from_paper',
+      converted_text_id: null,
+      converted_md5: null,
+    }
+    stubApi({ listing: { status: 200, payload: listingWith([main]) } })
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
 
     const list = await screen.findByRole('list', { name: 'Files in ABC Literature not in this paper' })
     const row = within(list).getByRole('listitem')
     expect(row).toHaveTextContent('Main paper')
     expect(row).toHaveTextContent('ABC Literature now has a different main file for this paper than the one in the Library')
     expect(row).not.toHaveTextContent(/Converted by/)
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
   })
 
   it('treats retired pdf_supplement_not_supported_yet on a listing as unrecognized (ALL-1738 item 1)', async () => {
-    // Card 36's line is retired from per-paper listings now that P7c2 supports PDF supplements;
-    // pdf_supplement_not_supported_yet belongs only to historical job outcomes (N17).
-    const pdf = { ...PAPER_LISTING.files[1], format: 'pdf', tickable: false, not_tickable_reason: 'pdf_supplement_not_supported_yet' }
-    stubApi({ status: 200, payload: listingWith([pdf]) })
-    renderSection(PROVIDER)
+    const pdf = {
+      ...fileListingFixture.files[1],
+      format: 'pdf',
+      tickable: false,
+      not_tickable_reason: 'pdf_supplement_not_supported_yet',
+    }
+    stubApi({ listing: { status: 200, payload: listingWith([pdf]) } })
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
 
     const list = await screen.findByRole('list', { name: 'Files in ABC Literature not in this paper' })
     const row = within(list).getByRole('listitem')
@@ -170,11 +725,17 @@ describe('DocumentFilesSection (read only)', () => {
     expect(row).not.toHaveTextContent(/Converted by/)
   })
 
-  // From the review's surviving-mutant probe: pins the parser's refusal of a tickable main.
-  it('TODAY backend: differing main, unconverted, tickable -> whole part could not be shown, others hidden', async () => {
-    const main = { ...PAPER_LISTING.files[0], in_this_paper: false, tickable: true, not_tickable_reason: null, converted_text_id: null, converted_md5: null }
-    stubApi({ status: 200, payload: listingWith([main, PAPER_LISTING.files[1]]) })
-    renderSection(PROVIDER)
+  it('refuses a tickable main file as a contract error and keeps paper files intact', async () => {
+    const main = {
+      ...fileListingFixture.files[0],
+      in_this_paper: false,
+      tickable: true,
+      not_tickable_reason: null,
+      converted_text_id: null,
+      converted_md5: null,
+    }
+    stubApi({ listing: { status: 200, payload: listingWith([main, fileListingFixture.files[1]]) } })
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
 
     expect(await screen.findByText('This paper\'s files in ABC Literature could not be shown.')).toBeInTheDocument()
     expect(screen.queryByText(/Converted by/)).not.toBeInTheDocument()
@@ -183,9 +744,9 @@ describe('DocumentFilesSection (read only)', () => {
   })
 
   it('words a file with an unknown code on its own line and still shows the rest', async () => {
-    const unknown = { ...PAPER_LISTING.files[4], not_tickable_reason: 'pdf_supplement_later' }
-    stubApi({ status: 200, payload: listingWith([PAPER_LISTING.files[1], unknown]) })
-    renderSection(PROVIDER)
+    const unknown = { ...fileListingFixture.files[4], not_tickable_reason: 'pdf_supplement_later' }
+    stubApi({ listing: { status: 200, payload: listingWith([fileListingFixture.files[1], unknown]) } })
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
 
     const list = await screen.findByRole('list', { name: 'Files in ABC Literature not in this paper' })
     const rows = within(list).getAllByRole('listitem')
@@ -197,44 +758,49 @@ describe('DocumentFilesSection (read only)', () => {
   })
 
   it('does not blame the provider when its answer cannot be read', async () => {
-    stubApi({ status: 200, payload: { ...PAPER_LISTING, files: 'not a list' } })
-    renderSection(PROVIDER)
+    stubApi({ listing: { status: 200, payload: { ...fileListingFixture, files: 'not a list' } } })
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
 
     expect(await screen.findByText('This paper\'s files in ABC Literature could not be shown.')).toBeInTheDocument()
     expect(screen.queryByText(/Could not check/)).not.toBeInTheDocument()
   })
 
   it('keeps the dialog whole when a file is neither tickable nor gives a reason', async () => {
-    stubApi({ status: 200, payload: listingWith([{ ...PAPER_LISTING.files[4], not_tickable_reason: null }]) })
-    renderSection(PROVIDER)
+    stubApi({
+      listing: {
+        status: 200,
+        payload: listingWith([{ ...fileListingFixture.files[4], not_tickable_reason: null }]),
+      },
+    })
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
 
     expect(await screen.findByText('This paper\'s files in ABC Literature could not be shown.')).toBeInTheDocument()
     expect(await screen.findByRole('list', { name: 'Files in this paper' })).toBeInTheDocument()
   })
 
   it('asks to sign in again only when the sign-in is missing', async () => {
-    stubApi({ status: 409, payload: { detail: { error: 'document_source_curator_token_unavailable' } } })
-    renderSection(PROVIDER)
+    stubApi({ listing: { status: 409, payload: { detail: { error: 'document_source_curator_token_unavailable' } } } })
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
 
     expect(await screen.findByText('Sign in again to see this paper\'s files in ABC Literature.')).toBeInTheDocument()
   })
 
   it('says the provider cannot be reached when its reader is down, not to sign in', async () => {
-    stubApi({ status: 503, payload: { detail: { error: 'document_source_curator_token_unavailable' } } })
-    renderSection(PROVIDER)
+    stubApi({ listing: { status: 503, payload: { detail: { error: 'document_source_curator_token_unavailable' } } } })
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
 
     expect(await screen.findByText('This server cannot reach ABC Literature just now, so this paper\'s files there cannot be listed.')).toBeInTheDocument()
     expect(screen.queryByText(/Sign in again/)).not.toBeInTheDocument()
   })
 
   it('does not ask the provider again when the same paper is reopened soon after', async () => {
-    const fetchMock = stubApi({ status: 200, payload: PAPER_LISTING })
+    const fetchMock = stubApi()
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    const first = renderSection(PROVIDER, client)
+    const first = renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT }, client)
     await screen.findByRole('list', { name: 'Files in ABC Literature not in this paper' })
     first.unmount()
 
-    renderSection(PROVIDER, client)
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT }, client)
     await screen.findByRole('list', { name: 'Files in ABC Literature not in this paper' })
     await waitFor(() => {
       expect(fetchMock.mock.calls.filter(([url]) => String(url) === PAPER_FILES_URL)).toHaveLength(2)
@@ -245,7 +811,12 @@ describe('DocumentFilesSection (read only)', () => {
 
 describe('listedProviderLabel', () => {
   it('uses only the provider\'s configured label, never its raw id', () => {
-    expect(listedProviderLabel({ provider: 'abc_literature', providerMetadata: { displayLabel: 'ABC Literature', referenceLabelPriority: null } })).toBe('ABC Literature')
+    expect(
+      listedProviderLabel({
+        provider: 'abc_literature',
+        providerMetadata: { displayLabel: 'ABC Literature', referenceLabelPriority: null },
+      }),
+    ).toBe('ABC Literature')
     expect(listedProviderLabel({ provider: 'abc_literature', providerMetadata: null })).toBeNull()
     expect(listedProviderLabel(null)).toBeNull()
   })

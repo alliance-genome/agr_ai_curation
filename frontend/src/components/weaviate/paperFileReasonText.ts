@@ -319,16 +319,17 @@ export const SUPPLEMENT_OUTCOME_REASON_TEXT: Record<
   SupplementOutcomeReasonCode,
   SupplementOutcomeReasonFormatter
 > = {
-  // Card 40: conversion wait outcomes.
-  // Part 4 note: when Library Add ships, append
-  // " You can add it later from the Library once {provider} shows it as converted."
-  // to `provider_not_converted` and `not_converted_in_time` (Card 40 / breakdown §3a).
-  provider_not_converted: (options) =>
-    `${sentenceLead(resolveProviderShortLabel(options))} has not converted this file.`,
+  // Card 40: conversion wait outcomes (with Library Add second sentence restored in Part 4).
+  provider_not_converted: (options) => {
+    const provider = resolveProviderShortLabel(options)
+    return `${sentenceLead(provider)} has not converted this file. You can add it later from the Library once ${provider} shows it as converted.`
+  },
   provider_conversion_failed: (options) =>
     `${sentenceLead(resolveProviderShortLabel(options))} tried and could not convert this file.`,
-  not_converted_in_time: (options) =>
-    `${sentenceLead(resolveProviderShortLabel(options))} had not converted this file when the import stopped waiting.`,
+  not_converted_in_time: (options) => {
+    const provider = resolveProviderShortLabel(options)
+    return `${sentenceLead(provider)} had not converted this file when the import stopped waiting. You can add it later from the Library once ${provider} shows it as converted.`
+  },
 
   // N11–N16: supplement stage endings.
   login_expired: () => 'Not added: your sign-in expired before it could be added.',

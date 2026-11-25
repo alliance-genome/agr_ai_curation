@@ -268,6 +268,40 @@ export type PdfJobStatus =
   | 'cancel_requested'
   | 'cancelled';
 
+export const ACTIVE_PDF_JOB_STATUSES: readonly PdfJobStatus[] = [
+  'pending',
+  'running',
+  'cancel_requested',
+];
+
+export const isActivePdfJobStatus = (status: PdfJobStatus | string | null | undefined): boolean =>
+  status === 'pending' || status === 'running' || status === 'cancel_requested';
+
+/**
+ * Structured refusal error raised by `POST /api/weaviate/documents/{document_id}/files`.
+ * Preserves the HTTP status (`422`, `409`, `503`), machine `code`, and optional numeric `limitValue`.
+ */
+export class AddDocumentSourceFilesError extends Error {
+  readonly httpStatus: number;
+  readonly code: string | null;
+  readonly limitValue: number | null;
+
+  constructor(
+    message: string,
+    options: {
+      httpStatus: number;
+      code: string | null;
+      limitValue?: number | null;
+    },
+  ) {
+    super(message);
+    this.name = 'AddDocumentSourceFilesError';
+    this.httpStatus = options.httpStatus;
+    this.code = options.code;
+    this.limitValue = options.limitValue ?? null;
+  }
+}
+
 export interface PdfProcessingJob {
   job_id: string;
   document_id: string;
@@ -792,15 +826,89 @@ export const importSourceIdentifiers = (
 ): Promise<IdentifierImportResponse> => postIdentifierBatch('import', rawIdentifiers);
 
 export const fetchDocumentSourceProviderConfiguration = async (
+  options?: RequestInit,
 ): Promise<DocumentSourceProviderConfiguration> => {
   const response = await fetchApi<RawDocumentSourceProviderConfiguration>(
     '/documents/source-provider',
+    options,
   );
   return {
     provider: toStringOrNull(response.provider),
     importEnabled: response.import_enabled === true,
     presentation: normalizeDocumentSourceProviderMetadata(response.presentation),
   };
+};
+
+export const addDocumentSourceFiles = async (
+  documentId: string,
+  request: AddPaperFilesRequest,
+  options?: RequestInit,
+): Promise<PdfProcessingJob> => {
+  const payloadBody: AddPaperFilesRequest = {
+    files: request.files.map(({ provider_file_id, md5, converted_md5 }) => ({
+      provider_file_id,
+      md5,
+      converted_md5,
+    })),
+  };
+
+  const response = await fetch(
+    `${API_BASE_URL}/documents/${encodeURIComponent(documentId)}/files`,
+    {
+      ...options,
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...options?.headers,
+      },
+      body: JSON.stringify(payloadBody),
+    },
+  );
+
+  if (response.status === 401) {
+    throw new AuthenticationError('Authentication required');
+  }
+
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    const payloadRecord = toRecordOrNull(payload);
+    const detailRecord = toRecordOrNull(payloadRecord?.detail);
+    const rawCode = detailRecord?.error;
+    const code = typeof rawCode === 'string' && rawCode.trim().length > 0 ? rawCode.trim() : null;
+    const rawLimit = detailRecord?.limit_value;
+    const limitValue =
+      typeof rawLimit === 'number' && Number.isInteger(rawLimit) ? rawLimit : null;
+    const detailMessage =
+      detailRecord && typeof detailRecord.message === 'string' && detailRecord.message.trim().length > 0
+        ? detailRecord.message.trim()
+        : typeof payloadRecord?.detail === 'string' && payloadRecord.detail.trim().length > 0
+          ? payloadRecord.detail.trim()
+          : undefined;
+    throw new AddDocumentSourceFilesError(
+      detailMessage || code || `Failed to add files to paper (${response.status})`,
+      {
+        httpStatus: response.status,
+        code,
+        limitValue,
+      },
+    );
+  }
+
+  const jobRecord = toRecordOrNull(payload);
+  if (
+    !jobRecord
+    || typeof jobRecord.job_id !== 'string'
+    || jobRecord.job_id.trim().length === 0
+    || typeof jobRecord.document_id !== 'string'
+    || jobRecord.document_id.trim().length === 0
+    || typeof jobRecord.status !== 'string'
+  ) {
+    throw new Error('Add files response is missing required job fields.');
+  }
+
+  return payload as PdfProcessingJob;
 };
 
 export const buildDocumentListSearchParams = (
@@ -907,10 +1015,12 @@ export const usePdfExtractionHealth = (
 export const fetchPdfJobs = async (
   params: {
     status?: PdfJobStatus[];
+    documentId?: string;
     windowDays?: number;
     limit?: number;
     offset?: number;
-  } = {}
+  } = {},
+  options?: RequestInit,
 ): Promise<PdfJobListResponse> => {
   const query = new URLSearchParams();
   (params.status ?? []).forEach((statusValue) => query.append('status', statusValue));
@@ -918,11 +1028,23 @@ export const fetchPdfJobs = async (
   if (params.limit) query.set('limit', String(params.limit));
   if (params.offset) query.set('offset', String(params.offset));
   const suffix = query.toString() ? `?${query.toString()}` : '';
-  return fetchApi<PdfJobListResponse>(`/pdf-jobs${suffix}`);
+  const response = await fetchApi<PdfJobListResponse>(`/pdf-jobs${suffix}`, options);
+  if (!params.documentId) {
+    return response;
+  }
+  const filteredJobs = response.jobs.filter((job) => job.document_id === params.documentId);
+  return {
+    ...response,
+    jobs: filteredJobs,
+    total: filteredJobs.length,
+  };
 };
 
-export const fetchPdfJob = async (jobId: string): Promise<PdfProcessingJob> => {
-  return fetchApi<PdfProcessingJob>(`/pdf-jobs/${jobId}`);
+export const fetchPdfJob = async (
+  jobId: string,
+  options?: RequestInit,
+): Promise<PdfProcessingJob> => {
+  return fetchApi<PdfProcessingJob>(`/pdf-jobs/${encodeURIComponent(jobId)}`, options);
 };
 
 export const cancelPdfJob = async (jobId: string): Promise<CancelPdfJobResponse> => {

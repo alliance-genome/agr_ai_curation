@@ -12,6 +12,11 @@ export interface PDFViewerDocumentChangedDetail {
   /** Listed files without a tab, including their status for evidence navigation. */
   unavailableFiles: ViewerFile[]
   ownerToken?: string
+  /**
+   * When true, update the viewer ONLY if it currently shows `documentId`; never switch
+   * away from another open paper and never open into an empty viewer.
+   */
+  refreshOnlyIfOpen?: boolean
   viewerState?: {
     currentPage?: number
     scrollPosition?: number
@@ -50,12 +55,18 @@ export const ALL_FILES_FAILED_MESSAGE = "None of this paper's files could be add
 export interface PaperFilesViewerOptions {
   ownerToken?: string
   viewerState?: PDFViewerDocumentChangedDetail['viewerState']
+  /**
+   * When true, update the viewer only if it currently shows this paper; never switch away
+   * from a different paper or open into an idle viewer.
+   */
+  refreshOnlyIfOpen?: boolean
 }
 
 /**
  * Show a paper's files in the viewer: one tab per file with a URL, the main file
  * first (or the first file with a URL). When no file has a URL yet (all being added,
- * or failed), the viewer is cleared instead. Returns whether a file is shown.
+ * or failed), the viewer is cleared instead unless `refreshOnlyIfOpen` is true.
+ * Returns whether a file is shown.
  */
 export function showPaperFilesInViewer(
   documentId: string,
@@ -68,6 +79,9 @@ export function showPaperFilesInViewer(
   const activeFileId = defaultActiveFileId(tabFiles)
   const mainFileUnavailable = files.some((file) => file.role === 'main' && !tabFiles.includes(file))
   if (activeFileId === null) {
+    if (options?.refreshOnlyIfOpen) {
+      return false
+    }
     let notice = FILES_NOT_READY_MESSAGE
     if (files.length > 0 && files.every((file) => file.status === 'failed')) {
       notice = ALL_FILES_FAILED_MESSAGE
@@ -86,6 +100,7 @@ export function showPaperFilesInViewer(
         mainFileUnavailable,
         unavailableFiles: files.filter((file) => !tabFiles.includes(file)),
         ownerToken: options?.ownerToken,
+        ...(options?.refreshOnlyIfOpen ? { refreshOnlyIfOpen: true } : {}),
         viewerState: options?.viewerState,
       },
     }),
