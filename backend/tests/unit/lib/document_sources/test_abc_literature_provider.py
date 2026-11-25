@@ -451,6 +451,8 @@ async def test_zfin_publication_identifier_uses_canonical_cross_reference(identi
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status,endpoint", [(404, "/reference/by_cross_reference/test"), (404, "token"), (401, "/reference/test"), (403, "/reference/test"), (429, "/reference/test"), (500, "/reference/test")])
 async def test_reference_lookup_classifies_only_not_found(status, endpoint) -> None:
+    from src.lib.document_sources.models import DocumentSourceLoginExpired
+
     class FailingClient(FakeABCLiteratureClient):
         async def lookup_cross_reference(self, *args, **kwargs):
             raise ABCLiteratureHTTPError("lookup failed", status_code=status, endpoint=endpoint)
@@ -459,6 +461,41 @@ async def test_reference_lookup_classifies_only_not_found(status, endpoint) -> N
     with pytest.raises(DocumentSourceError) as error:
         await provider.resolve_reference("ZDB-PUB-200229-13")
     assert isinstance(error.value, DocumentSourceReferenceNotFound) is (status == 404 and endpoint != "token")
+    assert isinstance(error.value, DocumentSourceLoginExpired) is (status == 401)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("identifier", "method"),
+    [
+        ("AGRKB:101", "show_reference"),
+        ("PMID:12345", "lookup_external_curie"),
+        ("PMID:12345", "show_reference"),
+        ("ZDB-PUB-200229-13", "lookup_cross_reference"),
+    ],
+)
+async def test_resolve_reference_maps_401_to_login_expired(identifier: str, method: str) -> None:
+    from src.lib.document_sources.models import DocumentSourceLoginExpired
+
+    class RefusedClient(FakeABCLiteratureClient):
+        async def show_reference(self, *args, **kwargs):
+            if method == "show_reference":
+                raise ABCLiteratureHTTPError("unauthorized", status_code=401, endpoint="/reference/AGRKB:101")
+            return await super().show_reference(*args, **kwargs)
+
+        async def lookup_external_curie(self, *args, **kwargs):
+            if method == "lookup_external_curie":
+                raise ABCLiteratureHTTPError("unauthorized", status_code=401, endpoint="/reference/by_external_curie")
+            return _abc_external_lookup("PMID:12345", reference_curie="AGRKB:101")
+
+        async def lookup_cross_reference(self, *args, **kwargs):
+            if method == "lookup_cross_reference":
+                raise ABCLiteratureHTTPError("unauthorized", status_code=401, endpoint="/reference/by_cross_reference")
+            return await super().lookup_cross_reference(*args, **kwargs)
+
+    provider = provider_from_fake(RefusedClient())
+    with pytest.raises(DocumentSourceLoginExpired):
+        await provider.resolve_reference(identifier, request_bearer_token="expired-token")
 
 
 @pytest.mark.parametrize("identifier", ["FBrf0123456", "FB:FBrf0123456", "ZDB-GENE-200229-13", "ZDB-PUB-20-13", "ZFIN:ZDB-PUB-200229-13"])

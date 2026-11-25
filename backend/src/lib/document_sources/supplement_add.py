@@ -1,13 +1,17 @@
 """Add converted supplements to an existing paper (KANBAN-1976 / ALL-1460, P7c1, P7c2).
 
 The write path every supplement goes through: a curator's "add files" (the
-``POST /documents/{id}/files`` route) or an import's supplement stage (P7b, in its
-own job) calls ``add_files_to_paper``. The paper stays usable throughout.
+``POST /documents/{id}/files`` route) calls ``add_files_to_paper`` (which fetches
+a fresh listing), while an import's supplement stage (P7b, in its own job) calls
+``add_files_to_paper_with_listing`` to reuse the stage's last listing. The paper
+stays usable throughout.
 
 - No conversion request is ever sent: an add takes only files the provider has
   already converted.
-- **Check phase, nothing written.** The paper's files are listed again with the
-  curator's login. Each chosen file, in listing order, is checked; a file that
+- **Check phase, nothing written.** ``add_files_to_paper`` lists the paper's files
+  again with the curator's login; ``add_files_to_paper_with_listing`` validates the
+  prebuilt listing's provenance, per-artifact bindings, and caller authorization
+  without re-listing. Each chosen file, in listing order, is checked; a file that
   fails a step is left out with a ``FileReason`` code and the next file goes on.
 - **Write phase.** Every accepted file gets its row (``pending``), its stored
   Markdown and processed JSON, its piece range and its pieces; then all of them
@@ -36,7 +40,7 @@ import io
 import logging
 import tempfile
 import uuid
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, TypeVar
@@ -52,14 +56,23 @@ from src.lib.document_sources.file_assessment import (
     normalize_md5,
 )
 from src.lib.document_sources.file_listing import (
-    ProviderFileDownloadFailure,
+    FileListing,
     ListedFile,
     ListedFileStatus,
+    ProviderFileDownloadFailure,
+    converted_text_access_allowed,
     current_file_check_limits,
     download_provider_file,
 )
 from src.lib.document_sources.file_reasons import ADD_REFUSAL_REASONS, FileReason, SupplementState
-from src.lib.document_sources.models import DocumentSourceError, DocumentSourceProvider, SourceArtifactFormat
+from src.lib.document_sources.import_selection import source_artifact_is_authorized
+from src.lib.document_sources.models import (
+    DocumentSourceError,
+    DocumentSourceLoginExpired,
+    DocumentSourceProvider,
+    SourceArtifact,
+    SourceArtifactFormat,
+)
 from src.lib.observability.cost_context import costed_document_processing
 from src.models.sql.pdf_document import (
     DISPLAY_MODE_LOCAL_PDF,
@@ -144,6 +157,11 @@ class _PaperState:
     ready_text_bytes: int
     next_tab_order: int
     leftovers: tuple["_Leftover", ...]
+    source_provider: str | None
+    source_provider_reference_id: str | None
+    source_provider_reference_curie: str | None
+    live_provider_file_ids: frozenset[str] = frozenset()
+    removed_provider_file_ids: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,6 +242,23 @@ def _scoped_file_hash(owner_user_id: int, sha256: str) -> str:
     return hashlib.sha256(f"{owner_user_id}:{sha256}".encode()).hexdigest()
 
 
+def _validate_chosen_files(files: Sequence[ChosenFile]) -> None:
+    if not files:
+        raise SupplementAddError("no_files_chosen")
+    chosen_ids = [chosen.provider_file_id for chosen in files]
+    if len(set(chosen_ids)) != len(chosen_ids):
+        raise SupplementAddError("file_chosen_twice")
+
+
+async def _prepare_paper_for_add(document_id: UUID, owner_user_id: int) -> _PaperState:
+    paper = await asyncio.to_thread(_paper_state, document_id, owner_user_id)
+    if paper.status != PAPER_STATUS_COMPLETED:
+        raise SupplementAddError("paper_not_completed")
+    if paper.leftovers:
+        await _remove_leftovers(document_id, paper.owner_subject, paper.leftovers)
+    return paper
+
+
 async def add_files_to_paper(
     document_id: UUID,
     owner_user_id: int,
@@ -235,37 +270,208 @@ async def add_files_to_paper(
     weaviate_client: Any,
     stage_checkpoint: Checkpoint,
     commit_state: SupplementAddCommit | None = None,
+    settled_outcomes: dict[str, FileOutcome] | None = None,
+    display_names: dict[str, str | None] | None = None,
 ) -> AddResult:
     """Add the chosen converted text supplements to one of the curator's papers.
 
-    Runs inside the job ``job_id`` (the paper's one active job). ``stage_checkpoint``
-    raises when the job is cancelled; it is called between files and stages.
-    Pass a fresh ``commit_state`` to observe whether this add became ready.
+    Runs inside the job ``job_id`` (the paper's one active job). Lists the paper's
+    files freshly with the curator's login; use ``add_files_to_paper_with_listing``
+    when the caller already holds a fresh listing. ``stage_checkpoint`` raises when
+    the job is cancelled; it is called between files and stages. Pass a fresh
+    ``commit_state`` to observe whether this add became ready.
     """
 
     from src.lib.document_sources.file_listing_service import list_files_for_paper
+
+    _validate_chosen_files(files)
+    paper = await _prepare_paper_for_add(document_id, owner_user_id)
+    listing = await list_files_for_paper(
+        document_id, owner_user_id=owner_user_id, provider=provider, context=request_context,
+    )
+    return await _add_files_using_listing(
+        document_id,
+        owner_user_id,
+        request_context,
+        files,
+        paper=paper,
+        listed_files=listing.files,
+        provider=provider,
+        weaviate_client=weaviate_client,
+        stage_checkpoint=stage_checkpoint,
+        commit_state=commit_state,
+        settled_outcomes=settled_outcomes,
+        display_names=display_names,
+    )
+
+
+def _listed_copy_ids(listed: ListedFile) -> tuple[str, ...]:
+    """All readable provider file ids collapsed onto ``listed`` (representative first)."""
+
+    if listed.copy_provider_file_ids:
+        if listed.provider_file_id in listed.copy_provider_file_ids:
+            return listed.copy_provider_file_ids
+        return (listed.provider_file_id, *listed.copy_provider_file_ids)
+    return (listed.provider_file_id,)
+
+
+def _validate_and_filter_prebuilt_listing(
+    listing: FileListing,
+    *,
+    provider_id: str,
+    paper: _PaperState,
+    authorized_group_ids: tuple[str, ...],
+) -> tuple[ListedFile, ...]:
+    """Verify per-entry provider/reference bindings and caller authorization on a prebuilt listing."""
+
+    assert paper.source_provider_reference_id is not None
+    assert paper.source_provider_reference_curie is not None
+    expected_ref_id = paper.source_provider_reference_id
+    expected_ref_curie = paper.source_provider_reference_curie
+
+    def _artifact_bound(artifact: object) -> bool:
+        if not isinstance(artifact, SourceArtifact) or artifact.provider != provider_id:
+            return False
+        artifact_ref_id = (artifact.reference_id or "").strip() or None
+        artifact_ref_curie = (artifact.reference_curie or "").strip() or None
+        if artifact_ref_id is None and artifact_ref_curie is None:
+            return False
+        if artifact_ref_id is not None and artifact_ref_id != expected_ref_id:
+            return False
+        if artifact_ref_curie is not None and artifact_ref_curie != expected_ref_curie:
+            return False
+        return True
+
+    authorized: list[ListedFile] = []
+    for item in listing.files:
+        if not isinstance(item, ListedFile):
+            raise SupplementAddError("listing_invalid")
+        if (
+            not isinstance(item.copy_provider_file_ids, tuple)
+            or any(not isinstance(cid, str) or not cid.strip() for cid in item.copy_provider_file_ids)
+        ):
+            raise SupplementAddError("listing_invalid")
+        if not _artifact_bound(item.source_artifact) or item.source_artifact.artifact_id != item.provider_file_id:
+            raise SupplementAddError("listing_invalid")
+        if item.converted_artifact is not None:
+            if (
+                not _artifact_bound(item.converted_artifact)
+                or item.converted_artifact.artifact_id != item.converted_text_id
+            ):
+                raise SupplementAddError("listing_invalid")
+            if (
+                item.file_role == FILE_ROLE_SUPPLEMENT
+                and item.converted_artifact.parent_artifact_id != item.provider_file_id
+            ):
+                raise SupplementAddError("listing_invalid")
+            if not converted_text_access_allowed(
+                item.converted_artifact, item.source_artifact, authorized_group_ids=authorized_group_ids,
+            ):
+                continue
+        elif not source_artifact_is_authorized(item.source_artifact, authorized_group_ids=authorized_group_ids):
+            continue
+        authorized.append(item)
+    return tuple(authorized)
+
+
+async def add_files_to_paper_with_listing(
+    document_id: UUID,
+    owner_user_id: int,
+    request_context: DocumentSourceRequestContext,
+    files: Sequence[ChosenFile],
+    *,
+    listing: FileListing,
+    job_id: UUID,
+    provider: DocumentSourceProvider,
+    weaviate_client: Any,
+    stage_checkpoint: Checkpoint,
+    commit_state: SupplementAddCommit | None = None,
+    settled_outcomes: dict[str, FileOutcome] | None = None,
+    display_names: dict[str, str | None] | None = None,
+) -> AddResult:
+    """Add the chosen converted supplements using a listing the caller already holds.
+
+    Sends no reference lookup and no artifact-list request to the provider; only
+    the chosen files' downloads (converted text, plus the original PDF per PDF
+    supplement) remain. Validates paper provenance, per-artifact provider and
+    reference bindings, and caller authorization on every entry, and never falls
+    back to calling ``list_files_for_paper``.
+    """
+
+    from src.lib.document_sources.file_listing_service import FileListingUnavailable
+
+    _validate_chosen_files(files)
+    if not isinstance(listing, FileListing):
+        raise SupplementAddError("listing_invalid")
+    if listing.provider != provider.provider_id:
+        raise SupplementAddError("listing_provider_mismatch")
+    token = (request_context.curator_token or "").strip()
+    if not token:
+        raise FileListingUnavailable("document_source_curator_token_unavailable")
+    paper = await _prepare_paper_for_add(document_id, owner_user_id)
+    if paper.source_provider != provider.provider_id:
+        raise FileListingUnavailable("not_imported_from_provider")
+    if not paper.source_provider_reference_id or not paper.source_provider_reference_curie:
+        raise FileListingUnavailable("paper_reference_incomplete")
+    if listing.reference_id != paper.source_provider_reference_id:
+        raise FileListingUnavailable("paper_reference_mismatch")
+    authorized_files = _validate_and_filter_prebuilt_listing(
+        listing,
+        provider_id=provider.provider_id,
+        paper=paper,
+        authorized_group_ids=tuple(request_context.authorized_group_ids),
+    )
+    return await _add_files_using_listing(
+        document_id,
+        owner_user_id,
+        request_context,
+        files,
+        paper=paper,
+        listed_files=authorized_files,
+        provider=provider,
+        weaviate_client=weaviate_client,
+        stage_checkpoint=stage_checkpoint,
+        commit_state=commit_state,
+        settled_outcomes=settled_outcomes,
+        display_names=display_names,
+    )
+
+
+async def _add_files_using_listing(
+    document_id: UUID,
+    owner_user_id: int,
+    request_context: DocumentSourceRequestContext,
+    files: Sequence[ChosenFile],
+    *,
+    paper: _PaperState,
+    listed_files: Sequence[ListedFile],
+    provider: DocumentSourceProvider,
+    weaviate_client: Any,
+    stage_checkpoint: Checkpoint,
+    commit_state: SupplementAddCommit | None = None,
+    settled_outcomes: dict[str, FileOutcome] | None = None,
+    display_names: dict[str, str | None] | None = None,
+) -> AddResult:
     from src.lib.openai_agents.config import (
         get_document_file_max_converted_text_bytes,
         get_document_max_files_per_paper,
         get_document_paper_max_text_bytes,
     )
 
-    if not files:
-        raise SupplementAddError("no_files_chosen")
-    chosen_ids = [chosen.provider_file_id for chosen in files]
-    if len(set(chosen_ids)) != len(chosen_ids):
-        raise SupplementAddError("file_chosen_twice")
-    paper = await asyncio.to_thread(_paper_state, document_id, owner_user_id)
-    if paper.status != PAPER_STATUS_COMPLETED:
-        raise SupplementAddError("paper_not_completed")
-    if paper.leftovers:
-        await _remove_leftovers(document_id, paper.owner_subject, paper.leftovers)
-
-    listing = await list_files_for_paper(
-        document_id, owner_user_id=owner_user_id, provider=provider, context=request_context,
-    )
-    listed_by_id = {item.provider_file_id: item for item in listing.files}
-    listing_order = {item.provider_file_id: index for index, item in enumerate(listing.files)}
+    listed_by_id = {item.provider_file_id: item for item in listed_files}
+    if any(chosen.provider_file_id in paper.removed_provider_file_ids for chosen in files):
+        raise FileRemovalUnfinished(document_id)
+    if any(
+        cid in paper.removed_provider_file_ids
+        for chosen in files
+        if (listed := listed_by_id.get(chosen.provider_file_id)) is not None
+        for cid in _listed_copy_ids(listed)
+    ):
+        raise FileRemovalUnfinished(document_id)
+    if display_names is not None:
+        for item in listed_files:
+            display_names[item.provider_file_id] = _public_display_name(item)
+    listing_order = {item.provider_file_id: index for index, item in enumerate(listed_files)}
     # In listing order (the tab order the new files take); files no longer listed go last.
     ordered = sorted(files, key=lambda chosen: listing_order.get(chosen.provider_file_id, len(listing_order)))
 
@@ -275,7 +481,7 @@ async def add_files_to_paper(
     limits = current_file_check_limits()
     token = (request_context.curator_token or "").strip()
 
-    outcomes: dict[str, FileOutcome] = {}
+    outcomes: dict[str, FileOutcome] = settled_outcomes if settled_outcomes is not None else {}
     accepted: list[_Accepted] = []
     try:
         await _check_and_write(
@@ -332,7 +538,7 @@ async def _check_and_write(
                 display_name=public_display_name,
             )
 
-        if listed.in_this_paper:
+        if listed.in_this_paper or any(cid in paper.live_provider_file_ids for cid in _listed_copy_ids(listed)):
             outcomes[file_id] = left_out(FileReason.ALREADY_IN_PAPER)
             continue
         if listed.status is not ListedFileStatus.READY or listed.converted_artifact is None or listed.file_role is None:
@@ -389,18 +595,30 @@ async def _check_and_write(
         ))
 
     if accepted:
-        await _write(
+        skipped = await _write(
             accepted, document_id=document_id, owner_user_id=owner_user_id, paper=paper,
             weaviate_client=weaviate_client, stage_checkpoint=stage_checkpoint,
             commit_state=commit_state,
         )
         for item in accepted:
-            outcomes[item.listed.provider_file_id] = FileOutcome(
-                item.listed.provider_file_id,
-                "added",
-                file_id=item.file_id,
-                display_name=item.public_display_name,
-            )
+            provider_file_id = item.listed.provider_file_id
+            if provider_file_id in skipped:
+                reason, measured, limit = skipped[provider_file_id]
+                outcomes[provider_file_id] = FileOutcome(
+                    provider_file_id,
+                    "left_out",
+                    reason,
+                    measured_value=measured,
+                    limit_value=limit,
+                    display_name=item.public_display_name,
+                )
+            else:
+                outcomes[provider_file_id] = FileOutcome(
+                    provider_file_id,
+                    "added",
+                    file_id=item.file_id,
+                    display_name=item.public_display_name,
+                )
 
 
 def _spool_directory() -> Path:
@@ -458,6 +676,8 @@ async def _download_pdf(
             provider, listed.provider_file_id, request_bearer_token=token, max_bytes=cap,
             use=lambda content: _spool_pdf(content, listed_md5=expected_md5, spool=spool),
         )
+    except DocumentSourceLoginExpired:
+        raise
     except DocumentSourceError:
         return left_out(FileReason.SOURCE_DOWNLOAD_FAILED)
     failure_codes = {
@@ -512,6 +732,8 @@ async def _download_and_check(
         outcome = await download_provider_file(
             provider, converted.artifact_id, request_bearer_token=token, max_bytes=download_cap, use=use,
         )
+    except DocumentSourceLoginExpired:
+        raise
     except DocumentSourceError:
         return FileOutcome(listed.provider_file_id, "left_out", FileReason.SOURCE_DOWNLOAD_FAILED)
     failure_codes = {
@@ -660,15 +882,16 @@ async def _write(
     weaviate_client: Any,
     stage_checkpoint: Checkpoint,
     commit_state: SupplementAddCommit,
-) -> None:
+) -> dict[str, tuple[FileReason, int | None, int | None]]:
     from src.lib.document_files.service import mark_files_ready
     from src.lib.document_sources.ingestion import _save_processed_json, _save_source_markdown
     from src.lib.exceptions import PDFCancellationError
 
     subject = paper.owner_subject
+    written: list[_Accepted] = list(accepted)
 
     async def commit() -> None:
-        sizes = {item.file_id: item.prepared.text_bytes for item in accepted}
+        sizes = {item.file_id: item.prepared.text_bytes for item in written}
         await asyncio.to_thread(mark_files_ready, sizes)
         commit_state.committed = True
         try:
@@ -681,11 +904,11 @@ async def _write(
     # files are written still leaves rows the stale sweep and the next add can clean up.
     planned = [
         (item, f"{subject}/source_markdown/{item.file_id}.md", f"{subject}/processed_json/{item.file_id}.json")
-        for item in accepted
+        for item in written
     ]
     pdf_paths = {
         item.file_id: f"{subject}/{document_id}/supplement_pdf/{item.file_id}.pdf"
-        for item in accepted if item.pdf is not None
+        for item in written if item.pdf is not None
     }
     planned_paths = [
         path for _, markdown_path, processed_path in planned for path in (markdown_path, processed_path)
@@ -698,7 +921,25 @@ async def _write(
                      pdf_path=pdf_paths.get(item.file_id))
             for tab_order, (item, markdown_path, processed_path) in enumerate(planned, start=paper.next_tab_order)
         ]
-        await _finish_mutation(asyncio.to_thread(_insert_rows, document_id, rows))
+        copy_ids_by_file = {item.listed.provider_file_id: _listed_copy_ids(item.listed) for item in written}
+        text_bytes_by_file = {item.listed.provider_file_id: item.prepared.text_bytes for item in written}
+        skipped = await _finish_mutation(
+            asyncio.to_thread(_insert_rows, document_id, rows, copy_ids_by_file, text_bytes_by_file)
+        )
+        if not isinstance(skipped, Mapping):
+            raise TypeError("_insert_rows must return a mapping of skipped provider file ids")
+        if skipped:
+            written = [item for item in written if item.listed.provider_file_id not in skipped]
+            planned = [entry for entry in planned if entry[0].listed.provider_file_id not in skipped]
+            pdf_paths = {
+                item.file_id: path for item in written
+                if (path := pdf_paths.get(item.file_id)) is not None
+            }
+            planned_paths = [
+                path for _, markdown_path, processed_path in planned for path in (markdown_path, processed_path)
+            ] + list(pdf_paths.values())
+            if not written:
+                return skipped
         for item, markdown_path, processed_path in planned:
             saved_markdown = await _finish_mutation(
                 _save_source_markdown(markdown=item.markdown, file_id=item.file_id, user_id=subject)
@@ -710,17 +951,18 @@ async def _write(
                 raise SupplementAddError("stored_file_path_mismatch")
             if item.pdf is not None:
                 await _finish_mutation(asyncio.to_thread(_save_supplement_pdf, item.pdf.file, pdf_paths[item.file_id]))
-        for item in accepted:
+        for item in written:
             await stage_checkpoint("vector_storage")
             await _store_supplement_pieces(item, document_id, subject, weaviate_client)
         await stage_checkpoint("finishing")
         await _finish_mutation(commit())
+        return skipped
     except BaseException as exc:
         if not commit_state.committed:
             rollback = _undo(
                 document_id,
                 subject,
-                [item.file_id for item in accepted],
+                [item.file_id for item in written],
                 planned_paths,
                 caller_reports_failure=True,
             )
@@ -851,10 +1093,25 @@ def _paper_state(document_id: UUID, owner_user_id: int) -> _PaperState:
                 if row.text_bytes is None:
                     raise FileRangeMissingError(f"Ready file {row.id} has no measured text size")
                 ready_bytes += row.text_bytes
+            elif row.text_bytes is not None:
+                ready_bytes += row.text_bytes
         leftovers = tuple(
             _Leftover.from_row(row)
             for row in paper.files
             if row.status == FILE_STATUS_FAILED and row.role == FILE_ROLE_SUPPLEMENT
+        )
+        live_provider_file_ids = frozenset(
+            identifier
+            for row in live
+            for identifier in (row.source_provider_source_file_id, row.source_provider_pdf_artifact_id)
+            if identifier
+        )
+        removed_provider_file_ids = frozenset(
+            identifier
+            for row in paper.files
+            if row.status == FILE_STATUS_REMOVED
+            for identifier in (row.source_provider_source_file_id, row.source_provider_pdf_artifact_id)
+            if identifier
         )
         return _PaperState(
             owner_subject=subject,
@@ -863,16 +1120,119 @@ def _paper_state(document_id: UUID, owner_user_id: int) -> _PaperState:
             ready_text_bytes=ready_bytes,
             next_tab_order=max((row.tab_order for row in paper.files), default=-1) + 1,
             leftovers=leftovers,
+            source_provider=paper.source_provider,
+            source_provider_reference_id=paper.source_provider_reference_id,
+            source_provider_reference_curie=paper.source_provider_reference_curie,
+            live_provider_file_ids=live_provider_file_ids,
+            removed_provider_file_ids=removed_provider_file_ids,
         )
 
 
-def _insert_rows(document_id: UUID, rows: list[PDFDocumentFile]) -> None:
+def _row_copy_ids(
+    source_id: str | None,
+    copy_ids_by_file: Mapping[str, tuple[str, ...]] | None,
+) -> tuple[str, ...]:
+    if not source_id:
+        return ()
+    if copy_ids_by_file is not None and source_id in copy_ids_by_file:
+        known = copy_ids_by_file[source_id]
+        return known if source_id in known else (source_id, *known)
+    return (source_id,)
+
+
+def _insert_rows(
+    document_id: UUID,
+    rows: list[PDFDocumentFile],
+    copy_ids_by_file: Mapping[str, tuple[str, ...]] | None = None,
+    text_bytes_by_file: Mapping[str, int] | None = None,
+) -> dict[str, tuple[FileReason, int | None, int | None]]:
+    from src.lib.document_files.service import FileRangeMissingError
+    from src.lib.openai_agents.config import (
+        get_document_max_files_per_paper,
+        get_document_paper_max_text_bytes,
+    )
     from src.models.sql.database import SessionLocal
 
+    max_files = get_document_max_files_per_paper()
+    max_text_bytes = get_document_paper_max_text_bytes()
     with SessionLocal() as session, session.begin():
         # Serialize with other writers of the paper's files (range reservation locks it too).
         session.execute(select(PDFDocument.id).where(PDFDocument.id == document_id).with_for_update())
-        session.add_all(rows)
+        existing = session.execute(
+            select(
+                PDFDocumentFile.id,
+                PDFDocumentFile.status,
+                PDFDocumentFile.source_provider_source_file_id,
+                PDFDocumentFile.source_provider_pdf_artifact_id,
+                PDFDocumentFile.tab_order,
+                PDFDocumentFile.text_bytes,
+            ).where(PDFDocumentFile.document_id == document_id)
+        ).all()
+        removed_ids = {
+            identifier
+            for _, status, source_id, pdf_id, _, _ in existing
+            if status == FILE_STATUS_REMOVED
+            for identifier in (source_id, pdf_id)
+            if identifier
+        }
+        active_ids = {
+            identifier
+            for _, status, source_id, pdf_id, _, _ in existing
+            if status != FILE_STATUS_REMOVED
+            for identifier in (source_id, pdf_id)
+            if identifier
+        }
+        for row in rows:
+            row_copy_ids = _row_copy_ids(row.source_provider_source_file_id, copy_ids_by_file)
+            if any(cid in removed_ids for cid in row_copy_ids):
+                raise FileRemovalUnfinished(document_id)
+        skipped: dict[str, tuple[FileReason, int | None, int | None]] = {}
+        to_insert: list[PDFDocumentFile] = []
+        live_count = sum(1 for _, status, _, _, _, _ in existing if status not in _NOT_LIVE)
+        reserved_text_bytes = 0
+        for file_id, status, _, _, _, text_bytes in existing:
+            if status == FILE_STATUS_READY:
+                if text_bytes is None:
+                    raise FileRangeMissingError(f"Ready file {file_id} has no measured text size")
+                reserved_text_bytes += text_bytes
+            elif status not in _NOT_LIVE and text_bytes is not None:
+                # Include text bytes already reserved by overlapping pending writers.
+                reserved_text_bytes += text_bytes
+        next_tab_order = max((tab_order for _, _, _, _, tab_order, _ in existing), default=-1) + 1
+        for row in rows:
+            source_id = row.source_provider_source_file_id
+            row_copy_ids = _row_copy_ids(source_id, copy_ids_by_file)
+            if source_id and any(cid in active_ids for cid in row_copy_ids):
+                skipped[source_id] = (FileReason.ALREADY_IN_PAPER, None, None)
+                continue
+            if live_count + 1 > max_files:
+                if source_id:
+                    skipped[source_id] = (FileReason.PAPER_FILE_LIMIT, live_count + 1, max_files)
+                continue
+            row_text_bytes = (
+                text_bytes_by_file[source_id]
+                if text_bytes_by_file is not None and source_id and source_id in text_bytes_by_file
+                else None
+            )
+            if row_text_bytes is not None and reserved_text_bytes + row_text_bytes > max_text_bytes:
+                assert source_id is not None
+                skipped[source_id] = (
+                    FileReason.PAPER_TEXT_LIMIT,
+                    reserved_text_bytes + row_text_bytes,
+                    max_text_bytes,
+                )
+                continue
+            row.tab_order = next_tab_order
+            next_tab_order += 1
+            live_count += 1
+            if row_text_bytes is not None:
+                row.text_bytes = row_text_bytes
+                reserved_text_bytes += row_text_bytes
+            active_ids.update(row_copy_ids)
+            to_insert.append(row)
+        if to_insert:
+            session.add_all(to_insert)
+        return skipped
 
 
 def _rollback_predicate(file_ids: Sequence[UUID]):
@@ -1108,22 +1468,23 @@ def start_supplement_add(document_id: UUID, owner_user_id: int, files: Sequence[
         )
 
 
+def _supplement_entry(item: FileOutcome) -> dict[str, Any]:
+    return {
+        "provider_file_id": item.provider_file_id,
+        "display_name": item.display_name,
+        "state": (SupplementState.ADDED if item.outcome == "added" else SupplementState.LEFT_OUT).value,
+        "reason_code": item.reason_code.value if item.reason_code else None,
+        "observed_at": None,
+        "file_id": str(item.file_id) if item.file_id else None,
+        "measured_value": item.measured_value,
+        "limit_value": item.limit_value,
+    }
+
+
 def _supplement_entries(result: AddResult) -> list[dict[str, Any]]:
     """The job's ``metadata.supplements`` entries (interface I1)."""
 
-    return [
-        {
-            "provider_file_id": item.provider_file_id,
-            "display_name": item.display_name,
-            "state": (SupplementState.ADDED if item.outcome == "added" else SupplementState.LEFT_OUT).value,
-            "reason_code": item.reason_code.value if item.reason_code else None,
-            "observed_at": None,
-            "file_id": str(item.file_id) if item.file_id else None,
-            "measured_value": item.measured_value,
-            "limit_value": item.limit_value,
-        }
-        for item in result.files
-    ]
+    return [_supplement_entry(item) for item in result.files]
 
 
 def _report_nothing_added(result: AddResult, document_id: UUID) -> None:
@@ -1170,6 +1531,39 @@ def _cancel_checkpoint(job_id: UUID) -> Checkpoint:
     return checkpoint
 
 
+def _login_expired_entries(
+    files: Sequence[ChosenFile],
+    *,
+    settled_outcomes: Mapping[str, FileOutcome] | None = None,
+    display_names: Mapping[str, str | None] | None = None,
+) -> list[dict[str, Any]]:
+    """Per-file ``metadata.supplements`` entries (interface I1) when the login expired during an add.
+
+    Preserves earlier settled per-file refusals (with their display names and limit/measured
+    values) and marks only unfinished files ``login_expired``.
+    """
+
+    settled = settled_outcomes or {}
+    names = display_names or {}
+    entries: list[dict[str, Any]] = []
+    for chosen in files:
+        prior = settled.get(chosen.provider_file_id)
+        if prior is not None:
+            entries.append(_supplement_entry(prior))
+        else:
+            entries.append({
+                "provider_file_id": chosen.provider_file_id,
+                "display_name": names.get(chosen.provider_file_id),
+                "state": SupplementState.LEFT_OUT.value,
+                "reason_code": FileReason.LOGIN_EXPIRED.value,
+                "observed_at": None,
+                "file_id": None,
+                "measured_value": None,
+                "limit_value": None,
+            })
+    return entries
+
+
 @costed_document_processing
 async def run_supplement_add_job(request: SupplementAddJobRequest) -> None:
     """Run one add as its job: completed, failed or cancelled; the paper is never touched."""
@@ -1183,12 +1577,16 @@ async def run_supplement_add_job(request: SupplementAddJobRequest) -> None:
 
     job_id = request.job_id
     provider = get_configured_document_source_provider()
+    settled_outcomes: dict[str, FileOutcome] = {}
+    display_names: dict[str, str | None] = {}
     try:
         result = await asyncio.wait_for(
             add_files_to_paper(
                 request.document_id, request.owner_user_id, request.context, request.files,
                 job_id=job_id, provider=provider, weaviate_client=get_connection(),
                 stage_checkpoint=_cancel_checkpoint(job_id),
+                settled_outcomes=settled_outcomes,
+                display_names=display_names,
             ),
             timeout=get_document_source_import_timeout_seconds(),
         )
@@ -1200,7 +1598,22 @@ async def run_supplement_add_job(request: SupplementAddJobRequest) -> None:
             job_id=job_id, message=_MESSAGE_TIMED_OUT, stage="timed_out", metadata={"error_code": "add_timed_out"},
         )
         return
-    except (SupplementAddError, FileListingUnavailable) as stopped:
+    except DocumentSourceLoginExpired:
+        pdf_job_service.mark_failed(
+            job_id=job_id,
+            message=_MESSAGE_NONE_ADDED,
+            stage="failed",
+            metadata={
+                "error_code": FileReason.LOGIN_EXPIRED.value,
+                "supplements": _login_expired_entries(
+                    request.files,
+                    settled_outcomes=settled_outcomes,
+                    display_names=display_names,
+                ),
+            },
+        )
+        return
+    except (SupplementAddError, FileListingUnavailable, FileRemovalUnfinished) as stopped:
         pdf_job_service.mark_failed(
             job_id=job_id, message=_MESSAGE_FAILED, stage="failed", metadata={"error_code": stopped.code},
         )

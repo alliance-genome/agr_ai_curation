@@ -1614,3 +1614,80 @@ def test_can_import_is_ready_or_still_converting_with_a_selected_main(status, se
         ReferenceImportDecisionStatus.READY, ReferenceImportDecisionStatus.CONVERSION_RUNNING,
     )
     assert decision.can_import is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("step", ["resolve", "import"])
+@pytest.mark.parametrize("bearer_kind", [ProviderBearerKind.CURATOR, ProviderBearerKind.SERVICE])
+async def test_resolve_reference_401_sentry_reporting_depends_on_bearer_kind(
+    tmp_path, monkeypatch, step, bearer_kind,
+):
+    """ALL-1751 review: DocumentSourceLoginExpired stays quiet for curator bearers (user's own
+    expired login) and reports one sanitized Sentry event for service bearers (broken machine
+    reader token) across both dry-run resolve and import callers, keeping HTTP responses intact."""
+    from src.lib.document_sources import identifier_import as module
+    from src.lib.document_sources.models import DocumentSourceLoginExpired
+
+    captures = []
+    monkeypatch.setattr(
+        module,
+        "report_runtime_exception",
+        lambda exc, **kwargs: captures.append((exc, kwargs)),
+    )
+
+    secret = "secret-service-token-abc999"
+
+    class _UnauthorizedProvider(_FakeProvider):
+        async def resolve_reference(self, identifier, *, request_bearer_token=None):
+            raise DocumentSourceLoginExpired(f"ABC Literature reference lookup failed ({secret})")
+
+    sessions = []
+    service = IdentifierImportService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: _FakeSession(sessions),
+        storage_path_provider=lambda: tmp_path,
+        principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        provider_factory=_UnauthorizedProvider,
+        create_document_fn=lambda *_args, **_kwargs: None,
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="unused"),
+        get_document_fn=lambda *_args, **_kwargs: None,
+        delete_document_fn=lambda *_args, **_kwargs: None,
+        find_existing_source_document_fn=lambda *_args, **_kwargs: None,
+        import_batch_limit_provider=lambda: 10,
+    )
+    context = DocumentSourceRequestContext(
+        bearer_kind=bearer_kind,
+        provider_groups=("FBStaff",),
+        authorized_group_ids=("FB",),
+        curator_token=secret,
+    )
+
+    if step == "resolve":
+        result = await service.resolve_identifiers(
+            identifiers="PMID:123", user={"sub": "user-1"}, document_source_context=context,
+        )
+        expected_op = "source_resolve_failed"
+    else:
+        result = await service.import_identifiers(
+            background_tasks=BackgroundTasks(),
+            identifiers="PMID:123",
+            user={"sub": "user-1"},
+            document_source_context=context,
+        )
+        expected_op = "source_import_failed"
+
+    assert result.error_count == 1
+    assert result.results[0].status == "error"
+    assert result.results[0].error_code == "document_source_unavailable"
+
+    if bearer_kind is ProviderBearerKind.CURATOR:
+        assert captures == []
+    else:
+        assert len(captures) == 1
+        exc, kwargs = captures[0]
+        assert kwargs["component"] == "identifier_import"
+        assert kwargs["operation"] == expected_op
+        assert kwargs["include_request"] is False
+        assert secret not in repr((str(exc), kwargs))
+        assert "PMID:123" not in repr((str(exc), kwargs))

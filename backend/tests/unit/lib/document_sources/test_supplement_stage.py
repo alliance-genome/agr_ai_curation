@@ -75,10 +75,20 @@ class _AbcClient(FakeABCLiteratureClient):
         self.answers = answers or [_answer_payload("converted", [])]
         self.requests = 0
         self.reads = 0
+        self.reference_reads = 0
         self.paper = paper
         self.on_read = on_read or {}
         self.read_error = read_error
         self.failing_reads = failing_reads  # None: every read fails when read_error is set
+
+    async def show_reference(self, reference, *, request_bearer_token=None):
+        self.reference_reads += 1
+        if self.paper is not None:
+            return _abc_reference_record(
+                copyright_license_open_access=self.paper.licence_open,
+                copyright_license_name=self.paper.licence_name,
+            )
+        return _abc_reference_record()
 
     async def request_referencefile_conversion(self, reference, *, wait=False, request_bearer_token=None):
         self.requests += 1
@@ -95,29 +105,87 @@ class _AbcClient(FakeABCLiteratureClient):
             self.on_read[self.reads]()
         return self.paper.rows if self.paper is not None else []
 
+    async def download_referencefile(self, artifact_id, *, request_bearer_token=None, max_bytes=None):
+        if self.paper is not None and artifact_id in self.paper.payloads:
+            payload = self.paper.payloads[artifact_id]
+            if isinstance(payload, Exception):
+                raise payload
+            return payload
+        return await super().download_referencefile(
+            artifact_id, request_bearer_token=request_bearer_token, max_bytes=max_bytes,
+        )
+
 
 class _Paper:
     """The paper's ABC rows as the listing would show them now."""
 
-    def __init__(self, rows, payloads=None):
+    def __init__(self, rows, payloads=None, *, groups=("WB",), licence_open=None, licence_name=None):
         self.rows = rows
         self.payloads = payloads or {}
+        self.groups = groups
+        self.licence_open = licence_open
+        self.licence_name = licence_name
         self.listings = 0
+        self.reused_listings = 0
+        self.store = None
 
     async def list_files(self, document_id, *, owner_user_id, provider, context):
+        from tests.unit.lib.document_sources.test_file_listing import _Store
+
         self.listings += 1
-        listing, _ = await _listing(self.rows, payloads=self.payloads)
+        if self.store is None:
+            self.store = _Store()
+        listing, _ = await _listing(
+            self.rows,
+            groups=self.groups,
+            payloads=self.payloads,
+            store=self.store,
+            licence_open=self.licence_open,
+            licence_name=self.licence_name,
+            in_paper=("10",),
+        )
         return listing
+
+    async def list_files_from_artifacts(
+        self, document_id, *, owner_user_id, provider, context, reference, artifacts, check_unchecked=True,
+    ):
+        from src.lib.document_sources.file_listing import ListingRoute, list_reference_files
+        from tests.unit.lib.document_sources.test_file_listing import _Store, _limits
+
+        self.reused_listings += 1
+        if self.store is None:
+            self.store = _Store()
+        return await list_reference_files(
+            provider=provider,
+            reference=reference,
+            authorized_group_ids=tuple(context.authorized_group_ids),
+            bearer_kind=context.bearer_kind,
+            request_bearer_token=context.curator_token or "",
+            files_in_paper=("10",),
+            limits=_limits(),
+            check_limit=20,
+            load_stored=self.store.load,
+            save_assessment=self.store.save,
+            route=ListingRoute.PAPER,
+            provider_observations={},
+            find_paper_in_library=None,
+            artifacts=artifacts,
+            check_unchecked=check_unchecked,
+        )
 
 
 class _Add:
     def __init__(self):
         self.calls: list[list[Any]] = []
+        self.listings: list[Any] = []
 
-    async def __call__(self, document_id, owner_user_id, request_context, files, *, job_id,
-                       provider, weaviate_client, stage_checkpoint):
+    async def __call__(
+        self, document_id, owner_user_id, request_context, files, *, listing, job_id,
+        provider, weaviate_client, stage_checkpoint, settled_outcomes=None, display_names=None,
+    ):
         await stage_checkpoint("checking_files")
         self.calls.append(list(files))
+        self.listings.append(listing)
         return AddResult(files=tuple(
             FileOutcome(provider_file_id=chosen.provider_file_id, outcome="added", file_id=uuid4())
             for chosen in files
@@ -188,7 +256,7 @@ def _chosen(provider_file_id, *, converted_md5=None, display_name=None):
 
 async def _run(*, chosen, paper, last_answer_payload, clock, add=None, abc_answers=None,
                conversion_requested=True, login_expires_in=24 * 3600, on_read=None,
-               read_error=None, failing_reads=None, sleep=None):
+               read_error=None, failing_reads=None, sleep=None, context=None):
     from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
 
     client = _AbcClient(abc_answers, paper=paper, on_read=on_read, read_error=read_error,
@@ -204,14 +272,15 @@ async def _run(*, chosen, paper, last_answer_payload, clock, add=None, abc_answe
     outcomes = _Outcomes()
     add = add or _Add()
     await stage.run_supplement_stage(
-        job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
+        job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7,
         plan=SupplementPlan(
-            chosen=tuple(chosen), request_context=_context(),
-            login_expires_at=clock() + login_expires_in, owner_user_id=7, reference="AGRKB:101",
+            chosen=tuple(chosen), request_context=context or _context(),
+            login_expires_at=clock() + login_expires_in, owner_user_id=7,
         ),
         conversion_requested=conversion_requested, last_answer=last_answer,
         main_ready_at=clock(), provider=provider, weaviate_client=object(),
-        outcomes=outcomes, list_files=paper.list_files, add_files=add,
+        outcomes=outcomes, list_files=paper.list_files,
+        list_files_from_artifacts=paper.list_files_from_artifacts, add_files=add,
         clock=clock, sleep=sleep or clock.sleep,
     )
     return client, add, outcomes
@@ -261,9 +330,11 @@ async def test_a_file_abc_converts_during_the_wait_joins_without_any_conversion_
 
     assert client.requests == 0  # the stage never sends the conversion request
     assert client.reads == 3  # one show_all read per poll until the converted row appears
-    assert paper.listings == 2  # the stage's first listing, then one when the new text appeared
+    assert paper.listings == 1  # only the stage's first full listing
+    assert paper.reused_listings == 1  # built from the poll's rows and resolved reference
     assert clock.now == 1_000_000.0 + 3 * 60  # DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS default
     assert [(file.provider_file_id, file.converted_md5) for file in add.calls[0]] == [("30", GOOD_TABLE_MD5)]
+    assert add.listings[0].reference is not None
     assert outcomes.ended == ["completed"]
     assert _final_entries(job) == {"30": ("added", None)}
 
@@ -284,7 +355,7 @@ async def test_the_full_listing_runs_only_when_a_chosen_file_gets_a_new_converte
         on_read={5: _abc_stores_30},
     )
 
-    assert (client.requests, client.reads, paper.listings) == (0, 5, 2)
+    assert (client.requests, client.reads, paper.listings, paper.reused_listings) == (0, 5, 1, 1)
     assert [file.provider_file_id for file in add.calls[0]] == ["30"]
 
 
@@ -620,12 +691,13 @@ async def _stage(job, *, chosen, paper, main_ready_at, clock, provider, add=None
                  conversion_requested=False, last_answer=None, login_expires_at=None):
     outcomes, add = _Outcomes(), add or _Add()
     await stage.run_supplement_stage(
-        job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
+        job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7,
         plan=SupplementPlan(chosen=tuple(chosen), request_context=_context(),
-                            login_expires_at=login_expires_at, owner_user_id=7, reference="AGRKB:101"),
+                            login_expires_at=login_expires_at, owner_user_id=7),
         conversion_requested=conversion_requested, last_answer=last_answer,
         main_ready_at=main_ready_at, provider=provider, weaviate_client=object(),
-        outcomes=outcomes, list_files=paper.list_files, add_files=add,
+        outcomes=outcomes, list_files=paper.list_files,
+        list_files_from_artifacts=paper.list_files_from_artifacts, add_files=add,
         clock=clock, sleep=clock.sleep,
     )
     return add, outcomes
@@ -828,11 +900,12 @@ async def test_a_stage_ended_by_a_delete_mid_listing_is_not_a_stage_failure(job,
     task = stage.start_supplement_stage(
         job_id=JOB_ID,
         run=lambda: stage.run_supplement_stage(
-            job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
+            job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7,
             plan=SupplementPlan(chosen=(_chosen("20", converted_md5=GOOD_TABLE_MD5),), request_context=_context(),
-                                login_expires_at=None, owner_user_id=7, reference="AGRKB:101"),
+                                login_expires_at=None, owner_user_id=7),
             conversion_requested=False, last_answer=None, main_ready_at=clock(), provider=provider,
             weaviate_client=object(), outcomes=outcomes, list_files=_DeletedPaper().list_files,
+            list_files_from_artifacts=_DeletedPaper().list_files,
             add_files=_Add(), clock=clock, sleep=clock.sleep,
         ),
         outcomes=outcomes,
@@ -884,112 +957,280 @@ async def test_a_good_read_resets_the_count_of_failed_reads(job):
     assert _final_entries(job) == {"30": ("added", None)}
 
 
-# --- ALL-1678: the polling cap per supplement wait (owner's option b, 24 Nov 2026), proven
-# against the real wait sending real requests: the real ABC adapter over a client that counts
-# every call, and the real file listing (resolve, show_all, check downloads). The cap counts the
-# wait's own reads of the listing; each test also reports every request the wait really sends.
+# --- ALL-1678 + ALL-1751: the polling cap and total HTTP requests per supplement wait, proven
+# at the HTTP boundary: the real Alliance ABC adapter and its HTTP client over an
+# ``httpx.MockTransport`` counting every request, the real file-listing service (fresh start
+# listing + reused-rows poll listings), and the real add (``add_files_to_paper_with_listing``)
+# driven for real against fake storage.
 
 
-class _CountingAbc(FakeABCLiteratureClient):
-    """ABC's client, every call counted and marked as the wait's own poll or not."""
+def _make_sample_pdf(pages: int = 1, *, title: str = "Made-up supplement") -> bytes:
+    import io
 
-    def __init__(self, *, fails):
-        super().__init__()
-        self.rows: list = []
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    for _ in range(pages):
+        writer.add_blank_page(width=612, height=792)
+    writer.add_metadata({"/Title": title})
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
+class _HttpAbc:
+    """ABC over HTTP (``httpx.MockTransport``), counting every request and its phase."""
+
+    def __init__(self, *, ids, extension, converts_at, fails):
+        self.ids = list(ids)
+        self.extension = extension
+        self.converts_at = converts_at
+        self.fails = fails  # fails(kind, n, in_listing) -> bool | int (HTTP status code)
+        self.converted: list[int] = []
         self.calls: list[tuple[str, bool]] = []
         self.in_listing = False
-        self.fails = fails  # fails(kind, n, in_listing) -> bool
         self.show_reference_payload = _abc_reference_record()
+        # Distinct PDF bytes per supplement so MD5 deduplication keeps every file distinct.
+        self.pdf_bytes = (
+            {file_id: _make_sample_pdf(1, title=f"Made-up S{file_id}") for file_id in self.ids}
+            if extension == "pdf"
+            else {}
+        )
+        self.pdf_md5 = {file_id: hashlib.md5(data).hexdigest() for file_id, data in self.pdf_bytes.items()}
 
-    def _record(self, kind):
+    def _rows(self):
+        rows = [_abc_show_all_main_pdf(10, "WB")]
+        for file_id in self.ids:
+            md5 = self.pdf_md5.get(file_id)
+            if file_id in self.converted:
+                rows.extend(_pair(file_id, "WB", extension=self.extension, md5=md5, content=GOOD_TABLE))
+            else:
+                row = _unconverted(file_id, self.extension)
+                if md5 is not None:
+                    row["md5sum"] = md5
+                rows.append(row)
+        return rows
+
+    def _failure_status(self, kind: str) -> int | None:
         self.calls.append((kind, self.in_listing))
-        if self.fails(kind, sum(1 for call in self.calls if call[0] == kind), self.in_listing):
-            from agr_ai_curation_alliance.literature.client import ABCLiteratureHTTPError
+        count = sum(1 for call_kind, _ in self.calls if call_kind == kind)
+        failed = self.fails(kind, count, self.in_listing)
+        if isinstance(failed, bool):
+            return 502 if failed else None
+        return int(failed) if failed else None
 
-            raise ABCLiteratureHTTPError("ABC Literature returned HTTP 502", status_code=502, endpoint=kind)
+    def handle(self, request):
+        from urllib.parse import unquote
 
-    async def show_reference(self, reference, *, request_bearer_token=None):
-        self._record("reference")
-        return self.show_reference_payload
+        import httpx
 
-    async def show_referencefiles(self, reference, *, request_bearer_token=None):
-        self._record("show_all")
-        return list(self.rows)
+        path = unquote(request.url.path)
+        if path == "/reference/AGRKB:101":
+            status = self._failure_status("reference")
+            if status is not None:
+                return httpx.Response(status, json={"detail": "made-up failure"})
+            return httpx.Response(200, json=self.show_reference_payload)
+        if path == "/reference/referencefile/show_all/AGRKB:101":
+            if not self.in_listing:
+                new = self.converts_at(self.polls + 1)
+                if new is not None and 0 <= new < len(self.ids) and self.ids[new] not in self.converted:
+                    self.converted.append(self.ids[new])
+            status = self._failure_status("show_all")
+            if status is not None:
+                return httpx.Response(status, json={"detail": "made-up failure"})
+            return httpx.Response(200, json=self._rows())
+        if path.startswith("/reference/referencefile/download_file/"):
+            status = self._failure_status("download")
+            if status is not None:
+                return httpx.Response(status, json={"detail": "made-up failure"})
+            artifact_id = int(path.rsplit("/", 1)[1])
+            body = self.pdf_bytes.get(artifact_id, GOOD_TABLE)
+            return httpx.Response(200, stream=httpx.ByteStream(body), headers={"content-length": str(len(body))})
+        if path == "/reference/referencefile/conversion_request/AGRKB:101":
+            self._failure_status("conversion")
+            return httpx.Response(202, json=_answer_payload("running", []))
+        return httpx.Response(404, json={"detail": "Not Found"})
 
-    async def download_referencefile(self, artifact_id, *, request_bearer_token=None, max_bytes=None):
-        self._record("download")
-        return GOOD_TABLE
+    def provider(self):
+        import httpx
 
-    async def request_referencefile_conversion(self, reference, *, wait=False, request_bearer_token=None):
-        self._record("conversion")
-        return _answer_payload("running", [])
+        from agr_ai_curation_alliance.document_sources.abc_literature import (
+            ABCLiteratureDocumentSourceProvider,
+        )
+        from agr_ai_curation_alliance.literature.client import (
+            ABCLiteratureClient,
+            ABCLiteratureClientConfig,
+        )
+
+        client = ABCLiteratureClient(
+            ABCLiteratureClientConfig(base_url="https://abc.example.org"),
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(self.handle)),
+        )
+        return ABCLiteratureDocumentSourceProvider(client)
 
     @property
     def polls(self) -> int:
         return sum(1 for kind, in_listing in self.calls if kind == "show_all" and not in_listing)
 
 
-async def _one_supplement_wait(monkeypatch, job, *, wait, poll, files, converts_at, fails=lambda *_: False):
-    """One supplement wait on the fake clock with the real listing; returns (polls, total, client).
+def _install_fake_add_storage(monkeypatch, store, tmp_path):
+    """In-memory storage boundary so the real ``add_files_to_paper_with_listing`` runs."""
+    from src.lib.document_sources import file_listing_service, ingestion, supplement_add
+    from tests.unit.lib.document_sources.test_file_listing import _limits
 
-    ``converts_at(n)`` is the index of the file ABC has converted by the wait's read ``n``. The
-    add is a stand-in here (the persistence route test drives the real one): its own listing
-    and downloads come on top of ``total``.
+    inserted = []
+    ready = {}
+    saved_pdfs = {}
+    next_index = [30]
+    spool = tmp_path / ".add_spool"
+    spool.mkdir(exist_ok=True)
+
+    monkeypatch.setattr(file_listing_service, "_stores", lambda _provider: (store.load, store.save))
+    monkeypatch.setattr(file_listing_service, "current_file_check_limits", _limits)
+    monkeypatch.setattr(
+        file_listing_service, "_paper_lookup",
+        lambda *_a, **_k: file_listing_service._PaperSource(
+            provider="abc_literature", reference_id="101", reference_curie="AGRKB:101",
+            file_ids=("10",), provider_observations={},
+        ),
+    )
+    monkeypatch.setattr(supplement_add, "current_file_check_limits", _limits)
+    monkeypatch.setattr(
+        supplement_add, "_paper_state",
+        lambda *_a, **_k: supplement_add._PaperState(
+            owner_subject="owner-subject", status="completed", file_count=1, ready_text_bytes=1_000,
+            next_tab_order=1, leftovers=(), source_provider="abc_literature",
+            source_provider_reference_id="101", source_provider_reference_curie="AGRKB:101",
+            live_provider_file_ids=frozenset({"10"}),
+        ),
+    )
+    monkeypatch.setattr(supplement_add, "_spool_directory", lambda: spool)
+
+    def _save_pdf(spooled, relative):
+        spooled.seek(0)
+        saved_pdfs[relative] = spooled.read()
+
+    monkeypatch.setattr(supplement_add, "_save_supplement_pdf", _save_pdf)
+
+    async def _save_md(*, markdown, file_id, user_id):
+        return f"{user_id}/source_markdown/{file_id}.md"
+
+    async def _save_json(*, elements, file_id, user_id):
+        return f"{user_id}/processed_json/{file_id}.json"
+
+    monkeypatch.setattr(ingestion, "_save_source_markdown", _save_md)
+    monkeypatch.setattr(ingestion, "_save_processed_json", _save_json)
+    def _fake_insert(_doc, rows, _copy_ids=None, _text_bytes=None):
+        inserted.extend(rows)
+        return {}
+
+    monkeypatch.setattr(supplement_add, "_insert_rows", _fake_insert)
+
+    def _reserve(_document_id, file_id, count):
+        start = next_index[0]
+        next_index[0] += count
+        row = next(row for row in inserted if row.id == file_id)
+        row.chunk_index_start, row.chunk_index_end = start, start + count - 1
+        return start
+
+    async def _store_pieces(*_args, **_kwargs):
+        return None
+
+    async def _after_add(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("src.lib.document_files.service.reserve_file_chunk_range", _reserve)
+    monkeypatch.setattr("src.lib.pipeline.store.store_added_file_pieces", _store_pieces)
+    monkeypatch.setattr("src.lib.document_files.service.mark_files_ready", lambda items: ready.update(items))
+    monkeypatch.setattr(supplement_add, "_after_add", _after_add)
+    monkeypatch.setattr(
+        supplement_add,
+        "_rollback_files",
+        lambda _doc, ids: [supplement_add._Leftover.from_row(row) for row in inserted if row.id in ids],
+    )
+    monkeypatch.setattr(supplement_add, "_remove_stored_files", lambda _paths, _subject: None)
+    monkeypatch.setattr(supplement_add, "_delete_rows", lambda _doc, _ids: None)
+
+    async def _delete_pieces(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(supplement_add, "_delete_pieces", _delete_pieces)
+    return inserted, saved_pdfs
+
+
+async def _one_supplement_wait(
+    monkeypatch, job, *, wait, poll, files, converts_at, fails=lambda *_: False,
+    extension="xlsx", real_add=False, tmp_path=None,
+):
+    """One supplement wait on the fake clock over ``httpx.MockTransport`` with the real
+    listing service and (when ``real_add``) the real add; returns ``(polls, total, client)``.
+
+    ``converts_at(n)`` is the index of the file ABC has converted by the wait's read ``n``.
     """
-    from src.lib.document_sources.file_listing import ListingRoute, list_reference_files
-    from tests.unit.lib.document_sources.test_file_listing import _limits, _Store
+    from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
+    from src.lib.document_sources import file_listing_service, supplement_add
+    from tests.unit.lib.document_sources.test_file_listing import _Store, _limits
 
     monkeypatch.setenv("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", str(wait))
     monkeypatch.setenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", str(poll))
     clock = _Clock()
-    client = _CountingAbc(fails=fails)
-    provider = provider_from_fake(client)
     ids = [30 + 2 * index for index in range(files)]
-    converted: list[int] = []
-
-    def _rows():
-        return [_abc_show_all_main_pdf(10, "WB")] + [
-            row for i in ids for row in (_pair(i, "WB") if i in converted else [_unconverted(i, "xlsx")])
-        ]
-
-    client.rows = _rows()
-    original_show_all = client.show_referencefiles
-
-    async def _show_all(reference, *, request_bearer_token=None):
-        if not client.in_listing:
-            new = converts_at(client.polls + 1)
-            if new is not None and 0 <= new < len(ids) and ids[new] not in converted:
-                converted.append(ids[new])
-                client.rows = _rows()
-        return await original_show_all(reference, request_bearer_token=request_bearer_token)
-
-    client.show_referencefiles = _show_all
+    client = _HttpAbc(ids=ids, extension=extension, converts_at=converts_at, fails=fails)
+    provider = client.provider()
     store = _Store()
+
+    if real_add:
+        assert tmp_path is not None
+        _install_fake_add_storage(monkeypatch, store, tmp_path)
+    else:
+        monkeypatch.setattr(file_listing_service, "_stores", lambda _provider: (store.load, store.save))
+        monkeypatch.setattr(file_listing_service, "current_file_check_limits", _limits)
+        monkeypatch.setattr(
+            file_listing_service, "_paper_lookup",
+            lambda *_a, **_k: file_listing_service._PaperSource(
+                provider="abc_literature", reference_id="101", reference_curie="AGRKB:101",
+                file_ids=("10",), provider_observations={},
+            ),
+        )
 
     async def _list_files(document_id, *, owner_user_id, provider, context):
         client.in_listing = True
         try:
-            reference = await provider.resolve_reference("AGRKB:101", request_bearer_token="curator-token")
-            return await list_reference_files(
-                provider=provider, reference=reference, authorized_group_ids=("WB",),
-                bearer_kind=ProviderBearerKind.CURATOR, request_bearer_token="curator-token",
-                files_in_paper=("10",), limits=_limits(), check_limit=20,
-                load_stored=store.load, save_assessment=store.save, route=ListingRoute.PAPER,
-                provider_observations={}, find_paper_in_library=None,
+            return await file_listing_service.list_files_for_paper(
+                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
             )
         finally:
             client.in_listing = False
 
-    from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
+    async def _list_files_from_artifacts(
+        document_id, *, owner_user_id, provider, context, reference, artifacts, check_unchecked=True,
+    ):
+        client.in_listing = True
+        try:
+            return await file_listing_service.list_files_for_paper_from_artifacts(
+                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
+                reference=reference, artifacts=artifacts, check_unchecked=check_unchecked,
+            )
+        finally:
+            client.in_listing = False
 
-    await stage.run_supplement_stage(
-        job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
-        plan=SupplementPlan(chosen=tuple(_chosen(str(i)) for i in ids), request_context=_context(),
-                            login_expires_at=clock() + 86400, owner_user_id=7, reference="AGRKB:101"),
-        conversion_requested=True, last_answer=_map_conversion_result(RUNNING, provider="abc_literature"),
-        main_ready_at=clock(), provider=provider, weaviate_client=object(), outcomes=_Outcomes(),
-        list_files=_list_files, add_files=_Add(), clock=clock, sleep=clock.sleep,
+    chosen = tuple(
+        ChosenSupplement(provider_file_id=str(i), md5=client.pdf_md5.get(i, f"md5-{i}"), converted_md5=None)
+        for i in ids
     )
+    add_fn = supplement_add.add_files_to_paper_with_listing if real_add else _Add()
+    try:
+        await stage.run_supplement_stage(
+            job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7,
+            plan=SupplementPlan(chosen=chosen, request_context=_context(),
+                                login_expires_at=clock() + 86400, owner_user_id=7),
+            conversion_requested=True, last_answer=_map_conversion_result(RUNNING, provider="abc_literature"),
+            main_ready_at=clock(), provider=provider, weaviate_client=object(), outcomes=_Outcomes(),
+            list_files=_list_files, list_files_from_artifacts=_list_files_from_artifacts,
+            add_files=add_fn, clock=clock, sleep=clock.sleep,
+        )
+    finally:
+        await provider.aclose()
     assert not any(kind == "conversion" for kind, _ in client.calls)  # never asks ABC to convert
     return client.polls, len(client.calls), client
 
@@ -1000,54 +1241,265 @@ async def test_at_the_defaults_a_supplement_wait_makes_exactly_its_cap_bound(job
     and a show_all) comes on top."""
     from src.lib.openai_agents.config import supplement_wait_max_polls
 
-    polls, total, _ = await _one_supplement_wait(
+    polls, total, client = await _one_supplement_wait(
         monkeypatch, job, wait=10800, poll=60, files=1, converts_at=lambda n: None,
     )
 
     assert polls == supplement_wait_max_polls(wait_seconds=10800, listing_poll_seconds=60) == 179
     assert total == 181
+    kinds = [kind for kind, _ in client.calls]
+    assert (kinds.count("reference"), kinds.count("show_all"), kinds.count("download")) == (1, 180, 0)
 
 
 @pytest.mark.asyncio
-async def test_at_the_edge_with_the_alternating_failure_the_polls_stay_capped_and_the_rest_is_counted(
-    job, monkeypatch,
+@pytest.mark.parametrize(
+    ("extension", "expected_downloads", "expected_total"),
+    [
+        # 19 PDF supplements: 19 check downloads + 19 add text downloads + 19 add PDF downloads = 57.
+        # Plus 1 initial GET /reference + 1 initial show_all + 179 poll show_all = 238 total
+        # (236 after the stage's initial 2-request listing).
+        ("pdf", 57, 238),
+        # 19 Office supplements: 19 check downloads + 19 add text downloads = 38. Total = 219.
+        ("xlsx", 38, 219),
+    ],
+    ids=["19_pdf_supplements", "19_office_supplements"],
+)
+async def test_worst_case_at_defaults_with_real_add_meets_all_1751_request_budget(
+    job, monkeypatch, tmp_path, extension, expected_downloads, expected_total,
 ):
-    """10,800 s at 26.94 s, the smallest listing poll the default cap allows. A converted row is
-    listed from the first read while every later full listing's show_all fails (a good read
-    resets the count, so they alternate to the limit: the separate finding)."""
+    """ALL-1751 proof at the HTTP boundary with the real add: 10,800 s / 60 s, 19 files
+    converting across the full wait (18 on polls 1..18 and the 19th on poll 179)."""
+    from src.lib.openai_agents.config import supplement_wait_max_polls
+
+    def _converts_at(n: int) -> int | None:
+        if 1 <= n <= 18:
+            return n - 1
+        if n == 179:
+            return 18
+        return None
+
+    polls, total, client = await _one_supplement_wait(
+        monkeypatch, job, wait=10800, poll=60, files=19, converts_at=_converts_at,
+        extension=extension, real_add=True, tmp_path=tmp_path,
+    )
+
+    assert polls == supplement_wait_max_polls(wait_seconds=10800, listing_poll_seconds=60) == 179
+    kinds = [kind for kind, _ in client.calls]
+    assert kinds.count("reference") == 1
+    assert kinds.count("show_all") == 180  # 1 initial + 179 polls; zero on reused listings or add
+    assert kinds.count("download") == expected_downloads
+    assert total == expected_total
+    final = _final_entries(job)
+    assert len(final) == 19 and all(value == ("added", None) for value in final.values())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("poll", "expected_polls", "expected_total"),
+    [
+        # Defaults (60 s): 179 intervals x 1 request + 2 initial + 1 check + 1 add = 183 (vs 539 before).
+        (60, 179, 183),
+        # Cap edge (26.94 s): 400 intervals x 1 request + 2 initial + 1 check + 1 add = 404 (vs 1,202 before).
+        (26.94, 400, 404),
+    ],
+    ids=["defaults_60s", "cap_edge_26_94s"],
+)
+async def test_alternating_failure_costs_one_request_per_interval_instead_of_three(
+    job, monkeypatch, tmp_path, poll, expected_polls, expected_total,
+):
+    """ALL-1751: because the full listing reuses the cheap read's rows, alternating good and
+    failed show_all reads costs 1 request per interval (never 3) and the converted file still joins."""
     from src.lib.openai_agents.config import supplement_wait_max_polls
 
     polls, total, client = await _one_supplement_wait(
-        monkeypatch, job, wait=10800, poll=26.94, files=19, converts_at=lambda n: 0 if n == 1 else None,
-        fails=lambda kind, n, in_listing: kind == "show_all" and in_listing and n > 1,
+        monkeypatch, job, wait=10800, poll=poll, files=19,
+        converts_at=lambda n: 0 if n == 1 else None,
+        fails=lambda kind, n, in_listing: kind == "show_all" and not in_listing and n > 2 and n % 2 == 1,
+        real_add=True, tmp_path=tmp_path,
     )
 
-    assert polls == supplement_wait_max_polls(wait_seconds=10800, listing_poll_seconds=26.94) == 400
-    # The cap does not count: the first listing (2), then a resolve and a failing show_all in
-    # every interval (2 x 400).
-    assert total == 1202
-    assert [kind for kind, _ in client.calls].count("download") == 0
+    assert polls == supplement_wait_max_polls(wait_seconds=10800, listing_poll_seconds=poll) == expected_polls
+    kinds = [kind for kind, _ in client.calls]
+    assert kinds.count("reference") == 1
+    assert kinds.count("show_all") == expected_polls + 1
+    assert kinds.count("download") == 2  # 1 check download + 1 add download for file 0
+    assert total == expected_total
+    assert _final_entries(job)["30"] == ("added", None)
 
 
 @pytest.mark.asyncio
-async def test_files_converting_one_per_read_send_listings_and_downloads_the_cap_does_not_count(job, monkeypatch):
-    """610 s at 60 s: ten reads, a file converted before each; every full listing answers."""
+async def test_files_converting_one_per_read_reuse_the_listing_and_add_sends_only_downloads(
+    job, monkeypatch, tmp_path,
+):
+    """610 s at 60 s: ten reads, a file converted before each, real add driven for all ten."""
     from src.lib.openai_agents.config import supplement_wait_max_polls
 
     polls, total, client = await _one_supplement_wait(
         monkeypatch, job, wait=610, poll=60, files=19, converts_at=lambda n: n - 1,
+        real_add=True, tmp_path=tmp_path,
     )
 
     assert polls == supplement_wait_max_polls(wait_seconds=610, listing_poll_seconds=60) == 10
     kinds = [kind for kind, _ in client.calls]
-    # 10 polls; 11 listings (a resolve and a show_all each); one check download per converted text.
-    assert (kinds.count("reference"), kinds.count("download"), total) == (11, 10, 42)
+    # 1 initial resolve + 1 initial show_all + 10 polls + 10 check downloads + 10 add downloads = 32
+    # (was 42 before even without running the add).
+    assert (kinds.count("reference"), kinds.count("show_all"), kinds.count("download"), total) == (1, 11, 20, 32)
+    final = _final_entries(job)
+    assert sum(1 for state, _ in final.values() if state == "added") == 10
+
+
+@pytest.mark.asyncio
+async def test_failed_read_tolerance_applies_to_reused_listing_errors(job, monkeypatch):
+    """HTTP 500 on a check download raises DocumentSourceError inside the reused listing and
+    is retried up to DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS (default 3) without extra show_all."""
+    polls, total, client = await _one_supplement_wait(
+        monkeypatch, job, wait=600, poll=60, files=1,
+        converts_at=lambda n: 0 if n == 1 else None,
+        fails=lambda kind, n, _in_listing: 500 if kind == "download" and n <= 2 else False,
+    )
+
+    assert polls == 3
+    kinds = [kind for kind, _ in client.calls]
+    assert (kinds.count("reference"), kinds.count("show_all"), kinds.count("download")) == (1, 4, 3)
+    assert total == 8
+    assert _final_entries(job) == {"30": ("added", None)}
+
+
+@pytest.mark.asyncio
+async def test_three_consecutive_reused_listing_errors_stop_the_wait_at_max_failed_reads(job, monkeypatch):
+    """ALL-1751 review: failed_reads resets only after the whole poll succeeds, so 3 consecutive
+    HTTP 500s inside list_files_from_artifacts end the wait after 3 polls (not 9)."""
+    polls, total, client = await _one_supplement_wait(
+        monkeypatch, job, wait=600, poll=60, files=1,
+        converts_at=lambda n: 0 if n == 1 else None,
+        fails=lambda kind, _n, _in_listing: 500 if kind == "download" else False,
+    )
+
+    assert polls == 3
+    kinds = [kind for kind, _ in client.calls]
+    assert (kinds.count("reference"), kinds.count("show_all"), kinds.count("download")) == (1, 4, 3)
+    assert total == 8
+    assert _final_entries(job) == {"30": ("left_out", IN_TIME)}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["disappeared", "lost_access"])
+async def test_queued_supplement_revalidated_against_latest_poll_before_add_without_extra_show_all(
+    job, monkeypatch, tmp_path, mode,
+):
+    """ALL-1751 review: a queued Office supplement that disappears or loses original access on
+    a later poll is NOT added from a stale listing (0 add downloads, 0 extra show_all)."""
+    from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
+    from src.lib.document_sources import file_listing_service, supplement_add
+    from tests.unit.lib.document_sources.test_file_listing import _Store
+
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", "180")
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", "60")
+    clock = _Clock()
+    store = _Store()
+    _install_fake_add_storage(monkeypatch, store, tmp_path)
+
+    class _RevokingHttpAbc(_HttpAbc):
+        def _rows(self):
+            rows = [_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "xlsx")]
+            if self.polls < 2:
+                rows.extend(_pair(20, "WB", content=GOOD_TABLE))
+            elif mode == "lost_access":
+                # Original becomes FB-only while converted text stays WB and downloadable.
+                rows.extend(_pair(20, "FB", converted_mods=("WB",), content=GOOD_TABLE))
+            return rows
+
+    client = _RevokingHttpAbc(ids=[30], extension="xlsx", converts_at=lambda _n: None, fails=lambda *_: False)
+    provider = client.provider()
+
+    async def _list_files(document_id, *, owner_user_id, provider, context):
+        client.in_listing = True
+        try:
+            return await file_listing_service.list_files_for_paper(
+                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
+            )
+        finally:
+            client.in_listing = False
+
+    async def _list_files_from_artifacts(
+        document_id, *, owner_user_id, provider, context, reference, artifacts, check_unchecked=True,
+    ):
+        client.in_listing = True
+        try:
+            return await file_listing_service.list_files_for_paper_from_artifacts(
+                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
+                reference=reference, artifacts=artifacts, check_unchecked=check_unchecked,
+            )
+        finally:
+            client.in_listing = False
+
+    try:
+        await stage.run_supplement_stage(
+            job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7,
+            plan=SupplementPlan(
+                chosen=(_chosen("20", converted_md5=GOOD_TABLE_MD5), _chosen("30")),
+                request_context=_context(), login_expires_at=clock() + 86400,
+                owner_user_id=7,
+            ),
+            conversion_requested=True, last_answer=_map_conversion_result(RUNNING, provider="abc_literature"),
+            main_ready_at=clock(), provider=provider, weaviate_client=object(), outcomes=_Outcomes(),
+            list_files=_list_files, list_files_from_artifacts=_list_files_from_artifacts,
+            add_files=supplement_add.add_files_to_paper_with_listing, clock=clock, sleep=clock.sleep,
+        )
+    finally:
+        await provider.aclose()
+
+    kinds = [kind for kind, _ in client.calls]
+    assert kinds.count("reference") == 1
+    assert kinds.count("show_all") == 3  # 1 initial + 2 polls; zero extra show_all for revalidation or add
+    # Only the 1 check download during initial listing; ZERO add downloads after revocation/removal.
+    assert kinds.count("download") == 1
+    assert _final_entries(job) == {
+        "20": ("left_out", FileReason.FILE_NOT_IN_REFERENCE.value),
+        "30": ("left_out", IN_TIME),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("extension", "fail_download_n", "expected_downloads"),
+    [
+        # 2 files convert on polls 1..2 (2 check downloads). In add: download #3 (file 0 text) returns 401 -> stops immediately.
+        ("xlsx", 3, 3),
+        # 2 PDFs convert on polls 1..2 (2 check downloads). In add: download #3 (file 0 text) succeeds, #4 (file 0 PDF) returns 401 -> stops before file 1!
+        ("pdf", 4, 4),
+    ],
+    ids=["401_on_converted_text_download", "401_on_original_pdf_download"],
+)
+async def test_401_during_real_add_ends_all_files_login_expired_without_further_requests(
+    job, monkeypatch, tmp_path, extension, fail_download_n, expected_downloads,
+):
+    """ALL-1751 review: a 401 on either converted-text or original-PDF download during the real
+    add propagates DocumentSourceLoginExpired, ends all unadded files login_expired, and sends
+    zero subsequent requests."""
+    polls, total, client = await _one_supplement_wait(
+        monkeypatch, job, wait=300, poll=60, files=2,
+        converts_at=lambda n: n - 1 if n <= 2 else None,
+        fails=lambda kind, n, _in_listing: 401 if kind == "download" and n == fail_download_n else False,
+        extension=extension, real_add=True, tmp_path=tmp_path,
+    )
+
+    assert polls == 2
+    kinds = [kind for kind, _ in client.calls]
+    assert (kinds.count("reference"), kinds.count("show_all"), kinds.count("download")) == (
+        1, 3, expected_downloads,
+    )
+    assert total == 1 + 3 + expected_downloads
+    assert _final_entries(job) == {
+        "30": ("left_out", "login_expired"),
+        "32": ("left_out", "login_expired"),
+    }
 
 
 @pytest.mark.asyncio
 async def test_a_sweep_of_legal_settings_never_exceeds_the_supplement_waits_cap(job, monkeypatch):
-    """Random settings, file counts, conversions and failures of reads, listings and downloads,
-    all sent as real requests through the adapter and the real listing."""
+    """Random settings, file counts, conversions and failures of reads and downloads,
+    all sent as real HTTP requests through the adapter and the real listing service."""
     import random
 
     from src.lib.openai_agents.config import supplement_wait_max_polls
@@ -1059,13 +1511,16 @@ async def test_a_sweep_of_legal_settings_never_exceeds_the_supplement_waits_cap(
         poll = round(generator.uniform(max(5.0, wait / 60), wait / 3), 2)
         seed = generator.random()
         with pytest.MonkeyPatch.context() as each:
-            polls, total, _ = await _one_supplement_wait(
+            polls, total, client = await _one_supplement_wait(
                 each, job, wait=wait, poll=poll, files=generator.choice([1, 5, 19]),
                 converts_at=lambda n, s=seed: random.Random(s * 7 + n).randrange(-3, 19),
                 fails=lambda kind, n, in_listing, s=seed: random.Random(f"{s}{kind}{n}{in_listing}").random() < 0.3,
             )
         bound = supplement_wait_max_polls(wait_seconds=wait, listing_poll_seconds=poll)
+        kinds = [kind for kind, _ in client.calls]
         assert polls <= bound, (wait, poll, polls, bound)
+        assert kinds.count("reference") <= 1
+        assert kinds.count("show_all") <= polls + 1  # only initial listing + polls; never a second show_all
         assert total >= polls
         equal += polls == bound
     assert equal > 0
@@ -1081,7 +1536,6 @@ def test_queued_entries_use_real_display_name_never_provider_id():
         request_context=_context(),
         login_expires_at=None,
         owner_user_id=7,
-        reference="AGRKB:101",
     )
 
     queued = stage.queued_entries(plan)
@@ -1167,7 +1621,6 @@ def test_waiting_message_uses_registered_provider_short_label_without_hardcoding
         request_context=_context(),
         login_expires_at=None,
         owner_user_id=7,
-        reference="AGRKB:101",
     )
     st = stage._Stage(job_id=JOB_ID, plan=plan, main_ready_at=1_000_000.0, clock=_Clock())
     st.entries["30"] = stage._Entry(
@@ -1196,3 +1649,565 @@ def test_waiting_message_uses_registered_provider_short_label_without_hardcoding
         "Main paper ready. Waiting for the document source to convert 1 supplement; "
         "you can use the paper and leave this page."
     )
+
+
+@pytest.mark.asyncio
+async def test_stage_with_initial_listing_failure_leaves_queued_files_out_without_calling_add(job):
+    """If the stage's initial listing fails with DocumentSourceError, QUEUED files end
+    source_unavailable without triggering a fresh listing inside the add."""
+    clock = _Clock()
+    client, provider = _plain_provider()
+
+    class _UnavailablePaper(_Paper):
+        async def list_files(self, document_id, *, owner_user_id, provider, context):
+            self.listings += 1
+            raise DocumentSourceUnavailable("provider unavailable")
+
+    paper = _UnavailablePaper([])
+    add, outcomes = await _stage(
+        job, chosen=[_chosen("20", converted_md5=GOOD_TABLE_MD5)], paper=paper, main_ready_at=clock(),
+        clock=clock, provider=provider,
+    )
+
+    assert paper.listings == 1
+    assert add.calls == []
+    assert _final_entries(job) == {"20": ("left_out", "source_unavailable")}
+    assert outcomes.ended == ["completed"]
+
+
+@pytest.mark.asyncio
+async def test_poll_reads_use_the_resolved_reference_so_licence_rules_stay_intact(job):
+    """ALL-1751: passing the resolved SourceReference to provider.list_artifacts during polling
+    preserves copyright-licence access rules (open access allows no-MOD curators; unset licence
+    refuses access)."""
+    clock = _Clock()
+    # Open-access paper: supplement belongs to FB only, curator has no authorized groups,
+    # yet open_access=True grants GLOBAL access when the resolved SourceReference is passed.
+    paper = _Paper(
+        [_abc_show_all_main_pdf(10, "FB"), _unconverted(30, "xlsx")],
+        groups=(), licence_open=True, licence_name="CC BY 4.0",
+    )
+
+    def _abc_stores_30():
+        paper.rows = [_abc_show_all_main_pdf(10, "FB"), *_pair(30, "FB")]
+        paper.payloads = {"31": GOOD_TABLE}
+
+    no_group_context = DocumentSourceRequestContext(
+        provider_groups=(), authorized_group_ids=(),
+        bearer_kind=ProviderBearerKind.CURATOR, curator_token="curator-token",
+    )
+    client, add, outcomes = await _run(
+        chosen=[_chosen("30")], paper=paper, last_answer_payload=RUNNING, clock=clock,
+        on_read={1: _abc_stores_30}, context=no_group_context,
+    )
+
+    assert (client.reads, client.reference_reads, paper.listings, paper.reused_listings) == (1, 1, 1, 1)
+    assert [file.provider_file_id for file in add.calls[0]] == ["30"]
+    assert _final_entries(job) == {"30": ("added", None)}
+    assert outcomes.ended == ["completed"]
+
+    # Refused licence (licence name set, open_access=None): poll read must NOT grant access
+    # even though the supplement lists WB and the curator has WB!
+    clock2 = _Clock()
+    refused_paper = _Paper(
+        [_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "xlsx")],
+        groups=("WB",), licence_open=None, licence_name="Restricted License",
+    )
+
+    def _abc_stores_30_refused():
+        refused_paper.rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(30, "WB")]
+        refused_paper.payloads = {"31": GOOD_TABLE}
+
+    client2, add2, outcomes2 = await _run(
+        chosen=[_chosen("30")], paper=refused_paper, last_answer_payload=RUNNING, clock=clock2,
+        on_read={1: _abc_stores_30_refused}, login_expires_in=900 + 120,
+    )
+    assert add2.calls == []
+    assert _final_entries(job) == {"30": ("left_out", IN_TIME)}
+    assert outcomes2.ended == ["completed"]
+
+
+@pytest.mark.asyncio
+async def test_poll_without_resolved_reference_fails_with_named_error_no_fallback(job):
+    from dataclasses import replace
+
+    from src.lib.document_sources.file_listing import FileListingError
+
+    clock = _Clock()
+    paper = _Paper([_abc_show_all_main_pdf(10, "WB"), _unconverted(30, "xlsx")])
+
+    async def _listing_without_reference(*args, **kwargs):
+        built = await paper.list_files(*args, **kwargs)
+        return replace(built, reference=None)
+
+    client, provider = _plain_provider()
+    from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
+
+    with pytest.raises(FileListingError):
+        await stage.run_supplement_stage(
+            job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7,
+            plan=SupplementPlan(chosen=(_chosen("30"),), request_context=_context(),
+                                login_expires_at=clock() + 86400, owner_user_id=7),
+            conversion_requested=True, last_answer=_map_conversion_result(RUNNING, provider="abc_literature"),
+            main_ready_at=clock(), provider=provider, weaviate_client=object(), outcomes=_Outcomes(),
+            list_files=_listing_without_reference,
+            list_files_from_artifacts=paper.list_files_from_artifacts,
+            add_files=_Add(), clock=clock, sleep=clock.sleep,
+        )
+    assert client.reads == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["valid", "disappeared", "lost_access"])
+async def test_max_failed_reads_on_waiting_file_does_not_retry_a_fourth_time_and_revalidates_queued_file(
+    job, monkeypatch, tmp_path, mode,
+):
+    """ALL-1751 review: 1 QUEUED file A + 1 WAITING file B whose check returns HTTP 500 3 times
+    stops at strictly 3 check attempts for B (never 4), ends B not_converted_in_time, and
+    revalidates A against the latest poll's rows with zero extra show_all or check downloads."""
+    from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
+    from src.lib.document_sources import file_listing_service, supplement_add
+    from tests.unit.lib.document_sources.test_file_listing import _Store
+
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", "600")
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", "60")
+    clock = _Clock()
+    store = _Store()
+    _install_fake_add_storage(monkeypatch, store, tmp_path)
+
+    b_check_downloads = 0
+
+    class _FailingWaitingHttpAbc(_HttpAbc):
+        def _rows(self):
+            rows = [_abc_show_all_main_pdf(10, "WB")]
+            if self.polls < 3 or mode == "valid":
+                rows.extend(_pair(20, "WB", content=GOOD_TABLE))
+            elif mode == "lost_access":
+                rows.extend(_pair(20, "FB", converted_mods=("WB",), content=GOOD_TABLE))
+            if self.polls >= 1:
+                rows.extend(_pair(30, "WB", content=GOOD_TABLE))
+            else:
+                rows.append(_unconverted(30, "xlsx"))
+            return rows
+
+        def handle(self, request):
+            nonlocal b_check_downloads
+            if request.url.path.endswith("/31"):
+                b_check_downloads += 1
+            return super().handle(request)
+
+    client = _FailingWaitingHttpAbc(
+        ids=[30], extension="xlsx", converts_at=lambda _n: None,
+        fails=lambda kind, _n, in_listing: 500 if kind == "download" and in_listing and client.polls >= 1 else False,
+    )
+    provider = client.provider()
+
+    async def _list_files(document_id, *, owner_user_id, provider, context):
+        client.in_listing = True
+        try:
+            return await file_listing_service.list_files_for_paper(
+                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
+            )
+        finally:
+            client.in_listing = False
+
+    async def _list_files_from_artifacts(
+        document_id, *, owner_user_id, provider, context, reference, artifacts, check_unchecked=True,
+    ):
+        client.in_listing = True
+        try:
+            return await file_listing_service.list_files_for_paper_from_artifacts(
+                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
+                reference=reference, artifacts=artifacts, check_unchecked=check_unchecked,
+            )
+        finally:
+            client.in_listing = False
+
+    try:
+        await stage.run_supplement_stage(
+            job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7,
+            plan=SupplementPlan(
+                chosen=(_chosen("20", converted_md5=GOOD_TABLE_MD5), _chosen("30")),
+                request_context=_context(), login_expires_at=clock() + 86400, owner_user_id=7,
+            ),
+            conversion_requested=True, last_answer=_map_conversion_result(RUNNING, provider="abc_literature"),
+            main_ready_at=clock(), provider=provider, weaviate_client=object(), outcomes=_Outcomes(),
+            list_files=_list_files, list_files_from_artifacts=_list_files_from_artifacts,
+            add_files=supplement_add.add_files_to_paper_with_listing, clock=clock, sleep=clock.sleep,
+        )
+    finally:
+        await provider.aclose()
+
+    kinds = [kind for kind, _ in client.calls]
+    assert client.polls == 3
+    assert kinds.count("reference") == 1
+    assert kinds.count("show_all") == 4  # 1 initial + 3 polls; zero on final revalidation or add
+    assert b_check_downloads == 3  # strictly max_failed_reads (3), never a 4th attempt
+    if mode == "valid":
+        # 1 initial check for A + 3 failed checks for B + 1 add download for A = 5
+        assert kinds.count("download") == 5
+        assert _final_entries(job) == {"20": ("added", None), "30": ("left_out", IN_TIME)}
+    else:
+        # 1 initial check for A + 3 failed checks for B + 0 add downloads = 4
+        assert kinds.count("download") == 4
+        assert _final_entries(job) == {
+            "20": ("left_out", FileReason.FILE_NOT_IN_REFERENCE.value),
+            "30": ("left_out", IN_TIME),
+        }
+
+
+@pytest.mark.asyncio
+async def test_cancel_at_wait_expiry_stops_before_final_pre_add_revalidation(job, monkeypatch):
+    """ALL-1751 review: stage.checkpoint() runs before final pre-add revalidation so a cancel
+    requested as the wait expires stops cleanly without rebuilding the listing or adding."""
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", "120")
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", "60")
+    clock = _Clock()
+    paper = _Paper(
+        [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), _unconverted(30, "xlsx")],
+        payloads={"21": GOOD_TABLE},
+    )
+
+    def _cancel_after_first_poll():
+        # Poll 1 runs at t=60 (setting latest_artifacts), then the next sleep reaches t=120.
+        # Request cancellation during poll 1 so expiry triggers checkpoint before revalidation.
+        pass
+
+    async def _sleep_and_cancel(seconds: float) -> None:
+        clock.now += seconds
+        if clock.now >= 1_000_120.0:
+            job.cancel_requested = True
+        await asyncio.sleep(0)
+
+    revalidation_calls = 0
+    original_from_artifacts = paper.list_files_from_artifacts
+
+    async def _counting_from_artifacts(*args, **kwargs):
+        nonlocal revalidation_calls
+        revalidation_calls += 1
+        return await original_from_artifacts(*args, **kwargs)
+
+    paper.list_files_from_artifacts = _counting_from_artifacts  # type: ignore[method-assign]
+    _client, add, outcomes = await _run(
+        chosen=[_chosen("20", converted_md5=GOOD_TABLE_MD5), _chosen("30")],
+        paper=paper, last_answer_payload=RUNNING, clock=clock,
+        on_read={1: _cancel_after_first_poll}, sleep=_sleep_and_cancel,
+    )
+
+    assert revalidation_calls == 0
+    assert add.calls == []
+    assert outcomes.ended == ["cancelled"]
+    assert _final_entries(job) == {
+        "20": ("left_out", "import_cancelled"),
+        "30": ("left_out", "import_cancelled"),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("when", ["upfront", "raced_under_lock"])
+async def test_stage_catches_file_removal_unfinished_cleanly_without_stage_failure(
+    job, monkeypatch, tmp_path, when,
+):
+    """ALL-1751 review: FileRemovalUnfinished raised upfront or under _insert_rows lock is
+    caught in run_supplement_stage, preserving error_code='file_removal_unfinished' without
+    failing the stage, re-raising, or reporting to Sentry."""
+    from src.lib.document_sources import file_listing_service, supplement_add
+    from tests.unit.lib.document_sources.test_file_listing import _Store
+
+    reported = []
+    monkeypatch.setattr(stage, "report_runtime_exception", lambda exc, **kwargs: reported.append(kwargs))
+    clock = _Clock()
+    store = _Store()
+    _install_fake_add_storage(monkeypatch, store, tmp_path)
+
+    client = _HttpAbc(ids=[], extension="xlsx", converts_at=lambda _n: None, fails=lambda *_: False)
+
+    def _rows_with_20():
+        return [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB", content=GOOD_TABLE)]
+
+    client._rows = _rows_with_20  # type: ignore[method-assign]
+    provider = client.provider()
+
+    if when == "upfront":
+        monkeypatch.setattr(
+            supplement_add, "_paper_state",
+            lambda *_a, **_k: supplement_add._PaperState(
+                owner_subject="owner-subject", status="completed", file_count=1, ready_text_bytes=1_000,
+                next_tab_order=1, leftovers=(), source_provider="abc_literature",
+                source_provider_reference_id="101", source_provider_reference_curie="AGRKB:101",
+                live_provider_file_ids=frozenset({"10"}),
+                removed_provider_file_ids=frozenset({"20"}),
+            ),
+        )
+    else:
+        def _race_removed(doc_id, _rows, _copy_ids=None, _text_bytes=None):
+            raise supplement_add.FileRemovalUnfinished(doc_id)
+
+        monkeypatch.setattr(supplement_add, "_insert_rows", _race_removed)
+
+    outcomes = _Outcomes()
+    try:
+        await stage.run_supplement_stage(
+            job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7,
+            plan=SupplementPlan(
+                chosen=(_chosen("20", converted_md5=GOOD_TABLE_MD5),),
+                request_context=_context(), login_expires_at=clock() + 86400, owner_user_id=7,
+            ),
+            conversion_requested=False, last_answer=None, main_ready_at=clock(),
+            provider=provider, weaviate_client=object(), outcomes=outcomes,
+            list_files=file_listing_service.list_files_for_paper,
+            list_files_from_artifacts=file_listing_service.list_files_for_paper_from_artifacts,
+            add_files=supplement_add.add_files_to_paper_with_listing,
+            clock=clock, sleep=clock.sleep,
+        )
+    finally:
+        await provider.aclose()
+
+    assert reported == []
+    assert outcomes.ended == ["completed"]
+    final_meta = job.progress[-1]["metadata"]
+    assert final_meta["error_code"] == "file_removal_unfinished"
+    assert _final_entries(job) == {"20": ("left_out", FileReason.PAPER_BUSY_WHEN_READY.value)}
+    assert file_listing_service.provider_observations_from_jobs([final_meta]) == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "licence_outcome",
+    [
+        "restricted",
+        "unchanged",
+        "resolve_error",
+        "resolve_401",
+        "all_polls_fail_then_restricted",
+        "deadline_during_first_sleep_then_restricted",
+    ],
+)
+async def test_open_access_reference_revalidated_once_before_add_after_polls(
+    job, monkeypatch, tmp_path, licence_outcome,
+):
+    """ALL-1751 review: an open-access (GLOBAL) reference revalidates GET /reference once
+    before adding whenever wait time elapsed (after polls, when all polls fail, or when
+    the wait hits its deadline during its first sleep). If the licence became restricted,
+    show_all is refreshed once with the new reference so a queued Office supplement that
+    lost access is NOT added (0 add downloads). If GET /reference returns 401, it ends
+    login_expired. If unchanged, 0 extra show_all calls are made and the file joins."""
+    from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
+    from src.lib.document_sources import file_listing_service, supplement_add
+    from tests.unit.lib.document_sources.test_file_listing import _Store
+
+    if licence_outcome == "all_polls_fail_then_restricted":
+        wait_seconds = "600"
+    elif licence_outcome == "deadline_during_first_sleep_then_restricted":
+        wait_seconds = "45"
+    else:
+        wait_seconds = "120"
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", wait_seconds)
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", "60")
+    clock = _Clock()
+    store = _Store()
+    _install_fake_add_storage(monkeypatch, store, tmp_path)
+
+    class _OpenAccessHttpAbc(_HttpAbc):
+        def _rows(self):
+            # Both main and supplements belong to FB only; the WB curator can read them
+            # ONLY while the reference's open copyright licence grants GLOBAL access.
+            return [
+                _abc_show_all_main_pdf(10, "FB"),
+                *_pair(20, "FB", content=GOOD_TABLE),
+                _unconverted(30, "xlsx"),
+            ]
+
+        def handle(self, request):
+            if (
+                (self.polls >= 1 and licence_outcome in ("restricted", "all_polls_fail_then_restricted"))
+                or (licence_outcome == "deadline_during_first_sleep_then_restricted" and clock() > 1_000_000.0)
+            ):
+                self.show_reference_payload = _abc_reference_record(
+                    copyright_license_open_access=False,
+                    copyright_license_name="Restricted License",
+                )
+            return super().handle(request)
+
+    def _fails(kind: str, n: int, in_listing: bool):
+        if licence_outcome == "resolve_error" and kind == "reference" and n == 2:
+            return 500
+        if licence_outcome == "resolve_401" and kind == "reference" and n == 2:
+            return 401
+        if licence_outcome == "all_polls_fail_then_restricted" and kind == "show_all" and not in_listing and n <= 4:
+            # Show-all #1 is initial listing; #2..#4 are the 3 failed polls hitting max_failed_reads=3;
+            # #5 is the post-licence-change refresh which succeeds with the updated reference.
+            return 502
+        return False
+
+    client = _OpenAccessHttpAbc(
+        ids=[30],
+        extension="xlsx",
+        converts_at=lambda _n: None,
+        fails=_fails,
+    )
+    client.show_reference_payload = _abc_reference_record(
+        copyright_license_open_access=True,
+        copyright_license_name="CC BY 4.0",
+    )
+    provider = client.provider()
+
+    async def _list_files(document_id, *, owner_user_id, provider, context):
+        client.in_listing = True
+        try:
+            return await file_listing_service.list_files_for_paper(
+                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
+            )
+        finally:
+            client.in_listing = False
+
+    async def _list_files_from_artifacts(
+        document_id, *, owner_user_id, provider, context, reference, artifacts, check_unchecked=True,
+    ):
+        client.in_listing = True
+        try:
+            return await file_listing_service.list_files_for_paper_from_artifacts(
+                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
+                reference=reference, artifacts=artifacts, check_unchecked=check_unchecked,
+            )
+        finally:
+            client.in_listing = False
+
+    try:
+        await stage.run_supplement_stage(
+            job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7,
+            plan=SupplementPlan(
+                chosen=(_chosen("20", converted_md5=GOOD_TABLE_MD5), _chosen("30")),
+                request_context=_context(), login_expires_at=clock() + 86400, owner_user_id=7,
+            ),
+            conversion_requested=True, last_answer=_map_conversion_result(RUNNING, provider="abc_literature"),
+            main_ready_at=clock(), provider=provider, weaviate_client=object(), outcomes=_Outcomes(),
+            list_files=_list_files, list_files_from_artifacts=_list_files_from_artifacts,
+            add_files=supplement_add.add_files_to_paper_with_listing, clock=clock, sleep=clock.sleep,
+        )
+    finally:
+        await provider.aclose()
+
+    kinds = [kind for kind, _ in client.calls]
+    assert kinds.count("reference") == 2  # 1 initial + 1 pre-add open-licence check
+    if licence_outcome == "restricted":
+        # 1 initial + 1 poll + 1 refresh after licence changed = 3 show_all; 0 add downloads (only 1 initial check)
+        assert kinds.count("show_all") == 3
+        assert kinds.count("download") == 1
+        assert _final_entries(job) == {
+            "20": ("left_out", FileReason.FILE_NOT_IN_REFERENCE.value),
+            "30": ("left_out", IN_TIME),
+        }
+    elif licence_outcome == "all_polls_fail_then_restricted":
+        # 1 initial + 3 failed polls + 1 refresh after licence changed = 5 show_all; 0 add downloads
+        assert kinds.count("show_all") == 5
+        assert kinds.count("download") == 1
+        assert _final_entries(job) == {
+            "20": ("left_out", FileReason.FILE_NOT_IN_REFERENCE.value),
+            "30": ("left_out", IN_TIME),
+        }
+    elif licence_outcome == "deadline_during_first_sleep_then_restricted":
+        # Slept once for 45s and hit deadline with 0 wait polls; 1 initial + 1 post-licence-change refresh = 2 show_all
+        assert clock() == 1_000_045.0
+        assert kinds.count("show_all") == 2
+        assert kinds.count("download") == 1
+        assert _final_entries(job) == {
+            "20": ("left_out", FileReason.FILE_NOT_IN_REFERENCE.value),
+            "30": ("left_out", IN_TIME),
+        }
+    elif licence_outcome == "unchanged":
+        # 1 initial + 1 poll; ZERO extra show_all when reference metadata is unchanged
+        assert kinds.count("show_all") == 2
+        assert kinds.count("download") == 2  # 1 initial check + 1 add download
+        assert _final_entries(job) == {"20": ("added", None), "30": ("left_out", IN_TIME)}
+    elif licence_outcome == "resolve_401":
+        # 401 on pre-add resolve_reference maps to DocumentSourceLoginExpired -> login_expired (0 add downloads)
+        assert kinds.count("show_all") == 2
+        assert kinds.count("download") == 1
+        assert _final_entries(job) == {
+            "20": ("left_out", FileReason.LOGIN_EXPIRED.value),
+            "30": ("left_out", IN_TIME),
+        }
+    else:
+        # Fail closed on pre-add resolve_reference 500: 0 extra show_all, 0 add downloads
+        assert kinds.count("show_all") == 2
+        assert kinds.count("download") == 1
+        assert _final_entries(job) == {
+            "20": ("left_out", FileReason.SOURCE_UNAVAILABLE.value),
+            "30": ("left_out", IN_TIME),
+        }
+
+
+@pytest.mark.asyncio
+async def test_stage_prebuilt_add_401_preserves_earlier_settled_refusal_and_display_name(
+    job, monkeypatch, tmp_path,
+):
+    """ALL-1751 review: in run_supplement_stage's prebuilt-listing add, if file 1 settles as
+    file_changed_since_listed before file 2's download returns 401, file 1 keeps its settled
+    refusal and display name while file 2 ends login_expired with zero further requests."""
+    from src.lib.document_sources import file_listing_service, supplement_add
+    from tests.unit.lib.document_sources.test_file_listing import _Store
+
+    clock = _Clock()
+    store = _Store()
+    _install_fake_add_storage(monkeypatch, store, tmp_path)
+
+    client = _HttpAbc(
+        ids=[],
+        extension="xlsx",
+        converts_at=lambda _n: None,
+        # Downloads #1 and #2 are initial listing checks for 21 and 41; #3 is add download of 41 -> 401.
+        fails=lambda kind, n, _in_listing: 401 if kind == "download" and n == 3 else False,
+    )
+
+    def _two_files():
+        return [
+            _abc_show_all_main_pdf(10, "WB"),
+            *_pair(20, "WB", content=GOOD_TABLE),
+            *_pair(40, "WB", content=GOOD_TABLE),
+        ]
+
+    client._rows = _two_files  # type: ignore[method-assign]
+    provider = client.provider()
+
+    async def _list_files(document_id, *, owner_user_id, provider, context):
+        client.in_listing = True
+        try:
+            return await file_listing_service.list_files_for_paper(
+                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
+            )
+        finally:
+            client.in_listing = False
+
+    outcomes = _Outcomes()
+    try:
+        await stage.run_supplement_stage(
+            job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7,
+            plan=SupplementPlan(
+                chosen=(
+                    _chosen("20", converted_md5="0" * 32),  # stale checksum -> file_changed_since_listed
+                    _chosen("40", converted_md5=GOOD_TABLE_MD5),
+                ),
+                request_context=_context(), login_expires_at=clock() + 86400, owner_user_id=7,
+            ),
+            conversion_requested=False, last_answer=None, main_ready_at=clock(),
+            provider=provider, weaviate_client=object(), outcomes=outcomes,
+            list_files=_list_files,
+            list_files_from_artifacts=file_listing_service.list_files_for_paper_from_artifacts,
+            add_files=supplement_add.add_files_to_paper_with_listing,
+            clock=clock, sleep=clock.sleep,
+        )
+    finally:
+        await provider.aclose()
+
+    assert outcomes.ended == ["completed"]
+    entries = {
+        entry["provider_file_id"]: (entry["display_name"], entry["state"], entry["reason_code"])
+        for entry in job.progress[-1]["metadata"]["supplements"]
+    }
+    assert entries == {
+        "20": ("Made_up_S20.xlsx", "left_out", FileReason.FILE_CHANGED_SINCE_LISTED.value),
+        "40": ("Made_up_S40.xlsx", "left_out", FileReason.LOGIN_EXPIRED.value),
+    }
+    kinds = [kind for kind, _ in client.calls]
+    assert (kinds.count("reference"), kinds.count("show_all"), kinds.count("download")) == (1, 1, 3)

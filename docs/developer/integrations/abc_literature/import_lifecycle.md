@@ -50,13 +50,18 @@ as the listing showed them. The request locks the paper row, then creates the
 paper's one active job (`409 import_in_progress` when another is active); `422`
 for an empty list, a file chosen twice, or more files than
 `DOCUMENT_MAX_FILES_PER_PAPER` allows counting the paper's files. The add then
-runs in the background (`supplement_add.add_files_to_paper`, also called by an
-import's supplement stage inside its own job):
+runs in the background (`supplement_add.add_files_to_paper` for the curator's
+add route; an import's supplement stage calls
+`supplement_add.add_files_to_paper_with_listing` inside its own job to reuse the
+stage's last listing):
 
 - **No conversion request is sent.** Only files ABC has already converted are added.
-- **Check phase, nothing written.** The paper is listed again with the curator's
-  login (`paper_reference_mismatch` stops the add). Each chosen file, in listing
-  order, is left out with a `FileReason` code at the first step it fails:
+- **Check phase, nothing written.** On the curator's add route, the paper is
+  listed again with the curator's login (`paper_reference_mismatch` stops the
+  add). In an import's supplement stage, the add reuses the stage's last listing
+  (still enforcing paper ownership, provider/reference match, live paper files,
+  and per-file MD5 checks) so it sends only file downloads. Each chosen file, in
+  listing order, is left out with a `FileReason` code at the first step it fails:
   `file_not_in_reference`, `already_in_paper`, `file_not_tickable` (no converted
   text), `file_changed_since_listed` (either MD5), `paper_file_limit`; the download
   with the curator's login and `DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES` (`too_large`,
@@ -435,11 +440,15 @@ completed import job then carries one `left_out` entry per chosen file with
   `provider_conversion_failed` and `provider_not_converted` can still appear).
   Otherwise it watches ABC's read-only file listing (`show_all`, which only
   reads ABC's database): one read every
-  `DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS` (default 60 s), recording activity
-  at every read. A chosen file counts as converted once a listed converted
-  supplement text names it as its source (`parent_artifact_id`); only when such
-  a new text appears does the stage run the full per-paper listing, for the
-  text's id, MD5 and access checks.
+  `DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS` (default 60 s) using the reference
+  resolved at the stage's start (preserving reference licence rules), recording
+  activity at every read. A chosen file counts as converted once a listed
+  converted supplement text names it as its source (`parent_artifact_id`); only
+  when such a new text appears does the stage build the full per-paper listing
+  from that poll's already-fetched rows and resolved reference
+  (`file_listing_service.list_files_for_paper_from_artifacts`), sending no
+  second `GET /reference` and no second `show_all` — only check downloads of
+  unchecked texts (stored checks reused by MD5).
 - **Failed files.** ABC's listing does not show a failed conversion, so a file
   ABC fails during the wait stays `waiting` and ends `not_converted_in_time`
   when the wait ends. If ABC loses its job, nothing restarts it and the files
@@ -459,10 +468,35 @@ completed import job then carries one `left_out` entry per chosen file with
   - the job made terminal elsewhere (a dead-wait cancel or a delete): nothing more
     is written then.
 - **Then.** The stage (`adding_supplements`) adds the converted files with one
-  `add_files_to_paper` call; its checkpoint stops the add when the job is
-  cancel-requested or no longer active. An expired login in the add ends as
-  `login_expired`, and any other provider error as `source_unavailable`; the job
-  completes and no Sentry event is sent.
+  `add_files_to_paper_with_listing` call reusing the stage's last listing (no
+  second `GET /reference` or `show_all`; only converted-text downloads, plus the
+  original PDF download per PDF supplement); its checkpoint stops the add when
+  the job is cancel-requested or no longer active. An expired login in the add
+  ends as `login_expired`, and any other provider error as `source_unavailable`;
+  the job completes and no Sentry event is sent.
+- **HTTP request budget (ALL-1751).** Measured at the HTTP boundary at the
+  shipped defaults (`10,800 s / 60 s`, up to 19 supplements):
+  - No conversions (and no extra unchecked, unchosen converted texts on the
+    reference): 2 initial (`GET /reference` + `show_all`) + 179 poll reads =
+    **181 requests**.
+  - Tested full-wait conversion scenarios (179 polls, all 19 chosen supplements
+    convert and join, no extra unchecked unchosen texts on the reference and no
+    retried check downloads): 2 initial + 179 poll reads + 19 check downloads +
+    38 add downloads (19 converted text + 19 original PDF) = **238 requests**
+    for 19 PDF supplements (**219** for 19 Office supplements; 236 PDF / 217
+    Office after the stage's initial 2-request listing) for group-restricted
+    references. Open-access references with queued files after polling send one
+    additional pre-add `GET /reference` check (plus one `show_all` only if the
+    reference's metadata changed during the wait). These are the tested
+    successful scenarios rather than a hard worst-case bound when a reference
+    also carries extra unchecked, unchosen converted texts downloaded during
+    listing.
+  - Alternating read failure: **1 request per interval** instead of 3 (**181**
+    at the 60 s default with no conversions, **183** with 1 Office file added or
+    **184** with 1 PDF file added; **402** at the 26.94 s cap edge with no
+    conversions, **404** with 1 Office file added or **405** with 1 PDF file
+    added — down from **539** at defaults and **1,202** at the edge before
+    ALL-1751).
 - **Progress.** `metadata.supplements` (state from `SupplementState`; reasons from
   `PROVIDER_OBSERVATION_REASONS`, `SUPPLEMENT_STAGE_REASONS` or the add's own
   codes, with the add's measured and limit values) and

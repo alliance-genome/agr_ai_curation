@@ -137,7 +137,6 @@ def _sample_plan() -> SupplementPlan:
         request_context=_sample_context(),
         login_expires_at=None,
         owner_user_id=1,
-        reference="REF:101",
     )
 
 
@@ -432,7 +431,6 @@ def _queued_import_plan() -> SupplementPlan:
         request_context=_sample_context(),
         login_expires_at=None,
         owner_user_id=1,
-        reference="REF:101",
     )
 
 

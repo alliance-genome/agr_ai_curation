@@ -175,6 +175,7 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
                     request_bearer_token=request_bearer_token,
                 )
         except ABCLiteratureHTTPError as exc:
+            _raise_if_login_refused(exc, "ABC Literature reference lookup failed")
             if exc.status_code == 404 and exc.endpoint.startswith("/reference/"):
                 raise DocumentSourceReferenceNotFound(
                     "No matching reference was found in ABC Literature. "

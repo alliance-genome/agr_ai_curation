@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import weakref
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
@@ -64,6 +65,8 @@ from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
     DocumentSourceArtifactNotFound,
     DocumentSourceArtifactTooLarge,
+    DocumentSourceError,
+    DocumentSourceLoginExpired,
     DocumentSourceProvider,
     DocumentSourceUnavailable,
     ProviderBearerKind,
@@ -163,6 +166,9 @@ class ListedFile:
     # The provider's own records, for an import or add of this entry; never sent to the browser.
     source_artifact: SourceArtifact
     converted_artifact: SourceArtifact | None
+    # All readable provider file ids that collapsed onto this entry (representative first);
+    # used by the add to match duplicate copies against live paper rows; never sent to the browser.
+    copy_provider_file_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +187,9 @@ class FileListing:
     # Identifier listing only: the curator's paper an import would answer ``duplicate`` with;
     # its files are added through that paper's own listing.
     existing_document_id: str | None
+    # The provider's resolved reference record, for reusing in a wait's later listings;
+    # never sent to the browser.
+    reference: SourceReference | None = None
 
 
 def file_role_for_artifact_role(role: SourceArtifactRole, *, is_main: bool) -> str:
@@ -238,6 +247,34 @@ class DownloadOutcome(Generic[R]):
     result: R | None = None
     failure: ProviderFileDownloadFailure | None = None
     limit_value: int | None = None
+
+
+logger = logging.getLogger(__name__)
+
+
+def _report_drained_check_failure(exc: Exception) -> None:
+    """Report one unexpected sibling check failure drained alongside another error without blocking re-raise."""
+    from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
+
+    logger.warning(
+        "Drained listing check failed while stopping concurrent checks (%s)",
+        type(exc).__name__,
+        extra={"sentry_skip_event": True},
+    )
+    try:
+        report_runtime_exception(
+            sanitized_runtime_error("File listing check failed while draining concurrent checks"),
+            component="document_sources",
+            operation="file_listing_drained_check_failed",
+            context={"exception_type": type(exc).__name__},
+            fingerprint=["file_listing_drained_check_failed", type(exc).__name__],
+            include_request=False,
+        )
+    except Exception:
+        logger.warning(
+            "File listing drained-check failure reporting unavailable",
+            extra={"sentry_skip_event": True},
+        )
 
 
 # One limiter per event loop, so every listing and import in the process shares one bound.
@@ -323,6 +360,7 @@ async def download_provider_file(
     request_bearer_token: str,
     max_bytes: int,
     use: Callable[[bytes], R],
+    abort: Callable[[], bool] | None = None,
 ) -> DownloadOutcome[R]:
     """Download one provider file and hand its bytes to ``use``, within the process-wide limit.
 
@@ -333,10 +371,14 @@ async def download_provider_file(
     process, and a download stops past ``max_bytes``. ``use`` runs in a worker
     thread while the slot is still held, so at most that many files are in
     memory at once; the bytes are not kept afterwards. Each download is tried
-    once. Other provider errors propagate. Shared by the listing and the import.
+    once. When ``abort`` returns true after acquiring the download slot, the
+    provider is not called. Other provider errors propagate. Shared by the
+    listing and the import.
     """
 
     async with _download_limiter():
+        if abort is not None and abort():
+            return DownloadOutcome()
         try:
             content = await provider.download_artifact(
                 artifact_id, request_bearer_token=request_bearer_token, max_bytes=max_bytes,
@@ -440,13 +482,18 @@ async def list_reference_files(
     route: ListingRoute,
     provider_observations: Mapping[str, ProviderObservation],
     find_paper_in_library: Callable[[ReferenceImportDecision], Awaitable[str | None]] | None,
+    artifacts: Sequence[SourceArtifact] | None = None,
+    check_unchecked: bool = True,
 ) -> FileListing:
     """List one resolved reference's files for one curator.
 
     ``reference`` must be the provider's resolved reference: a provider can
     apply licence rules only to a resolved reference, so a bare identifier is
-    refused here rather than listed with fewer rules. ``load_stored`` and
-    ``save_assessment`` read and write stored results by
+    refused here rather than listed with fewer rules. When ``artifacts`` is
+    given, those already-fetched provider rows are validated against
+    ``provider`` and ``reference`` and used directly with no
+    ``provider.list_artifacts`` call (never falling back to a fresh read).
+    ``load_stored`` and ``save_assessment`` read and write stored results by
     (converted text id, MD5, check version); ``files_in_paper`` holds the
     provider file ids already imported into the paper. At most ``check_limit``
     files not checked before are downloaded by one listing. ``provider_observations``
@@ -458,19 +505,26 @@ async def list_reference_files(
 
     if not isinstance(reference, SourceReference):
         raise FileListingError("Files are listed only for a resolved provider reference")
+    if reference.provider != provider.provider_id:
+        raise FileListingError("Resolved reference belongs to another provider")
     if provider_observations and route is not ListingRoute.PAPER:
         raise FileListingError("Provider observations belong to the per-paper listing only")
     if (find_paper_in_library is None) != (route is not ListingRoute.IDENTIFIER):
         raise FileListingError("Only the identifier listing checks the curator's Library")
     groups = tuple(authorized_group_ids)
     in_paper = set(files_in_paper)
-    artifacts = await provider.list_artifacts(reference, request_bearer_token=request_bearer_token)
+    if artifacts is None:
+        resolved_artifacts = await provider.list_artifacts(reference, request_bearer_token=request_bearer_token)
+    else:
+        resolved_artifacts = _validated_prefetched_artifacts(
+            artifacts, provider_id=provider.provider_id, reference=reference,
+        )
 
     decision = await decide_reference_import(
         provider=provider,
         identifier=reference.reference_curie or reference.reference_id or "",
         reference=reference,
-        artifacts=artifacts,
+        artifacts=resolved_artifacts,
         authorized_group_ids=groups,
         bearer_kind=bearer_kind,
         request_bearer_token=request_bearer_token,
@@ -504,11 +558,12 @@ async def list_reference_files(
             last_provider_observation=None,
             source_artifact=source,
             converted_artifact=converted,
+            copy_provider_file_ids=(source.artifact_id,),
         ))
 
     openable, not_shown = visible_supplement_candidates(
         provider,
-        artifacts,
+        resolved_artifacts,
         authorized_group_ids=groups,
     )
 
@@ -549,48 +604,81 @@ async def list_reference_files(
         else:
             unchecked.append(candidate)
 
-    access_scope = tuple(sorted({str(value).strip().upper() for value in groups if str(value).strip()}))
-    ref_key = reference.reference_id or reference.reference_curie
-    cursor_key: _ListingCursorKey | None = (provider.provider_id, ref_key, access_scope) if ref_key else None
-    # Reserve candidates and advance the cursor synchronously before awaiting downloads
-    # so overlapping refreshes do not check the same file or rewind progress on late completion.
-    ordered_unchecked = _order_unchecked_candidates(unchecked, cursor_key)
-    to_check = ordered_unchecked[: max(0, check_limit)]
-    _update_listing_cursor(cursor_key, to_check=to_check, unchecked_count=len(unchecked))
-    for candidate in ordered_unchecked[len(to_check):]:
-        checks[candidate.original.artifact_id] = ListedFileCheck(ListedFileCheckStatus.CHECK_LIMIT_REACHED)
+    if check_unchecked:
+        access_scope = tuple(sorted({str(value).strip().upper() for value in groups if str(value).strip()}))
+        ref_key = reference.reference_id or reference.reference_curie
+        cursor_key: _ListingCursorKey | None = (provider.provider_id, ref_key, access_scope) if ref_key else None
+        # Reserve candidates and advance the cursor synchronously before awaiting downloads
+        # so overlapping refreshes do not check the same file or rewind progress on late completion.
+        ordered_unchecked = _order_unchecked_candidates(unchecked, cursor_key)
+        to_check = ordered_unchecked[: max(0, check_limit)]
+        _update_listing_cursor(cursor_key, to_check=to_check, unchecked_count=len(unchecked))
+        for candidate in ordered_unchecked[len(to_check):]:
+            checks[candidate.original.artifact_id] = ListedFileCheck(ListedFileCheckStatus.CHECK_LIMIT_REACHED)
 
-    async def check_candidate(candidate: _Candidate) -> ListedFileCheck:
-        text = candidate.converted
-        assert text is not None
-        text_md5 = normalize_md5(text.md5sum)
-        assert text_md5 is not None
+        login_expired: DocumentSourceLoginExpired | None = None
 
-        def assess(content: bytes) -> FileAssessment | None:
-            if hashlib.md5(content).hexdigest() != text_md5:
-                return None
-            return assess_converted_file(content, candidate.profile, limits)
+        async def check_candidate(candidate: _Candidate) -> ListedFileCheck:
+            nonlocal login_expired
+            if login_expired is not None:
+                return ListedFileCheck(ListedFileCheckStatus.NOT_CHECKED)
+            text = candidate.converted
+            assert text is not None
+            text_md5 = normalize_md5(text.md5sum)
+            assert text_md5 is not None
 
-        outcome = await download_provider_file(
-            provider, text.artifact_id, request_bearer_token=request_bearer_token,
-            max_bytes=limits.max_bytes, use=assess,
+            def assess(content: bytes) -> FileAssessment | None:
+                if hashlib.md5(content).hexdigest() != text_md5:
+                    return None
+                return assess_converted_file(content, candidate.profile, limits)
+
+            try:
+                outcome = await download_provider_file(
+                    provider, text.artifact_id, request_bearer_token=request_bearer_token,
+                    max_bytes=limits.max_bytes, use=assess,
+                    abort=lambda: login_expired is not None,
+                )
+            except DocumentSourceLoginExpired as exc:
+                if login_expired is None:
+                    login_expired = exc
+                return ListedFileCheck(ListedFileCheckStatus.NOT_CHECKED)
+            if outcome.failure is ProviderFileDownloadFailure.TOO_LARGE:
+                # The provider stopped before returning bytes whose checksum we could verify.
+                return _check_from_assessment(FileAssessment(
+                    refused=True, reason=FileReason.TOO_LARGE, limit_value=outcome.limit_value,
+                ))
+            if outcome.failure is not None:
+                return ListedFileCheck(ListedFileCheckStatus(outcome.failure.value))
+            if outcome.result is None:
+                return ListedFileCheck(ListedFileCheckStatus.NOT_CHECKED)
+            await asyncio.to_thread(
+                save_assessment, text.artifact_id, text_md5, limits.assessment_version(candidate.profile), outcome.result,
+            )
+            return _check_from_assessment(outcome.result)
+
+        raw_results = await asyncio.gather(
+            *(check_candidate(candidate) for candidate in to_check), return_exceptions=True,
         )
-        if outcome.failure is ProviderFileDownloadFailure.TOO_LARGE:
-            # The provider stopped before returning bytes whose checksum we could verify.
-            return _check_from_assessment(FileAssessment(
-                refused=True, reason=FileReason.TOO_LARGE, limit_value=outcome.limit_value,
-            ))
-        if outcome.failure is not None:
-            return ListedFileCheck(ListedFileCheckStatus(outcome.failure.value))
-        if outcome.result is None:
-            return ListedFileCheck(ListedFileCheckStatus.NOT_CHECKED)
-        await asyncio.to_thread(
-            save_assessment, text.artifact_id, text_md5, limits.assessment_version(candidate.profile), outcome.result,
-        )
-        return _check_from_assessment(outcome.result)
-
-    results = await asyncio.gather(*(check_candidate(candidate) for candidate in to_check))
-    checks.update(zip((candidate.original.artifact_id for candidate in to_check), results))
+        if login_expired is not None:
+            for item in raw_results:
+                if isinstance(item, Exception) and not isinstance(item, DocumentSourceError):
+                    _report_drained_check_failure(item)
+            raise login_expired
+        propagated = next((item for item in raw_results if isinstance(item, BaseException)), None)
+        if propagated is not None:
+            for item in raw_results:
+                if (
+                    item is not propagated
+                    and isinstance(item, Exception)
+                    and not isinstance(item, DocumentSourceError)
+                ):
+                    _report_drained_check_failure(item)
+            raise propagated
+        results: list[ListedFileCheck] = []
+        for item in raw_results:
+            assert not isinstance(item, BaseException)
+            results.append(item)
+        checks.update(zip((candidate.original.artifact_id for candidate in to_check), results))
 
     for candidate in unique:
         original = candidate.original
@@ -633,6 +721,7 @@ async def list_reference_files(
             ),
             source_artifact=original,
             converted_artifact=candidate.converted,
+            copy_provider_file_ids=copy_ids,
         ))
 
     return FileListing(
@@ -645,7 +734,41 @@ async def list_reference_files(
         duplicate_copies_count=duplicate_copies,
         check_version=limits.check_version,
         existing_document_id=existing_document_id,
+        reference=reference,
     )
+
+
+def _validated_prefetched_artifacts(
+    artifacts: Sequence[SourceArtifact],
+    *,
+    provider_id: str,
+    reference: SourceReference,
+) -> list[SourceArtifact]:
+    if isinstance(artifacts, (str, bytes, bytearray)) or not isinstance(artifacts, Sequence):
+        raise FileListingError("Pre-fetched artifacts must be a sequence of provider artifacts")
+    expected_ref_id = (reference.reference_id or "").strip() or None
+    expected_ref_curie = (reference.reference_curie or "").strip() or None
+    validated: list[SourceArtifact] = []
+    for artifact in artifacts:
+        if not isinstance(artifact, SourceArtifact):
+            raise FileListingError("Pre-fetched artifacts must contain only provider artifact records")
+        if artifact.provider != provider_id:
+            raise FileListingError("Pre-fetched artifact belongs to another provider")
+        artifact_ref_id = (artifact.reference_id or "").strip() or None
+        artifact_ref_curie = (artifact.reference_curie or "").strip() or None
+        matched_ref = False
+        if artifact_ref_id is not None:
+            if expected_ref_id is None or artifact_ref_id != expected_ref_id:
+                raise FileListingError("Pre-fetched artifact belongs to another reference")
+            matched_ref = True
+        if artifact_ref_curie is not None:
+            if expected_ref_curie is None or artifact_ref_curie != expected_ref_curie:
+                raise FileListingError("Pre-fetched artifact belongs to another reference")
+            matched_ref = True
+        if not matched_ref:
+            raise FileListingError("Pre-fetched artifact has no reference binding")
+        validated.append(artifact)
+    return validated
 
 
 async def _paper_refusal(

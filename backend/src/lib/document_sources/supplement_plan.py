@@ -33,5 +33,3 @@ class SupplementPlan:
     # claims; ``None`` for the development machine reader, which has no curator login.
     login_expires_at: float | None
     owner_user_id: int
-    # The provider reference the paper was imported from (the request's poll value).
-    reference: str

@@ -124,15 +124,30 @@ class _Abc:
     second listing read, unless ``fails_main``: then it never does, and any later
     conversion request answers ``failed``."""
 
-    def __init__(self, main_name: str, *, fails_main: bool = False, never_converts: bool = False):
+    def __init__(
+        self,
+        main_name: str,
+        *,
+        fails_main: bool = False,
+        never_converts: bool = False,
+        supplement_extension: str = "xlsx",
+        supplement_pdf: bytes | None = None,
+    ):
         self.fails_main = fails_main
         self.never_converts = never_converts
+        self.supplement_extension = supplement_extension
+        self.supplement_pdf = supplement_pdf
         self.main_reads = 0
         self.main = _row(10, file_class="main", extension="pdf", display_name=main_name, pdf_type="pdf")
-        self.supplement = _row(30, file_class="supplement", extension="xlsx", display_name="Made_up_S30")
+        self.supplement = _row(
+            30, file_class="supplement", extension=supplement_extension, display_name="Made_up_S30",
+        )
+        if supplement_pdf is not None:
+            self.supplement["md5sum"] = hashlib.md5(supplement_pdf).hexdigest()
         self.rows = [self.main, self.supplement]
         self.conversion_requests: list[str] = []  # "main" or "stage", by when it was sent
         self.stage_reads = 0
+        self.stage_requests: list[str] = []
         self.main_ready = False
         self.unknown: list[str] = []
 
@@ -142,12 +157,14 @@ class _Abc:
 
     def abc_stores_the_supplement_text(self):
         row = _row(31, file_class="converted_merged_supplement", extension="md",
-                   display_name="Made_up_S30_xlsx", source=_source(self.supplement))
+                   display_name=f"Made_up_S30_{self.supplement_extension}", source=_source(self.supplement))
         row["md5sum"] = hashlib.md5(WORKBOOK).hexdigest()
         self.rows.append(row)
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = unquote(request.url.path)
+        if self.main_ready:
+            self.stage_requests.append(path)
         if path == f"/reference/{REFERENCE}":
             return httpx.Response(200, json={
                 "reference_id": 101, "curie": REFERENCE, "title": "A made-up paper",
@@ -180,6 +197,8 @@ class _Abc:
             ))
         if path.startswith("/reference/referencefile/download_file/"):
             payloads = {"10": MAIN_PDF, "11": MAIN_MARKDOWN, "31": WORKBOOK}
+            if self.supplement_pdf is not None:
+                payloads["30"] = self.supplement_pdf
             body = payloads[path.rsplit("/", 1)[1]]
             # A streamed body, as ABC's download route sends it (the client reads it raw).
             return httpx.Response(200, stream=httpx.ByteStream(body), headers={"content-length": str(len(body))})
@@ -201,8 +220,16 @@ class _Abc:
 def owner(monkeypatch, tmp_path):
     command.upgrade(Config(str(BACKEND_ROOT / "alembic.ini")), "head")
     subject = f"p7b-route-owner-{uuid4()}"
+    from src.models.sql.document_file_assessment import DocumentFileAssessment
+
     with SessionLocal.begin() as db:
         owner_id = ensure_test_pdf_owner(db, auth_sub=subject)
+        db.execute(
+            delete(DocumentFileAssessment).where(
+                DocumentFileAssessment.provider == "abc_literature",
+                DocumentFileAssessment.provider_file_id == "31",
+            )
+        )
     monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: tmp_path)
     for name, value in {
         "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS": "5",
@@ -212,6 +239,12 @@ def owner(monkeypatch, tmp_path):
     yield owner_id, subject
     with SessionLocal.begin() as db:
         db.execute(delete(PDFDocument).where(PDFDocument.filename.like(f"{PREFIX}%")))
+        db.execute(
+            delete(DocumentFileAssessment).where(
+                DocumentFileAssessment.provider == "abc_literature",
+                DocumentFileAssessment.provider_file_id == "31",
+            )
+        )
 
 
 def _search_index(monkeypatch):
@@ -284,7 +317,10 @@ async def _import_with_a_chosen_supplement(abc: _Abc, subject: str, monkeypatch,
         DocumentSourceIdentifierImportRequest(
             identifiers=REFERENCE,
             supplements=[DocumentSourceSupplementChoice(
-                identifier=REFERENCE, provider_file_id="30", md5="md5-30", converted_md5=None,
+                identifier=REFERENCE,
+                provider_file_id="30",
+                md5=abc.supplement["md5sum"],
+                converted_md5=None,
             )],
         ),
         background_tasks, request, user,
@@ -306,6 +342,19 @@ def _main_job(document_id: UUID) -> PdfProcessingJob:
     return next(job for job in jobs if not (job.metadata_json or {}).get("job_kind"))
 
 
+def _sample_pdf(pages: int = 2) -> bytes:
+    import io
+
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    for _ in range(pages):
+        writer.add_blank_page(width=612, height=792)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
 @pytest.mark.asyncio
 async def test_an_imported_supplement_joins_once_abc_lists_it_with_no_conversion_request_from_the_wait(
     owner, monkeypatch, tmp_path,
@@ -324,10 +373,21 @@ async def test_an_imported_supplement_joins_once_abc_lists_it_with_no_conversion
     assert main_job.status == "completed"
     assert "supplements" not in (main_job.metadata_json or {})
     assert set(main_job.metadata_json["provider_conversion_requests"]) == {"on_demand_sent_at"}
-    # After the main paper was ready: the stage's first full listing, two show_all
-    # reads (the second found the converted row), the full listing for that text,
-    # then the add's own listing before it writes. All reads; none asks ABC to convert.
-    assert abc.stage_reads == 5
+    # ALL-1751: after the main paper was ready:
+    # - 1 GET /reference (the stage's first full listing only; reused by polls and add)
+    # - 3 show_all reads (the stage's first listing + 2 cheap poll reads; none on full
+    #   listing or add)
+    # - 2 download_file reads (1 check download on the reused listing + 1 add download)
+    # Total: 6 requests (down from 10 before ALL-1751).
+    assert abc.stage_reads == 3
+    assert abc.stage_requests == [
+        f"/reference/{REFERENCE}",
+        f"/reference/referencefile/show_all/{REFERENCE}",
+        f"/reference/referencefile/show_all/{REFERENCE}",
+        f"/reference/referencefile/show_all/{REFERENCE}",
+        "/reference/referencefile/download_file/31",
+        "/reference/referencefile/download_file/31",
+    ]
     with SessionLocal() as db:
         paper = db.get(PDFDocument, document_id)
         assert paper.status == "completed"
@@ -344,6 +404,41 @@ async def test_an_imported_supplement_joins_once_abc_lists_it_with_no_conversion
     assert stage_job.metadata_json["supplements"][0]["display_name"] == "Made_up_S30.xlsx"
     latest = job_service.get_latest_paper_job_for_document(document_id=document_id, user_id=owner_id)
     assert latest.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_an_imported_pdf_supplement_reuses_the_stage_listing_and_downloads_text_and_pdf(
+    owner, monkeypatch, tmp_path,
+):
+    """ALL-1751 + #1126: a PDF supplement sends 1 GET /reference, 3 show_all reads, 1 check
+    download, 1 add text download, and 1 add original PDF download (7 requests total)."""
+    _owner_id, subject = owner
+    pdf_bytes = _sample_pdf(2)
+    abc = _Abc(
+        main_name=f"{PREFIX}{uuid4().hex}",
+        supplement_extension="pdf",
+        supplement_pdf=pdf_bytes,
+    )
+    document_id = await _import_with_a_chosen_supplement(abc, subject, monkeypatch, tmp_path)
+
+    assert abc.conversion_requests == ["main"]
+    assert abc.stage_reads == 3
+    assert abc.stage_requests == [
+        f"/reference/{REFERENCE}",
+        f"/reference/referencefile/show_all/{REFERENCE}",
+        f"/reference/referencefile/show_all/{REFERENCE}",
+        f"/reference/referencefile/show_all/{REFERENCE}",
+        "/reference/referencefile/download_file/31",
+        "/reference/referencefile/download_file/31",
+        "/reference/referencefile/download_file/30",
+    ]
+    with SessionLocal() as db:
+        paper = db.get(PDFDocument, document_id)
+        added = [row for row in paper.files if row.source_provider_source_file_id == "30"]
+        assert [(row.role, row.status, row.display_mode, row.page_count) for row in added] == [
+            ("supplement", "ready", "local_pdf", 2),
+        ]
+        assert (tmp_path / added[0].file_path).is_file()
 
 
 

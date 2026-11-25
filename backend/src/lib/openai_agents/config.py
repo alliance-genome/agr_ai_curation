@@ -2476,9 +2476,10 @@ def supplement_wait_max_polls(*, wait_seconds: float, listing_poll_seconds: floa
     """Worst case for a supplement wait: its reads of the provider's listing.
 
     A read follows each full listing poll that ends before the wait's limit: at
-    most ``ceil(wait / listing poll) - 1``. Not counted: the full listings after
-    a newly converted text, their check downloads, the stage's first listing and
-    the add's listing and downloads.
+    most ``ceil(wait / listing poll) - 1``. Not counted: the stage's first
+    listing (a reference lookup and a listing read), check downloads for
+    unchecked converted texts, and the add's file downloads (the stage reuses
+    each poll's listing rows and its last listing instead of re-listing).
     """
     return math.ceil(wait_seconds / listing_poll_seconds) - 1
 

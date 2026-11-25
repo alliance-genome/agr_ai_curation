@@ -1440,8 +1440,11 @@ class UploadExecutionService:
             )
             return
         from src.lib.document_sources import supplement_wait
-        from src.lib.document_sources.file_listing_service import list_files_for_paper
-        from src.lib.document_sources.supplement_add import add_files_to_paper
+        from src.lib.document_sources.file_listing_service import (
+            list_files_for_paper,
+            list_files_for_paper_from_artifacts,
+        )
+        from src.lib.document_sources.supplement_add import add_files_to_paper_with_listing
 
         terminal_metadata = (
             {PDF_PROCESSING_RECEIPT_KEY: observability_receipt}
@@ -1502,7 +1505,6 @@ class UploadExecutionService:
                         job_id=stage_job_id,
                         document_id=str(request.document_id),
                         owner_user_id=plan.owner_user_id,
-                        reference=plan.reference,
                         plan=plan,
                         conversion_requested=conversion_requested,
                         last_answer=last_answer,
@@ -1511,7 +1513,8 @@ class UploadExecutionService:
                         weaviate_client=get_connection(),
                         outcomes=outcomes,
                         list_files=list_files_for_paper,
-                        add_files=add_files_to_paper,
+                        list_files_from_artifacts=list_files_for_paper_from_artifacts,
+                        add_files=add_files_to_paper_with_listing,
                     )
                 finally:
                     await provider.aclose()
