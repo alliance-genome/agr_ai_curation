@@ -39,6 +39,7 @@ write_test_env() {
       'REDIS_AUTH=test-redis-auth' \
       'WEAVIATE_API_KEY=test-weaviate-key' \
       'AUTH_PROVIDER=oidc' \
+      'AGR_PREBUILT_PACKAGE_ENVS_DIR=/srv/custom-package-envs' \
       'OIDC_ISSUER_URL=https://issuer.example.org' \
       'OIDC_CLIENT_ID=curation-production' \
       'OIDC_REDIRECT_URI=https://curation.example.org/auth/callback' \
@@ -143,7 +144,7 @@ assert_rejected_with() {
 
 write_test_env
 unset MAX_PARALLEL_VALIDATORS ADMIN_EMAILS
-grep -Ev '^(ADMIN_EMAILS=|MAX_PARALLEL_VALIDATORS=|LANGFUSE_TIMEOUT=|OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES=|WORKSPACE_REVIEW_CONCURRENCY=|VALIDATION_REVIEW_|EXTRACTION_FANOUT_|VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=|WEAVIATE_CHUNK_FETCH_PAGE_SIZE=|DOCUMENT_TABLE_HEADER_|DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES=|DOCUMENT_FILE_DOWNLOAD_CONCURRENCY=|DOCUMENT_FILE_LISTING_CHECK_LIMIT=|DOCUMENT_FILE_LISTING_CURSOR_CACHE_MAX_ENTRIES=|DOCUMENT_MAX_FILES_PER_PAPER=|DOCUMENT_PAPER_MAX_TEXT_BYTES=|DOCUMENT_FILE_MAX_PDF_BYTES=|DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW=|DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=|DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=|DOCUMENT_SOURCE_DEAD_WAIT_POLLS=|DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS=|DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS=|DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS=|DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT=|DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS=|DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS=)' "${env_file}" >"${default_env_file}"
+grep -Ev '^(ADMIN_EMAILS=|AGR_PREBUILT_PACKAGE_ENVS_DIR=|MAX_PARALLEL_VALIDATORS=|LANGFUSE_TIMEOUT=|OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES=|WORKSPACE_REVIEW_CONCURRENCY=|VALIDATION_REVIEW_|EXTRACTION_FANOUT_|VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=|WEAVIATE_CHUNK_FETCH_PAGE_SIZE=|DOCUMENT_TABLE_HEADER_|DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES=|DOCUMENT_FILE_DOWNLOAD_CONCURRENCY=|DOCUMENT_FILE_LISTING_CHECK_LIMIT=|DOCUMENT_FILE_LISTING_CURSOR_CACHE_MAX_ENTRIES=|DOCUMENT_MAX_FILES_PER_PAPER=|DOCUMENT_PAPER_MAX_TEXT_BYTES=|DOCUMENT_FILE_MAX_PDF_BYTES=|DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW=|DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=|DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=|DOCUMENT_SOURCE_DEAD_WAIT_POLLS=|DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS=|DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS=|DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS=|DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT=|DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS=|DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS=)' "${env_file}" >"${default_env_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":false,"git_sha":"abcdef1"}' \
   >"${frontend_build_metadata_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":true,"git_sha":"abcdef1"}' \
@@ -200,6 +201,8 @@ for service in ("backend", "benchmark_worker"):
     assert str(service_env["VALIDATION_REVIEW_QUICK_CHECK_MAX_RETRIES"]) == "2"
 for service in ("backend", "benchmark_worker"):
     assert str(config["services"][service]["environment"]["MAX_PARALLEL_VALIDATORS"]) == "8"
+    assert str(config["services"][service]["environment"]["AGR_PACKAGE_ENV_BOOTSTRAP_MODE"]) == "prebuilt"
+    assert str(config["services"][service]["environment"]["AGR_PREBUILT_PACKAGE_ENVS_DIR"]) == "/opt/package-envs"
 assert str(backend_env["PDF_JOB_RECOVERY_INTERVAL_SECONDS"]) == "60"
 assert str(backend_env["PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS"]) == "5400"
 assert str(backend_env["PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS"]) == "30"
@@ -264,7 +267,7 @@ env \
   -f "${repo_root}/docker-compose.yml" \
   config --format json >"${development_rendered_file}"
 # The host capacity must win over the service env file's value of 3.
-MAX_PARALLEL_VALIDATORS=2 AGR_DEV_ENV_FILE="${env_file}" docker compose --env-file "${env_file}" \
+AGR_PACKAGE_ENV_BOOTSTRAP_MODE=prebuilt MAX_PARALLEL_VALIDATORS=2 AGR_DEV_ENV_FILE="${env_file}" docker compose --env-file "${env_file}" \
   -f "${repo_root}/docker-compose.yml" config --format json >"${development_override_file}"
 # AGR_DEV_ENV_FILE must preserve ADMIN_EMAILS even when --env-file omits it and
 # ADMIN_EMAILS is unset in the shell.
@@ -289,6 +292,10 @@ envfile_only_backend_env = json.load(open(sys.argv[3], encoding="utf-8"))["servi
 for service in ("backend", "benchmark_worker"):
     assert str(services[service]["environment"]["MAX_PARALLEL_VALIDATORS"]) == "8"
     assert str(override_services[service]["environment"]["MAX_PARALLEL_VALIDATORS"]) == "2"
+    assert str(services[service]["environment"]["AGR_PACKAGE_ENV_BOOTSTRAP_MODE"]) == "dynamic"
+    assert str(services[service]["environment"]["AGR_PREBUILT_PACKAGE_ENVS_DIR"]) == "/opt/package-envs"
+    assert str(override_services[service]["environment"]["AGR_PACKAGE_ENV_BOOTSTRAP_MODE"]) == "prebuilt"
+    assert str(override_services[service]["environment"]["AGR_PREBUILT_PACKAGE_ENVS_DIR"]) == "/srv/custom-package-envs"
 assert str(backend_env["DOCUMENT_FILE_LISTING_CHECK_LIMIT"]) == "20"
 assert str(backend_env["DOCUMENT_FILE_LISTING_CURSOR_CACHE_MAX_ENTRIES"]) == "512"
 assert str(backend_env["DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS"]) == "30"
@@ -401,6 +408,8 @@ for service in ("backend", "benchmark_worker"):
     assert str(service_env["VALIDATION_REVIEW_QUICK_CHECK_MAX_RETRIES"]) == "0"
 for service in ("backend", "benchmark_worker"):
     assert str(config["services"][service]["environment"]["MAX_PARALLEL_VALIDATORS"]) == "3"
+    assert str(config["services"][service]["environment"]["AGR_PACKAGE_ENV_BOOTSTRAP_MODE"]) == "prebuilt"
+    assert str(config["services"][service]["environment"]["AGR_PREBUILT_PACKAGE_ENVS_DIR"]) == "/srv/custom-package-envs"
 assert str(backend_env["DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"]) == "250000"
 assert str(config["services"]["benchmark_worker"]["environment"]["DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"]) == "250000"
 assert str(backend_env["DOCUMENT_FILE_DOWNLOAD_CONCURRENCY"]) == "7"
@@ -558,6 +567,7 @@ render_with_override \
   "${unsafe_environment}"
 assert_rejected_with "${unsafe_environment}" "${frontend_build_metadata_file}" \
   'backend.AUTH_PROVIDER' \
+  'backend.AGR_PACKAGE_ENV_BOOTSTRAP_MODE' \
   'backend.DEBUG' \
   'backend.DEV_MODE' \
   'backend.SECURE_COOKIES' \

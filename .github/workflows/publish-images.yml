@@ -102,7 +102,7 @@ jobs:
         include:
           - artifact_id: backend
             build_args: ""
-            context: backend
+            context: .
             display_name: backend
             dockerfile: backend/Dockerfile.prod
             manifest_key: backend
@@ -196,6 +196,28 @@ jobs:
           push: true
           sbom: false
           tags: ${{ steps.tags.outputs.tags }}
+
+      - name: Verify backend prebuilt package environments offline
+        if: matrix.artifact_id == 'backend'
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          REPOSITORY: ${{ matrix.repository }}
+        run: |
+          image_ref="${REPOSITORY}@${DIGEST}"
+          docker pull "${image_ref}"
+          docker run --rm --network=none --entrypoint /opt/venv/bin/python "${image_ref}" -c '
+            import json, pathlib, subprocess
+            root = pathlib.Path("/opt/package-envs")
+            env_dirs = sorted(p for p in root.iterdir() if p.is_dir())
+            assert env_dirs, "Expected at least one prebuilt package environment under /opt/package-envs"
+            for env_dir in env_dirs:
+                meta = json.loads((env_dir / "environment.json").read_text(encoding="utf-8"))
+                assert meta.get("prebuilt") is True and meta.get("fingerprint"), env_dir
+                py = env_dir / "venv" / "bin" / "python"
+                assert py.is_file(), py
+                subprocess.run([str(py), "-m", "pip", "check"], check=True)
+          '
 
       - name: Verify frontend compiled mode artifact
         if: matrix.artifact_id == 'frontend'

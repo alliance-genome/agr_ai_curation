@@ -26,6 +26,7 @@ def test_load_package_manifest_parses_representative_fixture():
     assert manifest.display_name == "AGR Base Package"
     assert manifest.python_package_root == "src/agr_base"
     assert manifest.requirements_file == "requirements/runtime.txt"
+    assert manifest.requirements_lock_file is None
     assert [export.kind for export in manifest.exports] == [
         ExportKind.AGENT,
         ExportKind.PROMPT,
@@ -337,3 +338,38 @@ def test_fast_contract_parser_rejects_unsafe_tags_and_malformed_yaml(tmp_path, s
     path.write_text(source)
     with pytest.raises(PackageContractError, match="Invalid YAML"):
         _load_yaml_mapping(path)
+
+
+def test_load_package_manifest_validates_optional_requirements_lock_file(tmp_path: Path):
+    manifest_path = tmp_path / "package.yaml"
+    manifest_path.write_text(
+        """
+package_id: org.locked
+display_name: Locked Package
+version: 1.0.0
+package_api_version: 1.0.0
+min_runtime_version: 1.0.0
+max_runtime_version: 2.0.0
+python_package_root: python/src/org_locked
+requirements_file: requirements/runtime.txt
+requirements_lock_file: requirements/runtime.lock.txt
+exports:
+  - kind: tool_binding
+    name: default
+    path: tools/bindings.yaml
+    description: Locked bindings
+""".strip(),
+        encoding="utf-8",
+    )
+    manifest = load_package_manifest(manifest_path)
+    assert manifest.requirements_lock_file == "requirements/runtime.lock.txt"
+
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8").replace(
+            "requirements/runtime.lock.txt",
+            "../outside.lock.txt",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(PackageManifestError, match="requirements_lock_file"):
+        load_package_manifest(manifest_path)

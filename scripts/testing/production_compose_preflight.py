@@ -111,6 +111,9 @@ def validate_config(
         "HEALTH_CHECK_REQUIRE_LITERATURE_DB",
         True,
     )
+    bootstrap_mode = str(backend_env.get("AGR_PACKAGE_ENV_BOOTSTRAP_MODE", "")).strip().lower()
+    if bootstrap_mode != "prebuilt":
+        errors.append("backend.AGR_PACKAGE_ENV_BOOTSTRAP_MODE must render as prebuilt")
     auth_provider = str(backend_env.get("AUTH_PROVIDER", "")).strip().lower()
     required_auth_keys: tuple[str, ...] = ()
     if auth_provider == "oidc":

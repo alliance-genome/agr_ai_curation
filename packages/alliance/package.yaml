@@ -6,6 +6,7 @@ min_runtime_version: 1.0.0
 max_runtime_version: 2.0.0
 python_package_root: python/src/agr_ai_curation_alliance
 requirements_file: requirements/runtime.txt
+requirements_lock_file: requirements/runtime.lock.txt
 dependencies:
   - package_id: agr.core
     version_range: ">=1.0.0,<2.0.0"

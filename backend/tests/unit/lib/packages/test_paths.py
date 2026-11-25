@@ -22,6 +22,7 @@ def _clear_runtime_path_env(monkeypatch):
         "FILE_OUTPUT_STORAGE_PATH",
         "IDENTIFIER_PREFIX_STATE_DIR",
         "IDENTIFIER_PREFIX_FILE_PATH",
+        "AGR_PREBUILT_PACKAGE_ENVS_DIR",
     ):
         monkeypatch.delenv(variable, raising=False)
 
@@ -49,6 +50,16 @@ def test_default_runtime_layout_does_not_depend_on_repo_checkout():
     )
     assert paths.get_package_runner_metadata_path("agr.base") == Path(
         "/runtime/state/package_runner/agr.base/environment.json"
+    )
+    assert paths.get_prebuilt_package_envs_dir() == Path("/opt/package-envs")
+    assert paths.get_prebuilt_package_env_dir("agr.base") == Path(
+        "/opt/package-envs/agr.base"
+    )
+    assert paths.get_prebuilt_package_venv_dir("agr.base") == Path(
+        "/opt/package-envs/agr.base/venv"
+    )
+    assert paths.get_prebuilt_package_metadata_path("agr.base") == Path(
+        "/opt/package-envs/agr.base/environment.json"
     )
 
 
@@ -136,3 +147,18 @@ def test_package_runner_paths_reject_unsafe_package_ids(
 
     with pytest.raises(ValueError, match=expected_message):
         paths.get_runtime_package_dir(bad_package_id)
+
+    with pytest.raises(ValueError, match=expected_message):
+        paths.get_prebuilt_package_env_dir(bad_package_id)
+
+
+def test_prebuilt_package_envs_dir_honors_env_override(monkeypatch, tmp_path):
+    custom_dir = tmp_path / "custom-package-envs"
+    monkeypatch.setenv("AGR_PREBUILT_PACKAGE_ENVS_DIR", str(custom_dir))
+
+    assert paths.get_prebuilt_package_envs_dir() == custom_dir
+    assert paths.get_prebuilt_package_env_dir("demo.pkg") == custom_dir / "demo.pkg"
+    assert paths.get_prebuilt_package_venv_dir("demo.pkg") == custom_dir / "demo.pkg" / "venv"
+    assert paths.get_prebuilt_package_metadata_path("demo.pkg") == (
+        custom_dir / "demo.pkg" / "environment.json"
+    )

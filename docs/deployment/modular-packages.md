@@ -69,9 +69,13 @@ Key ownership rules:
   optional specialist catalog plus default shipped tool bindings.
 - `runtime/packages/<your-package>/` is where custom organization packages
   belong.
-- `runtime/state/` is writable runtime state. The package runner creates one
-  isolated virtual environment per loaded package under
-  `runtime/state/package_runner/<package_id>/venv`.
+- `runtime/state/` is writable runtime state. In local development (`dynamic`
+  bootstrap mode), the package runner creates isolated virtual environments
+  under `runtime/state/package_runner/<package_id>/venv`. Production images
+  bake tool-bearing package environments into `/opt/package-envs/<package_id>/`
+  at image build time from each package's hashed `requirements_lock_file` and
+  verify their fingerprint at startup (`AGR_PACKAGE_ENV_BOOTSTRAP_MODE=prebuilt`)
+  without runtime downloads.
 - `data/` holds mutable deployment data. The standalone compose stack mounts
   these host directories into the container runtime paths used by the app.
 
@@ -493,8 +497,17 @@ selections:
 7. Verify package loading in backend logs and, if you use the admin health
    endpoints, check `GET /api/admin/health/packages`.
 
-The package runner installs `requirements/runtime.txt` into an isolated virtual
-environment the first time a package-backed tool executes.
+The package runner executes tool-bearing packages inside isolated virtual
+environments. In local development (`AGR_PACKAGE_ENV_BOOTSTRAP_MODE=dynamic`),
+the runner creates or reuses `runtime/state/package_runner/<package_id>/venv`
+from `requirements_lock_file` (when declared) or `requirements/runtime.txt`.
+In production (`AGR_PACKAGE_ENV_BOOTSTRAP_MODE=prebuilt`), the backend image
+bakes `/opt/package-envs/<package_id>/` at build time from each package's
+hashed `requirements_lock_file` and refuses missing or mismatched environments
+at startup without falling back to `pip install`. Deployments that add custom
+tool-bearing packages in production must include a hashed `requirements_lock_file`
+and rebuild the backend image (`docker build -f backend/Dockerfile.prod .`) with
+their package directory present under `packages/`.
 
 ## Upgrade a standard standalone install
 

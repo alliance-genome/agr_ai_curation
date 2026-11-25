@@ -772,6 +772,7 @@ def _safe_rendered_config() -> dict:
                 "image": "example.invalid/backend:v0.9.0",
                 "environment": {
                     "AUTH_PROVIDER": "oidc",
+                    "AGR_PACKAGE_ENV_BOOTSTRAP_MODE": "prebuilt",
                     "OIDC_ISSUER_URL": "https://issuer.example.org",
                     "OIDC_CLIENT_ID": "curation-production",
                     "OIDC_REDIRECT_URI": "https://curation.example.org/auth/callback",
@@ -901,6 +902,8 @@ def test_runtime_preflight_allows_explicit_sentry_operational_overrides():
     ("service", "key", "unsafe_value", "expected_error"),
     [
         ("backend", "DEV_MODE", "true", "backend.DEV_MODE"),
+        ("backend", "AGR_PACKAGE_ENV_BOOTSTRAP_MODE", "dynamic", "backend.AGR_PACKAGE_ENV_BOOTSTRAP_MODE"),
+        ("backend", "AGR_PACKAGE_ENV_BOOTSTRAP_MODE", "", "backend.AGR_PACKAGE_ENV_BOOTSTRAP_MODE"),
         ("backend", "DEBUG", "true", "backend.DEBUG"),
         ("backend", "AUTH_PROVIDER", "dev", "backend.AUTH_PROVIDER"),
         ("backend", "SECURE_COOKIES", "false", "backend.SECURE_COOKIES"),
@@ -1494,3 +1497,49 @@ def test_extraction_fanout_contract_covers_every_getter():
 
     getters = {name for name in dir(config) if name.startswith("get_extraction_fanout_")}
     assert getters == {"get_" + key.lower() for key, _, _ in FANOUT_CONTRACT}
+
+
+def test_package_env_bootstrap_settings_have_deployment_parity(monkeypatch):
+    from src.lib.openai_agents import config
+
+    prod_services = _load_compose()["services"]
+    dev_services = _load_dev_compose()["services"]
+    env_example = _load_env_assignments(ENV_EXAMPLE_PATH)
+    standalone_env = _load_env_assignments(ENV_TEMPLATE_PATH)
+
+    for service in ("backend", "benchmark_worker"):
+        assert prod_services[service]["environment"]["AGR_PACKAGE_ENV_BOOTSTRAP_MODE"] == (
+            "${AGR_PACKAGE_ENV_BOOTSTRAP_MODE:-prebuilt}"
+        )
+        assert prod_services[service]["environment"]["AGR_PREBUILT_PACKAGE_ENVS_DIR"] == (
+            "${AGR_PREBUILT_PACKAGE_ENVS_DIR:-/opt/package-envs}"
+        )
+        dev_env = dev_services[service]["environment"]
+        if isinstance(dev_env, list):
+            dev_env = _list_environment(dev_env)
+        assert dev_env["AGR_PACKAGE_ENV_BOOTSTRAP_MODE"] == (
+            "${AGR_PACKAGE_ENV_BOOTSTRAP_MODE:-dynamic}"
+        )
+        assert dev_env["AGR_PREBUILT_PACKAGE_ENVS_DIR"] == (
+            "${AGR_PREBUILT_PACKAGE_ENVS_DIR:-/opt/package-envs}"
+        )
+
+    assert env_example["AGR_PACKAGE_ENV_BOOTSTRAP_MODE"] == "dynamic"
+    assert env_example["AGR_PREBUILT_PACKAGE_ENVS_DIR"] == "/opt/package-envs"
+    assert standalone_env["AGR_PACKAGE_ENV_BOOTSTRAP_MODE"] == "prebuilt"
+    assert standalone_env["AGR_PREBUILT_PACKAGE_ENVS_DIR"] == "/opt/package-envs"
+
+    monkeypatch.delenv("AGR_PACKAGE_ENV_BOOTSTRAP_MODE", raising=False)
+    monkeypatch.delenv("AGR_PREBUILT_PACKAGE_ENVS_DIR", raising=False)
+    assert config.get_package_env_bootstrap_mode() == "dynamic"
+    assert config.get_prebuilt_package_envs_dir() == Path("/opt/package-envs")
+
+    monkeypatch.setenv("AGR_PACKAGE_ENV_BOOTSTRAP_MODE", "prebuilt")
+    monkeypatch.setenv("AGR_PREBUILT_PACKAGE_ENVS_DIR", "/srv/package-envs")
+    assert config.get_package_env_bootstrap_mode() == "prebuilt"
+    assert config.get_prebuilt_package_envs_dir() == Path("/srv/package-envs")
+
+    for invalid in ("", "auto", "fallback"):
+        monkeypatch.setenv("AGR_PACKAGE_ENV_BOOTSTRAP_MODE", invalid)
+        with pytest.raises(ValueError, match="AGR_PACKAGE_ENV_BOOTSTRAP_MODE"):
+            config.get_package_env_bootstrap_mode()

@@ -2,6 +2,7 @@ services:
   backend:
     environment:
       AUTH_PROVIDER: dev
+      AGR_PACKAGE_ENV_BOOTSTRAP_MODE: dynamic
       DEBUG: "true"
       DEV_MODE: "true"
       HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS: "false"

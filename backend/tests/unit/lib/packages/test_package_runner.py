@@ -45,6 +45,8 @@ def _clear_runtime_path_env(monkeypatch):
         "AGR_RUNTIME_PACKAGES_DIR",
         "AGR_RUNTIME_STATE_DIR",
         "AGR_RUNTIME_OVERRIDES_PATH",
+        "AGR_PACKAGE_ENV_BOOTSTRAP_MODE",
+        "AGR_PREBUILT_PACKAGE_ENVS_DIR",
         "PDF_STORAGE_PATH",
         "PDFX_JSON_STORAGE_PATH",
         "PROCESSED_JSON_STORAGE_PATH",
@@ -1651,6 +1653,367 @@ def _write_fake_agents_dependency(tmp_path: Path) -> Path:
 
 def test_production_image_ships_the_backend_lock_for_package_environments():
     dockerfile = (BACKEND_ROOT / "Dockerfile.prod").read_text(encoding="utf-8")
-    runtime_stage = dockerfile.split(" AS runtime", 1)[1]
+    builder_stage, runtime_stage = dockerfile.split(" AS runtime", 1)
+    assert "src.lib.packages.build_package_envs" in builder_stage
+    assert "/opt/package-envs" in builder_stage
+    assert "KNOWN_PTH=" in builder_stage
     assert "WORKDIR /app/backend" in runtime_stage
     assert "requirements.lock.txt ./" in runtime_stage
+    assert "COPY --from=builder /opt/package-envs /opt/package-envs" in runtime_stage
+    assert "AGR_PACKAGE_ENV_BOOTSTRAP_MODE=prebuilt" in runtime_stage
+    assert "AGR_PREBUILT_PACKAGE_ENVS_DIR=/opt/package-envs" in runtime_stage
+
+
+def _stage_locked_demo_package(
+    packages_root: Path,
+    *,
+    requirements_text: str = "demo-dependency==1.0.0\n",
+    lock_text: str | None = (
+        "demo-dependency==1.0.0 \\\n"
+        "    --hash=sha256:" + ("a" * 64) + "\n"
+    ),
+    declare_lock: bool = True,
+):
+    package_dir = packages_root / FIXTURE_PACKAGE_DIR.name
+    shutil.copytree(FIXTURE_PACKAGE_DIR, package_dir)
+    if declare_lock:
+        manifest_path = package_dir / "package.yaml"
+        manifest_text = manifest_path.read_text(encoding="utf-8").replace(
+            "requirements_file: requirements/runtime.txt",
+            "requirements_file: requirements/runtime.txt\nrequirements_lock_file: requirements/runtime.lock.txt",
+        )
+        manifest_path.write_text(manifest_text, encoding="utf-8")
+    (package_dir / "requirements" / "runtime.txt").write_text(
+        requirements_text,
+        encoding="utf-8",
+    )
+    if lock_text is not None:
+        (package_dir / "requirements" / "runtime.lock.txt").write_text(
+            lock_text,
+            encoding="utf-8",
+        )
+    registry = load_package_registry(
+        packages_root,
+        runtime_version="1.5.0",
+        supported_package_api_version="1.0.0",
+    )
+    package = registry.get_package("demo.runner")
+    assert package is not None
+    return package
+
+
+def test_prebuilt_environment_matches_across_different_mount_roots_with_zero_subprocess_calls(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from src.lib.packages.env_manager import PACKAGE_ENV_BOOTSTRAP_MODE_PREBUILT
+
+    build_package = _stage_locked_demo_package(tmp_path / "build" / "packages")
+    runtime_package = _stage_locked_demo_package(tmp_path / "runtime" / "packages")
+    build_constraints = tmp_path / "build" / "requirements.lock.txt"
+    runtime_constraints = tmp_path / "app" / "backend" / "requirements.lock.txt"
+    runtime_constraints.parent.mkdir(parents=True, exist_ok=True)
+    lock_body = "demo-dependency==1.0.0\n"
+    build_constraints.write_text(lock_body, encoding="utf-8")
+    runtime_constraints.write_text(lock_body, encoding="utf-8")
+
+    prebuilt_root = tmp_path / "opt" / "package-envs"
+    builder = PackageEnvironmentManager(
+        host_python=Path(sys.executable),
+        constraints_path=build_constraints,
+    )
+    build_commands: list[tuple[str, list[str]]] = []
+
+    def fake_build_run(command, *, package_id, step):
+        build_commands.append((step, command))
+        if step == "create_venv":
+            py = prebuilt_root / package_id / "venv" / "bin" / "python"
+            py.parent.mkdir(parents=True, exist_ok=True)
+            py.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+
+    monkeypatch.setattr(builder, "_run_command", fake_build_run)
+    built = builder.build_environment(
+        build_package,
+        target_dir=prebuilt_root / build_package.package_id,
+    )
+    assert [step for step, _ in build_commands] == [
+        "create_venv",
+        "install_requirements",
+        "verify_requirements",
+    ]
+    install_cmd = build_commands[1][1]
+    assert "--require-hashes" in install_cmd
+    assert "--no-deps" in install_cmd
+    assert "--no-build-isolation" in install_cmd
+    assert install_cmd[-2:] == [
+        "-r",
+        str(build_package.package_path / "requirements" / "runtime.lock.txt"),
+    ]
+
+    # Now verify from a completely different mount root in prebuilt mode with ZERO subprocesses.
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime-state-root"))
+    monkeypatch.setenv("AGR_PACKAGE_ENV_BOOTSTRAP_MODE", "prebuilt")
+    monkeypatch.setenv("AGR_PREBUILT_PACKAGE_ENVS_DIR", str(prebuilt_root))
+    runtime_manager = PackageEnvironmentManager(constraints_path=runtime_constraints)
+
+    def forbid_subprocess(*args, **kwargs):
+        raise AssertionError(f"Prebuilt mode must never invoke subprocess: {args} {kwargs}")
+
+    monkeypatch.setattr(subprocess, "run", forbid_subprocess)
+    verified = runtime_manager.ensure_environment(runtime_package)
+
+    assert verified.reused is True
+    assert verified.mode == PACKAGE_ENV_BOOTSTRAP_MODE_PREBUILT
+    assert verified.fingerprint == built.fingerprint
+    assert verified.venv_dir == prebuilt_root / "demo.runner" / "venv"
+    assert verified.python_executable == prebuilt_root / "demo.runner" / "venv" / "bin" / "python"
+    assert not (tmp_path / "runtime-state-root" / "state" / "package_runner").exists()
+
+
+@pytest.mark.parametrize(
+    "failure_case,expected_fragment",
+    [
+        ("missing_dir", "metadata missing or invalid"),
+        ("missing_python", "interpreter missing"),
+        ("corrupt_metadata", "metadata missing or invalid"),
+        ("wrong_package_id", "package_id mismatch"),
+        ("mutated_lock", "fingerprint mismatch"),
+        ("mutated_requirements", "fingerprint mismatch"),
+        ("mutated_constraints", "fingerprint mismatch"),
+    ],
+)
+def test_prebuilt_mode_fails_loudly_without_download_fallback(
+    monkeypatch,
+    tmp_path: Path,
+    failure_case: str,
+    expected_fragment: str,
+):
+    from src.lib.packages.env_manager import PackageEnvironmentBootstrapError
+
+    package = _stage_locked_demo_package(tmp_path / "runtime" / "packages")
+    constraints = tmp_path / "requirements.lock.txt"
+    constraints.write_text("demo-dependency==1.0.0\n", encoding="utf-8")
+    prebuilt_root = tmp_path / "opt" / "package-envs"
+
+    if failure_case != "missing_dir":
+        builder = PackageEnvironmentManager(
+            host_python=Path(sys.executable),
+            constraints_path=constraints,
+        )
+
+        def fake_build_run(command, *, package_id, step):
+            if step == "create_venv":
+                py = prebuilt_root / package_id / "venv" / "bin" / "python"
+                py.parent.mkdir(parents=True, exist_ok=True)
+                py.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+
+        monkeypatch.setattr(builder, "_run_command", fake_build_run)
+        builder.build_environment(
+            package,
+            target_dir=prebuilt_root / package.package_id,
+        )
+
+    metadata_path = prebuilt_root / "demo.runner" / "environment.json"
+    python_path = prebuilt_root / "demo.runner" / "venv" / "bin" / "python"
+    if failure_case == "missing_python":
+        python_path.unlink()
+    elif failure_case == "corrupt_metadata":
+        metadata_path.write_text("{not-json", encoding="utf-8")
+    elif failure_case == "wrong_package_id":
+        meta = json.loads(metadata_path.read_text(encoding="utf-8"))
+        meta["package_id"] = "other.pkg"
+        metadata_path.write_text(json.dumps(meta), encoding="utf-8")
+    elif failure_case == "mutated_lock":
+        (package.package_path / "requirements" / "runtime.lock.txt").write_text(
+            "demo-dependency==2.0.0 \\\n    --hash=sha256:" + ("b" * 64) + "\n",
+            encoding="utf-8",
+        )
+    elif failure_case == "mutated_requirements":
+        (package.package_path / "requirements" / "runtime.txt").write_text(
+            "demo-dependency==2.0.0\n",
+            encoding="utf-8",
+        )
+    elif failure_case == "mutated_constraints":
+        constraints.write_text("demo-dependency==2.0.0\n", encoding="utf-8")
+
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime-state-root"))
+    monkeypatch.setenv("AGR_PACKAGE_ENV_BOOTSTRAP_MODE", "prebuilt")
+    monkeypatch.setenv("AGR_PREBUILT_PACKAGE_ENVS_DIR", str(prebuilt_root))
+    manager = PackageEnvironmentManager(constraints_path=constraints)
+
+    def forbid_subprocess(*args, **kwargs):
+        raise AssertionError(f"Prebuilt mode must never fall back to pip/venv: {args} {kwargs}")
+
+    monkeypatch.setattr(subprocess, "run", forbid_subprocess)
+    with pytest.raises(PackageEnvironmentBootstrapError, match=expected_fragment):
+        manager.ensure_environment(package)
+    assert not (tmp_path / "runtime-state-root" / "state" / "package_runner").exists()
+
+
+def test_dynamic_mode_uses_hashed_lockfile_and_fails_when_declared_lock_is_missing(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from src.lib.packages.env_manager import PackageEnvironmentBootstrapError
+
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime"))
+    constraints = tmp_path / "requirements.lock.txt"
+    constraints.write_text("demo-dependency==1.0.0\n", encoding="utf-8")
+    package = _stage_locked_demo_package(tmp_path / "packages-locked")
+    manager, commands = _recording_manager(monkeypatch, constraints)
+
+    env = manager.ensure_environment(package)
+    assert env.reused is False
+    install_cmd = commands[-1]
+    assert "--require-hashes" in install_cmd
+    assert "--no-deps" in install_cmd
+    assert "--no-build-isolation" in install_cmd
+    assert install_cmd[-2:] == [
+        "-r",
+        str(package.package_path / "requirements" / "runtime.lock.txt"),
+    ]
+
+    # Missing declared lockfile must fail loudly without falling back to runtime.txt.
+    missing_lock_pkg = _stage_locked_demo_package(
+        tmp_path / "packages-missing-lock",
+        lock_text=None,
+        declare_lock=True,
+    )
+    commands.clear()
+    with pytest.raises(PackageEnvironmentBootstrapError, match="Requirements lockfile not found"):
+        manager.ensure_environment(missing_lock_pkg)
+    assert commands == []
+
+
+def test_build_package_environments_cli_requires_hashed_lock_and_skips_non_tool_packages(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from src.lib.packages import build_package_envs
+    from src.lib.packages.env_manager import PackageEnvironmentBootstrapError
+
+    packages_root = tmp_path / "packages"
+    shutil.copytree(REPO_ROOT / "packages" / "core", packages_root / "core")
+    _stage_locked_demo_package(
+        packages_root,
+        requirements_text="demo-dependency==1.0.0\n",
+        lock_text=None,
+        declare_lock=False,
+    )
+    constraints = tmp_path / "requirements.lock.txt"
+    constraints.write_text("demo-dependency==1.0.0\n", encoding="utf-8")
+    output_dir = tmp_path / "out-envs"
+
+    with pytest.raises(PackageEnvironmentBootstrapError, match="requires a hashed requirements_lock_file"):
+        build_package_envs.build_package_environments(
+            packages_dir=packages_root,
+            output_dir=output_dir,
+            constraints_path=constraints,
+            host_python=Path(sys.executable),
+        )
+
+    # Empty requirements + no tool bindings (core) plus empty-requirements tool package succeeds.
+    shutil.rmtree(packages_root / "demo_runner")
+    _stage_locked_demo_package(
+        packages_root,
+        requirements_text="# no runtime deps\n",
+        lock_text=None,
+        declare_lock=False,
+    )
+    commands: list[tuple[str, list[str]]] = []
+
+    def fake_run(self, command, *, package_id, step):
+        commands.append((step, command))
+        if step == "create_venv":
+            py = output_dir / package_id / "venv" / "bin" / "python"
+            py.parent.mkdir(parents=True, exist_ok=True)
+            py.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+
+    monkeypatch.setattr(PackageEnvironmentManager, "_run_command", fake_run)
+    built = build_package_envs.build_package_environments(
+        packages_dir=packages_root,
+        output_dir=output_dir,
+        constraints_path=constraints,
+        host_python=Path(sys.executable),
+    )
+    assert [env.package_id for env in built] == ["demo.runner"]
+    assert not (output_dir / "agr.core").exists()
+    assert [step for step, _ in commands] == ["create_venv", "verify_requirements"]
+
+
+def test_alliance_hashed_lockfile_matches_backend_lock_and_pins_all_entries():
+    import re
+    from packaging.utils import canonicalize_name
+    from packaging.version import Version
+    from src.lib.packages.manifest_loader import load_package_manifest
+
+    alliance_dir = REPO_ROOT / "packages" / "alliance"
+    manifest = load_package_manifest(alliance_dir / "package.yaml")
+    assert manifest.requirements_lock_file == "requirements/runtime.lock.txt"
+
+    lock_path = alliance_dir / manifest.requirements_lock_file
+    assert lock_path.is_file()
+
+    # Join backslash-continued logical entries.
+    logical_entries: list[str] = []
+    current = ""
+    for raw_line in lock_path.read_text(encoding="utf-8").splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            assert not current, f"Unfinished continuation before comment/blank line: {current}"
+            continue
+        if stripped.endswith("\\"):
+            current = f"{current} {stripped[:-1].strip()}".strip()
+        else:
+            current = f"{current} {stripped}".strip()
+            logical_entries.append(current)
+            current = ""
+    assert not current, f"Dangling line continuation at EOF: {current}"
+    assert logical_entries, "runtime.lock.txt must not be empty"
+
+    hash_pattern = re.compile(r"^--hash=sha256:[0-9a-f]{64}$")
+    pkg_pins: dict[str, str] = {}
+    for entry in logical_entries:
+        tokens = entry.split()
+        spec_token = tokens[0]
+        hash_tokens = tokens[1:]
+        assert "==" in spec_token, f"Unpinned entry in runtime.lock.txt: {spec_token}"
+        req = Requirement(spec_token)
+        assert len(req.specifier) == 1 and next(iter(req.specifier)).operator == "==", (
+            f"Entry must use exact == pin: {spec_token}"
+        )
+        assert req.url is None, f"URL requirement not allowed in hashed lock: {spec_token}"
+        assert hash_tokens, f"Missing --hash=sha256:... for {spec_token}"
+        for token in hash_tokens:
+            assert hash_pattern.fullmatch(token), f"Invalid hash token {token!r} on {spec_token}"
+        canonical = canonicalize_name(req.name)
+        assert canonical not in pkg_pins, f"Duplicate entry in runtime.lock.txt: {req.name}"
+        pkg_pins[canonical] = next(iter(req.specifier)).version
+
+    # Zero version drift against backend/requirements.lock.txt for every shared package.
+    backend_pins: dict[str, str] = {}
+    for raw_line in (BACKEND_ROOT / "requirements.lock.txt").read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        req = Requirement(line)
+        backend_pins[canonicalize_name(req.name)] = next(iter(req.specifier)).version
+
+    drift = {
+        name: (pkg_ver, backend_pins[name])
+        for name, pkg_ver in pkg_pins.items()
+        if name in backend_pins and pkg_ver != backend_pins[name]
+    }
+    assert drift == {}, f"Shared package version drift vs backend/requirements.lock.txt: {drift}"
+
+    # Every direct requirement in runtime.txt is present in runtime.lock.txt and satisfies its specifier.
+    for raw_line in (alliance_dir / "requirements" / "runtime.txt").read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        req = Requirement(line)
+        canonical = canonicalize_name(req.name)
+        assert canonical in pkg_pins, f"Direct requirement {req.name} missing from runtime.lock.txt"
+        assert Version(pkg_pins[canonical]) in req.specifier, (
+            f"{req.name}=={pkg_pins[canonical]} violates {req}"
+        )

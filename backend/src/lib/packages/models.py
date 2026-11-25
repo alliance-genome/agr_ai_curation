@@ -244,6 +244,7 @@ class PackageManifest(BaseModel):
     max_runtime_version: str
     python_package_root: str = Field(min_length=1)
     requirements_file: str = Field(min_length=1)
+    requirements_lock_file: str | None = Field(default=None, min_length=1)
     dependencies: list[PackageDependency] = Field(default_factory=list)
     exports: list[PackageExport] = Field(min_length=1)
 
@@ -317,6 +318,13 @@ class PackageManifest(BaseModel):
     @field_validator("python_package_root", "requirements_file")
     @classmethod
     def _validate_manifest_paths(cls, value: str, info) -> str:
+        return _validate_relative_package_path(value, info.field_name)
+
+    @field_validator("requirements_lock_file")
+    @classmethod
+    def _validate_optional_manifest_paths(cls, value: str | None, info) -> str | None:
+        if value is None:
+            return None
         return _validate_relative_package_path(value, info.field_name)
 
     @model_validator(mode="after")
