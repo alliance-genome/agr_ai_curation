@@ -18,10 +18,27 @@ class StoredPathOutsideOwnerStorage(PermissionError):
 def owner_storage_path(path: Path, storage_root: Path, owner_subject: str) -> Path:
     """The resolved path, or ``StoredPathOutsideOwnerStorage`` when it leaves the owner's folder."""
 
-    if not owner_subject or "/" in owner_subject or owner_subject in {".", ".."}:
+    if (
+        not owner_subject
+        or "/" in owner_subject
+        or "\\" in owner_subject
+        or "\x00" in owner_subject
+        or owner_subject in {".", ".."}
+        or Path(owner_subject).name != owner_subject
+    ):
         raise StoredPathOutsideOwnerStorage("The owner's subject cannot name a storage folder")
+    resolved_root = storage_root.resolve()
+    owner_entry = resolved_root / owner_subject
+    if owner_entry.is_symlink():
+        raise StoredPathOutsideOwnerStorage("The owner's storage folder cannot be a symlink")
+    owner_root = owner_entry.resolve()
+    try:
+        owner_root.relative_to(resolved_root)
+    except ValueError:
+        raise StoredPathOutsideOwnerStorage("The owner's storage folder resolves outside storage root") from None
+    if owner_root != owner_entry:
+        raise StoredPathOutsideOwnerStorage("The owner's storage folder resolves outside storage root")
     resolved = path.resolve()
-    owner_root = (storage_root.resolve() / owner_subject).resolve()
     try:
         resolved.relative_to(owner_root)
     except ValueError:

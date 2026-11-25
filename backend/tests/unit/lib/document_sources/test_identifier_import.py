@@ -2572,3 +2572,155 @@ async def test_post_commit_import_compensation_reports_one_sanitized_sentry_even
     }
     assert doc_id not in repr(report_mock.call_args)
     assert secret_detail not in repr(report_mock.call_args)
+
+
+@pytest.mark.asyncio
+async def test_committed_import_compensation_cancel_before_file_removal_submission_aborts_cleanly(
+    tmp_path, monkeypatch,
+):
+    """Cancellation arriving after create_task schedules compensation but before file-worker submission deletes nothing."""
+    import asyncio
+    from contextlib import asynccontextmanager
+    from unittest.mock import MagicMock
+    from uuid import uuid4
+
+    doc_id = str(uuid4())
+    staged_dir = tmp_path / "user-1" / doc_id
+    staged_dir.mkdir(parents=True)
+    staged_pdf = staged_dir / "paper.pdf"
+    staged_pdf.write_bytes(b"%PDF-1.7\n")
+
+    lock_events: list[str] = []
+    file_removal_calls = 0
+    delete_doc_mock = AsyncMock()
+    sql_delete_calls = 0
+
+    @asynccontextmanager
+    async def _lock(_doc_id):
+        lock_events.append("acquired")
+        try:
+            yield object()
+        finally:
+            lock_events.append("released")
+
+    service = IdentifierImportService(
+        upload_execution_service=MagicMock(),
+        session_factory=lambda: _FakeSession(),
+        storage_path_provider=lambda: tmp_path,
+        delete_document_fn=delete_doc_mock,
+        paper_operation_lock_fn=_lock,
+        get_active_job_fn=lambda **_kw: None,
+    )
+
+    def _unexpected_file_removal(**_kw):
+        nonlocal file_removal_calls
+        file_removal_calls += 1
+        return True
+
+    def _unexpected_sql_delete(**_kw):
+        nonlocal sql_delete_calls
+        sql_delete_calls += 1
+
+    monkeypatch.setattr(service, "_remove_committed_paper_files", _unexpected_file_removal)
+    monkeypatch.setattr(service, "_delete_committed_sql_row", _unexpected_sql_delete)
+
+    task_holder: list[asyncio.Task] = []
+    real_create_task = asyncio.create_task
+    cancelled_at_guarded = False
+
+    def _cancel_on_guarded_schedule(coro, *args, **kwargs):
+        nonlocal cancelled_at_guarded
+        created = real_create_task(coro, *args, **kwargs)
+        if getattr(coro, "__name__", None) == "_guarded" and not cancelled_at_guarded and task_holder:
+            cancelled_at_guarded = True
+            task_holder[0].cancel("cancelled before file-worker submission")
+        return created
+
+    monkeypatch.setattr("src.lib.document_cleanup.asyncio.create_task", _cancel_on_guarded_schedule)
+
+    comp_task = real_create_task(
+        service._compensate_partial_import(
+            user_sub="user-1",
+            document_id=doc_id,
+            saved_path=staged_pdf,
+            weaviate_document_created=True,
+            sql_record_committed=True,
+        )
+    )
+    task_holder.append(comp_task)
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(comp_task, timeout=5)
+
+    assert cancelled_at_guarded is True
+    assert file_removal_calls == 0
+    assert delete_doc_mock.await_count == 0
+    assert sql_delete_calls == 0
+    assert staged_pdf.exists()
+    assert lock_events == ["acquired", "released"]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_identifier_import_staged_cleanup_failure_reports_sanitized_sentry_event(
+    tmp_path, monkeypatch,
+):
+    """Duplicate-paper staged cleanup failure during identifier import reports once via sanitized Sentry reporter."""
+    from unittest.mock import MagicMock, Mock
+    from uuid import uuid4
+    from src.lib.document_sources import identifier_import as module
+
+    existing_doc = SimpleNamespace(id=uuid4(), filename="existing.pdf")
+    report_mock = Mock(return_value=True)
+    monkeypatch.setattr("src.lib.document_cleanup.runtime.report_runtime_exception", report_mock)
+    monkeypatch.setattr(module, "_cleanup_saved_pdf", lambda *_a, **_kw: False)
+
+    class _DupSession:
+        def execute(self, *_a, **_kw):
+            return SimpleNamespace(scalars=lambda: SimpleNamespace(first=lambda: existing_doc))
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    service = IdentifierImportService(
+        upload_execution_service=MagicMock(),
+        session_factory=lambda: _DupSession(),
+        storage_path_provider=lambda: tmp_path,
+        principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        provider_factory=_FakeProvider,
+        create_document_fn=AsyncMock(return_value={"success": True}),
+        get_document_fn=AsyncMock(return_value={"document": {"id": str(existing_doc.id)}}),
+        find_existing_source_document_fn=lambda *_a, **_kw: None,
+        import_batch_limit_provider=lambda: 10,
+    )
+
+    response = await service.import_identifiers(
+        background_tasks=BackgroundTasks(),
+        identifiers="PMID:123",
+        user={"sub": "user-1"},
+        document_source_context=DocumentSourceRequestContext(
+            bearer_kind=ProviderBearerKind.CURATOR,
+            provider_groups=("FBStaff",),
+            authorized_group_ids=("FB",),
+            curator_token="curator-token",
+        ),
+    )
+
+    assert response.results[0].status == "duplicate"
+    report_mock.assert_called_once()
+    kwargs = report_mock.call_args.kwargs
+    assert kwargs["component"] == "document_sources"
+    assert kwargs["operation"] == "intake_compensation_file_cleanup_failed"
+    assert kwargs["context"]["sql_committed"] is False
+    assert kwargs["context"]["weaviate_retained"] is False
+    assert kwargs["context"]["document_id_hash"].startswith("sha256:")
+    assert kwargs["fingerprint"] == [
+        "intake_compensation_file_cleanup_failed",
+        "document_sources",
+        "pre_commit",
+    ]
+    assert kwargs["include_request"] is False
+    assert str(existing_doc.id) not in repr(report_mock.call_args)

@@ -184,6 +184,7 @@ async def run_thread_drained(
     /,
     *args: Any,
     cancellable_before_start: bool = True,
+    on_submit: Callable[[], None] | None = None,
     **kwargs: Any,
 ) -> _T:
     """Submit ``func`` to the default executor and always drain it before returning on cancellation.
@@ -191,7 +192,8 @@ async def run_thread_drained(
     Ensures no worker thread continues executing SQL on a borrowed ``paper_operation_lock``
     connection concurrently with ``_release`` closing that connection. When
     ``cancellable_before_start`` is True, delivers any already-pending cancellation before
-    submitting the worker.
+    submitting the worker. When ``on_submit`` is provided, invokes it synchronously
+    immediately after submitting the worker with no intervening ``await``.
     """
     if cancellable_before_start:
         await asyncio.sleep(0)
@@ -202,6 +204,8 @@ async def run_thread_drained(
         return ctx.run(func, *args, **kwargs)
 
     worker_future = loop.run_in_executor(None, _invoke)
+    if on_submit is not None:
+        on_submit()
 
     async def _await_worker() -> _T:
         return await worker_future

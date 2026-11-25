@@ -2408,6 +2408,154 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+@pytest.mark.parametrize("failure_step", ["stored_files", "sql_cleanup"])
+def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_without_request_url(
+    failure_step,
+):
+    """Non-cancelled HTTP stored_files/sql_cleanup failures emit 1 sanitized Sentry event, no request.url, and HTTP 500."""
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent(f"""
+        import asyncio
+        from contextlib import contextmanager
+        import logging
+        import os
+        import tempfile
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        os.environ["SENTRY_CONTENT_REDACTION_ENABLED"] = "false"
+
+        import sentry_sdk
+        from sentry_sdk.integrations.logging import LoggingIntegration
+        from fastapi import HTTPException
+
+        from src.api import documents
+        from src.lib.observability.sentry import before_send, hash_sentry_identifier
+        from src.lib.weaviate_client import documents as weaviate_docs
+        import src.models.sql.database as sql_db
+
+        doc_id = "22222222-3333-4444-5555-666666666666"
+        secret_detail = "private-db-constraint-value-secret"
+        events = []
+
+        logging.basicConfig(level=logging.INFO)
+        sentry_sdk.init(
+            dsn="http://public@example.invalid/1",
+            transport=events.append,
+            before_send=before_send,
+            include_local_variables=False,
+            default_integrations=False,
+            integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+        )
+
+        def _attach_request_url(event, _hint):
+            event["request"] = {{"url": f"https://example.invalid/weaviate/documents/{{doc_id}}"}}
+            return event
+
+        sentry_sdk.get_global_scope().add_event_processor(_attach_request_url)
+
+        class _LockConn:
+            def execute(self, *_a, **_kw):
+                return SimpleNamespace(scalar_one=lambda: True)
+            def commit(self):
+                pass
+            def close(self):
+                pass
+            def invalidate(self):
+                pass
+
+        sql_db.engine = SimpleNamespace(connect=lambda: _LockConn())
+
+        class _Session:
+            def __init__(self, doc=None, *, fail_on_delete=False):
+                self._doc = doc
+                self._fail_on_delete = fail_on_delete
+            def execute(self, *_a, **_kw):
+                return SimpleNamespace(
+                    scalars=lambda: SimpleNamespace(first=lambda: self._doc),
+                    scalar_one_or_none=lambda: self._doc,
+                )
+            def delete(self, _row):
+                if self._fail_on_delete:
+                    raise RuntimeError(f"{{secret_detail}} {{doc_id}}")
+            def commit(self):
+                pass
+            def rollback(self):
+                pass
+            def close(self):
+                pass
+
+        main_file = SimpleNamespace(
+            id="f1", role="main", status="ready", display_mode="local_pdf",
+            file_path=None, pdfx_json_path=None, processed_json_path=None, source_markdown_path=None,
+        )
+        paper = SimpleNamespace(
+            id=doc_id, user_id=42, document_kind="library",
+            main_file=main_file, main_file_or_none=main_file, files=[main_file],
+        )
+        sessions = [
+            _Session(),
+            _Session(paper),
+            _Session(paper),
+            _Session(paper, fail_on_delete=({failure_step!r} == "sql_cleanup")),
+        ]
+        documents.SessionLocal = lambda: sessions.pop(0)
+        documents.provision_user_async = lambda _p: asyncio.sleep(0, result=SimpleNamespace(id=42))
+        documents.verify_document_ownership = lambda *_a, **_kw: SimpleNamespace(id=doc_id, user_id=42)
+        documents.get_document = lambda *_a, **_kw: asyncio.sleep(0, result={{"document": {{"processing_status": "completed"}}}})
+        documents.pdf_job_service.get_latest_job_for_document = lambda **_kw: None
+        documents.pipeline_tracker.get_pipeline_status = lambda *_a, **_kw: asyncio.sleep(0, result=None)
+        documents.cleanup_document_curation_dependencies = lambda *_a, **_kw: {{}}
+        if {failure_step!r} == "stored_files":
+            def _boom_files(*_a, **_kw):
+                raise RuntimeError(f"{{secret_detail}} {{doc_id}}")
+            documents.remove_stored_files = _boom_files
+
+        @contextmanager
+        def _weaviate_session(*_a, **_kw):
+            yield MagicMock()
+
+        conn = MagicMock()
+        conn.session.side_effect = _weaviate_session
+        chunks, papers = MagicMock(), MagicMock()
+        chunks.data.delete_many.return_value = SimpleNamespace(successful=2, matches=2, failed=0)
+        papers.data.delete_by_id.return_value = True
+        weaviate_docs.get_connection = lambda: conn
+        weaviate_docs.get_user_collections = lambda *_a: (chunks, papers)
+
+        async def _exercise():
+            with tempfile.TemporaryDirectory() as tmp:
+                documents.get_pdf_storage_path = lambda: tmp
+                try:
+                    await documents.delete_document_endpoint(doc_id, {{"sub": "user-1"}})
+                except HTTPException as exc:
+                    assert exc.status_code == 500
+                    assert exc.detail == "Failed to delete document"
+                else:
+                    raise AssertionError("expected HTTPException 500")
+
+        asyncio.run(_exercise())
+
+        assert len(events) == 1, f"expected 1 Sentry event, got {{len(events)}}: {{events!r}}"
+        event = events[0]
+        assert "request" not in event, f"request leaked: {{event.get('request')!r}}"
+        assert doc_id not in repr(event), f"raw doc_id leaked: {{event!r}}"
+        assert secret_detail not in repr(event), f"secret leaked: {{event!r}}"
+        assert event["contexts"]["runtime_exception"] == {{
+            "component": "documents",
+            "operation": "paper_delete_cleanup_failed",
+            "document_id_hash": hash_sentry_identifier(doc_id),
+            "step": {failure_step!r},
+            "exception_type": "RuntimeError",
+        }}
+    """)
+    result = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 @pytest.mark.asyncio
 async def test_status_endpoint_returns_404_when_document_missing(monkeypatch):
     monkeypatch.setattr(documents, "SessionLocal", lambda: _FakeSession())

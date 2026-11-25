@@ -1011,7 +1011,12 @@ def is_waiting_supplement_stage(job: PdfJobResponse | None) -> bool:
     )
 
 
-def end_supplement_wait_for_delete(*, document_id: UUID | str, user_id: int) -> bool:
+def end_supplement_wait_for_delete(
+    *,
+    document_id: UUID | str,
+    user_id: int,
+    connection: object | None = None,
+) -> bool:
     """A delete of the paper ends its supplement stage while it only waits for the provider.
 
     Finalizes the paper's active supplement-wait job as cancelled (the stage then
@@ -1020,7 +1025,7 @@ def end_supplement_wait_for_delete(*, document_id: UUID | str, user_id: int) -> 
     """
     from src.lib.document_files.paper_lock import open_paper_lock_session
 
-    bound_session = open_paper_lock_session()
+    bound_session = open_paper_lock_session(connection)
     session = bound_session if bound_session is not None else SessionLocal()
     try:
         job = session.execute(
@@ -1090,9 +1095,16 @@ def get_latest_job_for_document(
     document_id: UUID | str,
     user_id: int,
     reconcile_stale: bool = True,
+    connection: object | None = None,
 ) -> Optional[PdfJobResponse]:
     """Return the most recent job of any kind for a document owned by user (the delete's check)."""
-    return _latest_job(document_id=document_id, user_id=user_id, reconcile_stale=reconcile_stale, paper_jobs_only=False)
+    return _latest_job(
+        document_id=document_id,
+        user_id=user_id,
+        reconcile_stale=reconcile_stale,
+        paper_jobs_only=False,
+        connection=connection,
+    )
 
 
 def get_latest_paper_job_for_document(
@@ -1100,13 +1112,20 @@ def get_latest_paper_job_for_document(
     document_id: UUID | str,
     user_id: int,
     reconcile_stale: bool = True,
+    connection: object | None = None,
 ) -> Optional[PdfJobResponse]:
     """The most recent job that processes the paper itself: jobs adding files to it are left out.
 
     Every reading of a paper's processing status uses this one, so an add (running,
     failed or cancelled) never shows the paper as processing, failed or cancelled.
     """
-    return _latest_job(document_id=document_id, user_id=user_id, reconcile_stale=reconcile_stale, paper_jobs_only=True)
+    return _latest_job(
+        document_id=document_id,
+        user_id=user_id,
+        reconcile_stale=reconcile_stale,
+        paper_jobs_only=True,
+        connection=connection,
+    )
 
 
 def _latest_job(
@@ -1115,10 +1134,11 @@ def _latest_job(
     user_id: int,
     reconcile_stale: bool,
     paper_jobs_only: bool,
+    connection: object | None = None,
 ) -> Optional[PdfJobResponse]:
     from src.lib.document_files.paper_lock import open_paper_lock_session
 
-    bound_session = open_paper_lock_session()
+    bound_session = open_paper_lock_session(connection)
     session = bound_session if bound_session is not None else SessionLocal()
     try:
         statement = (

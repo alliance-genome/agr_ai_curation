@@ -450,7 +450,18 @@ def remove_staged_paper_artifacts(
             or Path(document_id).name != document_id
         ):
             return False
-        owner_root = owner_storage_path(base_storage / user_sub, base_storage, user_sub)
+        resolved_base = base_storage.resolve()
+        owner_entry = resolved_base / user_sub
+        if owner_entry.is_symlink():
+            logger.warning(
+                "Refusing to remove staged PDF artifacts through symlinked owner folder",
+                extra={"sentry_skip_event": True},
+            )
+            return False
+        owner_root = owner_storage_path(owner_entry, resolved_base, user_sub)
+        owner_root.relative_to(resolved_base)
+        if owner_root != owner_entry:
+            return False
         expected_dir = owner_root / document_id
         if expected_dir.is_symlink():
             return False

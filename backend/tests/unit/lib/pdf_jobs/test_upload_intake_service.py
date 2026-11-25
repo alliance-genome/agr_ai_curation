@@ -2651,3 +2651,186 @@ def test_intake_upload_compensation_reports_one_sanitized_sentry_event_when_dele
     """)
     result = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.asyncio
+async def test_committed_compensation_cancel_before_file_removal_submission_aborts_cleanly(
+    tmp_path, monkeypatch,
+):
+    """Cancellation arriving after create_task schedules compensation but before file-worker submission deletes nothing."""
+    import asyncio
+    from contextlib import asynccontextmanager
+
+    doc_id = str(uuid4())
+    staged_dir = tmp_path / "user-1" / doc_id
+    staged_dir.mkdir(parents=True)
+    staged_pdf = staged_dir / "paper.pdf"
+    staged_pdf.write_bytes(b"%PDF-1.7\n")
+
+    lock_events: list[str] = []
+    file_removal_calls = 0
+    delete_doc_mock = AsyncMock()
+    sql_delete_calls = 0
+
+    @asynccontextmanager
+    async def _lock(_doc_id):
+        lock_events.append("acquired")
+        try:
+            yield object()
+        finally:
+            lock_events.append("released")
+
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: _FakeSession(),
+        storage_path_provider=lambda: tmp_path,
+        delete_document_fn=delete_doc_mock,
+        paper_operation_lock_fn=_lock,
+        get_active_job_fn=lambda **_kw: None,
+    )
+
+    def _unexpected_file_removal(**_kw):
+        nonlocal file_removal_calls
+        file_removal_calls += 1
+        return True
+
+    def _unexpected_sql_delete(**_kw):
+        nonlocal sql_delete_calls
+        sql_delete_calls += 1
+
+    monkeypatch.setattr(service, "_remove_committed_paper_files", _unexpected_file_removal)
+    monkeypatch.setattr(service, "_delete_committed_sql_row", _unexpected_sql_delete)
+
+    task_holder: list[asyncio.Task] = []
+    real_create_task = asyncio.create_task
+    cancelled_at_guarded = False
+
+    def _cancel_on_guarded_schedule(coro, *args, **kwargs):
+        nonlocal cancelled_at_guarded
+        created = real_create_task(coro, *args, **kwargs)
+        if getattr(coro, "__name__", None) == "_guarded" and not cancelled_at_guarded and task_holder:
+            cancelled_at_guarded = True
+            task_holder[0].cancel("cancelled before file-worker submission")
+        return created
+
+    monkeypatch.setattr("src.lib.document_cleanup.asyncio.create_task", _cancel_on_guarded_schedule)
+
+    comp_task = real_create_task(
+        service._compensate_job_creation_failure(
+            user_sub="user-1",
+            document_id=doc_id,
+            saved_path=staged_pdf,
+            weaviate_document_created=True,
+        )
+    )
+    task_holder.append(comp_task)
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(comp_task, timeout=5)
+
+    assert cancelled_at_guarded is True
+    assert file_removal_calls == 0
+    assert delete_doc_mock.await_count == 0
+    assert sql_delete_calls == 0
+    assert staged_pdf.exists()
+    assert lock_events == ["acquired", "released"]
+
+
+def test_staged_cleanup_refuses_symlinked_owner_directory_pointing_outside_storage(tmp_path):
+    """A symlinked owner directory escaping base_storage must never be traversed or removed."""
+    from src.lib.document_files.storage_paths import StoredPathOutsideOwnerStorage, owner_storage_path
+
+    base_storage = tmp_path / "storage"
+    base_storage.mkdir()
+    outside_target = tmp_path / "outside"
+    doc_id = str(uuid4())
+    outside_doc_dir = outside_target / doc_id
+    outside_doc_dir.mkdir(parents=True)
+    outside_pdf = outside_doc_dir / "paper.pdf"
+    outside_pdf.write_bytes(b"%PDF-1.7\n")
+    outside_keep = outside_doc_dir / "keep.txt"
+    outside_keep.write_text("do not delete")
+
+    owner_link = base_storage / "user-1"
+    owner_link.symlink_to(outside_target, target_is_directory=True)
+    staged_via_link = owner_link / doc_id / "paper.pdf"
+
+    with pytest.raises(StoredPathOutsideOwnerStorage):
+        owner_storage_path(staged_via_link, base_storage, "user-1")
+
+    removed = UploadIntakeService._cleanup_saved_file_artifacts(
+        staged_via_link,
+        base_storage=base_storage,
+        user_sub="user-1",
+        document_id=doc_id,
+    )
+
+    assert removed is False
+    assert outside_pdf.exists()
+    assert outside_keep.exists()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_upload_staged_cleanup_failure_reports_sanitized_sentry_event(
+    tmp_path, monkeypatch,
+):
+    """Duplicate-paper staged cleanup failure reports once via sanitized Sentry reporter while raising duplicate."""
+    from datetime import datetime, timezone
+    from src.lib.observability.sentry import hash_sentry_identifier
+    from src.lib.pdf_jobs import upload_intake_service as module
+
+    doc_id = str(uuid4())
+    existing_doc = SimpleNamespace(
+        id=uuid4(),
+        filename="existing.pdf",
+        status="completed",
+        upload_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    report_mock = Mock(return_value=True)
+    monkeypatch.setattr("src.lib.document_cleanup.runtime.report_runtime_exception", report_mock)
+    monkeypatch.setattr(module.UploadIntakeService, "_cleanup_saved_file_artifacts", classmethod(lambda cls, *_a, **_kw: False))
+
+    class _FixedIdHandler:
+        def __init__(self, storage_path: Path):
+            self.storage_path = storage_path
+
+        async def save_uploaded_pdf(self, file):
+            doc_dir = self.storage_path / doc_id
+            doc_dir.mkdir(parents=True, exist_ok=True)
+            path = doc_dir / file.filename
+            path.write_bytes(b"%PDF-1.7")
+            return path, SimpleNamespace(
+                id=doc_id,
+                filename=file.filename,
+                metadata=SimpleNamespace(checksum="dup-chk-1", page_count=1),
+            )
+
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: _FakeSession(execute_row=existing_doc),
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda sp: _FixedIdHandler(sp),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        get_document_fn=AsyncMock(return_value={"document": {"id": str(existing_doc.id)}}),
+    )
+
+    with pytest.raises(UploadIntakeDuplicateError):
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
+    report_mock.assert_called_once()
+    assert report_mock.call_args.kwargs == {
+        "component": "pdf_jobs",
+        "operation": "intake_compensation_file_cleanup_failed",
+        "context": {
+            "document_id_hash": hash_sentry_identifier(doc_id),
+            "sql_committed": False,
+            "weaviate_retained": False,
+        },
+        "fingerprint": ["intake_compensation_file_cleanup_failed", "pdf_jobs", "pre_commit"],
+        "include_request": False,
+    }

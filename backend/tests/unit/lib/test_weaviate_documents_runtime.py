@@ -1631,3 +1631,49 @@ async def test_get_document_parses_chunk_metadata_without_retired_detail_fields(
     assert result["chunks"][1]["metadata"] is None
     assert result["schema_version"] == "2.4.0"
     assert set(result) == {"document", "chunks", "total_chunks", "schema_version"}
+
+
+@pytest.mark.asyncio
+async def test_cli_delete_sql_exception_reports_sanitized_sentry_event():
+    """Post-Weaviate SQL failure in CLI delete emits one sanitized paper_delete_sql_cleanup_failed Sentry event."""
+    from contextlib import asynccontextmanager
+    from unittest.mock import AsyncMock
+    from src.lib.observability.sentry import hash_sentry_identifier
+    from src.lib.weaviate_client import cli as weaviate_cli
+
+    doc_uuid = "55555555-6666-7777-8888-999999999999"
+    secret_detail = "private-cli-postgres-detail"
+
+    @asynccontextmanager
+    async def _lock(_doc_id):
+        yield object()
+
+    def _boom_sql(*_args, **_kwargs):
+        raise RuntimeError(f"{secret_detail} {doc_uuid}")
+
+    report_mock = MagicMock(return_value=True)
+    with patch("src.lib.document_files.paper_lock.paper_operation_lock", _lock), \
+         patch.object(weaviate_cli, "_inspect_cli_sql_owner", return_value=(None, True)), \
+         patch("src.lib.pdf_jobs.service.get_active_job_for_document", return_value=None), \
+         patch.object(weaviate_cli, "delete_paper_chunks", AsyncMock(return_value={"success": True, "chunks_deleted": 2, "chunks_matched": 2})), \
+         patch.object(weaviate_cli, "_remove_cli_owned_paper_files", return_value=None), \
+         patch.object(weaviate_cli, "delete_paper_object", AsyncMock(return_value={"success": True, "deleted": True})), \
+         patch.object(weaviate_cli, "_delete_sql_row", side_effect=_boom_sql), \
+         patch("src.lib.document_cleanup.runtime.report_runtime_exception", report_mock):
+        result = await weaviate_cli._delete_document_for_cli("user-1", doc_uuid)
+
+    assert result["success"] is False
+    assert result["postgres_deleted"] is False
+    report_mock.assert_called_once()
+    assert report_mock.call_args.kwargs == {
+        "component": "weaviate_client",
+        "operation": "paper_delete_sql_cleanup_failed",
+        "context": {
+            "document_id_hash": hash_sentry_identifier(doc_uuid),
+            "exception_type": "RuntimeError",
+        },
+        "fingerprint": ["paper_delete_sql_cleanup_failed", "weaviate_client", "RuntimeError"],
+        "include_request": False,
+    }
+    assert doc_uuid not in repr(report_mock.call_args)
+    assert secret_detail not in repr(report_mock.call_args)

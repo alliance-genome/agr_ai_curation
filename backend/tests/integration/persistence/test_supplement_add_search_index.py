@@ -1609,5 +1609,27 @@ async def test_http_delete_endpoint_succeeds_under_one_connection_pool(
         assert result.success is True
         assert not main_file.exists()
         assert _rows(paper) == [] and _indexes(index, str(paper)) == []
+
+        # An undashed 32-hex UUID HTTP input must normalize to canonical dashed UUID
+        # so Weaviate chunks stored under str(paper_uuid) are actually deleted too.
+        paper_undashed = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+        undashed_rel = f"{TEST_USER_ID}/{paper_undashed}/main.pdf"
+        undashed_file = tmp_path / undashed_rel
+        undashed_file.parent.mkdir(parents=True, exist_ok=True)
+        undashed_file.write_bytes(b"%PDF-1.7\n")
+        with one_conn_session_local.begin() as db:
+            doc_row = db.get(PDFDocument, paper_undashed)
+            assert doc_row is not None
+            doc_row.files[0].file_path = undashed_rel
+
+        assert _indexes(index, str(paper_undashed)) == [0, 1, 2]
+        undashed_result = await documents_api.delete_document_endpoint(
+            document_id=paper_undashed.hex,
+            user={"sub": TEST_USER_ID},
+        )
+        assert undashed_result.success is True
+        assert undashed_result.document_id == str(paper_undashed)
+        assert not undashed_file.exists()
+        assert _rows(paper_undashed) == [] and _indexes(index, str(paper_undashed)) == []
     finally:
         one_conn_engine.dispose()

@@ -31,7 +31,6 @@ worker thread, never on the event loop.
 from __future__ import annotations
 
 import asyncio
-from contextvars import ContextVar
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -47,18 +46,13 @@ from src.lib.observability import runtime
 
 logger = logging.getLogger(__name__)
 _detached_releases: set[asyncio.Task[None]] = set()
-_ACTIVE_LOCK_CONNECTION: ContextVar[Any | None] = ContextVar(
-    "active_paper_lock_connection",
-    default=None,
-)
 
 
 def open_paper_lock_session(connection: Any = None) -> Session | None:
-    """Open an ORM Session bound to a real SQLAlchemy lock connection without checking out another pool slot."""
-    target = connection if connection is not None else _ACTIVE_LOCK_CONNECTION.get()
-    if isinstance(target, SqlAlchemyConnection):
+    """Open an ORM Session bound to an explicit SQLAlchemy lock connection without checking out another pool slot."""
+    if isinstance(connection, SqlAlchemyConnection):
         return Session(
-            bind=target,
+            bind=connection,
             autocommit=False,
             autoflush=False,
             expire_on_commit=False,
@@ -153,14 +147,12 @@ async def paper_operation_lock(document_id: UUID | str) -> AsyncIterator[Any]:
     if connection is None:
         raise PaperOperationInProgress(str(document_id))
     body_cancelled = False
-    lock_token = _ACTIVE_LOCK_CONNECTION.set(connection)
     try:
         yield connection
     except asyncio.CancelledError:
         body_cancelled = True
         raise
     finally:
-        _ACTIVE_LOCK_CONNECTION.reset(lock_token)
         # Drain the release even across repeated cancellations so the advisory lock
         # and DB connection are always closed before returning, and any release failure
         # is observed and reported cleanly.

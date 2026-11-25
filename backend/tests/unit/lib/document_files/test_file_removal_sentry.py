@@ -321,7 +321,7 @@ async def test_cancelled_remove_paper_file_drains_in_flight_piece_count_write_be
     removed = _make_removed(
         document_id, file_id, owner_subject="curator-sub", stored_path="curator-sub/doc/supp.md",
     )
-    monkeypatch.setattr(file_removal, "_mark_removed_or_busy", lambda *_args: removed)
+    monkeypatch.setattr(file_removal, "_mark_removed_or_busy", lambda *_args, **_kwargs: removed)
     monkeypatch.setattr("src.lib.weaviate_client.chunks.delete_chunk_range", lambda *_a, **_k: 0)
     monkeypatch.setattr("src.lib.document_files.service.remove_stored_files", lambda *_a, **_k: None)
     monkeypatch.setattr(file_removal, "_delete_removed_row", lambda *_a, **_k: None)
@@ -396,3 +396,66 @@ async def test_cancelled_remove_paper_file_drains_in_flight_piece_count_write_be
         assert "private-count-failure-secret" not in str(report.call_args)
     else:
         report.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_remove_paper_file_cancel_drains_mark_removed_worker_before_lock_release(monkeypatch):
+    """Cancelling remove_paper_file() under paper_operation_lock must drain _mark_removed_or_busy before _release."""
+    import asyncio
+    import threading
+    import src.models.sql.database as sql_db
+    from src.lib.document_files.paper_lock import paper_operation_lock
+
+    document_id = uuid4()
+    file_id = uuid4()
+    events: list[str] = []
+    worker_entered = threading.Event()
+    resume_worker = threading.Event()
+
+    class _LockConn:
+        def execute(self, statement, _params=None):
+            if "pg_advisory_unlock" in str(statement):
+                events.append("lock_released")
+            return SimpleNamespace(scalar_one=lambda: True)
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+        def invalidate(self):
+            pass
+
+    monkeypatch.setattr(sql_db, "engine", SimpleNamespace(connect=lambda: _LockConn()))
+
+    def _blocking_mark_removed(*_args):
+        worker_entered.set()
+        assert resume_worker.wait(timeout=5)
+        events.append("worker_finished")
+        return _make_removed(
+            document_id,
+            file_id,
+            owner_subject="user-1",
+            stored_path=f"user-1/{document_id}/supp.pdf",
+        )
+
+    monkeypatch.setattr(file_removal, "_mark_removed_or_busy", _blocking_mark_removed)
+
+    async def _run():
+        async with paper_operation_lock(document_id):
+            await remove_paper_file(document_id, 42, file_id, weaviate_client=SimpleNamespace())
+
+    task = asyncio.create_task(_run())
+    try:
+        assert await asyncio.to_thread(worker_entered.wait, 5)
+        task.cancel("client disconnected")
+        await asyncio.sleep(0.05)
+        assert "lock_released" not in events
+    finally:
+        resume_worker.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=5)
+
+    assert events == ["worker_finished", "lock_released"]

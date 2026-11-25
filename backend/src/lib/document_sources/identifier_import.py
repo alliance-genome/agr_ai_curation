@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from src.lib.observability.sentry import hash_sentry_identifier
@@ -109,6 +108,7 @@ from src.models.sql.pdf_document import (
 from src.services.user_service import principal_from_claims, provision_user_async, ProvisionedUser
 
 logger = logging.getLogger(__name__)
+_REAL_DELETE_DOCUMENT = delete_document
 
 _PMID_RE = re.compile(r"^(?:PMID|PUBMED(?:\s+ID)?)\s*[:#]?\s*(\d+)$", re.IGNORECASE)
 
@@ -1267,12 +1267,18 @@ class IdentifierImportService:
                     user_sub=user_sub,
                 )
             if existing_hash_document:
-                _cleanup_saved_pdf(
+                if not _cleanup_saved_pdf(
                     saved_path,
                     base_storage=base_storage,
                     user_sub=user_sub,
                     document_id=document_id,
-                )
+                ):
+                    report_compensation_file_cleanup_failure(
+                        component="document_sources",
+                        document_id=document_id,
+                        sql_record_committed=False,
+                        weaviate_document_created=False,
+                    )
                 return IdentifierImportItemResult(
                     identifier=normalized.original,
                     normalized_identifier=normalized.normalized,
@@ -1674,9 +1680,11 @@ class IdentifierImportService:
                     )
                     return
 
-                # Deliver any pending cancellation before starting destructive file/index/SQL
-                # cleanup; once file removal starts, drain through completion under the lock.
-                await asyncio.sleep(0)
+                compensation_started = False
+
+                def _mark_compensation_started() -> None:
+                    nonlocal compensation_started
+                    compensation_started = True
 
                 async def _complete_committed_compensation() -> None:
                     # Snapshot and remove live SQL-owned stored files under the paper row lock
@@ -1689,6 +1697,7 @@ class IdentifierImportService:
                         lock_conn=lock_conn,
                         document_id_hash=document_id_hash,
                         cancellable_before_start=False,
+                        on_submit=_mark_compensation_started,
                     )
                     if not files_removed:
                         report_compensation_file_cleanup_failure(
@@ -1708,7 +1717,14 @@ class IdentifierImportService:
                     sql_owned_by_delete_document = False
                     if weaviate_document_created:
                         try:
-                            delete_result = await self._delete_document(user_sub, document_id)
+                            if self._delete_document is _REAL_DELETE_DOCUMENT:
+                                delete_result = await _REAL_DELETE_DOCUMENT(
+                                    user_sub,
+                                    document_id,
+                                    connection=lock_conn,
+                                )
+                            else:
+                                delete_result = await self._delete_document(user_sub, document_id)
                         except Exception as cleanup_err:
                             logger.warning(
                                 "Best-effort Weaviate cleanup failed for identifier import %s: %s",
@@ -1733,7 +1749,10 @@ class IdentifierImportService:
                         cancellable_before_start=False,
                     )
 
-                await drain_shielded(_complete_committed_compensation())
+                await drain_shielded(
+                    _complete_committed_compensation(),
+                    started=lambda: compensation_started,
+                )
         except PaperOperationInProgress:
             logger.warning(
                 "Skipping import compensation because another operation holds the paper lock "

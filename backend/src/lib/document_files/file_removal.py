@@ -340,11 +340,12 @@ async def remove_paper_file(
     """Remove the file; the caller holds the paper's operation lock. Raises ``FileRemovalRefused``."""
 
     from src.lib.document_cache import invalidate_cache
+    from src.lib.document_cleanup import run_thread_drained
     from src.lib.document_files.service import remove_stored_files
     from src.lib.pipeline.store import update_document_piece_count
     from src.lib.weaviate_client.chunks import delete_chunk_range
 
-    removed = await asyncio.to_thread(_mark_removed_or_busy, document_id, owner_user_id, file_id)
+    removed = await run_thread_drained(_mark_removed_or_busy, document_id, owner_user_id, file_id)
     # From here a cancelled request stops the clean-up part way: the row stays ``removed``
     # with its range and paths, and a retry or the paper delete finishes it.
     subject = removed.owner_subject

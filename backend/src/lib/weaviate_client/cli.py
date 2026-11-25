@@ -164,6 +164,7 @@ def get_document_cmd(document_id: str, user_id: str, show_chunks: bool, output_f
 
 
 _REAL_DELETE_PAPER_CHUNKS = delete_paper_chunks
+_REAL_DELETE_SQL_ROW = _delete_sql_row
 
 
 def _tenant_paper_dir_has_artifacts(base_storage: Path, user_id: str, document_id: str) -> tuple[bool, str | None]:
@@ -222,8 +223,13 @@ def _inspect_cli_sql_owner(
     from src.models.sql.pdf_document import PDFDocument
     from src.models.sql.user import User
 
+    db_gen = None
     bound_session = open_paper_lock_session(connection)
-    db = bound_session if bound_session is not None else next(get_db())
+    if bound_session is not None:
+        db = bound_session
+    else:
+        db_gen = get_db()
+        db = next(db_gen)
     try:
         base_storage = Path(get_pdf_storage_path())
         pdf_doc = db.get(PDFDocument, document_uuid)
@@ -250,6 +256,9 @@ def _inspect_cli_sql_owner(
         raise
     finally:
         db.close()
+        close_gen = getattr(db_gen, "close", None)
+        if callable(close_gen):
+            close_gen()
 
 
 def _remove_cli_owned_paper_files(
@@ -270,8 +279,13 @@ def _remove_cli_owned_paper_files(
     from src.models.sql.pdf_document import PDFDocument
     from src.models.sql.user import User
 
+    db_gen = None
     bound_session = open_paper_lock_session(connection)
-    db = bound_session if bound_session is not None else next(get_db())
+    if bound_session is not None:
+        db = bound_session
+    else:
+        db_gen = get_db()
+        db = next(db_gen)
     try:
         pdf_doc = db.execute(
             select(PDFDocument).where(PDFDocument.id == document_uuid).with_for_update()
@@ -293,6 +307,9 @@ def _remove_cli_owned_paper_files(
         raise
     finally:
         db.close()
+        close_gen = getattr(db_gen, "close", None)
+        if callable(close_gen):
+            close_gen()
 
 
 async def _delete_document_for_cli(user_id: str, document_id: str) -> dict[str, Any]:
@@ -300,6 +317,7 @@ async def _delete_document_for_cli(user_id: str, document_id: str) -> dict[str, 
     from src.lib.document_cleanup import (
         delete_drain_context,
         drain_shielded,
+        report_sql_cleanup_failure,
         run_thread_drained,
     )
     from src.lib.document_files.paper_lock import PaperOperationInProgress, paper_operation_lock
@@ -392,17 +410,26 @@ async def _delete_document_for_cli(user_id: str, document_id: str) -> dict[str, 
 
                     sql_delete_failed = False
                     try:
-                        postgres_deleted = await run_thread_drained(
-                            _delete_sql_row,
-                            user_id,
-                            canonical_document_id,
-                            cancellable_before_start=False,
-                        )
+                        if _delete_sql_row is _REAL_DELETE_SQL_ROW:
+                            postgres_deleted = await run_thread_drained(
+                                _delete_sql_row,
+                                user_id,
+                                canonical_document_id,
+                                connection=lock_conn,
+                                cancellable_before_start=False,
+                            )
+                        else:
+                            postgres_deleted = await run_thread_drained(
+                                _delete_sql_row,
+                                user_id,
+                                canonical_document_id,
+                                cancellable_before_start=False,
+                            )
                     except Exception as db_err:
-                        logger.warning(
-                            "CLI delete failed to remove PostgreSQL record (%s)",
-                            type(db_err).__name__,
-                            extra={"sentry_skip_event": True},
+                        report_sql_cleanup_failure(
+                            component="weaviate_client",
+                            document_id=canonical_document_id,
+                            exception_type=type(db_err).__name__,
                         )
                         postgres_deleted = False
                         sql_delete_failed = True

@@ -426,12 +426,18 @@ async def update_document_filename(
         )
 
 
-async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
+async def get_document(
+    user_id: str,
+    document_id: str,
+    *,
+    connection: Any = None,
+) -> Dict[str, Any]:
     """Get detailed information about a specific document.
 
     Args:
         user_id: User identifier for tenant scoping (required, FR-011, FR-014)
         document_id: Document UUID
+        connection: Optional active paper advisory-lock SQLAlchemy connection to reuse
 
     Returns:
         Dictionary with document details (only if document belongs to user)
@@ -452,11 +458,12 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
 
     # T030: Get database user for ownership metadata (FR-014, FR-016). In a worker
     # thread, so waiting for a pooled connection never blocks the event loop; reuses
-    # the active paper_operation_lock connection when called under a paper lock.
+    # an explicit paper_operation_lock connection when passed under a paper lock.
     def check_owner_and_kind() -> str:
         from ..document_files.paper_lock import open_paper_lock_session
 
-        bound_session = open_paper_lock_session()
+        db_gen = None
+        bound_session = open_paper_lock_session(connection)
         if bound_session is not None:
             db = bound_session
         else:
@@ -481,6 +488,9 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
             raise
         finally:
             db.close()
+            close_gen = getattr(db_gen, "close", None)
+            if callable(close_gen):
+                close_gen()
 
     tenant_name = await run_thread_drained(check_owner_and_kind)
 
@@ -938,6 +948,7 @@ def _delete_sql_row(user_id: str, document_id: str, *, connection: Any = None) -
     from src.lib.document_files.paper_lock import open_paper_lock_session
     from src.models.sql.user import User
 
+    db_gen = None
     bound_session = open_paper_lock_session(connection)
     if bound_session is not None:
         db = bound_session
@@ -969,9 +980,20 @@ def _delete_sql_row(user_id: str, document_id: str, *, connection: Any = None) -
         raise
     finally:
         db.close()
+        close_gen = getattr(db_gen, "close", None)
+        if callable(close_gen):
+            close_gen()
 
 
-async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
+_REAL_DELETE_SQL_ROW = _delete_sql_row
+
+
+async def delete_document(
+    user_id: str,
+    document_id: str,
+    *,
+    connection: Any = None,
+) -> Dict[str, Any]:
     """Delete the search entries, then clean up SQL.
 
     Callers that own committed papers or stored files must hold ``paper_operation_lock``,
@@ -997,12 +1019,21 @@ async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
 
         # A complete chunk wipe allows SQL cleanup even when delete_by_id found no index object.
         try:
-            postgres_deleted = await run_thread_drained(
-                _delete_sql_row,
-                user_id,
-                document_id,
-                cancellable_before_start=False,
-            )
+            if connection is not None and _delete_sql_row is _REAL_DELETE_SQL_ROW:
+                postgres_deleted = await run_thread_drained(
+                    _delete_sql_row,
+                    user_id,
+                    document_id,
+                    connection=connection,
+                    cancellable_before_start=False,
+                )
+            else:
+                postgres_deleted = await run_thread_drained(
+                    _delete_sql_row,
+                    user_id,
+                    document_id,
+                    cancellable_before_start=False,
+                )
         except Exception as e:
             report_sql_cleanup_failure(
                 component="weaviate_client",

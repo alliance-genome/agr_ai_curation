@@ -12,7 +12,6 @@ The intake output contract is `UploadIntakeResult`, which includes:
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 import uuid
@@ -113,6 +112,7 @@ from src.services.user_service import principal_from_claims, provision_user_asyn
 from . import service as pdf_job_service
 
 logger = logging.getLogger(__name__)
+_REAL_DELETE_DOCUMENT = delete_document
 
 _PDF_DOCUMENT_DUPLICATE_CONSTRAINTS = frozenset(
     {
@@ -389,12 +389,18 @@ class UploadIntakeService:
                 )
 
             if existing:
-                self._cleanup_saved_file_artifacts(
+                if not self._cleanup_saved_file_artifacts(
                     saved_path,
                     base_storage=base_storage,
                     user_sub=user_sub,
                     document_id=document_id_str,
-                )
+                ):
+                    report_compensation_file_cleanup_failure(
+                        component="pdf_jobs",
+                        document_id=document_id_str,
+                        sql_record_committed=False,
+                        weaviate_document_created=False,
+                    )
                 raise UploadIntakeDuplicateError(self._duplicate_detail(existing))
 
             provider_import_plan: ProviderChecksumImportPlan | None = None
@@ -995,9 +1001,11 @@ class UploadIntakeService:
                     )
                     return
 
-                # Deliver any pending cancellation before starting destructive file/index/SQL
-                # cleanup; once file removal starts, drain through completion under the lock.
-                await asyncio.sleep(0)
+                compensation_started = False
+
+                def _mark_compensation_started() -> None:
+                    nonlocal compensation_started
+                    compensation_started = True
 
                 async def _complete_committed_compensation() -> None:
                     # Snapshot and remove live SQL-owned stored files under the paper row lock
@@ -1010,6 +1018,7 @@ class UploadIntakeService:
                         lock_conn=lock_conn,
                         document_id_hash=document_id_hash,
                         cancellable_before_start=False,
+                        on_submit=_mark_compensation_started,
                     )
                     if not files_removed:
                         report_compensation_file_cleanup_failure(
@@ -1028,7 +1037,14 @@ class UploadIntakeService:
                     sql_owned_by_delete_document = False
                     if weaviate_document_created:
                         try:
-                            delete_result = await self._delete_document(user_sub, document_id)
+                            if self._delete_document is _REAL_DELETE_DOCUMENT:
+                                delete_result = await _REAL_DELETE_DOCUMENT(
+                                    user_sub,
+                                    document_id,
+                                    connection=lock_conn,
+                                )
+                            else:
+                                delete_result = await self._delete_document(user_sub, document_id)
                         except Exception as cleanup_err:
                             logger.warning(
                                 "Best-effort Weaviate cleanup failed for document %s: %s",
@@ -1053,7 +1069,10 @@ class UploadIntakeService:
                         cancellable_before_start=False,
                     )
 
-                await drain_shielded(_complete_committed_compensation())
+                await drain_shielded(
+                    _complete_committed_compensation(),
+                    started=lambda: compensation_started,
+                )
         except PaperOperationInProgress:
             logger.warning(
                 "Skipping job-creation compensation because another operation holds the paper lock "
