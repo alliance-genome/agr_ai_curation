@@ -57,7 +57,7 @@ def provisioned_owner(monkeypatch):
 @pytest.fixture
 def owner_id(provisioned_owner, monkeypatch):
     async def present(_sub, _document_id, **_kwargs):
-        return {"document": {"processingStatus": "completed"}}
+        return {"processingStatus": "completed"}
 
     async def wipe_chunks(_user_sub, _document_id):
         return {"success": True, "chunks_deleted": 0}
@@ -65,7 +65,7 @@ def owner_id(provisioned_owner, monkeypatch):
     async def delete_parent(_user_sub, _document_id, *, allow_missing=False):
         return {"success": True, "deleted": True}
 
-    monkeypatch.setattr(documents_api, "get_document", present)
+    monkeypatch.setattr(documents_api, "get_paper_status_for_delete", present)
     monkeypatch.setattr(documents_api, "delete_paper_chunks", wipe_chunks)
     monkeypatch.setattr(documents_api, "delete_paper_object", delete_parent)
     return provisioned_owner

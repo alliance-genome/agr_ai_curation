@@ -760,7 +760,7 @@ def _wire_delete(monkeypatch, owner_id, *, in_wipe=None, wipe_seconds: float = 0
         return type("User", (), {"id": owner_id})()
 
     async def present(_sub, _document_id, **_kwargs):
-        return {"document": {"processingStatus": "completed"}}
+        return {"processingStatus": "completed"}
 
     async def wipe(user_sub, document_id):
         from src.lib.document_cleanup import mark_destructive_delete_started
@@ -776,7 +776,7 @@ def _wire_delete(monkeypatch, owner_id, *, in_wipe=None, wipe_seconds: float = 0
         return {"success": True, "deleted": True}
 
     monkeypatch.setattr(documents_api, "provision_user_async", provision)
-    monkeypatch.setattr(documents_api, "get_document", present)
+    monkeypatch.setattr(documents_api, "get_paper_status_for_delete", present)
     monkeypatch.setattr(documents_api, "delete_paper_chunks", wipe)
     monkeypatch.setattr(documents_api, "delete_paper_object", delete_parent)
 
@@ -923,14 +923,14 @@ async def test_the_lock_is_released_when_the_delete_request_is_cancelled(owner_i
     async def slow_get_document(_sub, _document_id, **_kwargs):
         in_read.set()
         await asyncio.sleep(5.0)
-        return {"document": {"processingStatus": "completed"}}
+        return {"processingStatus": "completed"}
 
     async def unexpected_wipe(*_args, **_kwargs):
         nonlocal wipe_started
         wipe_started = True
         return {"success": True, "chunks_deleted": 0}
 
-    monkeypatch.setattr(documents_api, "get_document", slow_get_document)
+    monkeypatch.setattr(documents_api, "get_paper_status_for_delete", slow_get_document)
     monkeypatch.setattr(documents_api, "delete_paper_chunks", unexpected_wipe)
 
     request = asyncio.create_task(_delete(paper))
@@ -1375,7 +1375,7 @@ async def test_a_pool_timeout_while_reading_the_papers_index_object_is_the_delet
     async def no_connection(_sub, _document_id, **_kwargs):
         raise PoolTimeoutError("made-up: QueuePool limit reached")
 
-    monkeypatch.setattr(documents_api, "get_document", no_connection)
+    monkeypatch.setattr(documents_api, "get_paper_status_for_delete", no_connection)
     with pytest.raises(HTTPException) as raised:
         await _delete(paper)
     assert raised.value.status_code == 503
@@ -1602,10 +1602,10 @@ async def test_http_delete_endpoint_succeeds_under_one_connection_pool(
         return type("User", (), {"id": owner_id})()
 
     monkeypatch.setattr(documents_api, "provision_user_async", _provision)
-    # Exercise real weaviate_docs.get_document (SQL ownership check under lock_conn!),
+    # Exercise the real index status lookup (SQL ownership check under lock_conn),
     # real pdf_job_service.get_latest_job_for_document & end_supplement_wait_for_delete,
     # real snapshot_for_cleanup, real remove_paper_files, and real finish_delete.
-    monkeypatch.setattr(documents_api, "get_document", weaviate_docs.get_document)
+    monkeypatch.setattr(documents_api, "get_paper_status_for_delete", weaviate_docs.get_paper_status_for_delete)
     monkeypatch.setattr(documents_api, "delete_paper_chunks", weaviate_docs.delete_paper_chunks)
     monkeypatch.setattr(documents_api, "delete_paper_object", weaviate_docs.delete_paper_object)
 

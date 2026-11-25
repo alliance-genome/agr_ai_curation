@@ -428,6 +428,41 @@ async def update_document_filename(
         )
 
 
+def _check_library_document_access(user_id: str, document_id: str, connection: Any) -> None:
+    from sqlalchemy import select
+
+    from ...models.sql.user import User
+    from ..document_files.paper_lock import open_paper_lock_session
+
+    db_gen = None
+    bound_session = open_paper_lock_session(connection)
+    if bound_session is not None:
+        db = bound_session
+    else:
+        db_gen = get_db()
+        db = next(db_gen)
+    try:
+        db_user = db.execute(select(User).where(User.auth_sub == user_id)).scalar_one_or_none()
+        if not db_user:
+            raise ValueError(f"User with auth_sub {user_id} not found")
+        if db.scalar(select(PdfDocumentModel.document_kind).where(
+            PdfDocumentModel.id == UUID(document_id),
+            PdfDocumentModel.user_id == db_user.id,
+        )) not in (None, DOCUMENT_KIND_LIBRARY):
+            # Chat selection/resume and detailed library reads must not expose
+            # runtime benchmark copies. Normal benchmark tools use the direct
+            # owned chunk/context helpers, not this library detail operation.
+            raise ValueError("Document is not available in the curator library")
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+        close_gen = getattr(db_gen, "close", None)
+        if callable(close_gen):
+            close_gen()
+
+
 async def get_document(
     user_id: str,
     document_id: str,
@@ -455,46 +490,9 @@ async def get_document(
         raise ValueError("user_id is required for tenant-scoped document retrieval (FR-011, FR-014)")
 
     from ..weaviate_helpers import get_tenant_name
-    from ...models.sql.user import User
-    from sqlalchemy import select
 
-    # T030: Get database user for ownership metadata (FR-014, FR-016). In a worker
-    # thread, so waiting for a pooled connection never blocks the event loop; reuses
-    # an explicit paper_operation_lock connection when passed under a paper lock.
-    def check_owner_and_kind() -> str:
-        from ..document_files.paper_lock import open_paper_lock_session
-
-        db_gen = None
-        bound_session = open_paper_lock_session(connection)
-        if bound_session is not None:
-            db = bound_session
-        else:
-            db_gen = get_db()
-            db = next(db_gen)
-        try:
-            db_user = db.execute(select(User).where(User.auth_sub == user_id)).scalar_one_or_none()
-            if not db_user:
-                raise ValueError(f"User with auth_sub {user_id} not found")
-            if db.scalar(select(PdfDocumentModel.document_kind).where(
-                PdfDocumentModel.id == UUID(document_id),
-                PdfDocumentModel.user_id == db_user.id,
-            )) not in (None, DOCUMENT_KIND_LIBRARY):
-                # Chat selection/resume and detailed library reads must not expose
-                # runtime benchmark copies. Normal benchmark tools use the direct
-                # owned chunk/context helpers, not this library detail operation.
-                raise ValueError("Document is not available in the curator library")
-            # user_id parameter already contains auth_sub, use it for tenant naming
-            return get_tenant_name(user_id)
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            db.close()
-            close_gen = getattr(db_gen, "close", None)
-            if callable(close_gen):
-                close_gen()
-
-    tenant_name = await run_thread_drained(check_owner_and_kind)
+    await run_thread_drained(_check_library_document_access, user_id, document_id, connection)
+    tenant_name = get_tenant_name(user_id)
 
     weaviate_connection = get_connection()
     if not weaviate_connection:
@@ -742,6 +740,21 @@ def _index_delete_failure(
 def _paper_delete_session():
     connection = get_connection(caller_reports_failure=True)
     return connection.session(caller_reports_failure=True)
+
+
+async def get_paper_status_for_delete(
+    user_id: str, document_id: str, *, connection: Any,
+) -> dict[str, Any] | None:
+    """Read only the owned paper's indexed status. The endpoint reports lookup failures."""
+    await run_thread_drained(_check_library_document_access, user_id, document_id, connection)
+
+    def read_status() -> dict[str, Any] | None:
+        with _paper_delete_session() as client:
+            _, papers = get_user_collections(client, user_id)
+            paper = papers.query.fetch_object_by_id(document_id, return_properties=["processingStatus"])
+            return paper.properties if paper is not None else None
+
+    return await asyncio.to_thread(read_status)
 
 
 async def delete_paper_chunks(user_id: str, document_id: str) -> Dict[str, Any]:

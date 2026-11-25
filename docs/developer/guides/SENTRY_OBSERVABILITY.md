@@ -857,7 +857,11 @@ and `exception_type`. An incomplete bulk wipe retains its separate
 failed counts. The HTTP endpoint returns “The paper could not be deleted.
 Please try again.” for a failed deletion with status 500. Its catch-all handler
 reports `documents` / `paper_delete_failed` with the same context and grouping
-as the pool-exhaustion handler.
+as the pool-exhaustion handler. It covers ownership verification, lock acquisition
+and the tenant-scoped parent status lookup before cleanup. This lookup reads
+only the indexed processing status and delegates connection and query failures
+to the endpoint. An absent parent permits the existing chunk cleanup on retry.
+Missing-parent and stale-status warnings use the document hash.
 
 These exception reports use fixed, chain-free errors and `include_request=False`.
 Their companion warnings carry `sentry_skip_event=True` and omit raw IDs and

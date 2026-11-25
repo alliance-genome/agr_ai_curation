@@ -889,7 +889,7 @@ async def test_delete_document_endpoint_returns_success(monkeypatch):
     _patch_session_factory(monkeypatch, [verify_session, snapshot_session, file_session, cleanup_session])
 
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value({"processingStatus": "pending"}))
     monkeypatch.setattr(documents, "delete_paper_chunks", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 3}))
     monkeypatch.setattr(documents, "delete_paper_object", lambda *_args, **_kwargs: _async_value({"success": True, "deleted": True}))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
@@ -950,8 +950,8 @@ async def test_delete_document_endpoint_blocks_processing_documents(monkeypatch)
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
     monkeypatch.setattr(
         documents,
-        "get_document",
-        lambda *_args, **_kwargs: _async_value({"document": {"processing_status": ProcessingStatus.PROCESSING.value}}),
+        "get_paper_status_for_delete",
+        lambda *_args, **_kwargs: _async_value({"processingStatus": ProcessingStatus.PROCESSING.value}),
     )
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
@@ -969,7 +969,7 @@ async def test_delete_document_endpoint_blocks_active_pdf_job(monkeypatch):
     _patch_session_factory(monkeypatch, [verify_session])
 
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value({"processingStatus": "pending"}))
     monkeypatch.setattr(
         documents.pdf_job_service,
         "get_latest_job_for_document",
@@ -999,7 +999,7 @@ async def test_delete_document_endpoint_allows_reconciled_stale_pdf_job(monkeypa
     _patch_session_factory(monkeypatch, [verify_session, snapshot_session, file_session, cleanup_session])
 
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value({"processingStatus": "pending"}))
     monkeypatch.setattr(documents, "delete_paper_chunks", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 0}))
     monkeypatch.setattr(documents, "delete_paper_object", lambda *_args, **_kwargs: _async_value({"success": True, "deleted": True}))
     monkeypatch.setattr(
@@ -1020,7 +1020,7 @@ async def test_delete_document_endpoint_allows_reconciled_stale_pdf_job(monkeypa
 
 @pytest.mark.asyncio
 async def test_delete_document_endpoint_allows_stale_active_weaviate_status_when_job_terminal(
-    monkeypatch,
+    monkeypatch, caplog,
 ):
     doc_id = str(uuid4())
     verify_session = _FakeSession()
@@ -1031,7 +1031,7 @@ async def test_delete_document_endpoint_allows_stale_active_weaviate_status_when
     _patch_session_factory(monkeypatch, [verify_session, snapshot_session, file_session, cleanup_session])
 
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "processing"}}))
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value({"processingStatus": "processing"}))
     monkeypatch.setattr(
         documents.pdf_job_service,
         "get_latest_job_for_document",
@@ -1061,11 +1061,13 @@ async def test_delete_document_endpoint_allows_stale_active_weaviate_status_when
     result = await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
 
     assert result.success is True
+    assert documents.hash_sentry_identifier(doc_id) in caplog.text
+    assert doc_id not in caplog.text
 
 
 @pytest.mark.asyncio
 async def test_delete_document_endpoint_allows_old_active_tracker_after_terminal_job(
-    monkeypatch,
+    monkeypatch, caplog,
 ):
     doc_id = str(uuid4())
     now = datetime.now(timezone.utc)
@@ -1086,9 +1088,9 @@ async def test_delete_document_endpoint_allows_old_active_tracker_after_terminal
     )
     monkeypatch.setattr(
         documents,
-        "get_document",
+        "get_paper_status_for_delete",
         lambda *_args, **_kwargs: _async_value(
-            {"document": {"processing_status": "failed"}}
+            {"processingStatus": "failed"}
         ),
     )
     monkeypatch.setattr(
@@ -1141,6 +1143,8 @@ async def test_delete_document_endpoint_allows_old_active_tracker_after_terminal
     result = await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
 
     assert result.success is True
+    assert documents.hash_sentry_identifier(doc_id) in caplog.text
+    assert doc_id not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -1159,9 +1163,9 @@ async def test_delete_document_endpoint_blocks_newer_upload_tracker_after_termin
     )
     monkeypatch.setattr(
         documents,
-        "get_document",
+        "get_paper_status_for_delete",
         lambda *_args, **_kwargs: _async_value(
-            {"document": {"processing_status": "failed"}}
+            {"processingStatus": "failed"}
         ),
     )
     monkeypatch.setattr(
@@ -1221,16 +1225,13 @@ async def test_delete_document_endpoint_allows_stale_postgres_only_document_clea
 
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
 
-    async def _missing_document(*_args, **_kwargs):
-        raise ValueError(f"Document {doc_id} not found")
-
     chunk_wipe_calls = []
 
     async def _wipe_chunks(user_sub, target_doc_id):
         chunk_wipe_calls.append((user_sub, target_doc_id))
         return {"success": True, "chunks_deleted": 2}
 
-    monkeypatch.setattr(documents, "get_document", _missing_document)
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value(None))
     monkeypatch.setattr(documents, "delete_paper_chunks", _wipe_chunks)
     monkeypatch.setattr(
         documents,
@@ -1290,7 +1291,7 @@ async def test_delete_document_endpoint_removes_text_source_markdown(monkeypatch
     # The shared stored-file helper reads the same setting where it is defined.
     monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value({"processingStatus": "pending"}))
     monkeypatch.setattr(documents, "delete_paper_chunks", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 0}))
     monkeypatch.setattr(documents, "delete_paper_object", lambda *_args, **_kwargs: _async_value({"success": True, "deleted": True}))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
@@ -1351,7 +1352,7 @@ async def test_delete_document_endpoint_deletes_sql_row_after_removing_files(mon
     # The shared stored-file helper reads the same setting where it is defined.
     monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value({"processingStatus": "pending"}))
     monkeypatch.setattr(documents, "delete_paper_chunks", _wipe_chunks)
     monkeypatch.setattr(documents, "delete_paper_object", _delete_parent)
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
@@ -1400,7 +1401,7 @@ async def test_delete_document_endpoint_raises_when_cleanup_fails(monkeypatch, t
     # The shared stored-file helper reads the same setting where it is defined.
     monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value({"processingStatus": "pending"}))
     monkeypatch.setattr(documents, "delete_paper_chunks", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 0}))
     monkeypatch.setattr(
         documents,
@@ -1446,7 +1447,7 @@ async def test_delete_document_endpoint_retains_sql_row_when_parent_object_delet
     monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value({"processingStatus": "pending"}))
     monkeypatch.setattr(documents, "delete_paper_chunks", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 0}))
     monkeypatch.setattr(documents, "delete_paper_object", lambda *_args, **_kwargs: _async_value({"success": False, "message": "weaviate parent failed"}))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
@@ -1471,10 +1472,7 @@ async def test_delete_document_endpoint_blocks_stale_postgres_only_document_with
 
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
 
-    async def _missing_document(*_args, **_kwargs):
-        raise ValueError(f"Document {doc_id} not found")
-
-    monkeypatch.setattr(documents, "get_document", _missing_document)
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value(None))
     monkeypatch.setattr(
         documents.pdf_job_service,
         "get_latest_job_for_document",
@@ -1502,7 +1500,7 @@ async def test_delete_document_endpoint_raises_500_when_delete_fails(monkeypatch
     _patch_session_factory(monkeypatch, [verify_session, snapshot_session])
 
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "pending"}}))
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value({"processingStatus": "pending"}))
     monkeypatch.setattr(documents, "delete_paper_chunks", lambda *_args, **_kwargs: _async_value({"success": False, "message": "nope"}))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
@@ -1567,7 +1565,7 @@ async def test_delete_document_endpoint_cancel_during_chunk_wipe_drains_under_lo
     monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value({"processingStatus": "completed"}))
     monkeypatch.setattr(documents, "delete_paper_chunks", _wipe_chunks)
     monkeypatch.setattr(documents, "delete_paper_object", _delete_parent)
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
@@ -1619,7 +1617,7 @@ async def test_delete_document_endpoint_cancel_before_destructive_write_cancels_
         assert lock_key in _FakeLockConnection.held
         in_get_document.set()
         await asyncio.sleep(5)
-        return {"document": {"processing_status": "completed"}}
+        return {"processingStatus": "completed"}
 
     async def _unexpected_wipe(*_args, **_kwargs):
         nonlocal wipe_called
@@ -1627,7 +1625,7 @@ async def test_delete_document_endpoint_cancel_before_destructive_write_cancels_
         return {"success": True, "chunks_deleted": 0}
 
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", _slow_get_document)
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", _slow_get_document)
     monkeypatch.setattr(documents, "delete_paper_chunks", _unexpected_wipe)
     monkeypatch.setattr(
         documents,
@@ -1690,7 +1688,7 @@ async def test_delete_document_endpoint_cancel_during_incomplete_chunk_wipe_reta
     monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value({"processingStatus": "completed"}))
     monkeypatch.setattr(documents, "delete_paper_chunks", _incomplete_wipe)
     monkeypatch.setattr(
         documents,
@@ -1772,7 +1770,7 @@ async def test_delete_document_endpoint_cancel_during_file_unlink_failure_retain
     monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value({"processingStatus": "completed"}))
     monkeypatch.setattr(documents, "delete_paper_chunks", _wipe_chunks)
     monkeypatch.setattr(documents, "remove_stored_files", _fail_unlink)
     monkeypatch.setattr(
@@ -1864,7 +1862,7 @@ async def test_delete_document_endpoint_cancel_during_pool_timeout_emits_one_san
     monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value({"processingStatus": "completed"}))
     monkeypatch.setattr(documents, "delete_paper_chunks", _wipe_chunks)
     monkeypatch.setattr(documents, "delete_paper_object", lambda *_args, **_kwargs: _async_value({"success": True, "deleted": True}))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
@@ -1963,7 +1961,7 @@ async def test_delete_document_endpoint_cancel_in_pre_submission_scheduling_gap_
     monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value({"processingStatus": "completed"}))
     monkeypatch.setattr(documents, "delete_paper_chunks", _unexpected_wipe)
     monkeypatch.setattr(documents, "delete_paper_object", _unexpected_parent)
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
@@ -2022,7 +2020,7 @@ async def test_delete_document_endpoint_cancel_preserves_cancellation_when_repor
     monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value({"processingStatus": "completed"}))
     monkeypatch.setattr(documents, "delete_paper_chunks", _wipe_chunks)
     monkeypatch.setattr(documents, "remove_stored_files", _fail_unlink)
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
@@ -2087,7 +2085,7 @@ async def test_delete_document_endpoint_cancel_during_real_chunk_wipe_checkpoint
     monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value({"processingStatus": "completed"}))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args, **_kwargs: _async_value(None))
@@ -2164,8 +2162,8 @@ async def test_delete_document_endpoint_cancel_at_chunk_wipe_yield_before_submit
     )
     monkeypatch.setattr(
         documents,
-        "get_document",
-        lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}),
+        "get_paper_status_for_delete",
+        lambda *_args, **_kwargs: _async_value({"processingStatus": "completed"}),
     )
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_paper_job_for_document", lambda **_kwargs: None)
@@ -2301,7 +2299,7 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
         paper_lock.open_paper_lock_session = _open_lock_session
         documents.provision_user_async = lambda _p: asyncio.sleep(0, result=SimpleNamespace(id=42))
         documents.verify_document_ownership = lambda *_a, **_kw: SimpleNamespace(id=doc_id, user_id=42)
-        documents.get_document = lambda *_a, **_kw: asyncio.sleep(0, result={{"document": {{"processing_status": "completed"}}}})
+        documents.get_paper_status_for_delete = lambda *_a, **_kw: asyncio.sleep(0, result={{"processingStatus": "completed"}})
         documents.pdf_job_service.get_latest_job_for_document = lambda **_kw: None
         documents.pipeline_tracker.get_pipeline_status = lambda *_a, **_kw: asyncio.sleep(0, result=None)
         documents.cleanup_document_curation_dependencies = lambda *_a, **_kw: {{}}
@@ -2475,7 +2473,7 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("failure_step", ["chunk_wipe", "parent_object", "stored_files", "sql_cleanup", "unexpected"])
+@pytest.mark.parametrize("failure_step", ["chunk_wipe", "parent_object", "missing_parent_wipe", "stored_files", "sql_cleanup", "index_lookup", "ownership"])
 def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_without_request_url(
     failure_step,
 ):
@@ -2550,6 +2548,8 @@ def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_withou
                     scalars=lambda: SimpleNamespace(first=lambda: self._doc),
                     scalar_one_or_none=lambda: self._doc,
                 )
+            def scalar(self, _statement):
+                return "library"
             def delete(self, _row):
                 if self._fail_on_delete:
                     raise RuntimeError(f"{{secret_detail}} {{doc_id}}")
@@ -2570,6 +2570,7 @@ def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_withou
         )
         sessions = [
             _Session(),
+            _Session(SimpleNamespace(id=42)),  # Library access check on the lock connection.
             _Session(paper),
             _Session(paper),
             _Session(paper, fail_on_delete=({failure_step!r} == "sql_cleanup")),
@@ -2583,7 +2584,6 @@ def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_withou
         paper_lock.open_paper_lock_session = _open_lock_session
         documents.provision_user_async = lambda _p: asyncio.sleep(0, result=SimpleNamespace(id=42))
         documents.verify_document_ownership = lambda *_a, **_kw: SimpleNamespace(id=doc_id, user_id=42)
-        documents.get_document = lambda *_a, **_kw: asyncio.sleep(0, result={{"document": {{"processing_status": "completed"}}}})
         documents.pdf_job_service.get_latest_job_for_document = lambda **_kw: None
         documents.pipeline_tracker.get_pipeline_status = lambda *_a, **_kw: asyncio.sleep(0, result=None)
         documents.cleanup_document_curation_dependencies = lambda *_a, **_kw: {{}}
@@ -2593,7 +2593,8 @@ def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_withou
             documents.remove_stored_files = _boom_files
 
         @contextmanager
-        def _weaviate_session(*_a, **_kw):
+        def _weaviate_session(*, caller_reports_failure):
+            assert caller_reports_failure is True
             yield MagicMock()
 
         conn = MagicMock()
@@ -2601,13 +2602,22 @@ def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_withou
         chunks, papers = MagicMock(), MagicMock()
         chunks.data.delete_many.return_value = SimpleNamespace(successful=2, matches=2, failed=0)
         papers.data.delete_by_id.return_value = True
-        index_failure = {failure_step!r} in {{"chunk_wipe", "parent_object"}}
+        index_step = "chunk_wipe" if {failure_step!r} == "missing_parent_wipe" else {failure_step!r}
+        index_failure = index_step in {{"chunk_wipe", "parent_object"}}
         if index_failure:
-            target = chunks.data.delete_many if {failure_step!r} == "chunk_wipe" else papers.data.delete_by_id
+            target = chunks.data.delete_many if index_step == "chunk_wipe" else papers.data.delete_by_id
             target.side_effect = RuntimeError(f"{{secret_detail}} {{doc_id}}")
-        if {failure_step!r} == "unexpected":
-            documents.get_document = MagicMock(side_effect=RuntimeError(f"{{secret_detail}} {{doc_id}}"))
-        weaviate_docs.get_connection = lambda *, caller_reports_failure: conn
+        papers.query.fetch_object_by_id.return_value = SimpleNamespace(properties={{"processingStatus": "completed"}})
+        if {failure_step!r} == "missing_parent_wipe":
+            papers.query.fetch_object_by_id.return_value = None
+        if {failure_step!r} == "index_lookup":
+            papers.query.fetch_object_by_id.side_effect = RuntimeError(f"{{secret_detail}} {{doc_id}}")
+        if {failure_step!r} == "ownership":
+            documents.verify_document_ownership = MagicMock(side_effect=RuntimeError(f"{{secret_detail}} {{doc_id}}"))
+        def _get_connection(*, caller_reports_failure):
+            assert caller_reports_failure is True
+            return conn
+        weaviate_docs.get_connection = _get_connection
         weaviate_docs.get_user_collections = lambda *_a: (chunks, papers)
 
         async def _exercise():
@@ -2623,6 +2633,11 @@ def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_withou
 
         asyncio.run(_exercise())
 
+        if {failure_step!r} == "ownership":
+            papers.query.fetch_object_by_id.assert_not_called()
+        else:
+            papers.query.fetch_object_by_id.assert_called_once_with(doc_id, return_properties=["processingStatus"])
+        chunks.query.fetch_objects.assert_not_called()
         assert len(events) == 1, f"expected 1 Sentry event, got {{len(events)}}: {{events!r}}"
         event = events[0]
         assert "request" not in event, f"request leaked: {{event.get('request')!r}}"
@@ -2634,10 +2649,10 @@ def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_withou
             "document_id_hash": hash_sentry_identifier(doc_id),
             "exception_type": "RuntimeError",
         }}
-        if {failure_step!r} == "unexpected":
+        if {failure_step!r} in {{"ownership", "index_lookup"}}:
             expected_context["operation"] = "paper_delete_failed"
         else:
-            expected_context["step"] = {failure_step!r}
+            expected_context["step"] = index_step
         assert event["contexts"]["runtime_exception"] == expected_context
         log_output = log_buffer.getvalue()
         assert "exception_type=RuntimeError" in log_output
@@ -3492,7 +3507,7 @@ async def test_a_delete_during_a_supplement_wait_ends_the_wait_and_deletes_the_p
     latest = [_stage_job("running"), _stage_job("cancelled")]
 
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value({"processingStatus": "completed"}))
     monkeypatch.setattr(documents, "delete_paper_chunks", lambda *_args, **_kwargs: _async_value({"success": True, "chunks_deleted": 3}))
     monkeypatch.setattr(documents, "delete_paper_object", lambda *_args, **_kwargs: _async_value({"success": True, "deleted": True}))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: latest.pop(0))
@@ -3520,7 +3535,7 @@ async def test_a_delete_while_the_stage_writes_files_is_refused(monkeypatch):
     ended = []
 
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(id=doc_id, user_id=42))
-    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed"}}))
+    monkeypatch.setattr(documents, "get_paper_status_for_delete", lambda *_args, **_kwargs: _async_value({"processingStatus": "completed"}))
     monkeypatch.setattr(
         documents.pdf_job_service, "get_latest_job_for_document",
         lambda **_kwargs: _stage_job("running", stage="adding_supplements"),
