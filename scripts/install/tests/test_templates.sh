@@ -57,6 +57,8 @@ required_env_keys=(
   AGR_RUNTIME_CONFIG_HOST_DIR
   AGR_RUNTIME_PACKAGES_HOST_DIR
   AGR_RUNTIME_STATE_HOST_DIR
+  AGR_PACKAGE_ENV_BOOTSTRAP_MODE
+  AGR_PREBUILT_PACKAGE_ENVS_DIR
   PDF_STORAGE_HOST_DIR
   FILE_OUTPUT_STORAGE_HOST_DIR
   WEAVIATE_DATA_HOST_DIR
@@ -125,6 +127,8 @@ grep -q '^LANGFUSE_EVENT_PROPAGATION_STUCK_THRESHOLD_MINUTES=15$' "$env_template
 grep -q '^HEALTH_CHECK_REQUIRE_EXTERNAL_VALIDATION_DEPS=true$' "$env_template"
 grep -q '^HEALTH_CHECK_REQUIRE_LITERATURE_DB=true$' "$env_template"
 grep -q '^SECURE_COOKIES=true$' "$env_template"
+grep -q '^AGR_PACKAGE_ENV_BOOTSTRAP_MODE=prebuilt$' "$env_template"
+grep -q '^AGR_PREBUILT_PACKAGE_ENVS_DIR=/opt/package-envs$' "$env_template"
 grep -q '^PDF_UPLOAD_MAX_PAGE_COUNT=300$' "$env_template"
 grep -q '^PDF_EXTRACTION_TIMEOUT=3600$' "$env_template"
 grep -q '^WEAVIATE_AUTH_ENABLED=true$' "$env_template"

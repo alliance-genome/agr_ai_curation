@@ -1,8 +1,9 @@
 # Runtime dependencies for the tracked AGR Alliance package.
 # Some packaged tools still rely on public host-runtime surfaces exposed via
 # agr_ai_curation_runtime during isolated package execution.
-# Versions shared with the backend resolve to backend/requirements.lock.txt:
-# the package environment installs with that lock as a pip constraints file.
+# Versions shared with the backend resolve to backend/requirements.lock.txt.
+# Exact pinned versions and SHA-256 hashes live in runtime.lock.txt, which
+# backend/Dockerfile.prod installs with --require-hashes --no-deps --no-build-isolation.
 openai-agents
 pydantic>=2.0
 requests>=2.0

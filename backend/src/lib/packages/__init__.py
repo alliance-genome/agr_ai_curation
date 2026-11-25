@@ -33,9 +33,15 @@ from .document_source_provider_models import (
     DocumentSourceProviderRegistration,
 )
 from .env_manager import (
+    PACKAGE_ENV_BOOTSTRAP_MODES,
+    PACKAGE_ENV_BOOTSTRAP_MODE_DYNAMIC,
+    PACKAGE_ENV_BOOTSTRAP_MODE_ENV_VAR,
+    PACKAGE_ENV_BOOTSTRAP_MODE_PREBUILT,
     PackageEnvironment,
     PackageEnvironmentBootstrapError,
     PackageEnvironmentManager,
+    get_package_env_bootstrap_mode,
+    parse_package_env_bootstrap_mode,
 )
 from .health import build_package_health_report
 from .flow_recipes import (
@@ -91,6 +97,7 @@ from .package_runner import (
     execute_package_tool,
 )
 from .paths import (
+    DEFAULT_PREBUILT_PACKAGE_ENVS_DIR,
     get_file_output_dir,
     get_identifier_prefix_file_path,
     get_identifier_prefix_state_dir,
@@ -99,6 +106,10 @@ from .paths import (
     get_package_runner_package_state_dir,
     get_package_runner_state_dir,
     get_package_runner_venv_dir,
+    get_prebuilt_package_env_dir,
+    get_prebuilt_package_envs_dir,
+    get_prebuilt_package_metadata_path,
+    get_prebuilt_package_venv_dir,
     get_pdf_storage_dir,
     get_pdfx_json_storage_dir,
     get_processed_json_storage_dir,
@@ -149,6 +160,7 @@ from .tool_registry import (
 __all__ = [
     "AgentStudioPromptLoadError",
     "AgentStudioPromptSource",
+    "DEFAULT_PREBUILT_PACKAGE_ENVS_DIR",
     "DiscoveredPackage",
     "CurationAdapterLoadError",
     "DocumentSourceProviderCatalog",
@@ -169,6 +181,10 @@ __all__ = [
     "LoadedDocumentSourceProviderRegistration",
     "LoadedIdentifierPrefixProvider",
     "LoadedToolBindingExport",
+    "PACKAGE_ENV_BOOTSTRAP_MODES",
+    "PACKAGE_ENV_BOOTSTRAP_MODE_DYNAMIC",
+    "PACKAGE_ENV_BOOTSTRAP_MODE_ENV_VAR",
+    "PACKAGE_ENV_BOOTSTRAP_MODE_PREBUILT",
     "PROTOCOL_VERSION",
     "AgentBundleRegistrationError",
     "PackageContractError",
@@ -225,11 +241,16 @@ __all__ = [
     "get_file_output_dir",
     "get_identifier_prefix_file_path",
     "get_identifier_prefix_state_dir",
+    "get_package_env_bootstrap_mode",
     "get_package_manifest_path",
     "get_package_runner_metadata_path",
     "get_package_runner_package_state_dir",
     "get_package_runner_state_dir",
     "get_package_runner_venv_dir",
+    "get_prebuilt_package_env_dir",
+    "get_prebuilt_package_envs_dir",
+    "get_prebuilt_package_metadata_path",
+    "get_prebuilt_package_venv_dir",
     "get_pdf_storage_dir",
     "get_pdfx_json_storage_dir",
     "get_processed_json_storage_dir",
@@ -254,6 +275,7 @@ __all__ = [
     "load_runtime_overrides",
     "load_tool_bindings",
     "load_tool_registry",
+    "parse_package_env_bootstrap_mode",
     "resolve_default_packages_dir",
     "resolve_agent_studio_prompt",
     "validate_agent_bundle_directory_registration",

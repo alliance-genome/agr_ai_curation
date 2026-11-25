@@ -1,0 +1,23 @@
+# Scope repository-root builds of backend/Dockerfile.prod to the inputs it copies.
+*
+!backend/requirements.lock.txt
+!backend/requirements.txt
+!backend/cost_pricing
+!backend/auth_runtime
+!backend/src
+!backend/main.py
+!backend/alembic
+!backend/alembic.ini
+!packages
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.env
+**/.env*
+**/*.env
+**/*.pem
+**/*.key
+**/*.ovpn
+**/*credentials*
+**/*secret*
+**/.git

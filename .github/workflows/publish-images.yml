@@ -102,7 +102,7 @@ jobs:
         include:
           - artifact_id: backend
             build_args: ""
-            context: backend
+            context: .
             display_name: backend
             dockerfile: backend/Dockerfile.prod
             manifest_key: backend
@@ -196,6 +196,166 @@ jobs:
           push: true
           sbom: false
           tags: ${{ steps.tags.outputs.tags }}
+
+      - name: Verify backend prebuilt package environments offline
+        if: matrix.artifact_id == 'backend'
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          REPOSITORY: ${{ matrix.repository }}
+        run: |
+          image_ref="${REPOSITORY}@${DIGEST}"
+          docker pull "${image_ref}"
+          docker run --rm -i --network=none \
+            -v "${PWD}/packages:/runtime/packages:ro" \
+            --entrypoint /usr/local/bin/python3 "${image_ref}" -I -S - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+          import subprocess
+          import sys
+          import textwrap
+
+          known_pth = {
+              "a1_coverage.pth",
+              "distutils-precedence.pth",
+              "sphinxcontrib_jsmath-1.0.1-py3.7-nspkg.pth",
+          }
+          python_name_re = re.compile(r"^python(?:\d+(?:\.\d+)*)?$")
+
+          def scan_pth_under(lib_dir: pathlib.Path) -> None:
+              assert lib_dir.is_dir() and not lib_dir.is_symlink(), lib_dir
+              lib_resolved = lib_dir.resolve(strict=True)
+              saw_site_packages = False
+              unknown_pth = []
+              for dirpath, dirnames, filenames in os.walk(lib_dir, followlinks=False):
+                  current = pathlib.Path(dirpath)
+                  assert not current.is_symlink(), current
+                  assert current.resolve(strict=True).is_relative_to(lib_resolved), current
+                  if current.name == "site-packages":
+                      saw_site_packages = True
+                  for dirname in dirnames:
+                      subdir = current / dirname
+                      assert not subdir.is_symlink(), f"Symlinked directory under {lib_dir}: {subdir}"
+                  for filename in sorted(filenames):
+                      if filename.endswith(".pth"):
+                          pth = current / filename
+                          assert not pth.is_symlink(), f"Symlinked .pth file: {pth}"
+                          if filename not in known_pth:
+                              unknown_pth.append(str(pth))
+              assert saw_site_packages, f"Expected site-packages directory under {lib_dir}"
+              assert not unknown_pth, f"Unknown .pth file(s) detected under {lib_dir}: {unknown_pth}"
+
+          # 1. Validate directory trees and scan /opt/venv and /opt/package-envs for
+          # unknown .pth files BEFORE invoking any venv interpreter (base python3 -I -S).
+          opt_venv = pathlib.Path("/opt/venv")
+          assert opt_venv.is_dir() and not opt_venv.is_symlink(), opt_venv
+          scan_pth_under(opt_venv / "lib")
+
+          root = pathlib.Path("/opt/package-envs")
+          assert root.is_dir() and not root.is_symlink(), root
+          root_resolved = root.resolve(strict=True)
+          env_dirs = sorted(p for p in root.iterdir() if p.is_dir())
+          assert env_dirs, "Expected at least one prebuilt package environment under /opt/package-envs"
+
+          backend_lock = pathlib.Path("/app/backend/requirements.lock.txt")
+          assert backend_lock.is_file() and not backend_lock.is_symlink(), backend_lock
+          backend_lock_sha256 = hashlib.sha256(backend_lock.read_bytes()).hexdigest()
+          base_python = pathlib.Path(sys.executable).resolve(strict=True)
+          sha256_re = re.compile(r"^[0-9a-f]{64}$")
+
+          venv_pythons = []
+          for env_dir in env_dirs:
+              assert not env_dir.is_symlink(), env_dir
+              env_resolved = env_dir.resolve(strict=True)
+              assert env_resolved.is_relative_to(root_resolved), env_dir
+
+              venv_dir = env_dir / "venv"
+              assert venv_dir.is_dir() and not venv_dir.is_symlink(), venv_dir
+              venv_resolved = venv_dir.resolve(strict=True)
+              assert venv_resolved.is_relative_to(env_resolved), venv_dir
+              scan_pth_under(venv_dir / "lib")
+
+              meta_path = env_dir / "environment.json"
+              assert meta_path.is_file() and not meta_path.is_symlink(), meta_path
+              assert meta_path.resolve(strict=True).is_relative_to(env_resolved), meta_path
+
+              meta = json.loads(meta_path.read_text(encoding="utf-8"))
+              assert meta.get("prebuilt") is True, (env_dir, meta.get("prebuilt"))
+              assert meta.get("package_id") == env_dir.name, (env_dir, meta.get("package_id"))
+              fingerprint = meta.get("fingerprint")
+              assert isinstance(fingerprint, str) and sha256_re.fullmatch(fingerprint), (
+                  env_dir,
+                  fingerprint,
+              )
+              assert meta.get("constraints_sha256") == backend_lock_sha256, (
+                  env_dir,
+                  meta.get("constraints_sha256"),
+                  backend_lock_sha256,
+              )
+
+              py = venv_dir / "bin" / "python"
+              assert py.parent.is_dir() and not py.parent.is_symlink(), py.parent
+              py_bin_resolved = py.parent.resolve(strict=True)
+              assert py_bin_resolved.is_relative_to(venv_resolved), py.parent
+              assert py.is_file() and os.access(py, os.X_OK), py
+              py_resolved = py.resolve(strict=True)
+              if py.is_symlink():
+                  allowed_local_py = (
+                      py_resolved.parent == py_bin_resolved
+                      and python_name_re.fullmatch(py_resolved.name) is not None
+                  )
+                  assert py_resolved == base_python or allowed_local_py, (
+                      py,
+                      py_resolved,
+                      base_python,
+                  )
+              else:
+                  assert py_resolved.is_relative_to(venv_resolved), (py, py_resolved)
+              venv_pythons.append(py)
+
+          # 2. Verify checkout-derived package set and prebuilt fingerprints for ALL
+          # environments BEFORE invoking any package interpreter.
+          verify_runtime_code = textwrap.dedent(
+              """
+              from pathlib import Path
+              from src.lib.packages.discovery import discover_package_manifests
+              from src.lib.packages.env_manager import PackageEnvironmentManager
+              from src.lib.packages.models import ExportKind
+              from src.lib.packages.registry import LoadedPackage
+
+              discovered, failures = discover_package_manifests(Path("/runtime/packages"))
+              assert not failures, failures
+              manager = PackageEnvironmentManager(mode="prebuilt")
+              verified = set()
+              for item in discovered:
+                  if not any(e.kind == ExportKind.TOOL_BINDING for e in item.manifest.exports):
+                      continue
+                  loaded = LoadedPackage(
+                      package_id=item.manifest.package_id,
+                      display_name=item.manifest.display_name,
+                      version=item.manifest.version,
+                      package_path=item.package_path,
+                      manifest_path=item.manifest_path,
+                      manifest=item.manifest,
+                  )
+                  env = manager.ensure_environment(loaded)
+                  assert env.reused is True and env.mode == "prebuilt", env
+                  verified.add(loaded.package_id)
+              expected = {p.name for p in Path("/opt/package-envs").iterdir() if p.is_dir()}
+              assert verified == expected, (verified, expected)
+              print(f"Verified {len(verified)} prebuilt package environment(s): {sorted(verified)}")
+              """
+          )
+          subprocess.run(["/opt/venv/bin/python", "-c", verify_runtime_code], check=True)
+
+          # 3. Only after .pth allowlist, symlink/metadata checks, and checkout-derived
+          # package-set/fingerprint verification pass, run pip check in each package venv.
+          for py in venv_pythons:
+              subprocess.run([str(py), "-m", "pip", "check"], check=True)
+          PY
 
       - name: Verify frontend compiled mode artifact
         if: matrix.artifact_id == 'frontend'

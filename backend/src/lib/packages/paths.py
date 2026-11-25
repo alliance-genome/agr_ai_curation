@@ -43,6 +43,7 @@ DEFAULT_IDENTIFIER_PREFIX_FILENAME = "identifier_prefixes.json"
 DEFAULT_PACKAGE_RUNNER_STATE_DIRNAME = "package_runner"
 DEFAULT_PACKAGE_RUNNER_VENV_DIRNAME = "venv"
 DEFAULT_PACKAGE_RUNNER_METADATA_FILENAME = "environment.json"
+DEFAULT_PREBUILT_PACKAGE_ENVS_DIR = Path("/opt/package-envs")
 
 
 def _normalize_path(path: Path) -> Path:
@@ -220,6 +221,53 @@ def get_package_runner_metadata_path(package_id: str) -> Path:
     """Return the package-runner environment metadata file for one package."""
     return _normalize_path(
         get_package_runner_package_state_dir(package_id)
+        / DEFAULT_PACKAGE_RUNNER_METADATA_FILENAME
+    )
+
+
+def get_prebuilt_package_envs_dir() -> Path:
+    """Return the root directory containing image-baked package environments."""
+    raw_value = os.getenv("AGR_PREBUILT_PACKAGE_ENVS_DIR")
+    if raw_value and raw_value.strip():
+        return _normalize_path(Path(raw_value.strip()))
+    return _normalize_path(DEFAULT_PREBUILT_PACKAGE_ENVS_DIR)
+
+
+def get_prebuilt_package_env_dir(
+    package_id: str,
+    *,
+    prebuilt_envs_dir: Path | None = None,
+) -> Path:
+    """Return the image-baked environment directory for one package."""
+    safe_package_id = _validate_package_id_path_component(package_id)
+    root = (
+        _normalize_path(prebuilt_envs_dir)
+        if prebuilt_envs_dir is not None
+        else get_prebuilt_package_envs_dir()
+    )
+    return _normalize_path(root / safe_package_id)
+
+
+def get_prebuilt_package_venv_dir(
+    package_id: str,
+    *,
+    prebuilt_envs_dir: Path | None = None,
+) -> Path:
+    """Return the image-baked virtual environment directory for one package."""
+    return _normalize_path(
+        get_prebuilt_package_env_dir(package_id, prebuilt_envs_dir=prebuilt_envs_dir)
+        / DEFAULT_PACKAGE_RUNNER_VENV_DIRNAME
+    )
+
+
+def get_prebuilt_package_metadata_path(
+    package_id: str,
+    *,
+    prebuilt_envs_dir: Path | None = None,
+) -> Path:
+    """Return the image-baked environment metadata file for one package."""
+    return _normalize_path(
+        get_prebuilt_package_env_dir(package_id, prebuilt_envs_dir=prebuilt_envs_dir)
         / DEFAULT_PACKAGE_RUNNER_METADATA_FILENAME
     )
 

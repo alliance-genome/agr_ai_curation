@@ -24,6 +24,7 @@ import json
 import logging
 import math
 import os
+from pathlib import Path
 import re
 from typing import Literal, Optional, TYPE_CHECKING, Union
 from dataclasses import dataclass
@@ -3339,6 +3340,34 @@ def get_package_runner_timeout_seconds() -> float:
     a minute importing the package and completing their database query.
     """
     return max(1.0, _get_env_float_with_fallback("PACKAGE_RUNNER_TIMEOUT_SECONDS", 120.0))
+
+
+def get_package_env_bootstrap_mode() -> str:
+    """Package environment preparation mode (AGR_PACKAGE_ENV_BOOTSTRAP_MODE).
+
+    ``prebuilt`` verifies image-baked virtual environments under
+    ``AGR_PREBUILT_PACKAGE_ENVS_DIR`` against the mounted package fingerprint
+    and fails loudly without running pip or accessing the network on any
+    mismatch. ``dynamic`` creates or reuses virtual environments under runtime
+    state for local development and tests. Default ``dynamic``.
+    """
+    from src.lib.packages.env_manager import (
+        get_package_env_bootstrap_mode as _get_package_env_bootstrap_mode,
+    )
+
+    return _get_package_env_bootstrap_mode()
+
+
+def get_prebuilt_package_envs_dir() -> Path:
+    """Directory holding image-baked package environments (AGR_PREBUILT_PACKAGE_ENVS_DIR).
+
+    Used when ``AGR_PACKAGE_ENV_BOOTSTRAP_MODE=prebuilt``. Default ``/opt/package-envs``.
+    """
+    from src.lib.packages.paths import (
+        get_prebuilt_package_envs_dir as _get_prebuilt_package_envs_dir,
+    )
+
+    return _get_prebuilt_package_envs_dir()
 
 
 def get_agent_studio_trace_tool_timeout_seconds() -> float:

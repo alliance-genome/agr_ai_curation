@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -208,6 +209,9 @@ def startup_runtime(monkeypatch):
     from src.lib.weaviate_client import connection as weaviate_connection
 
     monkeypatch.setenv("WEAVIATE_EXPECTED_VERSION", "1.31.18")
+    monkeypatch.delenv("AGR_PACKAGE_ENV_BOOTSTRAP_MODE", raising=False)
+    monkeypatch.delenv("AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START", raising=False)
+    monkeypatch.delenv("AGR_PACKAGE_ENVS_PREPARED", raising=False)
     real_get_connection = weaviate_connection.get_connection
     search_index = MagicMock(side_effect=lambda: calls.append("search_index"))
     monkeypatch.setattr(weaviate_connection, "get_connection", search_index)
@@ -302,6 +306,84 @@ async def test_worker_without_expected_version_stops_at_start(monkeypatch, start
         await state.worker._main()
     state.search_index.assert_not_called()
     constructor.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_worker_fails_fast_at_start_when_prebuilt_package_env_missing(
+    monkeypatch,
+    startup_runtime,
+    tmp_path: Path,
+):
+    from src.lib.packages.env_manager import PackageEnvironmentBootstrapError
+
+    state = startup_runtime
+    runtime_root = tmp_path / "runtime"
+    pkg_dir = runtime_root / "packages" / "demo.tooling"
+    (pkg_dir / "requirements").mkdir(parents=True)
+    (pkg_dir / "tools").mkdir(parents=True)
+    (pkg_dir / "config").mkdir(parents=True)
+    (pkg_dir / "package.yaml").write_text(
+        """package_id: demo.tooling
+display_name: Demo Tooling
+version: 1.0.0
+package_api_version: 1.0.0
+min_runtime_version: 1.0.0
+max_runtime_version: 2.0.0
+python_package_root: python/src
+requirements_file: requirements/runtime.txt
+exports:
+  - kind: agent_studio_prompt
+    name: system
+    path: config/agent_studio_system_prompt.md
+  - kind: tool_binding
+    name: default
+    path: tools/bindings.yaml
+""",
+        encoding="utf-8",
+    )
+    (pkg_dir / "config" / "agent_studio_system_prompt.md").write_text(
+        "Demo prompt.\n",
+        encoding="utf-8",
+    )
+    (pkg_dir / "requirements" / "runtime.txt").write_text("", encoding="utf-8")
+    (pkg_dir / "python" / "src" / "demo_tooling").mkdir(parents=True)
+    (pkg_dir / "python" / "src" / "demo_tooling" / "tools.py").write_text(
+        "def ping() -> str:\n    return 'pong'\n",
+        encoding="utf-8",
+    )
+    (pkg_dir / "tools" / "bindings.yaml").write_text(
+        """package_id: demo.tooling
+bindings_api_version: 1.0.0
+tools:
+  - tool_id: demo_ping
+    binding_kind: static
+    callable: demo_tooling.tools:ping
+    required_context: []
+    source_file: python/src/demo_tooling/tools.py
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(runtime_root / "packages"))
+    monkeypatch.setenv("AGR_PACKAGE_ENV_BOOTSTRAP_MODE", "prebuilt")
+    monkeypatch.setenv("AGR_PREBUILT_PACKAGE_ENVS_DIR", str(tmp_path / "empty-prebuilt"))
+
+    constructor = MagicMock()
+    monkeypatch.setattr(state.worker, "BenchmarkWorker", constructor)
+
+    with pytest.raises(PackageEnvironmentBootstrapError, match="Prebuilt package environment"):
+        await state.worker._main()
+    constructor.assert_not_called()
+    state.tracing.assert_not_called()
+
+    # When runtime_entrypoint already prepared environments, worker skips duplicate verification.
+    monkeypatch.setenv("AGR_PACKAGE_ENVS_PREPARED", "1")
+    run = AsyncMock()
+    monkeypatch.setattr(BenchmarkWorker, "run_forever", run)
+    monkeypatch.setattr(state.worker, "BenchmarkWorker", BenchmarkWorker)
+    await state.worker._main()
+    assert run.await_count == 2
 
 
 @pytest.mark.asyncio

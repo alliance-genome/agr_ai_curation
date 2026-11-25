@@ -36,6 +36,8 @@ def _clear_runtime_env(monkeypatch):
         "IDENTIFIER_PREFIX_FILE_PATH",
         "AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START",
         "AGR_PACKAGE_ENVS_PREPARED",
+        "AGR_PACKAGE_ENV_BOOTSTRAP_MODE",
+        "AGR_PREBUILT_PACKAGE_ENVS_DIR",
         "RUN_DB_BOOTSTRAP_ON_START",
         "RUN_DB_MIGRATIONS_ON_START",
         "CURATION_DB_URL",
@@ -299,6 +301,7 @@ def test_bootstrap_package_environments_only_targets_tool_packages(monkeypatch, 
 
     class FakeEnvironment:
         reused = False
+        mode = "dynamic"
 
     class FakeManager:
         def ensure_environment(self, package: LoadedPackage):
@@ -416,6 +419,7 @@ def test_bootstrap_package_environments_marks_startup_sentinel(monkeypatch, tmp_
 
     class FakeEnvironment:
         reused = False
+        mode = "dynamic"
 
     class FakeManager:
         def ensure_environment(self, _package: LoadedPackage):
@@ -426,6 +430,72 @@ def test_bootstrap_package_environments_marks_startup_sentinel(monkeypatch, tmp_
     runtime_entrypoint.bootstrap_package_environments(registry)
 
     assert os.getenv("AGR_PACKAGE_ENVS_PREPARED") == "1"
+
+
+def test_bootstrap_package_environments_fails_startup_when_prebuilt_env_missing(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from src.lib.packages.env_manager import PackageEnvironmentBootstrapError
+
+    package_dir = tmp_path / "packages" / "demo.tooling"
+    (package_dir / "requirements").mkdir(parents=True)
+    (package_dir / "requirements" / "runtime.txt").write_text("", encoding="utf-8")
+    registry = PackageRegistry(
+        packages_dir=tmp_path / "packages",
+        runtime_version="1.0.0",
+        supported_package_api_version="1.0.0",
+        loaded_packages=(
+            _loaded_package("demo.tooling", package_dir, has_tool_binding=True),
+        ),
+        failed_packages=(),
+        validation_errors=(),
+    )
+    monkeypatch.setenv("AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START", "true")
+    monkeypatch.setenv("AGR_PACKAGE_ENV_BOOTSTRAP_MODE", "prebuilt")
+    monkeypatch.setenv("AGR_PREBUILT_PACKAGE_ENVS_DIR", str(tmp_path / "empty-prebuilt"))
+
+    with pytest.raises(PackageEnvironmentBootstrapError, match="Prebuilt package environment"):
+        runtime_entrypoint.bootstrap_package_environments(registry)
+    assert os.getenv("AGR_PACKAGE_ENVS_PREPARED") is None
+
+
+def test_prebuilt_mode_always_verifies_at_startup_even_when_eager_flag_is_false(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from src.lib.packages.env_manager import PackageEnvironmentBootstrapError
+
+    package_dir = tmp_path / "packages" / "demo.tooling"
+    (package_dir / "requirements").mkdir(parents=True)
+    (package_dir / "requirements" / "runtime.txt").write_text("", encoding="utf-8")
+    registry = PackageRegistry(
+        packages_dir=tmp_path / "packages",
+        runtime_version="1.0.0",
+        supported_package_api_version="1.0.0",
+        loaded_packages=(
+            _loaded_package("demo.tooling", package_dir, has_tool_binding=True),
+        ),
+        failed_packages=(),
+        validation_errors=(),
+    )
+    monkeypatch.setenv("AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START", "false")
+    monkeypatch.setenv("AGR_PACKAGE_ENV_BOOTSTRAP_MODE", "prebuilt")
+    monkeypatch.setenv("AGR_PREBUILT_PACKAGE_ENVS_DIR", str(tmp_path / "empty-prebuilt"))
+
+    with pytest.raises(PackageEnvironmentBootstrapError, match="Prebuilt package environment"):
+        runtime_entrypoint.bootstrap_package_environments(registry)
+
+    calls: list[object] = []
+    monkeypatch.setattr(runtime_entrypoint, "ensure_runtime_layout", lambda: calls.append("layout"))
+    monkeypatch.setattr(runtime_entrypoint, "validate_runtime_packages", lambda: registry)
+    monkeypatch.setattr(
+        runtime_entrypoint,
+        "_bootstrap_package_environments",
+        lambda value: calls.append(value),
+    )
+    assert runtime_entrypoint.maybe_prepare_package_tool_environments_on_start() is True
+    assert calls == ["layout", registry]
 
 
 def _prefix_provider(provider):

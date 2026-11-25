@@ -111,6 +111,17 @@ def validate_config(
         "HEALTH_CHECK_REQUIRE_LITERATURE_DB",
         True,
     )
+    for service_name in ("backend", "benchmark_worker"):
+        if service_name not in services:
+            continue
+        service_env = _environment(services[service_name])
+        bootstrap_mode = str(
+            service_env.get("AGR_PACKAGE_ENV_BOOTSTRAP_MODE", "")
+        ).strip().lower()
+        if bootstrap_mode != "prebuilt":
+            errors.append(
+                f"{service_name}.AGR_PACKAGE_ENV_BOOTSTRAP_MODE must render as prebuilt"
+            )
     auth_provider = str(backend_env.get("AUTH_PROVIDER", "")).strip().lower()
     required_auth_keys: tuple[str, ...] = ()
     if auth_provider == "oidc":

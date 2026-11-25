@@ -637,6 +637,12 @@ def initialize_worker_runtime() -> None:
     get_weaviate_expected_version()
     get_connection()
 
+    from src.lib.runtime_entrypoint import (
+        maybe_prepare_package_tool_environments_on_start,
+    )
+
+    maybe_prepare_package_tool_environments_on_start()
+
     try:
         from src.lib.openai_agents.langfuse_client import (
             initialize_langfuse,
