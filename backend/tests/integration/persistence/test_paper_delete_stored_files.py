@@ -2,21 +2,23 @@
 
 Deleting one paper must remove only that paper's stored files: never another paper's
 PDF, nor the shared per-user folders that hold every paper's Markdown and processed
-JSON. The real delete endpoint runs; only the search-index wipe is a stand-in. All
-values are made up.
+JSON. The retry test also exercises the real search index. All values are made up.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
 from alembic.config import Config
+from fastapi import HTTPException
 from sqlalchemy import delete
 
 from src.api import documents as documents_api
+from src.lib.weaviate_helpers import get_user_collections
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument, PDFDocumentFile
 from tests.pdf_document_test_support import ensure_test_pdf_owner, new_paper
@@ -39,25 +41,34 @@ def storage(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def owner_id(monkeypatch):
+def provisioned_owner(monkeypatch):
     with SessionLocal.begin() as db:
         owner = ensure_test_pdf_owner(db, auth_sub=TEST_USER_ID)
 
     async def provision(_principal):
         return type("User", (), {"id": owner})()
 
-    async def present(_sub, _document_id):
-        return {"document": {"processingStatus": "completed"}}
-
-    async def wipe(_user_sub, _document_id):
-        return {"success": True, "chunks_deleted": 0}
-
     monkeypatch.setattr(documents_api, "provision_user_async", provision)
-    monkeypatch.setattr(documents_api, "get_document", present)
-    monkeypatch.setattr(documents_api, "delete_document", wipe)
     yield owner
     with SessionLocal.begin() as db:
         db.execute(delete(PDFDocument).where(PDFDocument.filename.like(f"{PREFIX}%")))
+
+
+@pytest.fixture
+def owner_id(provisioned_owner, monkeypatch):
+    async def present(_sub, _document_id):
+        return {"document": {"processingStatus": "completed"}}
+
+    async def wipe_chunks(_user_sub, _document_id):
+        return {"success": True, "chunks_deleted": 0}
+
+    async def delete_parent(_user_sub, _document_id, *, allow_missing=False):
+        return {"success": True, "deleted": True}
+
+    monkeypatch.setattr(documents_api, "get_document", present)
+    monkeypatch.setattr(documents_api, "delete_paper_chunks", wipe_chunks)
+    monkeypatch.setattr(documents_api, "delete_paper_object", delete_parent)
+    return provisioned_owner
 
 
 def _write(root: Path, relative: str, content: bytes = b"made-up") -> str:
@@ -100,6 +111,101 @@ def _paper(root: Path, owner_id: int, *, text_supplement: bool = True) -> tuple[
 
 def _stored(root: Path) -> set[str]:
     return {str(path.relative_to(root)) for path in root.rglob("*") if path.is_file()}
+
+
+@pytest.mark.asyncio
+async def test_owner_can_retry_after_unlink_fails(
+    storage, provisioned_owner, weaviate_connection, setup_collections, monkeypatch,
+):
+    paper, paths = _paper(storage, provisioned_owner)
+    claims = {"sub": TEST_USER_ID}
+    monkeypatch.setattr("src.lib.weaviate_client.documents.get_connection", lambda: weaviate_connection)
+    wipe_chunks = AsyncMock(wraps=documents_api.delete_paper_chunks)
+    delete_parent = AsyncMock(wraps=documents_api.delete_paper_object)
+    monkeypatch.setattr(documents_api, "delete_paper_chunks", wipe_chunks)
+    monkeypatch.setattr(documents_api, "delete_paper_object", delete_parent)
+    with weaviate_connection.session() as client:
+        chunks, papers = get_user_collections(client, TEST_USER_ID)
+        papers.data.insert(uuid=paper, properties={"processingStatus": "completed"})
+        chunk = chunks.data.insert(properties={"documentId": str(paper), "chunkIndex": 0})
+
+    main_pdf, main_json, markdown, supplement_json = paths
+    unlink = Path.unlink
+
+    def refuse_markdown(path, *args, **kwargs):
+        if path == storage / markdown:
+            raise PermissionError("file is busy")
+        return unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as first_request:
+        first_request.setattr(Path, "unlink", refuse_markdown)
+        with pytest.raises(HTTPException) as failure:
+            await documents_api.delete_document_endpoint(str(paper), claims)
+
+    assert (failure.value.status_code, failure.value.detail) == (500, "Failed to delete document")
+    assert _stored(storage) == {markdown}
+    # Chunks are wiped before file cleanup, but the Weaviate parent object stays present
+    # until every file is removed so duplicate checks do not treat the retained SQL row
+    # as a phantom and strand files on disk.
+    with weaviate_connection.session() as client:
+        chunks, papers = get_user_collections(client, TEST_USER_ID)
+        assert papers.data.exists(paper)
+        assert not chunks.data.exists(chunk)
+    existing_in_weaviate = await documents_api.get_document(TEST_USER_ID, str(paper))
+    assert existing_in_weaviate and existing_in_weaviate["document"]["id"] == str(paper)
+    wipe_chunks.assert_awaited_once_with(TEST_USER_ID, str(paper))
+    delete_parent.assert_not_awaited()
+    with SessionLocal() as db:
+        owned = db.get(PDFDocument, paper)
+        assert owned is not None and owned.user_id == provisioned_owner
+        assert {(row.file_path, row.processed_json_path) for row in owned.files} == {
+            (main_pdf, main_json), (markdown, supplement_json),
+        }
+
+    result = await documents_api.delete_document_endpoint(str(paper), claims)
+
+    assert wipe_chunks.await_count == 2
+    delete_parent.assert_awaited_once_with(TEST_USER_ID, str(paper), allow_missing=True)
+    assert result.success and "0 chunks deleted" in result.message
+    assert _stored(storage) == set()
+    with weaviate_connection.session() as client:
+        chunks, papers = get_user_collections(client, TEST_USER_ID)
+        assert not papers.data.exists(paper)
+        assert not chunks.data.exists(chunk)
+    with SessionLocal() as db:
+        assert db.get(PDFDocument, paper) is None
+        assert db.query(PDFDocumentFile).filter_by(document_id=paper).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_retry_wipes_stray_chunks_when_weaviate_parent_object_is_already_absent(
+    storage, provisioned_owner, weaviate_connection, setup_collections, monkeypatch,
+):
+    paper, _ = _paper(storage, provisioned_owner)
+    claims = {"sub": TEST_USER_ID}
+    monkeypatch.setattr("src.lib.weaviate_client.documents.get_connection", lambda: weaviate_connection)
+    wipe_chunks = AsyncMock(wraps=documents_api.delete_paper_chunks)
+    delete_parent = AsyncMock(wraps=documents_api.delete_paper_object)
+    monkeypatch.setattr(documents_api, "delete_paper_chunks", wipe_chunks)
+    monkeypatch.setattr(documents_api, "delete_paper_object", delete_parent)
+    with weaviate_connection.session() as client:
+        chunks, papers = get_user_collections(client, TEST_USER_ID)
+        assert not papers.data.exists(paper)
+        stray_chunk = chunks.data.insert(properties={"documentId": str(paper), "chunkIndex": 0})
+
+    result = await documents_api.delete_document_endpoint(str(paper), claims)
+
+    wipe_chunks.assert_awaited_once_with(TEST_USER_ID, str(paper))
+    delete_parent.assert_not_awaited()
+    assert result.success and "1 chunks deleted" in result.message
+    assert _stored(storage) == set()
+    with weaviate_connection.session() as client:
+        chunks, papers = get_user_collections(client, TEST_USER_ID)
+        assert not papers.data.exists(paper)
+        assert not chunks.data.exists(stray_chunk)
+    with SessionLocal() as db:
+        assert db.get(PDFDocument, paper) is None
+        assert db.query(PDFDocumentFile).filter_by(document_id=paper).count() == 0
 
 
 @pytest.mark.asyncio
