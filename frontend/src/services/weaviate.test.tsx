@@ -644,6 +644,16 @@ describe('weaviate service', () => {
           }),
         })
         .mockResolvedValueOnce({
+          ok: false,
+          status: 503,
+          json: async () => ({ detail: 'Document-source import is disabled' }),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 503,
+          json: async () => ({ detail: { error: 'document_source_import_disabled' } }),
+        })
+        .mockResolvedValueOnce({
           ok: true,
           status: 200,
           json: async () => ({
@@ -679,6 +689,20 @@ describe('weaviate service', () => {
           error instanceof SourceIdentifierImportError
           && error.status === 503
           && error.code === 'document_source_curator_token_unavailable',
+      );
+      await expect(importSourceIdentifiers('PMID:101')).rejects.toSatisfy(
+        (error: unknown) =>
+          error instanceof SourceIdentifierImportError
+          && error.status === 503
+          && error.code === 'document_source_import_disabled'
+          && error.message === 'Document-source import is disabled',
+      );
+      await expect(importSourceIdentifiers('PMID:101')).rejects.toSatisfy(
+        (error: unknown) =>
+          error instanceof SourceIdentifierImportError
+          && error.status === 503
+          && error.code === 'document_source_import_disabled'
+          && error.message === 'Document-source import is disabled.',
       );
       const perRow = await importSourceIdentifiers('PMID:101');
       expect(perRow.results[0]?.errorCode).toBe('file_not_tickable');

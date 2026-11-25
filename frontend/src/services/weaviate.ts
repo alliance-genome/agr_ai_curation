@@ -413,12 +413,9 @@ export interface LiteratureImportResult {
   };
 }
 
-export interface ImportSourceSupplementChoice {
-  identifier: string;
-  provider_file_id: string;
-  md5?: string | null;
-  converted_md5?: string | null;
-}
+export type ImportSourceSupplementChoice =
+  Pick<ChosenSupplementInput, 'identifier' | 'provider_file_id'>
+  & Partial<Pick<ChosenSupplementInput, 'md5' | 'converted_md5'>>;
 
 /**
  * Structured error thrown by source-identifier resolve/import requests.
@@ -886,9 +883,14 @@ const postIdentifierBatch = async (
     const payload = await response.json().catch(() => null);
     const rawDetail = toRecordOrNull(payload)?.detail;
     if (typeof rawDetail === 'string') {
+      const trimmedDetail = rawDetail.trim();
+      const disabledCode =
+        response.status === 503 && trimmedDetail.toLowerCase() === 'document-source import is disabled'
+          ? 'document_source_import_disabled'
+          : null;
       throw new SourceIdentifierImportError(
-        rawDetail.trim() || 'Failed to process source identifiers.',
-        { status: response.status },
+        trimmedDetail || 'Failed to process source identifiers.',
+        { status: response.status, code: disabledCode },
       );
     }
     const detailRecord = toRecordOrNull(rawDetail);
@@ -902,8 +904,12 @@ const postIdentifierBatch = async (
         typeof detailRecord.message === 'string' && detailRecord.message.trim()
           ? detailRecord.message.trim()
           : null;
-      const message = detailMessage ?? (code ? `Request refused (${code}).` : 'Failed to process source identifiers.');
-      throw new SourceIdentifierImportError(message, {
+      const defaultMessage = code === 'document_source_import_disabled'
+        ? 'Document-source import is disabled.'
+        : code
+          ? `Request refused (${code}).`
+          : 'Failed to process source identifiers.';
+      throw new SourceIdentifierImportError(detailMessage ?? defaultMessage, {
         status: response.status,
         code,
         limitValue,
