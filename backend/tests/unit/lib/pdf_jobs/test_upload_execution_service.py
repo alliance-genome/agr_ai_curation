@@ -3987,6 +3987,114 @@ async def test_complete_main_paper_marks_stage_job_failed_if_launch_raises(monke
 
 
 @pytest.mark.asyncio
+async def test_complete_main_paper_survives_stage_launch_and_mark_failed_both_raising(monkeypatch):
+    """If both start_supplement_stage AND stage mark_failed raise, main paper stays completed and cancel propagates."""
+    import threading
+
+    from src.lib.document_sources import supplement_wait
+
+    completed, mark_failed_calls = [], []
+    status_updates, sql_failures = [], []
+
+    async def _ingest(request, *, weaviate_client):
+        del request, weaviate_client
+        return None
+
+    async def _update_status(document_id, user_id, status):
+        status_updates.append((document_id, user_id, status))
+
+    async def _sync_sql_failure(self, request, exc):
+        del self
+        sql_failures.append((request.document_id, str(exc)))
+
+    def _atomic_handoff(**kwargs):
+        return (
+            SimpleNamespace(
+                job_id=kwargs["job_id"],
+                status="completed",
+                current_stage="completed",
+                cancel_requested=False,
+                message=kwargs["message"],
+                error_message=None,
+            ),
+            SimpleNamespace(job_id="stage-double-boom"),
+        )
+
+    def _boom_launch(**_kwargs):
+        raise RuntimeError("event loop refused task")
+
+    def _boom_mark_failed(**kwargs):
+        mark_failed_calls.append(kwargs)
+        raise RuntimeError("db unavailable while failing stage job")
+
+    _quiet_jobs(monkeypatch, completed)
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", _boom_mark_failed)
+    monkeypatch.setattr(service_module, "update_document_status", _update_status)
+    monkeypatch.setattr(UploadExecutionService, "_sync_provider_markdown_sql_failure", _sync_sql_failure)
+    monkeypatch.setattr(
+        "src.lib.observability.runtime.report_runtime_exception",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "complete_import_and_start_supplement_wait",
+        _atomic_handoff,
+    )
+    monkeypatch.setattr(supplement_wait, "start_supplement_stage", _boom_launch)
+    tracker = _Tracker()
+    service = UploadExecutionService(
+        pipeline_tracker=tracker,
+        document_source_provider_factory=lambda: _Provider(),
+        provider_markdown_ingestion_fn=_ingest,
+    )
+
+    # Normal execute_provider_markdown path: never corrupts main paper, syncs COMPLETED.
+    await service.execute_provider_markdown(_markdown_request(supplements=_plan()))
+
+    assert [call["job_id"] for call in mark_failed_calls] == ["stage-double-boom"]
+    assert status_updates == []
+    assert sql_failures == []
+    assert tracker.calls[-1]["document_id"] == "doc-job-provider"
+    assert tracker.calls[-1]["stage"] == ProcessingStage.COMPLETED
+    assert tracker.failure_calls == []
+
+    # Cancelled mid-handoff path: catches mark_failed error, syncs COMPLETED, and propagates CancelledError.
+    entered = threading.Event()
+    release = threading.Event()
+    mark_failed_calls.clear()
+    tracker.calls.clear()
+
+    def _slow_handoff(**kwargs):
+        entered.set()
+        release.wait(timeout=5)
+        return _atomic_handoff(**kwargs)
+
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "complete_import_and_start_supplement_wait",
+        _slow_handoff,
+    )
+    task = asyncio.create_task(
+        service._complete_main_paper(_markdown_request(supplements=_plan()), message="Processing completed")
+    )
+    while not entered.is_set():
+        await asyncio.sleep(0.005)
+    task.cancel()
+    await asyncio.sleep(0.01)
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert [call["job_id"] for call in mark_failed_calls] == ["stage-double-boom"]
+    assert status_updates == []
+    assert sql_failures == []
+    assert tracker.calls[-1]["document_id"] == "doc-job-provider"
+    assert tracker.calls[-1]["stage"] == ProcessingStage.COMPLETED
+    assert tracker.failure_calls == []
+
+
+@pytest.mark.asyncio
 async def test_execute_provider_markdown_deadline_during_commit_launches_stage_and_never_fails_paper(monkeypatch):
     """If execute_provider_markdown times out mid-handoff commit, the stage launches and paper stays completed."""
     import threading

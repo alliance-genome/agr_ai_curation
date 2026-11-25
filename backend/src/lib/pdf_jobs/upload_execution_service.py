@@ -1538,12 +1538,12 @@ class UploadExecutionService:
                         stage=ProcessingStage.FAILED.value,
                     )
                 )
-                while not fail_task.done():
-                    try:
-                        await asyncio.shield(fail_task)
-                    except asyncio.CancelledError as cancel_err:
-                        cancelled_exc = cancel_err
                 try:
+                    while not fail_task.done():
+                        try:
+                            await asyncio.shield(fail_task)
+                        except asyncio.CancelledError as cancel_err:
+                            cancelled_exc = cancel_err
                     fail_task.result()
                 except Exception:
                     logger.exception(
