@@ -49,6 +49,7 @@ from src.lib.pdf_limits import (
 )
 from src.lib.pipeline.upload import UploadError
 from src.lib.document_sources.models import ProviderBearerKind
+from tests.unit.lib.intake_compensation_contract import IntakeCompensationContract
 
 FAKE_UPLOAD_MD5 = "f87357c6cdc4f067" + "e19f42aebabc6fb7"
 
@@ -1483,6 +1484,7 @@ async def test_intake_upload_integrity_error_compensates_and_returns_duplicate_e
 
     async def _delete_document(user_sub, document_id, **_kwargs):
         delete_document_calls.append((user_sub, document_id))
+        return {"success": True}
 
     create_document_calls = []
 
@@ -1543,6 +1545,7 @@ async def test_intake_upload_file_size_constraint_error_is_not_misreported_as_li
 
     async def _delete_document(user_sub, document_id, **_kwargs):
         delete_document_calls.append((user_sub, document_id))
+        return {"success": True}
 
     service = UploadIntakeService(
         upload_execution_service=dispatch,
@@ -1584,6 +1587,7 @@ async def test_intake_upload_generic_commit_failure_rolls_back_and_cleans_up(tmp
 
     async def _delete_document(user_sub, document_id, **_kwargs):
         delete_document_calls.append((user_sub, document_id))
+        return {"success": True}
 
     service = UploadIntakeService(
         upload_execution_service=dispatch,
@@ -1626,6 +1630,7 @@ async def test_intake_upload_runtime_error_rolls_back_and_compensates_without_di
 
     async def _delete_document(user_sub, document_id, **_kwargs):
         delete_document_calls.append((user_sub, document_id))
+        return {"success": True}
 
     service = UploadIntakeService(
         upload_execution_service=dispatch,
@@ -1705,6 +1710,7 @@ async def test_intake_upload_non_integrity_persistence_error_rolls_back_and_clea
 
     async def _delete_document(user_sub, document_id, **_kwargs):
         delete_document_calls.append((user_sub, document_id))
+        return {"success": True}
 
     def _boom_on_add(_row):
         raise RuntimeError("sql write failed")
@@ -1753,6 +1759,7 @@ async def test_intake_upload_job_creation_failure_compensates_sql_weaviate_and_f
 
     async def _delete_document(user_sub, document_id, **_kwargs):
         delete_document_calls.append((user_sub, document_id))
+        return {"success": True}
 
     def _session_factory():
         assert sessions, "session_factory called more times than expected"
@@ -2104,9 +2111,12 @@ async def test_intake_upload_pre_commit_compensation_retains_weaviate_and_report
 @pytest.mark.asyncio
 @pytest.mark.parametrize("competing_mode", ["lock_held", "active_job"])
 async def test_intake_upload_job_creation_compensation_skips_when_competing_supplement_add_owns_paper(
-    monkeypatch, tmp_path, competing_mode,
+    monkeypatch, tmp_path, competing_mode, caplog,
 ):
     from src.lib.document_files.paper_lock import paper_lock_key
+
+    report = Mock()
+    monkeypatch.setattr(runtime, "report_runtime_exception", report)
 
     initial_session = _FakeSession()
     persisted_record = SimpleNamespace(id=uuid4())
@@ -2161,6 +2171,8 @@ async def test_intake_upload_job_creation_compensation_skips_when_competing_supp
     delete_document_mock.assert_not_awaited()
     assert cleanup_session.deleted == []
     assert cleanup_session.commit_calls == 0
+    report.assert_not_called()
+    assert not caplog.records
 
 
 @pytest.mark.asyncio
@@ -2958,3 +2970,23 @@ async def test_provider_duplicate_staged_cleanup_failure_reports_sanitized_sentr
         "fingerprint": ["intake_compensation_file_cleanup_failed", "pdf_jobs", "pre_commit"],
         "include_request": False,
     }
+
+
+class TestIntakeCompensation(IntakeCompensationContract):
+    component = "pdf_jobs"
+
+    async def run_intake(self, tmp_path, **dependencies):
+        service = UploadIntakeService(
+            upload_execution_service=_DispatchRecorder(),
+            storage_path_provider=lambda: tmp_path,
+            upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+            principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
+            provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+            tenant_name_resolver=lambda _sub: "tenant-user-1",
+            **dependencies,
+        )
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )

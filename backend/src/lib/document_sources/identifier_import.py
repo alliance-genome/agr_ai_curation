@@ -23,7 +23,9 @@ from sqlalchemy.orm import Session
 from src.config import get_pdf_storage_path
 from src.lib.document_cleanup import (
     cleanup_document_curation_dependencies,
+    compensate_document_index,
     drain_shielded,
+    report_compensation_abort,
     report_compensation_file_cleanup_failure,
     report_sql_cleanup_failure,
     run_thread_drained,
@@ -754,7 +756,7 @@ class IdentifierImportService:
         create_document_fn: Callable[[str, Any], Awaitable[dict[str, Any]]] = create_document,
         create_job_fn: Callable[..., Any] = pdf_job_service.create_job,
         get_document_fn: Callable[..., Awaitable[Any]] = get_document,
-        delete_document_fn: Callable[..., Awaitable[Any]] = delete_document,
+        delete_document_fn: Callable[..., Awaitable[dict[str, Any]]] = delete_document,
         find_existing_source_document_fn: Callable[..., Any] = find_existing_document_by_source,
         cleanup_document_dependencies_fn: Callable[[Session, uuid.UUID], Any] = cleanup_document_curation_dependencies,
         tenant_name_resolver: Callable[[str], str] = get_tenant_name,
@@ -1627,14 +1629,13 @@ class IdentifierImportService:
                 )
                 return
             if weaviate_document_created:
-                try:
-                    await self._delete_document(user_sub, document_id)
-                except Exception as cleanup_err:
-                    logger.warning(
-                        "Best-effort Weaviate cleanup failed for identifier import %s: %s",
-                        document_id,
-                        cleanup_err,
-                    )
+                await compensate_document_index(
+                    self._delete_document,
+                    user_sub,
+                    document_id,
+                    component="document_sources",
+                    sql_record_committed=False,
+                )
             return
 
         # Fail any undispatched pending job created by this import BEFORE acquiring
@@ -1652,33 +1653,20 @@ class IdentifierImportService:
 
         lock_fn = self._paper_operation_lock_fn or paper_operation_lock
         get_active_job = self._get_active_job_fn or pdf_job_service.get_active_job_for_document
+        step = "paper_lock_acquire"
         try:
             async with lock_fn(document_id) as lock_conn:
-                try:
-                    active_job = await run_thread_drained(
-                        get_active_job,
-                        document_id=document_id,
-                        reconcile_stale=False,
-                        connection=lock_conn,
-                    )
-                except Exception as job_check_err:
-                    logger.warning(
-                        "Skipping import compensation because active-job check failed "
-                        "(%s, document_id_hash=%s)",
-                        type(job_check_err).__name__,
-                        document_id_hash,
-                        extra={"sentry_skip_event": True},
-                    )
-                    return
+                step = "active_job_check"
+                active_job = await run_thread_drained(
+                    get_active_job,
+                    document_id=document_id,
+                    reconcile_stale=False,
+                    connection=lock_conn,
+                )
                 if active_job is not None:
-                    logger.warning(
-                        "Skipping import compensation because an active job exists "
-                        "(document_id_hash=%s)",
-                        document_id_hash,
-                        extra={"sentry_skip_event": True},
-                    )
                     return
 
+                step = "committed_cleanup"
                 compensation_started = False
 
                 def _mark_compensation_started() -> None:
@@ -1707,36 +1695,17 @@ class IdentifierImportService:
                         )
                         return
 
-                    # Let the Weaviate wipe outcome govern SQL owner deletion: if delete_document
-                    # reports an error or incomplete chunk wipe (or raises CancelledError after an
-                    # incomplete/unstarted wipe), retain the SQL owner alongside the Weaviate parent.
-                    # When delete_document owns SQL deletion (reporting "postgres_deleted"), do not
-                    # issue a second SQL delete pass (delete_document reports SQL errors).
-                    weaviate_cleanup_ok = True
-                    sql_owned_by_delete_document = False
                     if weaviate_document_created:
-                        try:
-                            delete_result = await self._delete_document(
-                                user_sub,
-                                document_id,
-                                connection=lock_conn,
-                            )
-                        except Exception as cleanup_err:
-                            logger.warning(
-                                "Best-effort Weaviate cleanup failed for identifier import %s: %s",
-                                document_id,
-                                cleanup_err,
-                            )
-                            weaviate_cleanup_ok = False
-                        else:
-                            if isinstance(delete_result, dict):
-                                if "error" in delete_result or "chunks_failed" in delete_result:
-                                    weaviate_cleanup_ok = False
-                                elif "postgres_deleted" in delete_result:
-                                    sql_owned_by_delete_document = True
-
-                    if not weaviate_cleanup_ok or sql_owned_by_delete_document:
-                        return
+                        delete_sql_row = await compensate_document_index(
+                            self._delete_document,
+                            user_sub,
+                            document_id,
+                            component="document_sources",
+                            sql_record_committed=True,
+                            connection=lock_conn,
+                        )
+                        if not delete_sql_row:
+                            return
 
                     await run_thread_drained(
                         self._delete_committed_sql_row,
@@ -1750,19 +1719,13 @@ class IdentifierImportService:
                     started=lambda: compensation_started,
                 )
         except PaperOperationInProgress:
-            logger.warning(
-                "Skipping import compensation because another operation holds the paper lock "
-                "(document_id_hash=%s)",
-                document_id_hash,
-                extra={"sentry_skip_event": True},
-            )
-        except Exception as lock_err:
-            logger.warning(
-                "Skipping import compensation because acquiring the paper lock failed "
-                "(%s, document_id_hash=%s)",
-                type(lock_err).__name__,
-                document_id_hash,
-                extra={"sentry_skip_event": True},
+            return
+        except Exception as exc:
+            report_compensation_abort(
+                component="document_sources",
+                document_id=document_id,
+                step=step,
+                exception_type=type(exc).__name__,
             )
 
     @staticmethod

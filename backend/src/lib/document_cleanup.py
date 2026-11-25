@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Coroutine, Iterator
+from collections.abc import Awaitable, Callable, Coroutine, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
@@ -142,6 +142,76 @@ def report_compensation_file_cleanup_failure(
             "Failed to report intake compensation file cleanup failure",
             extra={"sentry_skip_event": True},
         )
+
+
+def _report_intake_compensation_failure(
+    *,
+    component: str,
+    operation: str,
+    message: str,
+    document_id: str,
+    details: dict[str, str | bool],
+) -> None:
+    context = {"document_id_hash": hash_sentry_identifier(document_id), **details}
+    logger.warning("%s (%s, %s)", message, component, context, extra={"sentry_skip_event": True})
+    try:
+        runtime.report_runtime_exception(
+            runtime.sanitized_runtime_error(message),
+            component=component,
+            operation=operation,
+            context=context,
+            fingerprint=[operation, component],
+            include_request=False,
+        )
+    except Exception:
+        logger.warning("Failed to report intake compensation failure", extra={"sentry_skip_event": True})
+
+
+def report_compensation_abort(
+    *, component: str, document_id: str, step: str, exception_type: str,
+) -> None:
+    _report_intake_compensation_failure(
+        component=component,
+        operation="intake_compensation_aborted",
+        message="Document intake compensation aborted",
+        document_id=document_id,
+        details={"step": step, "exception_type": exception_type},
+    )
+
+
+async def compensate_document_index(
+    delete_document: Callable[..., Awaitable[dict[str, Any]]],
+    user_sub: str,
+    document_id: str,
+    *,
+    component: str,
+    sql_record_committed: bool,
+    connection: Any = None,
+) -> bool:
+    """Delete the index and return whether intake should delete a committed SQL row."""
+    details: dict[str, str | bool] = {"sql_record_committed": sql_record_committed}
+    try:
+        if sql_record_committed:
+            result = await delete_document(user_sub, document_id, connection=connection)
+        else:
+            result = await delete_document(user_sub, document_id)
+        if "error" in result or "chunks_failed" in result:
+            # Weaviate owns the report. Retain any committed SQL owner for retry.
+            return False
+        if result["success"]:
+            return sql_record_committed and "postgres_deleted" not in result
+        details["failure_kind"] = "delete_unsuccessful"
+    except Exception as exc:
+        details["exception_type"] = type(exc).__name__
+
+    _report_intake_compensation_failure(
+        component=component,
+        operation="intake_compensation_index_cleanup_failed",
+        message="Index cleanup failed during document intake compensation",
+        document_id=document_id,
+        details=details,
+    )
+    return False
 
 
 def report_sql_cleanup_failure(
