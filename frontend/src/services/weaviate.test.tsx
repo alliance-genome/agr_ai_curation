@@ -201,6 +201,30 @@ describe('weaviate service', () => {
         expect.objectContaining({ credentials: 'include' }),
       );
     });
+
+    it('preserves optional short_label on configured provider presentation metadata', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          provider: 'example_source',
+          import_enabled: true,
+          presentation: {
+            display_label: 'Example Source',
+            short_label: 'EXS',
+          },
+        }),
+      });
+
+      await expect(fetchDocumentSourceProviderConfiguration()).resolves.toEqual({
+        provider: 'example_source',
+        importEnabled: true,
+        presentation: {
+          displayLabel: 'Example Source',
+          shortLabel: 'EXS',
+          referenceLabelPriority: null,
+        },
+      });
+    });
   });
 
   describe('fetchDocumentList', () => {

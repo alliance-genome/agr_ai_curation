@@ -3,6 +3,7 @@ import { Box, Chip, Stack, Typography } from '@mui/material'
 import { UNNAMED_FILE_LABEL } from '@/components/pdfViewer/viewerFiles'
 import {
   hasWaitingSupplements,
+  isPostMainSupplementPhase,
   parseSupplementJobProgress,
   type SupplementJobProgress,
   type SupplementProgressEntry,
@@ -10,9 +11,10 @@ import {
 } from '@/features/documents/supplementProgress'
 
 import {
-  SUPPLEMENT_STATE_TEXT,
+  UNRECOGNIZED_FILE_TEXT,
   formatSupplementWaitEndTime,
   supplementOutcomeReasonText,
+  supplementStateText,
   supplementWaitEndsText,
 } from './paperFileReasonText'
 
@@ -21,6 +23,12 @@ export interface SupplementFilesListProps {
   progress?: SupplementJobProgress | null
   /** Raw `job.metadata` convenience prop used when `progress` is omitted. */
   metadata?: Record<string, unknown> | null
+  /** Optional `job.current_stage` override (also read from `progress.current_stage`). */
+  currentStage?: string | null
+  /** Provider's short label (e.g. from `providerMetadata.shortLabel`); falls back to `providerLabel`. */
+  providerShortLabel?: string | null
+  /** Provider's full display label (e.g. from `providerMetadata.displayLabel`). */
+  providerLabel?: string | null
   /** Optional section heading (for example N37 "Adding files" in the Library details dialog). */
   heading?: string
   /** Compact typography and spacing for dense job cards such as `PdfJobsPanel`. */
@@ -50,12 +58,31 @@ function stateChipColor(
 function SupplementFileRow({
   entry,
   compact,
+  mainReady,
+  providerShortLabel,
+  providerLabel,
 }: {
   entry: SupplementProgressEntry
   compact: boolean
+  mainReady: boolean
+  providerShortLabel?: string | null
+  providerLabel?: string | null
 }) {
-  const displayName = entry.display_name || UNNAMED_FILE_LABEL
+  const displayName = entry.display_name?.trim() || UNNAMED_FILE_LABEL
   const textVariant = compact ? 'caption' : 'body2'
+
+  if (!entry.recognized) {
+    return (
+      <Box component="li" sx={{ py: compact ? 0.25 : 0.5 }}>
+        <Typography variant={textVariant} sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>
+          {displayName}
+        </Typography>
+        <Typography variant={textVariant} color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+          {UNRECOGNIZED_FILE_TEXT}
+        </Typography>
+      </Box>
+    )
+  }
 
   return (
     <Box component="li" sx={{ py: compact ? 0.25 : 0.5 }}>
@@ -65,14 +92,22 @@ function SupplementFileRow({
         </Typography>
         <Chip
           size="small"
-          label={SUPPLEMENT_STATE_TEXT[entry.state]}
+          label={supplementStateText(entry.state, {
+            mainReady,
+            providerShortLabel,
+            providerLabel,
+          })}
           color={stateChipColor(entry.state)}
           variant={entry.state === 'queued' ? 'outlined' : 'filled'}
         />
       </Box>
       {entry.state === 'left_out' ? (
         <Typography variant={textVariant} color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
-          {supplementOutcomeReasonText(entry.reason_code, { limitValue: entry.limit_value })}
+          {supplementOutcomeReasonText(entry.reason_code, {
+            limitValue: entry.limit_value,
+            providerShortLabel,
+            providerLabel,
+          })}
         </Typography>
       ) : null}
     </Box>
@@ -87,15 +122,22 @@ function SupplementFileRow({
 export default function SupplementFilesList({
   progress,
   metadata,
+  currentStage,
+  providerShortLabel,
+  providerLabel,
   heading,
   compact = false,
   ariaLabel = 'Supplement files',
 }: SupplementFilesListProps) {
-  const resolved = progress !== undefined ? progress : parseSupplementJobProgress(metadata)
+  const resolved =
+    progress !== undefined
+      ? progress
+      : parseSupplementJobProgress(metadata, { currentStage })
   if (!resolved || resolved.supplements.length === 0) {
     return null
   }
 
+  const mainReady = isPostMainSupplementPhase(resolved, currentStage)
   const waitEndTime =
     hasWaitingSupplements(resolved) && resolved.supplement_wait_ends_at
       ? formatSupplementWaitEndTime(resolved.supplement_wait_ends_at)
@@ -110,15 +152,18 @@ export default function SupplementFilesList({
       ) : null}
       {waitEndTime ? (
         <Typography variant={compact ? 'caption' : 'body2'} color="text.secondary">
-          {supplementWaitEndsText(waitEndTime)}
+          {supplementWaitEndsText(waitEndTime, { providerShortLabel, providerLabel })}
         </Typography>
       ) : null}
       <Box component="ul" aria-label={ariaLabel} sx={{ m: 0, pl: compact ? 2 : 2.5 }}>
         {resolved.supplements.map((entry, index) => (
           <SupplementFileRow
-            key={`${entry.provider_file_id}-${index}`}
+            key={`${entry.provider_file_id ?? 'unrecognized'}-${index}`}
             entry={entry}
             compact={compact}
+            mainReady={mainReady}
+            providerShortLabel={providerShortLabel}
+            providerLabel={providerLabel}
           />
         ))}
       </Box>

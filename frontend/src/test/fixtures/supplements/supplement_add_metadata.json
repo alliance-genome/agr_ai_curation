@@ -1,0 +1,105 @@
+{
+  "job_kind": "supplement_add",
+  "supplements": [
+    {
+      "provider_file_id": "100",
+      "display_name": "Table_S1.xlsx",
+      "state": "added",
+      "reason_code": null,
+      "observed_at": null,
+      "file_id": "22222222-2222-2222-2222-222222222223",
+      "measured_value": null,
+      "limit_value": null
+    },
+    {
+      "provider_file_id": "101",
+      "display_name": null,
+      "state": "left_out",
+      "reason_code": "file_not_in_reference",
+      "observed_at": null,
+      "file_id": null,
+      "measured_value": null,
+      "limit_value": null
+    },
+    {
+      "provider_file_id": "102",
+      "display_name": "Legacy_S2.pdf",
+      "state": "left_out",
+      "reason_code": "pdf_supplement_not_supported_yet",
+      "observed_at": null,
+      "file_id": null,
+      "measured_value": null,
+      "limit_value": null
+    },
+    {
+      "provider_file_id": "103",
+      "display_name": "Huge_S3.pdf",
+      "state": "left_out",
+      "reason_code": "pdf_too_large",
+      "observed_at": null,
+      "file_id": null,
+      "measured_value": 25000000,
+      "limit_value": 20000000
+    },
+    {
+      "provider_file_id": "104",
+      "display_name": "Broken_S4.pdf",
+      "state": "left_out",
+      "reason_code": "pdf_invalid",
+      "observed_at": null,
+      "file_id": null,
+      "measured_value": null,
+      "limit_value": null
+    },
+    {
+      "provider_file_id": "105",
+      "display_name": "Restricted_S5.pdf",
+      "state": "left_out",
+      "reason_code": "pdf_access_denied",
+      "observed_at": null,
+      "file_id": null,
+      "measured_value": null,
+      "limit_value": null
+    },
+    {
+      "provider_file_id": "106",
+      "display_name": "Extra_S6.xlsx",
+      "state": "left_out",
+      "reason_code": "paper_file_limit",
+      "observed_at": null,
+      "file_id": null,
+      "measured_value": 21,
+      "limit_value": 20
+    },
+    {
+      "provider_file_id": "107",
+      "display_name": "LargeText_S7.xlsx",
+      "state": "left_out",
+      "reason_code": "paper_text_limit",
+      "observed_at": null,
+      "file_id": null,
+      "measured_value": 2500000,
+      "limit_value": 2000000
+    },
+    {
+      "provider_file_id": "108",
+      "display_name": "Existing_S8.xlsx",
+      "state": "left_out",
+      "reason_code": "already_in_paper",
+      "observed_at": null,
+      "file_id": null,
+      "measured_value": null,
+      "limit_value": null
+    },
+    {
+      "provider_file_id": "109",
+      "display_name": "BadTable_S9.xlsx",
+      "state": "left_out",
+      "reason_code": "table_cells_mismatch",
+      "observed_at": null,
+      "file_id": null,
+      "measured_value": null,
+      "limit_value": null
+    }
+  ]
+}

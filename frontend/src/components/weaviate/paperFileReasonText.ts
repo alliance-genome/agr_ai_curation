@@ -5,11 +5,12 @@
  * The backend sends codes and numbers only. This is the single wording table shared by
  * Add Literature, the PDF Jobs panel, and the Library (details dialog and Files column).
  *
- * Wording note (Q-W1, approved 24 Nov 2026):
- * - Library listing texts use `{provider}`, the provider's configured display label
- *   ("ABC Literature" in production), never a raw provider id.
- * - Job-progress, Card 20, Card 34, Card 39, Card 40, and Card 41 texts say "ABC"
- *   exactly as signed off by Chris Tabone.
+ * Provider labels are always parameterized (never hardcoded to a single deployment's
+ * provider name in core code):
+ * - Library listing texts accept `{provider}` (the provider's configured `displayLabel`).
+ * - Job-progress, wait-outcome, and refusal helpers accept `providerShortLabel` (falling
+ *   back to `providerLabel`, or the generic `DEFAULT_PROVIDER_LABEL` when no provider
+ *   presentation is available).
  */
 import type {
   CheckReasonCode,
@@ -21,6 +22,7 @@ import type {
 } from '@/features/documents/paperSourceFiles'
 import {
   isKnownSupplementOutcomeReasonCode,
+  isValidIsoTimestampWithTz,
   type FileRemovalRefusalCode,
   type SupplementOutcomeReasonCode,
   type SupplementState,
@@ -31,8 +33,66 @@ type ProviderText = (provider: string) => string
 /** Shared retry button text (Card 38). */
 export const TRY_AGAIN_BUTTON_TEXT = 'Try again'
 
-/** Approved Card 34 line for papers not imported from ABC. */
-export const UPLOADED_PAPER_FILES_TEXT = 'Files can be added only to papers imported from ABC.'
+/**
+ * Generic fallback provider phrase used only when a caller renders provider-worded job copy
+ * without configured provider presentation metadata. Never hardcodes a deployment-specific name.
+ */
+export const DEFAULT_PROVIDER_LABEL = 'the literature source'
+
+export interface SupplementProviderLabelOptions {
+  /** Provider's short label for job/import copy (e.g. from `providerMetadata.shortLabel`). */
+  providerShortLabel?: string | null
+  /** Provider's full display label (e.g. from `providerMetadata.displayLabel`). */
+  providerLabel?: string | null
+}
+
+function nonEmptyLabel(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1
+}
+
+/** Resolve the provider short label for job/outcome wording from configured presentation metadata. */
+export function resolveProviderShortLabel(options?: SupplementProviderLabelOptions): string {
+  return (
+    nonEmptyLabel(options?.providerShortLabel)
+    ?? nonEmptyLabel(options?.providerLabel)
+    ?? DEFAULT_PROVIDER_LABEL
+  )
+}
+
+/** Resolve the short provider label from a document's provenance/provider metadata, or null if unset. */
+export function resolveSupplementProviderShortLabel(
+  source?: {
+    providerMetadata?: {
+      shortLabel?: string | null
+      displayLabel?: string | null
+    } | null
+  } | null,
+): string | null {
+  return (
+    nonEmptyLabel(source?.providerMetadata?.shortLabel)
+    ?? nonEmptyLabel(source?.providerMetadata?.displayLabel)
+  )
+}
+
+function sentenceLead(provider: string): string {
+  return provider === DEFAULT_PROVIDER_LABEL
+    ? 'The literature source'
+    : provider
+}
+
+/** Approved Card 34 line for papers not imported from the configured document-source provider. */
+export function uploadedPaperFilesText(provider?: string | null): string {
+  const label = nonEmptyLabel(provider) ?? DEFAULT_PROVIDER_LABEL
+  return `Files can be added only to papers imported from ${label}.`
+}
 
 /**
  * Why a provider's file cannot be added to the paper (P6f's not-tickable codes; Card 8).
@@ -82,7 +142,7 @@ export const OBSERVATION_TEXT: Record<ObservationCode, (provider: string, date: 
 
 /** Why the provider's list of this paper's files cannot be shown (Card 9 + Card 34). */
 export const LISTING_REFUSAL_TEXT: Record<ListingRefusalCode, ProviderText | null> = {
-  not_imported_from_provider: () => UPLOADED_PAPER_FILES_TEXT,
+  not_imported_from_provider: (provider) => uploadedPaperFilesText(provider),
   // No advice to import again: the import would find this paper by its main file and
   // answer that it is already in the Library.
   paper_reference_mismatch: (provider) => `This paper's entry in ${provider} has been merged into another entry, so its files cannot be listed here.`,
@@ -160,17 +220,43 @@ export function sourceFileStatusText(file: PaperSourceListedFile, provider: stri
 // Jobs panel and per-file supplement outcomes (N7–N29, Card 20, Card 39, Card 40)
 // ---------------------------------------------------------------------------
 
-/** Per-file supplement state labels (N7, Card 39, N8, N9, left_out). */
-export const SUPPLEMENT_STATE_TEXT: Record<SupplementState, string> = {
-  queued: 'Waiting for the main paper',
-  waiting: 'Waiting for ABC',
-  adding: 'Being added',
-  added: 'Added',
-  left_out: 'Not added',
+/** Approved post-main label for a converted supplement still waiting in `queued` state. */
+export const QUEUED_AFTER_MAIN_READY_TEXT = 'Waiting to be added'
+
+export interface SupplementStateTextOptions extends SupplementProviderLabelOptions {
+  /** True once the main paper is ready (post-main `queued` entries show "Waiting to be added"). */
+  mainReady?: boolean
 }
 
-/** Format an ISO-8601 wait-end timestamp for display in N10, or null if invalid. */
+/** Per-file supplement state label formatters (N7, post-main queued, Card 39, N8, N9, left_out). */
+export const SUPPLEMENT_STATE_TEXT: Record<
+  SupplementState,
+  (options?: SupplementStateTextOptions) => string
+> = {
+  queued: (options) =>
+    options?.mainReady ? QUEUED_AFTER_MAIN_READY_TEXT : 'Waiting for the main paper',
+  waiting: (options) => `Waiting for ${resolveProviderShortLabel(options)}`,
+  adding: () => 'Being added',
+  added: () => 'Added',
+  left_out: () => 'Not added',
+}
+
+/** Word a recognized supplement progress state. */
+export function supplementStateText(
+  state: SupplementState,
+  options?: SupplementStateTextOptions,
+): string {
+  return SUPPLEMENT_STATE_TEXT[state](options)
+}
+
+/**
+ * Format a strict timezone-bearing ISO-8601 wait-end timestamp for display in N10,
+ * or return `null` if invalid.
+ */
 export function formatSupplementWaitEndTime(isoTimestamp: string): string | null {
+  if (!isValidIsoTimestampWithTz(isoTimestamp)) {
+    return null
+  }
   const parsed = new Date(isoTimestamp)
   if (Number.isNaN(parsed.getTime())) {
     return null
@@ -179,28 +265,46 @@ export function formatSupplementWaitEndTime(isoTimestamp: string): string | null
 }
 
 /** Wait-end deadline line shown while at least one supplement is waiting (N10). */
-export function supplementWaitEndsText(time: string): string {
-  return `ABC has until ${time} to convert them.`
+export function supplementWaitEndsText(
+  time: string,
+  provider?: string | SupplementProviderLabelOptions | null,
+): string {
+  const shortLabel =
+    typeof provider === 'string'
+      ? (nonEmptyLabel(provider) ?? DEFAULT_PROVIDER_LABEL)
+      : resolveProviderShortLabel(provider ?? undefined)
+  return `${sentenceLead(shortLabel)} has until ${time} to convert them.`
 }
 
 /**
- * Format a byte limit using SI decimal units so backend settings match approved copy
- * (Card 20: 20,000,000 bytes -> "20 MB"; paper text limit: 2,000,000 bytes -> "2 MB").
+ * Format a byte limit exactly: use a decimal SI unit (`GB`, `MB`, `KB`) ONLY when it
+ * represents the byte threshold with zero rounding error (e.g. `20_000_000` -> `20 MB`,
+ * `2_000_000` -> `2 MB`, `1_500_000` -> `1.5 MB`), and otherwise show the exact byte
+ * count (e.g. `1_060_000` -> `1,060,000 bytes`) so a refusal never overstates the limit.
  */
 export function formatByteLimit(bytes: number): string {
   if (bytes >= 1_000_000_000) {
-    return `${Number((bytes / 1_000_000_000).toFixed(1))} GB`
+    if (bytes % 100_000_000 === 0) {
+      return `${Number((bytes / 1_000_000_000).toFixed(1))} GB`
+    }
+    return `${bytes.toLocaleString('en-US')} bytes`
   }
   if (bytes >= 1_000_000) {
-    return `${Number((bytes / 1_000_000).toFixed(1))} MB`
+    if (bytes % 100_000 === 0) {
+      return `${Number((bytes / 1_000_000).toFixed(1))} MB`
+    }
+    return `${bytes.toLocaleString('en-US')} bytes`
   }
   if (bytes >= 1_000) {
-    return `${Number((bytes / 1_000).toFixed(1))} KB`
+    if (bytes % 100 === 0) {
+      return `${Number((bytes / 1_000).toFixed(1))} KB`
+    }
+    return `${bytes.toLocaleString('en-US')} bytes`
   }
-  return bytes === 1 ? '1 byte' : `${bytes} bytes`
+  return bytes === 1 ? '1 byte' : `${bytes.toLocaleString('en-US')} bytes`
 }
 
-export interface SupplementOutcomeReasonOptions {
+export interface SupplementOutcomeReasonOptions extends SupplementProviderLabelOptions {
   limitValue?: number | null
 }
 
@@ -209,7 +313,7 @@ type SupplementOutcomeReasonFormatter = (options?: SupplementOutcomeReasonOption
 /**
  * Approved per-file outcome wording for `metadata.supplements[].reason_code`
  * (N11–N28, Card 8 checks, Card 20 PDF codes, Card 40 conversion wait codes).
- * Unknown codes are handled by `supplementOutcomeReasonText` with N29.
+ * Unknown codes and missing required limits return N29 via `supplementOutcomeReasonText`.
  */
 export const SUPPLEMENT_OUTCOME_REASON_TEXT: Record<
   SupplementOutcomeReasonCode,
@@ -217,18 +321,22 @@ export const SUPPLEMENT_OUTCOME_REASON_TEXT: Record<
 > = {
   // Card 40: conversion wait outcomes.
   // Part 4 note: when Library Add ships, append
-  // " You can add it later from the Library once ABC shows it as converted."
+  // " You can add it later from the Library once {provider} shows it as converted."
   // to `provider_not_converted` and `not_converted_in_time` (Card 40 / breakdown §3a).
-  provider_not_converted: () => 'ABC has not converted this file.',
-  provider_conversion_failed: () => 'ABC tried and could not convert this file.',
-  not_converted_in_time: () => 'ABC had not converted this file when the import stopped waiting.',
+  provider_not_converted: (options) =>
+    `${sentenceLead(resolveProviderShortLabel(options))} has not converted this file.`,
+  provider_conversion_failed: (options) =>
+    `${sentenceLead(resolveProviderShortLabel(options))} tried and could not convert this file.`,
+  not_converted_in_time: (options) =>
+    `${sentenceLead(resolveProviderShortLabel(options))} had not converted this file when the import stopped waiting.`,
 
   // N11–N16: supplement stage endings.
   login_expired: () => 'Not added: your sign-in expired before it could be added.',
   wait_limit_reached: () => 'Not added: the import\'s time for supplements ran out before this file could be added.',
   import_cancelled: () => 'Not added: the import was cancelled.',
   supplement_stage_failed: () => 'Not added: adding this paper\'s supplements failed.',
-  provider_answer_unknown: () => 'Not added: ABC\'s answer about this file could not be read.',
+  provider_answer_unknown: (options) =>
+    `Not added: ${resolveProviderShortLabel(options)}'s answer about this file could not be read.`,
   paper_busy_when_ready: () => 'Not added: the paper was being changed when its main paper became ready.',
 
   // Card 8: converted-text check refusals when emitted during an add.
@@ -242,31 +350,38 @@ export const SUPPLEMENT_OUTCOME_REASON_TEXT: Record<
   // N17–N28: per-file add refusals.
   pdf_supplement_not_supported_yet: () =>
     'Not added: PDF supplements could not be added when this import ran.',
-  file_not_in_reference: () => 'Not added: ABC no longer lists this file for the paper.',
-  file_not_tickable: () => 'Not added: ABC has no converted text for this file.',
-  file_changed_since_listed: () => 'Not added: the file changed in ABC after it was listed. Try again.',
-  source_file_missing: () => 'Not added: its converted text is missing in ABC.',
-  source_unavailable: () => 'Not added: ABC could not provide its converted text just now. Try again.',
+  file_not_in_reference: (options) =>
+    `Not added: ${resolveProviderShortLabel(options)} no longer lists this file for the paper.`,
+  file_not_tickable: (options) =>
+    `Not added: ${resolveProviderShortLabel(options)} has no converted text for this file.`,
+  file_changed_since_listed: (options) =>
+    `Not added: the file changed in ${resolveProviderShortLabel(options)} after it was listed. Try again.`,
+  source_file_missing: (options) =>
+    `Not added: its converted text is missing in ${resolveProviderShortLabel(options)}.`,
+  source_unavailable: (options) =>
+    `Not added: ${resolveProviderShortLabel(options)} could not provide its converted text just now. Try again.`,
   source_download_failed: () => 'Not added: its converted text could not be downloaded. Try again.',
-  access_denied: () => 'Not added: ABC refused access to its converted text.',
+  access_denied: (options) =>
+    `Not added: ${resolveProviderShortLabel(options)} refused access to its converted text.`,
   markdown_invalid: () => 'Not added: its converted text could not be read.',
   paper_text_limit: (options) =>
-    options?.limitValue != null
+    isPositiveInteger(options?.limitValue)
       ? `Not added: the paper would hold more text than AI Curation reads (${formatByteLimit(options.limitValue)}).`
-      : 'Not added: the paper would hold more text than AI Curation reads.',
+      : UNRECOGNIZED_FILE_TEXT,
   paper_file_limit: (options) =>
-    options?.limitValue != null
+    isPositiveInteger(options?.limitValue)
       ? `Not added: the paper already has the most files allowed (${options.limitValue.toLocaleString('en-US')}).`
-      : 'Not added: the paper already has the most files allowed.',
+      : UNRECOGNIZED_FILE_TEXT,
   already_in_paper: () => 'Already in this paper',
 
   // Card 20: PDF supplement outcomes.
   pdf_too_large: (options) =>
-    options?.limitValue != null
+    isPositiveInteger(options?.limitValue)
       ? `This PDF is larger than ${formatByteLimit(options.limitValue)}, so it was not added.`
-      : 'This PDF is larger than the allowed size, so it was not added.',
+      : UNRECOGNIZED_FILE_TEXT,
   pdf_invalid: () => 'This PDF could not be opened, so it was not added.',
-  pdf_access_denied: () => 'You can read this file\'s text in ABC but not its PDF, so it was not added.',
+  pdf_access_denied: (options) =>
+    `You can read this file's text in ${resolveProviderShortLabel(options)} but not its PDF, so it was not added.`,
 }
 
 /** Word a supplement outcome `reason_code`; unknown or missing codes return N29. */
@@ -320,12 +435,13 @@ export const LIBRARY_ADD_TEXT = {
   fileRemovalUnfinished: 'A file of this paper is still being removed. Try again in a moment.',
   /** N37 */
   addingFilesHeading: 'Adding files',
-  /** Card 34 */
-  uploadedPaperFiles: UPLOADED_PAPER_FILES_TEXT,
-  /** Card 41 (`file_not_tickable` request refusal) */
-  fileNoLongerChoosable:
-    'This file can no longer be chosen: ABC has not converted it and this import will not ask ABC to.',
 } as const
+
+/** Card 41 (`file_not_tickable` request refusal). */
+export function fileNoLongerChoosableText(provider?: string | null): string {
+  const label = nonEmptyLabel(provider) ?? DEFAULT_PROVIDER_LABEL
+  return `This file can no longer be chosen: ${label} has not converted it and this import will not ask ${label} to.`
+}
 
 /** N33: Library Add button label. */
 export function addFilesButtonText(count: number): string {
@@ -334,15 +450,29 @@ export function addFilesButtonText(count: number): string {
     : `Add ${count.toLocaleString('en-US')} files`
 }
 
-/** Card 41: request-level `paper_file_limit` refusal text. */
+/** Card 41: request-level `paper_file_limit` refusal text. Returns N29 if limit is invalid. */
 export function paperFileLimitRefusalText(limit: number): string {
+  if (!isPositiveInteger(limit)) {
+    return UNRECOGNIZED_FILE_TEXT
+  }
   return `Too many files for one paper: at most ${limit.toLocaleString('en-US')}, including the main paper.`
+}
+
+export interface AddFilesRefusalOptions {
+  /** Provider's configured display label (required for `document_source_curator_token_unavailable`). */
+  provider?: string | null
+  /** Optional provider short label for `file_not_tickable` (falls back to `provider`). */
+  providerShortLabel?: string | null
+  /** HTTP status code (409 vs 503 disambiguates `document_source_curator_token_unavailable`). */
+  httpStatus?: number
+  /** Numeric file limit carried by `paper_file_limit` refusals. */
+  limitValue?: number | null
 }
 
 /** Map an import or Library-add request refusal code to approved curator text. */
 export function addFilesRefusalText(
   code: string | null | undefined,
-  options?: { limitValue?: number | null; provider?: string },
+  options?: AddFilesRefusalOptions,
 ): string | null {
   switch (code) {
     case 'import_in_progress':
@@ -350,15 +480,24 @@ export function addFilesRefusalText(
     case 'file_removal_unfinished':
       return LIBRARY_ADD_TEXT.fileRemovalUnfinished
     case 'file_not_tickable':
-      return LIBRARY_ADD_TEXT.fileNoLongerChoosable
-    case 'paper_file_limit':
-      return options?.limitValue != null
-        ? paperFileLimitRefusalText(options.limitValue)
-        : 'Too many files for one paper.'
-    case 'document_source_curator_token_unavailable':
-      return LISTING_REFUSAL_TEXT.document_source_curator_token_unavailable!(
-        options?.provider ?? 'ABC Literature',
+      return fileNoLongerChoosableText(
+        nonEmptyLabel(options?.providerShortLabel) ?? nonEmptyLabel(options?.provider),
       )
+    case 'paper_file_limit':
+      return isPositiveInteger(options?.limitValue)
+        ? paperFileLimitRefusalText(options.limitValue)
+        : UNRECOGNIZED_FILE_TEXT
+    case 'document_source_curator_token_unavailable': {
+      const provider = nonEmptyLabel(options?.provider)
+      if (!provider) {
+        return UNRECOGNIZED_FILE_TEXT
+      }
+      return listingRefusalText(
+        'document_source_curator_token_unavailable',
+        options?.httpStatus ?? 409,
+        provider,
+      )
+    }
     case 'document_source_import_disabled':
       return null
     default:
@@ -407,8 +546,14 @@ export function removeFileDialogTitle(fileName: string): string {
   return `Remove ${fileName}?`
 }
 
-/** Card 2 (W-D1): refusal when one or more review sessions quote the file (no `{names}`). */
+/**
+ * Card 2 (W-D1): refusal when one or more review sessions quote the file (no `{names}`).
+ * Returns N29 if `count` is not a positive integer so a missing count never fabricates "1".
+ */
 export function quotedInReviewSessionsText(count: number): string {
+  if (!isPositiveInteger(count)) {
+    return UNRECOGNIZED_FILE_TEXT
+  }
   return count === 1
     ? 'This file is quoted in 1 review session. To remove it, delete the paper.'
     : `This file is quoted in ${count.toLocaleString('en-US')} review sessions. To remove it, delete the paper.`
@@ -424,7 +569,10 @@ export const FILE_REMOVAL_REFUSAL_TEXT: Record<
   last_file_not_removable: () => 'A paper\'s only file cannot be removed. To remove it, delete the paper.',
   paper_not_completed: () => 'Files can be removed once the paper has finished processing.',
   file_not_in_paper: () => 'This file is no longer in the paper.',
-  file_quoted_in_review: (options) => quotedInReviewSessionsText(options?.sessionCount ?? 1),
+  file_quoted_in_review: (options) =>
+    isPositiveInteger(options?.sessionCount)
+      ? quotedInReviewSessionsText(options.sessionCount)
+      : UNRECOGNIZED_FILE_TEXT,
 }
 
 /** Map a removal refusal code to approved curator text; unknown codes return N29. */

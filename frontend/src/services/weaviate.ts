@@ -16,10 +16,12 @@ import type {
   DocumentFileRemovalCheckResponse,
   DocumentFileRemovalResponse,
   FileRemovalRefusalCode,
+  RecognizedSupplementProgressEntry,
   SupplementJobKind,
   SupplementJobProgress,
   SupplementProgressEntry,
   SupplementState,
+  UnrecognizedSupplementProgressEntry,
 } from '../features/documents/supplementProgress';
 
 export type {
@@ -29,10 +31,12 @@ export type {
   DocumentFileRemovalCheckResponse,
   DocumentFileRemovalResponse,
   FileRemovalRefusalCode,
+  RecognizedSupplementProgressEntry,
   SupplementJobKind,
   SupplementJobProgress,
   SupplementProgressEntry,
   SupplementState,
+  UnrecognizedSupplementProgressEntry,
 };
 
 const API_BASE_URL = '/api/weaviate';
@@ -94,6 +98,7 @@ interface RawDocumentSourceProvenance {
 
 interface RawDocumentSourceProviderMetadata {
   display_label?: string | null;
+  short_label?: string | null;
   reference_label_priority?: string[] | null;
   identifier_help_label?: string | null;
   identifier_examples?: string[] | null;
@@ -185,6 +190,7 @@ export interface DocumentSourceProvenance {
 
 export interface DocumentSourceProviderMetadata {
   displayLabel?: string | null;
+  shortLabel?: string | null;
   referenceLabelPriority?: string[] | null;
   identifierHelpLabel?: string | null;
   identifierExamples?: string[] | null;
@@ -434,6 +440,10 @@ const normalizeDocumentSourceProviderMetadata = (
         ? referenceLabelPriority
         : null,
   };
+  const shortLabel = toStringOrNull(record.short_label);
+  if (shortLabel) {
+    metadata.shortLabel = shortLabel;
+  }
   const identifierHelpLabel = toStringOrNull(record.identifier_help_label);
   if (identifierHelpLabel) {
     metadata.identifierHelpLabel = identifierHelpLabel;
@@ -443,6 +453,7 @@ const normalizeDocumentSourceProviderMetadata = (
   }
 
   return metadata.displayLabel
+    || metadata.shortLabel
     || metadata.referenceLabelPriority
     || metadata.identifierHelpLabel
     || metadata.identifierExamples

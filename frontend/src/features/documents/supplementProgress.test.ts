@@ -1,93 +1,86 @@
 import { describe, expect, it } from 'vitest'
 
+import fileListingFixture from '@/test/fixtures/supplements/file_listing.json'
+import removalCheckFixture from '@/test/fixtures/supplements/removal_check.json'
+import supplementAddMetadataFixture from '@/test/fixtures/supplements/supplement_add_metadata.json'
+import supplementWaitMetadataFixture from '@/test/fixtures/supplements/supplement_wait_metadata.json'
+
+import { parsePaperSourceListing } from './paperSourceFiles'
 import {
+  ADDING_SUPPLEMENTS_STAGE,
+  WAITING_FOR_SUPPLEMENTS_STAGE,
   getJobSupplementProgress,
   hasWaitingSupplements,
   isKnownSupplementOutcomeReasonCode,
+  isPostMainSupplementPhase,
+  isValidIsoTimestampWithTz,
   parseSupplementJobProgress,
+  type DocumentFileRemovalCheckResponse,
 } from './supplementProgress'
 
 describe('supplementProgress parser (interface I1)', () => {
-  it('parses valid supplement_wait and supplement_add job metadata in backend wire shapes', () => {
-    const metadata = {
-      job_kind: 'supplement_wait',
-      supplement_wait_ends_at: '2026-11-24T15:30:00+00:00',
-      supplements: [
-        {
-          provider_file_id: '20',
-          display_name: 'Table_S1.xlsx',
-          state: 'waiting',
-          reason_code: null,
-          observed_at: null,
-          file_id: null,
-          measured_value: null,
-          limit_value: null,
-        },
-        {
-          provider_file_id: '30',
-          display_name: 'Figure_S2.pdf',
-          state: 'added',
-          reason_code: null,
-          observed_at: null,
-          file_id: 'aaaaaaaa-0000-0000-0000-000000000002',
-          measured_value: null,
-          limit_value: null,
-        },
-        {
-          provider_file_id: '40',
-          display_name: null,
-          state: 'left_out',
-          reason_code: 'paper_file_limit',
-          observed_at: '2026-11-24T15:10:00+00:00',
-          file_id: null,
-          measured_value: 21,
-          limit_value: 20,
-        },
-      ],
-    }
-
-    const parsed = parseSupplementJobProgress(metadata)
-
-    expect(parsed).toEqual({
-      job_kind: 'supplement_wait',
-      supplement_wait_ends_at: '2026-11-24T15:30:00+00:00',
-      supplements: [
-        {
-          provider_file_id: '20',
-          display_name: 'Table_S1.xlsx',
-          state: 'waiting',
-          reason_code: null,
-          observed_at: null,
-          file_id: null,
-          measured_value: null,
-          limit_value: null,
-        },
-        {
-          provider_file_id: '30',
-          display_name: 'Figure_S2.pdf',
-          state: 'added',
-          reason_code: null,
-          observed_at: null,
-          file_id: 'aaaaaaaa-0000-0000-0000-000000000002',
-          measured_value: null,
-          limit_value: null,
-        },
-        {
-          provider_file_id: '40',
-          display_name: null,
-          state: 'left_out',
-          reason_code: 'paper_file_limit',
-          observed_at: '2026-11-24T15:10:00+00:00',
-          file_id: null,
-          measured_value: 21,
-          limit_value: 20,
-        },
-      ],
+  it('parses backend-generated real-shape supplement_wait and supplement_add fixtures', () => {
+    const mixed = parseSupplementJobProgress(supplementWaitMetadataFixture.mixed_waiting, {
+      currentStage: WAITING_FOR_SUPPLEMENTS_STAGE,
     })
-    expect(hasWaitingSupplements(parsed)).toBe(true)
+    expect(mixed).not.toBeNull()
+    expect(mixed?.job_kind).toBe('supplement_wait')
+    expect(mixed?.current_stage).toBe(WAITING_FOR_SUPPLEMENTS_STAGE)
+    expect(mixed?.supplement_wait_ends_at).toBe('2026-11-24T15:30:00+00:00')
+    expect(mixed?.supplements).toHaveLength(2)
+    expect(mixed?.supplements[0]).toMatchObject({
+      recognized: true,
+      provider_file_id: '20',
+      display_name: 'Converted_S1.xlsx',
+      state: 'queued',
+    })
+    expect(mixed?.supplements[1]).toMatchObject({
+      recognized: true,
+      provider_file_id: '21',
+      display_name: 'Pending_S2.docx',
+      state: 'waiting',
+    })
+    expect(hasWaitingSupplements(mixed)).toBe(true)
+    expect(isPostMainSupplementPhase(mixed!)).toBe(true)
+
+    const allWait = parseSupplementJobProgress(supplementWaitMetadataFixture.all_states_and_outcomes)
+    expect(allWait?.supplements).toHaveLength(10)
+    expect(allWait?.supplements.every((entry) => entry.recognized)).toBe(true)
+
+    const addProgress = parseSupplementJobProgress(supplementAddMetadataFixture)
+    expect(addProgress?.job_kind).toBe('supplement_add')
+    expect(addProgress?.supplements).toHaveLength(10)
+    expect(addProgress?.supplements[1]).toMatchObject({
+      recognized: true,
+      provider_file_id: '101',
+      display_name: null,
+      state: 'left_out',
+      reason_code: 'file_not_in_reference',
+    })
+    expect(hasWaitingSupplements(addProgress)).toBe(false)
+    expect(isPostMainSupplementPhase(addProgress!)).toBe(true)
   })
 
-  it('returns null when metadata is absent, malformed, or has zero entries', () => {
+  it('matches backend-generated file_listing and removal_check fixtures', () => {
+    const listing = parsePaperSourceListing(fileListingFixture)
+    expect(listing.files).toHaveLength(6)
+    expect(listing.files.every((file) => file.recognized)).toBe(true)
+    expect(listing.not_shown_count).toBe(2)
+    expect(listing.duplicate_copies_count).toBe(1)
+
+    const checks: Record<string, DocumentFileRemovalCheckResponse> = removalCheckFixture
+    expect(checks.removable_plain?.removable).toBe(true)
+    expect(checks.removable_with_review_warning?.review_and_curate_would_refuse).toBe(true)
+    expect(checks.refused_file_quoted_in_review_single?.session_ids).toEqual(['session-1'])
+    expect(checks.refused_file_quoted_in_review_multiple?.session_ids).toEqual(['session-1', 'session-2'])
+    expect(checks.refused_main_file?.error).toBe('main_file_not_removable')
+    expect(checks.refused_last_file?.error).toBe('last_file_not_removable')
+    expect(checks.refused_import_in_progress?.error).toBe('import_in_progress')
+    expect(checks.refused_paper_not_completed?.error).toBe('paper_not_completed')
+    expect(checks.refused_file_not_in_paper?.error).toBe('file_not_in_paper')
+  })
+
+  it('returns null when metadata is absent, not an array, or empty', () => {
     for (const candidate of [
       null,
       undefined,
@@ -99,7 +92,6 @@ describe('supplementProgress parser (interface I1)', () => {
       { supplements: 'not-a-list' },
       { supplements: [] },
       { job_kind: 'supplement_wait', supplement_wait_ends_at: '2026-11-24T15:30:00+00:00', supplements: [] },
-      { supplements: [null, 123, {}, { provider_file_id: '', state: 'waiting' }, { provider_file_id: '1', state: 'bogus' }] },
     ]) {
       expect(parseSupplementJobProgress(candidate)).toBeNull()
     }
@@ -108,13 +100,14 @@ describe('supplementProgress parser (interface I1)', () => {
     expect(hasWaitingSupplements(null)).toBe(false)
   })
 
-  it('skips malformed entries without throwing and sanitizes bad optional fields on valid entries', () => {
+  it('preserves unrecognized or malformed entries as unrecognized rows instead of dropping chosen files', () => {
     const parsed = parseSupplementJobProgress({
       job_kind: 'unknown_kind',
       supplement_wait_ends_at: 'not-a-date',
       supplements: [
         null,
-        { provider_file_id: 'bad-state', state: 'running' },
+        { provider_file_id: 'bad-state', display_name: 'Mystery_S1.xlsx', state: 'future_state' },
+        { display_name: 'MissingId_S2.xlsx', state: 'waiting' },
         {
           provider_file_id: '50',
           display_name: '   ',
@@ -140,9 +133,26 @@ describe('supplementProgress parser (interface I1)', () => {
 
     expect(parsed).toEqual({
       job_kind: null,
+      current_stage: null,
       supplement_wait_ends_at: null,
       supplements: [
         {
+          recognized: false,
+          provider_file_id: null,
+          display_name: null,
+        },
+        {
+          recognized: false,
+          provider_file_id: 'bad-state',
+          display_name: 'Mystery_S1.xlsx',
+        },
+        {
+          recognized: false,
+          provider_file_id: null,
+          display_name: 'MissingId_S2.xlsx',
+        },
+        {
+          recognized: true,
           provider_file_id: '50',
           display_name: null,
           state: 'left_out',
@@ -153,6 +163,7 @@ describe('supplementProgress parser (interface I1)', () => {
           limit_value: null,
         },
         {
+          recognized: true,
           provider_file_id: '60',
           display_name: 'Big.pdf',
           state: 'left_out',
@@ -167,28 +178,65 @@ describe('supplementProgress parser (interface I1)', () => {
     expect(hasWaitingSupplements(parsed)).toBe(false)
   })
 
-  it('reads supplement progress from a job object via getJobSupplementProgress', () => {
-    const parsed = getJobSupplementProgress({
+  it('validates supplement_wait_ends_at strictly as an ISO-8601 timestamp with timezone', () => {
+    for (const valid of [
+      '2026-11-24T15:30:00+00:00',
+      '2026-11-24T15:30:00.123456+00:00',
+      '2026-11-24T15:30:00Z',
+      '2026-11-24T11:30:00-04:00',
+    ]) {
+      expect(isValidIsoTimestampWithTz(valid)).toBe(true)
+    }
+
+    for (const invalid of [
+      '0',
+      '123',
+      '2026-11-24',
+      '2026-11-24T15:30:00',
+      '2026-02-30T15:30:00Z',
+      '2026-13-01T15:30:00Z',
+      ' 2026-11-24T15:30:00Z ',
+      'not-a-date',
+      '',
+      null,
+      123,
+    ]) {
+      expect(isValidIsoTimestampWithTz(invalid)).toBe(false)
+    }
+
+    const parsed = parseSupplementJobProgress({
+      supplements: [
+        { provider_file_id: '20', display_name: 'S1.xlsx', state: 'waiting' },
+      ],
+      supplement_wait_ends_at: '0',
+    })
+    expect(parsed?.supplement_wait_ends_at).toBeNull()
+  })
+
+  it('distinguishes pre-main vs post-main supplement phases cleanly', () => {
+    const preMain = getJobSupplementProgress({
+      current_stage: 'extracting',
       metadata: {
-        job_kind: 'supplement_add',
         supplements: [
-          {
-            provider_file_id: '20',
-            display_name: 'Table_S1.xlsx',
-            state: 'adding',
-            reason_code: null,
-            observed_at: null,
-            file_id: null,
-            measured_value: null,
-            limit_value: null,
-          },
+          { provider_file_id: '20', display_name: 'S1.xlsx', state: 'queued' },
         ],
       },
     })
+    expect(preMain).not.toBeNull()
+    expect(isPostMainSupplementPhase(preMain!)).toBe(false)
+    expect(isPostMainSupplementPhase(preMain!, WAITING_FOR_SUPPLEMENTS_STAGE)).toBe(true)
+    expect(isPostMainSupplementPhase(preMain!, ADDING_SUPPLEMENTS_STAGE)).toBe(true)
 
-    expect(parsed?.job_kind).toBe('supplement_add')
-    expect(parsed?.supplements).toHaveLength(1)
-    expect(parsed?.supplements[0]?.state).toBe('adding')
+    const postMainByJobKind = getJobSupplementProgress({
+      current_stage: 'pending',
+      metadata: {
+        job_kind: 'supplement_add',
+        supplements: [
+          { provider_file_id: '20', display_name: 'S1.xlsx', state: 'queued' },
+        ],
+      },
+    })
+    expect(isPostMainSupplementPhase(postMainByJobKind!)).toBe(true)
   })
 
   it('distinguishes known vs unknown supplement outcome reason codes', () => {

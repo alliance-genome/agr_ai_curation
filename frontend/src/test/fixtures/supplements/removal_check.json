@@ -1,0 +1,90 @@
+{
+  "removable_plain": {
+    "document_id": "11111111-1111-1111-1111-111111111111",
+    "file_id": "22222222-2222-2222-2222-222222222222",
+    "removable": true,
+    "error": null,
+    "newest_result_quotes_file": false,
+    "has_review_session": false,
+    "review_and_curate_would_refuse": false
+  },
+  "removable_with_review_warning": {
+    "document_id": "11111111-1111-1111-1111-111111111111",
+    "file_id": "22222222-2222-2222-2222-222222222222",
+    "removable": true,
+    "error": null,
+    "newest_result_quotes_file": true,
+    "has_review_session": false,
+    "review_and_curate_would_refuse": true
+  },
+  "refused_file_quoted_in_review_single": {
+    "document_id": "11111111-1111-1111-1111-111111111111",
+    "file_id": "22222222-2222-2222-2222-222222222222",
+    "removable": false,
+    "error": "file_quoted_in_review",
+    "newest_result_quotes_file": false,
+    "has_review_session": true,
+    "review_and_curate_would_refuse": false,
+    "session_ids": [
+      "session-1"
+    ]
+  },
+  "refused_file_quoted_in_review_multiple": {
+    "document_id": "11111111-1111-1111-1111-111111111111",
+    "file_id": "22222222-2222-2222-2222-222222222222",
+    "removable": false,
+    "error": "file_quoted_in_review",
+    "newest_result_quotes_file": false,
+    "has_review_session": true,
+    "review_and_curate_would_refuse": false,
+    "session_ids": [
+      "session-1",
+      "session-2"
+    ]
+  },
+  "refused_main_file": {
+    "document_id": "11111111-1111-1111-1111-111111111111",
+    "file_id": "22222222-2222-2222-2222-222222222221",
+    "removable": false,
+    "error": "main_file_not_removable",
+    "newest_result_quotes_file": false,
+    "has_review_session": false,
+    "review_and_curate_would_refuse": false
+  },
+  "refused_last_file": {
+    "document_id": "11111111-1111-1111-1111-111111111111",
+    "file_id": "22222222-2222-2222-2222-222222222222",
+    "removable": false,
+    "error": "last_file_not_removable",
+    "newest_result_quotes_file": false,
+    "has_review_session": false,
+    "review_and_curate_would_refuse": false
+  },
+  "refused_import_in_progress": {
+    "document_id": "11111111-1111-1111-1111-111111111111",
+    "file_id": "22222222-2222-2222-2222-222222222222",
+    "removable": false,
+    "error": "import_in_progress",
+    "newest_result_quotes_file": false,
+    "has_review_session": false,
+    "review_and_curate_would_refuse": false
+  },
+  "refused_paper_not_completed": {
+    "document_id": "11111111-1111-1111-1111-111111111111",
+    "file_id": "22222222-2222-2222-2222-222222222222",
+    "removable": false,
+    "error": "paper_not_completed",
+    "newest_result_quotes_file": false,
+    "has_review_session": false,
+    "review_and_curate_would_refuse": false
+  },
+  "refused_file_not_in_paper": {
+    "document_id": "11111111-1111-1111-1111-111111111111",
+    "file_id": "22222222-2222-2222-2222-222222222299",
+    "removable": false,
+    "error": "file_not_in_paper",
+    "newest_result_quotes_file": false,
+    "has_review_session": false,
+    "review_and_curate_would_refuse": false
+  }
+}

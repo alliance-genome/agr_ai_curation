@@ -19,6 +19,7 @@ import {
   ADD_LITERATURE_TEXT,
   CHECK_REASON_TEXT,
   CHECK_STATUS_TEXT,
+  DEFAULT_PROVIDER_LABEL,
   FILE_REMOVAL_REFUSAL_TEXT,
   LIBRARY_ADD_TEXT,
   LIBRARY_FILES_COLUMN_TEXT,
@@ -26,15 +27,16 @@ import {
   LISTING_REFUSAL_TEXT,
   NOT_TICKABLE_REASON_TEXT,
   OBSERVATION_TEXT,
+  QUEUED_AFTER_MAIN_READY_TEXT,
   SUPPLEMENT_OUTCOME_REASON_TEXT,
   SUPPLEMENT_STATE_TEXT,
   TRY_AGAIN_BUTTON_TEXT,
   UNRECOGNIZED_FILE_TEXT,
-  UPLOADED_PAPER_FILES_TEXT,
   addFilesButtonText,
   addFilesRefusalText,
   duplicateCopiesText,
   fewCharactersNote,
+  fileNoLongerChoosableText,
   fileRemovalRefusalText,
   filesCountAriaLabel,
   formatByteLimit,
@@ -46,10 +48,14 @@ import {
   quotedInReviewSessionsText,
   removeFileAriaLabel,
   removeFileDialogTitle,
+  resolveProviderShortLabel,
+  resolveSupplementProviderShortLabel,
   sourceFileStatusText,
   supplementOutcomeReasonText,
+  supplementStateText,
   supplementWaitEndsText,
   unconvertedTickableSupplementText,
+  uploadedPaperFilesText,
 } from './paperFileReasonText'
 
 describe('paperFileReasonText: one table for every code', () => {
@@ -149,8 +155,11 @@ describe('paperFileReasonText: one table for every code', () => {
   })
 
   it('words listing refusals including Card 34 for uploaded papers and sign-in causes', () => {
-    expect(listingRefusalText('not_imported_from_provider', 409, 'ABC Literature')).toBe(
+    expect(listingRefusalText('not_imported_from_provider', 409, 'ABC')).toBe(
       'Files can be added only to papers imported from ABC.',
+    )
+    expect(listingRefusalText('not_imported_from_provider', 409, 'Genome Archive')).toBe(
+      'Files can be added only to papers imported from Genome Archive.',
     )
     expect(listingRefusalText('document_source_curator_token_unavailable', 409, 'P')).toBe('Sign in again to see this paper\'s files in P.')
     expect(listingRefusalText('document_source_curator_token_unavailable', 503, 'P')).toBe('This server cannot reach P just now, so this paper\'s files there cannot be listed.')
@@ -178,6 +187,9 @@ describe('approved supplement screen texts (N1–N29, N33–N44, N46–N47, Card
     expect(unconvertedTickableSupplementText('ABC Literature')).toBe(
       'Not converted by ABC Literature yet. If you choose it, the import asks ABC Literature to convert it; the main paper does not wait for it.',
     )
+    expect(unconvertedTickableSupplementText('Genome Archive')).toBe(
+      'Not converted by Genome Archive yet. If you choose it, the import asks Genome Archive to convert it; the main paper does not wait for it.',
+    )
     expect(importWithSupplementsButtonText(1)).toBe('Import with 1 supplement')
     expect(importWithSupplementsButtonText(4)).toBe('Import with 4 supplements')
     expect(ADD_LITERATURE_TEXT.openInLibraryToAddFiles).toBe('Open it in the Library to add its files.')
@@ -186,116 +198,158 @@ describe('approved supplement screen texts (N1–N29, N33–N44, N46–N47, Card
     )
   })
 
-  it('matches job state labels (N7–N9, Card 39) and wait-end message (N10)', () => {
-    expect(SUPPLEMENT_STATE_TEXT).toEqual({
-      queued: 'Waiting for the main paper',
-      waiting: 'Waiting for ABC',
-      adding: 'Being added',
-      added: 'Added',
-      left_out: 'Not added',
-    })
-    expect(supplementWaitEndsText('3:30 PM')).toBe('ABC has until 3:30 PM to convert them.')
+  it('matches job state labels (N7, post-main queued, Card 39, N8, N9) and strict wait-end timestamps (N10)', () => {
+    expect(QUEUED_AFTER_MAIN_READY_TEXT).toBe('Waiting to be added')
+    expect(supplementStateText('queued')).toBe('Waiting for the main paper')
+    expect(supplementStateText('queued', { mainReady: false })).toBe('Waiting for the main paper')
+    expect(supplementStateText('queued', { mainReady: true })).toBe('Waiting to be added')
+    expect(supplementStateText('waiting', { providerShortLabel: 'ABC' })).toBe('Waiting for ABC')
+    expect(supplementStateText('waiting', { providerShortLabel: 'Genome Archive' })).toBe('Waiting for Genome Archive')
+    expect(supplementStateText('waiting')).toBe(`Waiting for ${DEFAULT_PROVIDER_LABEL}`)
+    expect(supplementStateText('adding')).toBe('Being added')
+    expect(supplementStateText('added')).toBe('Added')
+    expect(supplementStateText('left_out')).toBe('Not added')
+
+    expect(supplementWaitEndsText('3:30 PM', 'ABC')).toBe('ABC has until 3:30 PM to convert them.')
+    expect(supplementWaitEndsText('3:30 PM', 'Genome Archive')).toBe(
+      'Genome Archive has until 3:30 PM to convert them.',
+    )
+    expect(supplementWaitEndsText('3:30 PM')).toBe(
+      'The literature source has until 3:30 PM to convert them.',
+    )
+
     expect(formatSupplementWaitEndTime('2026-11-24T15:30:00+00:00')).toBe(
       new Date('2026-11-24T15:30:00+00:00').toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
     )
+    expect(formatSupplementWaitEndTime('0')).toBeNull()
+    expect(formatSupplementWaitEndTime('123')).toBeNull()
+    expect(formatSupplementWaitEndTime('2026-11-24')).toBeNull()
+    expect(formatSupplementWaitEndTime('2026-11-24T15:30:00')).toBeNull()
+    expect(formatSupplementWaitEndTime('2026-02-30T15:30:00Z')).toBeNull()
     expect(formatSupplementWaitEndTime('not-a-timestamp')).toBeNull()
   })
 
-  it('formats byte limits in SI decimal units matching backend defaults (Card 20 & N26)', () => {
+  it('formats byte limits exactly without rounding up arbitrary thresholds (Card 20 & N26)', () => {
     expect(formatByteLimit(20_000_000)).toBe('20 MB')
     expect(formatByteLimit(2_000_000)).toBe('2 MB')
     expect(formatByteLimit(1_500_000)).toBe('1.5 MB')
+    expect(formatByteLimit(1_060_000)).toBe('1,060,000 bytes')
     expect(formatByteLimit(2_500_000_000)).toBe('2.5 GB')
+    expect(formatByteLimit(1_250_000_000)).toBe('1,250,000,000 bytes')
     expect(formatByteLimit(500_000)).toBe('500 KB')
+    expect(formatByteLimit(1_060)).toBe('1,060 bytes')
     expect(formatByteLimit(512)).toBe('512 bytes')
     expect(formatByteLimit(1)).toBe('1 byte')
   })
 
-  it('matches every per-file outcome code N11–N29, Card 20, Card 40, and Card 8 checks', () => {
-    // N11–N28
-    expect(supplementOutcomeReasonText('login_expired')).toBe(
+  it('matches every per-file outcome code N11–N29, Card 20, Card 40, and Card 8 checks (with Alliance & non-ABC providers)', () => {
+    const abc = { providerShortLabel: 'ABC' }
+    const other = { providerShortLabel: 'Genome Archive' }
+
+    // N11–N28 with Alliance short label
+    expect(supplementOutcomeReasonText('login_expired', abc)).toBe(
       'Not added: your sign-in expired before it could be added.',
     )
-    expect(supplementOutcomeReasonText('wait_limit_reached')).toBe(
+    expect(supplementOutcomeReasonText('wait_limit_reached', abc)).toBe(
       'Not added: the import\'s time for supplements ran out before this file could be added.',
     )
-    expect(supplementOutcomeReasonText('import_cancelled')).toBe('Not added: the import was cancelled.')
-    expect(supplementOutcomeReasonText('supplement_stage_failed')).toBe(
+    expect(supplementOutcomeReasonText('import_cancelled', abc)).toBe('Not added: the import was cancelled.')
+    expect(supplementOutcomeReasonText('supplement_stage_failed', abc)).toBe(
       'Not added: adding this paper\'s supplements failed.',
     )
-    expect(supplementOutcomeReasonText('provider_answer_unknown')).toBe(
+    expect(supplementOutcomeReasonText('provider_answer_unknown', abc)).toBe(
       'Not added: ABC\'s answer about this file could not be read.',
     )
-    expect(supplementOutcomeReasonText('paper_busy_when_ready')).toBe(
+    expect(supplementOutcomeReasonText('provider_answer_unknown', other)).toBe(
+      'Not added: Genome Archive\'s answer about this file could not be read.',
+    )
+    expect(supplementOutcomeReasonText('paper_busy_when_ready', abc)).toBe(
       'Not added: the paper was being changed when its main paper became ready.',
     )
-    expect(supplementOutcomeReasonText('pdf_supplement_not_supported_yet')).toBe(
+    expect(supplementOutcomeReasonText('pdf_supplement_not_supported_yet', abc)).toBe(
       'Not added: PDF supplements could not be added when this import ran.',
     )
-    expect(supplementOutcomeReasonText('file_not_in_reference')).toBe(
+    expect(supplementOutcomeReasonText('file_not_in_reference', abc)).toBe(
       'Not added: ABC no longer lists this file for the paper.',
     )
-    expect(supplementOutcomeReasonText('file_not_tickable')).toBe(
+    expect(supplementOutcomeReasonText('file_not_in_reference', other)).toBe(
+      'Not added: Genome Archive no longer lists this file for the paper.',
+    )
+    expect(supplementOutcomeReasonText('file_not_tickable', abc)).toBe(
       'Not added: ABC has no converted text for this file.',
     )
-    expect(supplementOutcomeReasonText('file_changed_since_listed')).toBe(
+    expect(supplementOutcomeReasonText('file_changed_since_listed', abc)).toBe(
       'Not added: the file changed in ABC after it was listed. Try again.',
     )
-    expect(supplementOutcomeReasonText('source_file_missing')).toBe(
+    expect(supplementOutcomeReasonText('source_file_missing', abc)).toBe(
       'Not added: its converted text is missing in ABC.',
     )
-    expect(supplementOutcomeReasonText('source_unavailable')).toBe(
+    expect(supplementOutcomeReasonText('source_unavailable', abc)).toBe(
       'Not added: ABC could not provide its converted text just now. Try again.',
     )
-    expect(supplementOutcomeReasonText('source_download_failed')).toBe(
+    expect(supplementOutcomeReasonText('source_download_failed', abc)).toBe(
       'Not added: its converted text could not be downloaded. Try again.',
     )
-    expect(supplementOutcomeReasonText('access_denied')).toBe(
+    expect(supplementOutcomeReasonText('access_denied', abc)).toBe(
       'Not added: ABC refused access to its converted text.',
     )
-    expect(supplementOutcomeReasonText('markdown_invalid')).toBe(
+    expect(supplementOutcomeReasonText('markdown_invalid', abc)).toBe(
       'Not added: its converted text could not be read.',
     )
     expect(supplementOutcomeReasonText('paper_text_limit', { limitValue: 2_000_000 })).toBe(
       'Not added: the paper would hold more text than AI Curation reads (2 MB).',
     )
-    expect(supplementOutcomeReasonText('paper_text_limit')).toBe(
-      'Not added: the paper would hold more text than AI Curation reads.',
+    expect(supplementOutcomeReasonText('paper_text_limit', { limitValue: 1_060_000 })).toBe(
+      'Not added: the paper would hold more text than AI Curation reads (1,060,000 bytes).',
     )
     expect(supplementOutcomeReasonText('paper_file_limit', { limitValue: 20 })).toBe(
       'Not added: the paper already has the most files allowed (20).',
     )
-    expect(supplementOutcomeReasonText('paper_file_limit')).toBe(
-      'Not added: the paper already has the most files allowed.',
-    )
-    expect(supplementOutcomeReasonText('already_in_paper')).toBe('Already in this paper')
+    expect(supplementOutcomeReasonText('already_in_paper', abc)).toBe('Already in this paper')
+
+    // Missing or invalid required limits fall back to N29 (no unsigned fallback copy)
+    for (const code of ['paper_text_limit', 'paper_file_limit', 'pdf_too_large'] as const) {
+      expect(supplementOutcomeReasonText(code)).toBe(UNRECOGNIZED_FILE_TEXT)
+      expect(supplementOutcomeReasonText(code, { limitValue: null })).toBe(UNRECOGNIZED_FILE_TEXT)
+      expect(supplementOutcomeReasonText(code, { limitValue: 0 })).toBe(UNRECOGNIZED_FILE_TEXT)
+      expect(supplementOutcomeReasonText(code, { limitValue: -1 })).toBe(UNRECOGNIZED_FILE_TEXT)
+    }
 
     // Card 20 PDF supplement outcomes
     expect(supplementOutcomeReasonText('pdf_too_large', { limitValue: 20_000_000 })).toBe(
       'This PDF is larger than 20 MB, so it was not added.',
     )
-    expect(supplementOutcomeReasonText('pdf_too_large')).toBe(
-      'This PDF is larger than the allowed size, so it was not added.',
+    expect(supplementOutcomeReasonText('pdf_too_large', { limitValue: 1_060_000 })).toBe(
+      'This PDF is larger than 1,060,000 bytes, so it was not added.',
     )
     expect(supplementOutcomeReasonText('pdf_invalid')).toBe(
       'This PDF could not be opened, so it was not added.',
     )
-    expect(supplementOutcomeReasonText('pdf_access_denied')).toBe(
+    expect(supplementOutcomeReasonText('pdf_access_denied', abc)).toBe(
       'You can read this file\'s text in ABC but not its PDF, so it was not added.',
+    )
+    expect(supplementOutcomeReasonText('pdf_access_denied', other)).toBe(
+      'You can read this file\'s text in Genome Archive but not its PDF, so it was not added.',
     )
 
     // Card 40 conversion wait outcomes (first sentence only until Part 4 ships)
-    expect(supplementOutcomeReasonText('provider_not_converted')).toBe(
+    expect(supplementOutcomeReasonText('provider_not_converted', abc)).toBe(
       'ABC has not converted this file.',
     )
-    expect(supplementOutcomeReasonText('provider_conversion_failed')).toBe(
+    expect(supplementOutcomeReasonText('provider_conversion_failed', abc)).toBe(
       'ABC tried and could not convert this file.',
     )
-    expect(supplementOutcomeReasonText('not_converted_in_time')).toBe(
+    expect(supplementOutcomeReasonText('not_converted_in_time', abc)).toBe(
       'ABC had not converted this file when the import stopped waiting.',
     )
+    expect(supplementOutcomeReasonText('provider_not_converted', other)).toBe(
+      'Genome Archive has not converted this file.',
+    )
+    expect(supplementOutcomeReasonText('provider_not_converted')).toBe(
+      'The literature source has not converted this file.',
+    )
     for (const code of ['provider_not_converted', 'not_converted_in_time'] as const) {
-      expect(supplementOutcomeReasonText(code)).not.toContain('add it later from the Library')
+      expect(supplementOutcomeReasonText(code, abc)).not.toContain('add it later from the Library')
     }
 
     // Card 8 check refusals emitted during add
@@ -317,14 +371,14 @@ describe('approved supplement screen texts (N1–N29, N33–N44, N46–N47, Card
     )
 
     // N29 fallback for unknown or missing codes
-    expect(supplementOutcomeReasonText('something_unknown')).toBe(
+    expect(supplementOutcomeReasonText('something_unknown', abc)).toBe(
       'This screen cannot describe this file yet.',
     )
-    expect(supplementOutcomeReasonText(null)).toBe('This screen cannot describe this file yet.')
-    expect(supplementOutcomeReasonText(undefined)).toBe('This screen cannot describe this file yet.')
+    expect(supplementOutcomeReasonText(null, abc)).toBe('This screen cannot describe this file yet.')
+    expect(supplementOutcomeReasonText(undefined, abc)).toBe('This screen cannot describe this file yet.')
   })
 
-  it('matches Library Add strings N33–N37, Card 34, and Card 41', () => {
+  it('matches Library Add strings N33–N37, Card 34, Card 41, and 409 vs 503 refusals', () => {
     expect(addFilesButtonText(1)).toBe('Add 1 file')
     expect(addFilesButtonText(3)).toBe('Add 3 files')
     expect(LIBRARY_ADD_TEXT.importStillRunning).toBe(
@@ -334,25 +388,54 @@ describe('approved supplement screen texts (N1–N29, N33–N44, N46–N47, Card
       'A file of this paper is still being removed. Try again in a moment.',
     )
     expect(LIBRARY_ADD_TEXT.addingFilesHeading).toBe('Adding files')
-    expect(UPLOADED_PAPER_FILES_TEXT).toBe('Files can be added only to papers imported from ABC.')
-    expect(LIBRARY_ADD_TEXT.uploadedPaperFiles).toBe(UPLOADED_PAPER_FILES_TEXT)
-    expect(LIBRARY_ADD_TEXT.fileNoLongerChoosable).toBe(
+    expect(uploadedPaperFilesText('ABC')).toBe('Files can be added only to papers imported from ABC.')
+    expect(uploadedPaperFilesText('Genome Archive')).toBe(
+      'Files can be added only to papers imported from Genome Archive.',
+    )
+    expect(fileNoLongerChoosableText('ABC')).toBe(
       'This file can no longer be chosen: ABC has not converted it and this import will not ask ABC to.',
     )
     expect(paperFileLimitRefusalText(20)).toBe(
       'Too many files for one paper: at most 20, including the main paper.',
     )
+    expect(paperFileLimitRefusalText(0)).toBe(UNRECOGNIZED_FILE_TEXT)
 
     expect(addFilesRefusalText('import_in_progress')).toBe(LIBRARY_ADD_TEXT.importStillRunning)
     expect(addFilesRefusalText('file_removal_unfinished')).toBe(LIBRARY_ADD_TEXT.fileRemovalUnfinished)
-    expect(addFilesRefusalText('file_not_tickable')).toBe(LIBRARY_ADD_TEXT.fileNoLongerChoosable)
+    expect(addFilesRefusalText('file_not_tickable', { providerShortLabel: 'ABC' })).toBe(
+      'This file can no longer be chosen: ABC has not converted it and this import will not ask ABC to.',
+    )
+    expect(addFilesRefusalText('file_not_tickable', { provider: 'Genome Archive' })).toBe(
+      'This file can no longer be chosen: Genome Archive has not converted it and this import will not ask Genome Archive to.',
+    )
     expect(addFilesRefusalText('paper_file_limit', { limitValue: 20 })).toBe(
       'Too many files for one paper: at most 20, including the main paper.',
     )
-    expect(addFilesRefusalText('paper_file_limit')).toBe('Too many files for one paper.')
+    // Missing or invalid limit_value must return N29 (no unsigned fallback copy)
+    expect(addFilesRefusalText('paper_file_limit')).toBe(UNRECOGNIZED_FILE_TEXT)
+    expect(addFilesRefusalText('paper_file_limit', { limitValue: null })).toBe(UNRECOGNIZED_FILE_TEXT)
+    expect(addFilesRefusalText('paper_file_limit', { limitValue: 0 })).toBe(UNRECOGNIZED_FILE_TEXT)
+
+    // 409 vs 503 disambiguation with a non-ABC provider label, and N29 when provider is missing
     expect(
-      addFilesRefusalText('document_source_curator_token_unavailable', { provider: 'ABC Literature' }),
-    ).toBe('Sign in again to see this paper\'s files in ABC Literature.')
+      addFilesRefusalText('document_source_curator_token_unavailable', {
+        httpStatus: 409,
+        provider: 'Genome Archive',
+      }),
+    ).toBe('Sign in again to see this paper\'s files in Genome Archive.')
+    expect(
+      addFilesRefusalText('document_source_curator_token_unavailable', {
+        httpStatus: 503,
+        provider: 'Genome Archive',
+      }),
+    ).toBe('This server cannot reach Genome Archive just now, so this paper\'s files there cannot be listed.')
+    expect(addFilesRefusalText('document_source_curator_token_unavailable', { httpStatus: 409 })).toBe(
+      UNRECOGNIZED_FILE_TEXT,
+    )
+    expect(
+      addFilesRefusalText('document_source_curator_token_unavailable', { httpStatus: 409, provider: '   ' }),
+    ).toBe(UNRECOGNIZED_FILE_TEXT)
+
     expect(addFilesRefusalText('document_source_import_disabled')).toBeNull()
     expect(addFilesRefusalText('unknown_refusal')).toBe(UNRECOGNIZED_FILE_TEXT)
   })
@@ -379,18 +462,26 @@ describe('approved supplement screen texts (N1–N29, N33–N44, N46–N47, Card
       'This paper\'s newest result quotes a file that was removed from the paper. Run the extraction again to review it.',
     )
 
-    // Card 2 (W-D1): drops {names}, singular vs plural
+    // Card 2 (W-D1): drops {names}, singular vs plural, and never fabricates "1" when missing/0
     expect(quotedInReviewSessionsText(1)).toBe(
       'This file is quoted in 1 review session. To remove it, delete the paper.',
     )
     expect(quotedInReviewSessionsText(3)).toBe(
       'This file is quoted in 3 review sessions. To remove it, delete the paper.',
     )
+    expect(quotedInReviewSessionsText(0)).toBe(UNRECOGNIZED_FILE_TEXT)
     expect(fileRemovalRefusalText('file_quoted_in_review', { sessionCount: 1 })).toBe(
       'This file is quoted in 1 review session. To remove it, delete the paper.',
     )
     expect(fileRemovalRefusalText('file_quoted_in_review', { sessionCount: 2 })).toBe(
       'This file is quoted in 2 review sessions. To remove it, delete the paper.',
+    )
+    expect(fileRemovalRefusalText('file_quoted_in_review')).toBe(UNRECOGNIZED_FILE_TEXT)
+    expect(fileRemovalRefusalText('file_quoted_in_review', { sessionCount: 0 })).toBe(
+      UNRECOGNIZED_FILE_TEXT,
+    )
+    expect(fileRemovalRefusalText('file_quoted_in_review', { sessionCount: -2 })).toBe(
+      UNRECOGNIZED_FILE_TEXT,
     )
 
     // N41–N44 + N34/N35 + N29 fallback
@@ -411,6 +502,23 @@ describe('approved supplement screen texts (N1–N29, N33–N44, N46–N47, Card
 
     // Card 3 (W-D2): no N45 cleanup_finished message in UI
     expect(JSON.stringify(LIBRARY_REMOVE_TEXT)).not.toContain('Clearing its stored copies')
+  })
+
+  it('resolves provider short labels from presentation metadata cleanly without Alliance defaults', () => {
+    expect(resolveProviderShortLabel({ providerShortLabel: 'ABC', providerLabel: 'ABC Literature' })).toBe('ABC')
+    expect(resolveProviderShortLabel({ providerLabel: 'Genome Archive' })).toBe('Genome Archive')
+    expect(resolveProviderShortLabel()).toBe(DEFAULT_PROVIDER_LABEL)
+    expect(
+      resolveSupplementProviderShortLabel({
+        providerMetadata: { shortLabel: 'GA', displayLabel: 'Genome Archive' },
+      }),
+    ).toBe('GA')
+    expect(
+      resolveSupplementProviderShortLabel({
+        providerMetadata: { displayLabel: 'Genome Archive' },
+      }),
+    ).toBe('Genome Archive')
+    expect(resolveSupplementProviderShortLabel(null)).toBeNull()
   })
 
   it('matches Library Files column N46–N47 and Card 38 Try again', () => {
