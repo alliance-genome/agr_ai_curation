@@ -9,6 +9,7 @@ numbers are never reused.
 
 from __future__ import annotations
 
+import logging
 import shutil
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
@@ -29,6 +30,8 @@ from src.models.sql.pdf_document import (
     PDFDocument,
     PDFDocumentFile,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentFileError(RuntimeError):
@@ -415,6 +418,69 @@ def remove_committed_paper_stored_files(
         except (StoredPathOutsideOwnerStorage, StoredFilesNotRemoved, OSError):
             return False
     return fallback_cleanup()
+
+
+def remove_staged_paper_artifacts(
+    saved_path: Path,
+    *,
+    base_storage: Path,
+    user_sub: str,
+    document_id: str,
+) -> bool:
+    """Remove staged PDF artifacts strictly inside ``<base_storage>/<user_sub>/<document_id>``.
+
+    Derives the only removable directory from trusted ``(base_storage, user_sub, document_id)``
+    so a filename containing path separators or traversal segments can never cause
+    ``shutil.rmtree`` to touch an unrelated directory. Wraps all stat/exists/rmtree checks
+    in ``OSError`` handling so permission errors return False cleanly.
+    """
+    from src.lib.document_files.storage_paths import (
+        StoredPathOutsideOwnerStorage,
+        owner_storage_entry,
+        owner_storage_path,
+    )
+
+    try:
+        if (
+            not document_id
+            or "/" in document_id
+            or "\\" in document_id
+            or "\x00" in document_id
+            or document_id in {".", ".."}
+            or Path(document_id).name != document_id
+        ):
+            return False
+        owner_root = owner_storage_path(base_storage / user_sub, base_storage, user_sub)
+        expected_dir = owner_root / document_id
+        if expected_dir.is_symlink():
+            return False
+        resolved_expected = expected_dir.resolve()
+        resolved_expected.relative_to(owner_root)
+        if resolved_expected != expected_dir:
+            return False
+
+        entry = owner_storage_entry(saved_path, base_storage, user_sub)
+        if entry.parent.resolve() != expected_dir:
+            logger.warning(
+                "Refusing to remove staged PDF artifacts outside expected paper folder",
+                extra={"sentry_skip_event": True},
+            )
+            return False
+
+        if not entry.exists() and not entry.is_symlink() and not expected_dir.exists():
+            return True
+        try:
+            shutil.rmtree(expected_dir)
+        except FileNotFoundError:
+            pass
+        return not entry.exists() and not entry.is_symlink() and not expected_dir.exists()
+    except (StoredPathOutsideOwnerStorage, ValueError, OSError) as exc:
+        logger.warning(
+            "Failed to remove staged PDF artifacts (%s)",
+            type(exc).__name__,
+            extra={"sentry_skip_event": True},
+        )
+        return False
 
 
 def ready_file_count(paper: PDFDocument) -> int:

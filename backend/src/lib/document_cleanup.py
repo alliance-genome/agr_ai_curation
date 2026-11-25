@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Coroutine, Iterator
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
 import logging
 from typing import Any, TypeVar
@@ -142,6 +142,71 @@ def report_compensation_file_cleanup_failure(
             "Failed to report intake compensation file cleanup failure",
             extra={"sentry_skip_event": True},
         )
+
+
+def report_sql_cleanup_failure(
+    *,
+    component: str,
+    document_id: str,
+    exception_type: str,
+) -> None:
+    """Emit one sanitized Sentry report and companion warning when post-Weaviate SQL cleanup fails."""
+    document_id_hash = hash_sentry_identifier(document_id)
+    logger.warning(
+        "Failed to delete document from PostgreSQL (%s, document_id_hash=%s)",
+        exception_type,
+        document_id_hash,
+        extra={"sentry_skip_event": True},
+    )
+    try:
+        runtime.report_runtime_exception(
+            runtime.sanitized_runtime_error(
+                "PostgreSQL cleanup failed after Weaviate document deletion"
+            ),
+            component=component,
+            operation="paper_delete_sql_cleanup_failed",
+            context={
+                "document_id_hash": document_id_hash,
+                "exception_type": exception_type,
+            },
+            fingerprint=["paper_delete_sql_cleanup_failed", component, exception_type],
+            include_request=False,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to report PostgreSQL document cleanup failure",
+            extra={"sentry_skip_event": True},
+        )
+
+
+async def run_thread_drained(
+    func: Callable[..., _T],
+    /,
+    *args: Any,
+    cancellable_before_start: bool = True,
+    **kwargs: Any,
+) -> _T:
+    """Submit ``func`` to the default executor and always drain it before returning on cancellation.
+
+    Ensures no worker thread continues executing SQL on a borrowed ``paper_operation_lock``
+    connection concurrently with ``_release`` closing that connection. When
+    ``cancellable_before_start`` is True, delivers any already-pending cancellation before
+    submitting the worker.
+    """
+    if cancellable_before_start:
+        await asyncio.sleep(0)
+    loop = asyncio.get_running_loop()
+    ctx = copy_context()
+
+    def _invoke() -> _T:
+        return ctx.run(func, *args, **kwargs)
+
+    worker_future = loop.run_in_executor(None, _invoke)
+
+    async def _await_worker() -> _T:
+        return await worker_future
+
+    return await drain_shielded(_await_worker())
 
 
 async def drain_shielded(

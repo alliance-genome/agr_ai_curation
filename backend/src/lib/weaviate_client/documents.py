@@ -19,6 +19,8 @@ from ..document_cleanup import (
     is_cancelled_delete_drain,
     is_delete_cancelled_before_start,
     mark_destructive_delete_started,
+    report_sql_cleanup_failure,
+    run_thread_drained,
 )
 from ..document_sources.provenance import (
     build_document_source_provenance,
@@ -449,10 +451,17 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
     from sqlalchemy import select
 
     # T030: Get database user for ownership metadata (FR-014, FR-016). In a worker
-    # thread, so waiting for a pooled connection never blocks the event loop.
+    # thread, so waiting for a pooled connection never blocks the event loop; reuses
+    # the active paper_operation_lock connection when called under a paper lock.
     def check_owner_and_kind() -> str:
-        db_gen = get_db()
-        db = next(db_gen)
+        from ..document_files.paper_lock import open_paper_lock_session
+
+        bound_session = open_paper_lock_session()
+        if bound_session is not None:
+            db = bound_session
+        else:
+            db_gen = get_db()
+            db = next(db_gen)
         try:
             db_user = db.execute(select(User).where(User.auth_sub == user_id)).scalar_one_or_none()
             if not db_user:
@@ -467,10 +476,13 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
                 raise ValueError("Document is not available in the curator library")
             # user_id parameter already contains auth_sub, use it for tenant naming
             return get_tenant_name(user_id)
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
 
-    tenant_name = await asyncio.to_thread(check_owner_and_kind)
+    tenant_name = await run_thread_drained(check_owner_and_kind)
 
     connection = get_connection()
     if not connection:
@@ -916,20 +928,6 @@ def _start_paper_search_entries_delete(
     return None, _finish()
 
 
-async def delete_paper_search_entries(user_id: str, document_id: str) -> Dict[str, Any]:
-    """Wipe the tenant's chunks, then delete the index object only after a complete wipe."""
-    if not user_id:
-        raise ValueError("user_id is required for tenant-scoped document deletion (FR-011, FR-014)")
-
-    # Deliver any already-pending cancellation before opening a session or submitting work.
-    await asyncio.sleep(0)
-
-    immediate_error, finish_coro = _start_paper_search_entries_delete(user_id, document_id)
-    if immediate_error is not None or finish_coro is None:
-        return immediate_error  # type: ignore[return-value]
-    return await drain_shielded(finish_coro)
-
-
 def _delete_sql_row(user_id: str, document_id: str, *, connection: Any = None) -> bool:
     """Remove the owned paper and its curation dependencies in one transaction.
 
@@ -999,12 +997,17 @@ async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
 
         # A complete chunk wipe allows SQL cleanup even when delete_by_id found no index object.
         try:
-            postgres_deleted = await asyncio.to_thread(_delete_sql_row, user_id, document_id)
+            postgres_deleted = await run_thread_drained(
+                _delete_sql_row,
+                user_id,
+                document_id,
+                cancellable_before_start=False,
+            )
         except Exception as e:
-            logger.warning(
-                "Failed to delete document from PostgreSQL (%s)",
-                type(e).__name__,
-                extra={"sentry_skip_event": True},
+            report_sql_cleanup_failure(
+                component="weaviate_client",
+                document_id=document_id,
+                exception_type=type(e).__name__,
             )
             postgres_deleted = False
 

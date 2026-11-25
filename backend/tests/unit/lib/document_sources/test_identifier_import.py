@@ -1863,7 +1863,7 @@ async def test_post_commit_import_compensation_cancelled_during_chunk_wipe_clean
 async def test_post_commit_import_compensation_retains_owner_on_persistent_unlink_failure(
     monkeypatch, tmp_path,
 ):
-    from src.lib.document_sources import identifier_import as module
+    import shutil
 
     sessions: list[_FakeSession] = []
     persisted_row_holder: list[object] = []
@@ -1884,7 +1884,7 @@ async def test_post_commit_import_compensation_retains_owner_on_persistent_unlin
             raise RuntimeError("dispatch boom after commit")
 
     delete_document_mock = AsyncMock()
-    monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("locked")))
+    monkeypatch.setattr(shutil, "rmtree", lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("locked")))
 
     provider = _FakeProvider()
     service = IdentifierImportService(
@@ -2027,9 +2027,9 @@ async def test_post_commit_import_compensation_retains_owner_on_incomplete_wipe(
 async def test_pre_commit_import_compensation_retains_weaviate_and_reports_on_persistent_unlink_failure(
     monkeypatch, tmp_path,
 ):
+    import shutil
     from unittest.mock import Mock
     from src.lib.document_cleanup import runtime as cleanup_runtime
-    from src.lib.document_sources import identifier_import as module
     from src.lib.observability.sentry import hash_sentry_identifier
 
     sessions: list[_FakeSession] = []
@@ -2048,7 +2048,7 @@ async def test_pre_commit_import_compensation_retains_weaviate_and_reports_on_pe
 
     monkeypatch.setattr(cleanup_runtime, "report_runtime_exception", report_mock)
     monkeypatch.setattr(
-        module.shutil,
+        shutil,
         "rmtree",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("locked")),
     )
@@ -2467,3 +2467,108 @@ async def test_post_commit_import_compensation_removes_live_renamed_sql_file_sna
     assert not (tmp_path / renamed_rel).exists()
     assert not list(tmp_path.rglob("*.pdf"))
     delete_document_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_post_commit_import_compensation_reports_one_sanitized_sentry_event_when_delete_document_sql_fails(
+    monkeypatch, tmp_path,
+):
+    from contextlib import contextmanager
+    from unittest.mock import MagicMock, Mock
+    from src.lib.document_cleanup import runtime as cleanup_runtime
+    from src.lib.observability.sentry import hash_sentry_identifier
+    from src.lib.weaviate_client import documents as weaviate_docs
+
+    @contextmanager
+    def _session():
+        yield MagicMock()
+
+    w_conn = MagicMock()
+    w_conn.session.side_effect = _session
+    chunks, papers = MagicMock(), MagicMock()
+    chunks.data.delete_many.return_value = SimpleNamespace(successful=0, matches=0, failed=0)
+    papers.data.delete_by_id.return_value = True
+    monkeypatch.setattr(weaviate_docs, "get_connection", lambda: w_conn)
+    monkeypatch.setattr(weaviate_docs, "get_user_collections", lambda *_: (chunks, papers))
+
+    secret_detail = "private-import-sql-failure-detail"
+    sql_delete_calls = 0
+
+    def _failing_sql_row(*_args):
+        nonlocal sql_delete_calls
+        sql_delete_calls += 1
+        raise RuntimeError(secret_detail)
+
+    monkeypatch.setattr(weaviate_docs, "_delete_sql_row", _failing_sql_row)
+    report_mock = Mock()
+    monkeypatch.setattr(cleanup_runtime, "report_runtime_exception", report_mock)
+
+    sessions: list[_FakeSession] = []
+    persisted_row_holder: list[object] = []
+
+    class _TrackingSession(_FakeSession):
+        def add(self, row):
+            super().add(row)
+            persisted_row_holder.append(row)
+
+        def execute(self, *_args, **_kwargs):
+            return _ExecuteResult(persisted_row_holder[0] if persisted_row_holder else None)
+
+    class _FailingDispatch(_DispatchRecorder):
+        async def dispatch_provider_markdown_execution(self, *, background_tasks, request):
+            raise RuntimeError("dispatch boom after commit")
+
+        async def dispatch_upload_execution(self, *, background_tasks, request):
+            raise RuntimeError("dispatch boom after commit")
+
+    created_doc_ids: list[str] = []
+
+    async def _create_document(_user_sub, doc):
+        created_doc_ids.append(str(doc.id))
+        return {"success": True}
+
+    service = IdentifierImportService(
+        upload_execution_service=_FailingDispatch(),
+        session_factory=lambda: _TrackingSession(sessions),
+        storage_path_provider=lambda: tmp_path,
+        principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        provider_factory=_FakeProvider,
+        create_document_fn=_create_document,
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        get_document_fn=AsyncMock(return_value=None),
+        delete_document_fn=weaviate_docs.delete_document,
+        find_existing_source_document_fn=lambda *_args, **_kwargs: None,
+        import_batch_limit_provider=lambda: 10,
+    )
+
+    with pytest.raises(RuntimeError, match="dispatch boom after commit"):
+        await service.import_identifiers(
+            background_tasks=BackgroundTasks(),
+            identifiers="PMID:123",
+            user={"sub": "user-1"},
+            document_source_context=DocumentSourceRequestContext(
+                bearer_kind=ProviderBearerKind.CURATOR,
+                provider_groups=("FBStaff",),
+                authorized_group_ids=("FB",),
+                curator_token="curator-token",
+            ),
+        )
+
+    assert len(created_doc_ids) == 1
+    doc_id = created_doc_ids[0]
+    assert sql_delete_calls == 1
+    assert not any(session.deleted for session in sessions)
+    report_mock.assert_called_once()
+    assert report_mock.call_args.kwargs == {
+        "component": "weaviate_client",
+        "operation": "paper_delete_sql_cleanup_failed",
+        "context": {
+            "document_id_hash": hash_sentry_identifier(doc_id),
+            "exception_type": "RuntimeError",
+        },
+        "fingerprint": ["paper_delete_sql_cleanup_failed", "weaviate_client", "RuntimeError"],
+        "include_request": False,
+    }
+    assert doc_id not in repr(report_mock.call_args)
+    assert secret_detail not in repr(report_mock.call_args)

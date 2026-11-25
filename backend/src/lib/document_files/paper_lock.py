@@ -53,11 +53,6 @@ _ACTIVE_LOCK_CONNECTION: ContextVar[Any | None] = ContextVar(
 )
 
 
-def active_paper_lock_connection() -> Any | None:
-    """Return the checked-out advisory-lock DB connection for the active task, if any."""
-    return _ACTIVE_LOCK_CONNECTION.get()
-
-
 def open_paper_lock_session(connection: Any = None) -> Session | None:
     """Open an ORM Session bound to a real SQLAlchemy lock connection without checking out another pool slot."""
     target = connection if connection is not None else _ACTIVE_LOCK_CONNECTION.get()

@@ -1388,6 +1388,7 @@ async def test_competing_supplement_add_and_committed_upload_compensation_never_
 
     service_a = UploadIntakeService(
         upload_execution_service=MagicMock(),
+        storage_path_provider=lambda: tmp_path,
         delete_document_fn=_pausing_delete_document,
     )
 
@@ -1425,6 +1426,7 @@ async def test_competing_supplement_add_and_committed_upload_compensation_never_
     )
     service_b = UploadIntakeService(
         upload_execution_service=MagicMock(),
+        storage_path_provider=lambda: tmp_path,
         delete_document_fn=weaviate_docs.delete_document,
     )
     await service_b._compensate_job_creation_failure(
@@ -1535,5 +1537,77 @@ async def test_committed_compensation_and_undispatched_job_fail_work_under_one_c
         )
         assert not import_path.exists()
         assert _rows(paper_i) == [] and _indexes(index, str(paper_i)) == []
+    finally:
+        one_conn_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_http_delete_endpoint_succeeds_under_one_connection_pool(
+    owner_id, index, tmp_path, monkeypatch,
+):
+    """Uncontended HTTP delete_document_endpoint reuses lock_conn cleanly under pool_size=1, max_overflow=0."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from src.lib.pdf_jobs import service as pdf_job_service
+    from src.lib.weaviate_client import documents as weaviate_docs
+    from src.models.sql import database
+
+    one_conn_engine = create_engine(database.engine.url, pool_size=1, max_overflow=0, pool_timeout=1)
+    one_conn_session_local = sessionmaker(
+        bind=one_conn_engine, autocommit=False, autoflush=False, expire_on_commit=False,
+    )
+    monkeypatch.setattr(database, "engine", one_conn_engine)
+    monkeypatch.setattr(database, "SessionLocal", one_conn_session_local)
+    monkeypatch.setattr(documents_api, "SessionLocal", one_conn_session_local)
+    monkeypatch.setattr(pdf_job_service, "SessionLocal", one_conn_session_local)
+
+    def _one_conn_get_db():
+        db = one_conn_session_local()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    monkeypatch.setattr(weaviate_docs, "get_db", _one_conn_get_db)
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: tmp_path)
+    monkeypatch.setattr(documents_api, "get_pdf_storage_path", lambda: tmp_path)
+
+    async def _provision(_principal):
+        return type("User", (), {"id": owner_id})()
+
+    monkeypatch.setattr(documents_api, "provision_user_async", _provision)
+    # Exercise real weaviate_docs.get_document (SQL ownership check under lock_conn!),
+    # real pdf_job_service.get_latest_job_for_document & end_supplement_wait_for_delete,
+    # real snapshot_for_cleanup, real remove_paper_files, and real finish_delete.
+    monkeypatch.setattr(documents_api, "get_document", weaviate_docs.get_document)
+    monkeypatch.setattr(documents_api, "delete_paper_chunks", weaviate_docs.delete_paper_chunks)
+    monkeypatch.setattr(documents_api, "delete_paper_object", weaviate_docs.delete_paper_object)
+
+    try:
+        paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+        main_rel = f"{TEST_USER_ID}/{paper}/main.pdf"
+        main_file = tmp_path / main_rel
+        main_file.parent.mkdir(parents=True, exist_ok=True)
+        main_file.write_bytes(b"%PDF-1.7\n")
+        with one_conn_session_local.begin() as db:
+            doc_row = db.get(PDFDocument, paper)
+            assert doc_row is not None
+            doc_row.files[0].file_path = main_rel
+
+        # Add a waiting supplement stage so end_supplement_wait_for_delete also runs under lock_conn.
+        pdf_job_service.start_supplement_wait_job(
+            document_id=paper,
+            user_id=owner_id,
+            filename="main.pdf",
+        )
+
+        result = await documents_api.delete_document_endpoint(
+            document_id=str(paper),
+            user={"sub": TEST_USER_ID},
+        )
+        assert result.success is True
+        assert not main_file.exists()
+        assert _rows(paper) == [] and _indexes(index, str(paper)) == []
     finally:
         one_conn_engine.dispose()

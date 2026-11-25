@@ -1018,7 +1018,10 @@ def end_supplement_wait_for_delete(*, document_id: UUID | str, user_id: int) -> 
     writes nothing more) and returns True. While the stage is adding files, or for
     any other job, nothing changes and the delete keeps refusing.
     """
-    session = SessionLocal()
+    from src.lib.document_files.paper_lock import open_paper_lock_session
+
+    bound_session = open_paper_lock_session()
+    session = bound_session if bound_session is not None else SessionLocal()
     try:
         job = session.execute(
             select(PdfProcessingJob).where(
@@ -1038,6 +1041,9 @@ def end_supplement_wait_for_delete(*, document_id: UUID | str, user_id: int) -> 
         _finalize_cancelled(session, job, now=datetime.now(timezone.utc))
         session.commit()
         return True
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
 
@@ -1110,7 +1116,10 @@ def _latest_job(
     reconcile_stale: bool,
     paper_jobs_only: bool,
 ) -> Optional[PdfJobResponse]:
-    session = SessionLocal()
+    from src.lib.document_files.paper_lock import open_paper_lock_session
+
+    bound_session = open_paper_lock_session()
+    session = bound_session if bound_session is not None else SessionLocal()
     try:
         statement = (
             select(PdfProcessingJob)

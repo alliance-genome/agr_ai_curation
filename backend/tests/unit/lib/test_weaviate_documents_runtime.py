@@ -757,60 +757,7 @@ async def test_delete_paper_chunks_cancel_drains_worker_before_closing_session(m
 
 
 @pytest.mark.asyncio
-async def test_delete_paper_search_entries_cancel_during_chunk_wipe_deletes_parent(monkeypatch):
-    wipe_entered = threading.Event()
-    resume_wipe = threading.Event()
-    session_open = False
-    events: list[str] = []
-
-    @contextmanager
-    def _tracked_session():
-        nonlocal session_open
-        session_open = True
-        try:
-            yield MagicMock()
-        finally:
-            session_open = False
-            events.append("session_closed")
-
-    connection = MagicMock()
-    connection.session.side_effect = _tracked_session
-
-    def _delete_many(**_kwargs):
-        wipe_entered.set()
-        assert resume_wipe.wait(timeout=5)
-        assert session_open is True
-        events.append("chunks")
-        return SimpleNamespace(successful=2, matches=2, failed=0)
-
-    def _delete_by_id(_document_id):
-        assert session_open is True
-        events.append("parent")
-        return True
-
-    chunks, papers = MagicMock(), MagicMock()
-    chunks.data.delete_many.side_effect = _delete_many
-    papers.data.delete_by_id.side_effect = _delete_by_id
-    monkeypatch.setattr(documents, "get_connection", lambda: connection)
-    monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
-
-    task = asyncio.create_task(documents.delete_paper_search_entries("user-1", "doc-1"))
-    try:
-        assert await asyncio.to_thread(wipe_entered.wait, 5)
-        task.cancel("stop search delete")
-        await asyncio.sleep(0.02)
-        assert not task.done()
-    finally:
-        resume_wipe.set()
-
-    with pytest.raises(asyncio.CancelledError, match="stop search delete"):
-        await asyncio.wait_for(task, timeout=5)
-
-    assert events == ["chunks", "parent", "session_closed"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("helper_name", ["delete_document", "delete_paper_chunks", "delete_paper_search_entries"])
+@pytest.mark.parametrize("helper_name", ["delete_document", "delete_paper_chunks"])
 async def test_delete_helpers_cancelled_before_submission_do_not_start_destructive_work(
     monkeypatch, helper_name,
 ):
@@ -867,7 +814,7 @@ async def test_drain_shielded_preserves_cancellation_when_on_cancelled_error_fai
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "helper_name",
-    ["delete_paper_chunks", "delete_paper_object", "delete_paper_search_entries", "delete_document"],
+    ["delete_paper_chunks", "delete_paper_object", "delete_document"],
 )
 async def test_delete_helpers_cancel_before_submission_when_caller_already_cancelling(
     monkeypatch, helper_name,
@@ -991,7 +938,10 @@ async def test_drain_shielded_closes_coro_when_child_cancelled_before_start(monk
 @pytest.mark.asyncio
 async def test_delete_document_sanitizes_postgres_cleanup_warning(monkeypatch, caplog):
     import logging
+    from src.lib.document_cleanup import runtime as cleanup_runtime
+    from src.lib.observability.sentry import hash_sentry_identifier
 
+    doc_id = "dddddddd-1111-2222-3333-444444444444"
     chunks, papers = MagicMock(), MagicMock()
     chunks.data.delete_many.return_value = SimpleNamespace(successful=0, matches=0, failed=0)
     papers.data.delete_by_id.return_value = True
@@ -1003,13 +953,16 @@ async def test_delete_document_sanitizes_postgres_cleanup_warning(monkeypatch, c
         "_delete_sql_row",
         MagicMock(side_effect=RuntimeError(secret_sql_detail)),
     )
+    report_mock = MagicMock()
+    monkeypatch.setattr(cleanup_runtime, "report_runtime_exception", report_mock)
 
-    with caplog.at_level(logging.WARNING, logger="src.lib.weaviate_client.documents"):
-        result = await documents.delete_document("user-1", "doc-1")
+    with caplog.at_level(logging.WARNING, logger="src.lib.document_cleanup"):
+        result = await documents.delete_document("user-1", doc_id)
 
     assert result["success"] is True
     assert result["postgres_deleted"] is False
     assert secret_sql_detail not in caplog.text
+    assert doc_id not in caplog.text
     pg_warnings = [
         record for record in caplog.records
         if "Failed to delete document from PostgreSQL" in record.getMessage()
@@ -1017,6 +970,21 @@ async def test_delete_document_sanitizes_postgres_cleanup_warning(monkeypatch, c
     assert len(pg_warnings) == 1
     assert "RuntimeError" in pg_warnings[0].getMessage()
     assert getattr(pg_warnings[0], "sentry_skip_event", False) is True
+    report_mock.assert_called_once()
+    (err,) = report_mock.call_args.args
+    assert err.__cause__ is None and err.__context__ is None
+    assert report_mock.call_args.kwargs == {
+        "component": "weaviate_client",
+        "operation": "paper_delete_sql_cleanup_failed",
+        "context": {
+            "document_id_hash": hash_sentry_identifier(doc_id),
+            "exception_type": "RuntimeError",
+        },
+        "fingerprint": ["paper_delete_sql_cleanup_failed", "weaviate_client", "RuntimeError"],
+        "include_request": False,
+    }
+    assert doc_id not in repr(report_mock.call_args)
+    assert secret_sql_detail not in repr(report_mock.call_args)
 
 
 @pytest.mark.asyncio
@@ -1372,6 +1340,165 @@ def test_cli_delete_cmd_exits_nonzero_when_sql_owner_delete_fails(monkeypatch, t
     )
     assert cli_result.exit_code == 1
     assert "postgresql" in cli_result.output.lower()
+    assert held == set()
+
+
+@pytest.mark.asyncio
+async def test_cli_delete_cancel_during_preflight_worker_drains_before_lock_release(monkeypatch, tmp_path):
+    from uuid import uuid4
+    from src.lib.weaviate_client import cli as weaviate_cli
+
+    doc_id = str(uuid4())
+    held: set[int] = set()
+    events: list[str] = []
+    worker_entered = threading.Event()
+    resume_worker = threading.Event()
+
+    class _FakeLockConn:
+        def execute(self, statement, params):
+            sql = str(statement)
+            key = params["key"]
+            if "pg_try_advisory_lock" in sql:
+                taken = key not in held
+                held.add(key)
+                return SimpleNamespace(scalar_one=lambda: taken)
+            if "pg_advisory_unlock" in sql:
+                held.discard(key)
+                events.append("unlock")
+                return SimpleNamespace(scalar_one=lambda: True)
+            raise AssertionError(sql)
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+        def invalidate(self):
+            pass
+
+    monkeypatch.setattr(
+        "src.models.sql.database.engine",
+        SimpleNamespace(connect=lambda: _FakeLockConn()),
+        raising=False,
+    )
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
+
+    def _blocking_inspect(_user_id, _doc_uuid, *, connection=None):
+        worker_entered.set()
+        assert resume_worker.wait(timeout=5)
+        events.append("preflight_done")
+        return None, False
+
+    chunks_spy = MagicMock()
+    monkeypatch.setattr(weaviate_cli, "_inspect_cli_sql_owner", _blocking_inspect)
+    monkeypatch.setattr(weaviate_cli, "delete_paper_chunks", chunks_spy)
+
+    task = asyncio.create_task(weaviate_cli._delete_document_for_cli("user-1", doc_id))
+    try:
+        assert await asyncio.to_thread(worker_entered.wait, 5)
+        task.cancel("cancel during cli preflight")
+        await asyncio.sleep(0.02)
+        assert not task.done()
+        assert events == []
+    finally:
+        resume_worker.set()
+
+    with pytest.raises(asyncio.CancelledError, match="cancel during cli preflight"):
+        await asyncio.wait_for(task, timeout=5)
+
+    assert events == ["preflight_done", "unlock"]
+    chunks_spy.assert_not_called()
+    assert held == set()
+
+
+@pytest.mark.asyncio
+async def test_cli_delete_normalizes_undashed_uuid_for_weaviate_calls(monkeypatch, tmp_path):
+    from uuid import uuid4
+    from src.lib.weaviate_client import cli as weaviate_cli
+
+    doc_uuid = uuid4()
+    undashed_id = doc_uuid.hex
+    canonical_id = str(doc_uuid)
+    user_id = "user-uuid-norm"
+    held: set[int] = set()
+
+    class _FakeLockConn:
+        def execute(self, statement, params):
+            sql = str(statement)
+            key = params["key"]
+            if "pg_try_advisory_lock" in sql:
+                taken = key not in held
+                held.add(key)
+                return SimpleNamespace(scalar_one=lambda: taken)
+            if "pg_advisory_unlock" in sql:
+                held.discard(key)
+                return SimpleNamespace(scalar_one=lambda: True)
+            raise AssertionError(sql)
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+        def invalidate(self):
+            pass
+
+    monkeypatch.setattr(
+        "src.models.sql.database.engine",
+        SimpleNamespace(connect=lambda: _FakeLockConn()),
+        raising=False,
+    )
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
+
+    pdf_doc = SimpleNamespace(id=doc_uuid, user_id=42, files=[])
+    db_user = SimpleNamespace(id=42, auth_sub=user_id)
+
+    class _FakeDb:
+        def get(self, _model, _pk):
+            return pdf_doc
+
+        def execute(self, statement):
+            if "pdf_documents" in str(statement):
+                return SimpleNamespace(scalar_one_or_none=lambda: pdf_doc)
+            return SimpleNamespace(scalar_one_or_none=lambda: db_user)
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("src.models.sql.database.get_db", lambda: iter([_FakeDb()]))
+    monkeypatch.setattr("src.lib.pdf_jobs.service.get_active_job_for_document", lambda **_kw: None)
+
+    seen_ids: dict[str, str] = {}
+
+    async def _fake_chunks(_uid, did):
+        seen_ids["chunks"] = did
+        return {"success": True, "chunks_deleted": 1, "chunks_matched": 1}
+
+    async def _fake_parent(_uid, did, *, allow_missing=False):
+        seen_ids["parent"] = did
+        return {"success": True, "deleted": True}
+
+    def _fake_sql(_uid, did):
+        seen_ids["sql"] = did
+        return True
+
+    monkeypatch.setattr(weaviate_cli, "delete_paper_chunks", _fake_chunks)
+    monkeypatch.setattr(weaviate_cli, "delete_paper_object", _fake_parent)
+    monkeypatch.setattr(weaviate_cli, "_delete_sql_row", _fake_sql)
+
+    result = await weaviate_cli._delete_document_for_cli(user_id, undashed_id)
+    assert result["success"] is True
+    assert result["documentId"] == canonical_id
+    assert seen_ids == {
+        "chunks": canonical_id,
+        "parent": canonical_id,
+        "sql": canonical_id,
+    }
     assert held == set()
 
 

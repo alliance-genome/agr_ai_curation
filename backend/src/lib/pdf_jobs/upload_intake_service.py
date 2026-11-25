@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import shutil
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -31,7 +30,10 @@ from sqlalchemy.orm import Session
 from src.config import get_pdf_storage_path
 from src.lib.document_cleanup import (
     cleanup_document_curation_dependencies,
+    drain_shielded,
     report_compensation_file_cleanup_failure,
+    report_sql_cleanup_failure,
+    run_thread_drained,
 )
 from src.lib.document_files.paper_lock import (
     PaperOperationInProgress,
@@ -41,6 +43,7 @@ from src.lib.document_files.paper_lock import (
 from src.lib.document_files.service import (
     owned_paper_by_main_file_hash,
     remove_committed_paper_stored_files,
+    remove_staged_paper_artifacts,
 )
 from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.import_selection import (
@@ -84,7 +87,12 @@ from src.lib.pdf_limits import (
     MAX_PDF_FILE_SIZE_BYTES,
     pdf_file_size_limit_message,
 )
-from src.lib.pipeline.upload import PDFUploadHandler, UploadError, generate_checksum
+from src.lib.pipeline.upload import (
+    PDFUploadHandler,
+    UploadError,
+    generate_checksum,
+    is_safe_pdf_filename,
+)
 from src.lib.storage_permissions import ensure_writable_directory
 from src.lib.weaviate_client.documents import (
     create_document,
@@ -327,13 +335,23 @@ class UploadIntakeService:
             saved_path, document = await upload_handler.save_uploaded_pdf(file)
         except UploadError as upload_error:
             raise UploadIntakeValidationError(str(upload_error)) from upload_error
+        document_id_str = str(document.id)
         file_size_bytes = saved_path.stat().st_size
-        self._validate_saved_pdf_size(saved_path, file_size_bytes)
+        self._validate_saved_pdf_size(
+            saved_path,
+            file_size_bytes,
+            base_storage=base_storage,
+            user_sub=user_sub,
+            document_id=document_id_str,
+        )
         page_count = document.metadata.page_count
         self._validate_pdf_page_count(
             saved_path,
             page_count=page_count,
             max_page_count=self._max_page_count_provider(),
+            base_storage=base_storage,
+            user_sub=user_sub,
+            document_id=document_id_str,
         )
 
         try:
@@ -343,7 +361,7 @@ class UploadIntakeService:
             # enter the PDF duplicate-row recovery path below.
             await self._compensate_persistence_failure(
                 user_sub=user_sub,
-                document_id=str(document.id),
+                document_id=document_id_str,
                 saved_path=saved_path,
                 weaviate_document_created=False,
             )
@@ -371,7 +389,12 @@ class UploadIntakeService:
                 )
 
             if existing:
-                self._cleanup_saved_file_artifacts(saved_path)
+                self._cleanup_saved_file_artifacts(
+                    saved_path,
+                    base_storage=base_storage,
+                    user_sub=user_sub,
+                    document_id=document_id_str,
+                )
                 raise UploadIntakeDuplicateError(self._duplicate_detail(existing))
 
             provider_import_plan: ProviderChecksumImportPlan | None = None
@@ -383,6 +406,9 @@ class UploadIntakeService:
                     saved_path=saved_path,
                     session=session,
                     owner_user_id=db_user.id,
+                    base_storage=base_storage,
+                    user_sub=user_sub,
+                    document_id=document_id_str,
                 )
                 if provider_import_plan is not None:
                     document.source_provenance = provider_import_plan.source_provenance
@@ -595,9 +621,20 @@ class UploadIntakeService:
         saved_path: Path,
         session: Session,
         owner_user_id: int,
+        base_storage: Path,
+        user_sub: str,
+        document_id: str,
     ) -> ProviderChecksumImportPlan | None:
+        def _cleanup_staged() -> None:
+            self._cleanup_saved_file_artifacts(
+                saved_path,
+                base_storage=base_storage,
+                user_sub=user_sub,
+                document_id=document_id,
+            )
+
         if document_source_context is None:
-            self._cleanup_saved_file_artifacts(saved_path)
+            _cleanup_staged()
             raise UploadIntakeProviderDecisionError(
                 status_code=503,
                 detail={
@@ -623,7 +660,7 @@ class UploadIntakeService:
                 allow_conversion_request=bool(curator_token),
             )
         except (DocumentSourceConfigError, DocumentSourceError) as exc:
-            self._cleanup_saved_file_artifacts(saved_path)
+            _cleanup_staged()
             try:
                 runtime.report_runtime_exception(
                     runtime.sanitized_runtime_error("Document-source checksum lookup failed"),
@@ -660,7 +697,7 @@ class UploadIntakeService:
 
         if decision.status is ChecksumImportDecisionStatus.LOCAL_PDF_REQUIRED:
             if decision.selected is None:
-                self._cleanup_saved_file_artifacts(saved_path)
+                _cleanup_staged()
                 raise self._provider_decision_error(decision)
             logger.info(
                 "Document-source checksum match requires exact uploaded PDF bytes; "
@@ -675,17 +712,17 @@ class UploadIntakeService:
             and decision.selected is not None
         )
         if not decision.is_ready and not wait_for_conversion:
-            self._cleanup_saved_file_artifacts(saved_path)
+            _cleanup_staged()
             raise self._provider_decision_error(decision)
         if decision.selected is None:
-            self._cleanup_saved_file_artifacts(saved_path)
+            _cleanup_staged()
             raise self._provider_decision_error(decision)
         if (
             decision.selected.converted_artifact is None
             and not wait_for_conversion
         ):
             provider_label = _provider_display_label(decision.provider)
-            self._cleanup_saved_file_artifacts(saved_path)
+            _cleanup_staged()
             raise UploadIntakeProviderDecisionError(
                 status_code=409,
                 detail={
@@ -705,7 +742,7 @@ class UploadIntakeService:
             (decision.selected.converted_artifact is not None or wait_for_conversion)
             and not curator_token
         ):
-            self._cleanup_saved_file_artifacts(saved_path)
+            _cleanup_staged()
             raise UploadIntakeProviderDecisionError(
                 status_code=503,
                 detail={
@@ -727,7 +764,7 @@ class UploadIntakeService:
                 selected=decision.selected,
             )
         except UploadIntakeProviderDecisionError:
-            self._cleanup_saved_file_artifacts(saved_path)
+            _cleanup_staged()
             raise
         existing_source_document = self._find_existing_source_document(
             session,
@@ -739,7 +776,7 @@ class UploadIntakeService:
             source_md5=source_provenance.get("source_md5"),
         )
         if existing_source_document:
-            self._cleanup_saved_file_artifacts(saved_path)
+            _cleanup_staged()
             raise UploadIntakeDuplicateError(
                 {
                     "error": "duplicate_file",
@@ -862,13 +899,19 @@ class UploadIntakeService:
     ) -> bool:
         bound_session = open_paper_lock_session(lock_conn)
         session = bound_session if bound_session is not None else self._session_factory()
+        base_storage = self._storage_path_provider()
         try:
             return remove_committed_paper_stored_files(
                 session,
                 document_id=document_id,
                 user_sub=user_sub,
-                base_storage=self._storage_path_provider(),
-                fallback_cleanup=lambda: self._cleanup_saved_file_artifacts(saved_path),
+                base_storage=base_storage,
+                fallback_cleanup=lambda: self._cleanup_saved_file_artifacts(
+                    saved_path,
+                    base_storage=base_storage,
+                    user_sub=user_sub,
+                    document_id=document_id,
+                ),
             )
         except Exception as cleanup_err:
             session.rollback()
@@ -887,7 +930,6 @@ class UploadIntakeService:
         *,
         document_id: str,
         lock_conn: Any,
-        document_id_hash: str | None,
     ) -> None:
         bound_session = open_paper_lock_session(lock_conn)
         cleanup_session = bound_session if bound_session is not None else self._session_factory()
@@ -906,12 +948,10 @@ class UploadIntakeService:
                 cleanup_session.commit()
         except Exception as cleanup_err:
             cleanup_session.rollback()
-            logger.warning(
-                "Best-effort SQL cleanup failed after durable job creation error "
-                "(%s, document_id_hash=%s)",
-                type(cleanup_err).__name__,
-                document_id_hash,
-                extra={"sentry_skip_event": True},
+            report_sql_cleanup_failure(
+                component="pdf_jobs",
+                document_id=document_id,
+                exception_type=type(cleanup_err).__name__,
             )
         finally:
             cleanup_session.close()
@@ -931,7 +971,7 @@ class UploadIntakeService:
         try:
             async with lock_fn(document_id) as lock_conn:
                 try:
-                    active_job = await asyncio.to_thread(
+                    active_job = await run_thread_drained(
                         get_active_job,
                         document_id=document_id,
                         reconcile_stale=False,
@@ -955,57 +995,65 @@ class UploadIntakeService:
                     )
                     return
 
-                # Snapshot and remove live SQL-owned stored files under the paper row lock
-                # first; if any private PDF cannot be removed, retain SQL and Weaviate ownership.
-                files_removed = await asyncio.to_thread(
-                    self._remove_committed_paper_files,
-                    document_id=document_id,
-                    user_sub=user_sub,
-                    saved_path=saved_path,
-                    lock_conn=lock_conn,
-                    document_id_hash=document_id_hash,
-                )
-                if not files_removed:
-                    report_compensation_file_cleanup_failure(
-                        component="pdf_jobs",
+                # Deliver any pending cancellation before starting destructive file/index/SQL
+                # cleanup; once file removal starts, drain through completion under the lock.
+                await asyncio.sleep(0)
+
+                async def _complete_committed_compensation() -> None:
+                    # Snapshot and remove live SQL-owned stored files under the paper row lock
+                    # first; if any private PDF cannot be removed, retain SQL and Weaviate ownership.
+                    files_removed = await run_thread_drained(
+                        self._remove_committed_paper_files,
                         document_id=document_id,
-                        sql_record_committed=True,
-                        weaviate_document_created=weaviate_document_created,
+                        user_sub=user_sub,
+                        saved_path=saved_path,
+                        lock_conn=lock_conn,
+                        document_id_hash=document_id_hash,
+                        cancellable_before_start=False,
                     )
-                    return
-
-                # Let the Weaviate wipe outcome govern SQL owner deletion: an incomplete wipe
-                # or Weaviate failure retains both the Weaviate parent and the SQL owner.
-                # When delete_document itself owns SQL deletion (reporting "postgres_deleted"),
-                # do not issue a second SQL delete pass.
-                weaviate_cleanup_ok = True
-                sql_owned_by_delete_document = False
-                if weaviate_document_created:
-                    try:
-                        delete_result = await self._delete_document(user_sub, document_id)
-                    except Exception as cleanup_err:
-                        logger.warning(
-                            "Best-effort Weaviate cleanup failed for document %s: %s",
-                            document_id,
-                            cleanup_err,
+                    if not files_removed:
+                        report_compensation_file_cleanup_failure(
+                            component="pdf_jobs",
+                            document_id=document_id,
+                            sql_record_committed=True,
+                            weaviate_document_created=weaviate_document_created,
                         )
-                        weaviate_cleanup_ok = False
-                    else:
-                        if isinstance(delete_result, dict):
-                            if "error" in delete_result or "chunks_failed" in delete_result:
-                                weaviate_cleanup_ok = False
-                            elif "postgres_deleted" in delete_result:
-                                sql_owned_by_delete_document = True
+                        return
 
-                if not weaviate_cleanup_ok or sql_owned_by_delete_document:
-                    return
+                    # Let the Weaviate wipe outcome govern SQL owner deletion: an incomplete wipe
+                    # or Weaviate failure retains both the Weaviate parent and the SQL owner.
+                    # When delete_document itself owns SQL deletion (reporting "postgres_deleted"),
+                    # do not issue a second SQL delete pass (delete_document reports SQL errors).
+                    weaviate_cleanup_ok = True
+                    sql_owned_by_delete_document = False
+                    if weaviate_document_created:
+                        try:
+                            delete_result = await self._delete_document(user_sub, document_id)
+                        except Exception as cleanup_err:
+                            logger.warning(
+                                "Best-effort Weaviate cleanup failed for document %s: %s",
+                                document_id,
+                                cleanup_err,
+                            )
+                            weaviate_cleanup_ok = False
+                        else:
+                            if isinstance(delete_result, dict):
+                                if "error" in delete_result or "chunks_failed" in delete_result:
+                                    weaviate_cleanup_ok = False
+                                elif "postgres_deleted" in delete_result:
+                                    sql_owned_by_delete_document = True
 
-                await asyncio.to_thread(
-                    self._delete_committed_sql_row,
-                    document_id=document_id,
-                    lock_conn=lock_conn,
-                    document_id_hash=document_id_hash,
-                )
+                    if not weaviate_cleanup_ok or sql_owned_by_delete_document:
+                        return
+
+                    await run_thread_drained(
+                        self._delete_committed_sql_row,
+                        document_id=document_id,
+                        lock_conn=lock_conn,
+                        cancellable_before_start=False,
+                    )
+
+                await drain_shielded(_complete_committed_compensation())
         except PaperOperationInProgress:
             logger.warning(
                 "Skipping job-creation compensation because another operation holds the paper lock "
@@ -1065,9 +1113,14 @@ class UploadIntakeService:
         weaviate_document_created: bool,
     ) -> None:
         """Best-effort compensation for partial persistence failures."""
-        # Remove staged file artifacts before deleting Weaviate ownership so
-        # cancellation or persistent unlink failure never strands a private PDF on disk.
-        if not self._cleanup_saved_file_artifacts(saved_path):
+        # Remove staged file artifacts strictly inside the trusted paper folder before
+        # deleting Weaviate ownership so cancellation or unlink failure never strands a PDF.
+        if not self._cleanup_saved_file_artifacts(
+            saved_path,
+            base_storage=self._storage_path_provider(),
+            user_sub=user_sub,
+            document_id=document_id,
+        ):
             report_compensation_file_cleanup_failure(
                 component="pdf_jobs",
                 document_id=document_id,
@@ -1086,22 +1139,19 @@ class UploadIntakeService:
                 )
 
     @staticmethod
-    def _cleanup_saved_file_artifacts(saved_path: Path) -> bool:
-        try:
-            if not saved_path.exists() and not saved_path.is_symlink():
-                return True
-            try:
-                shutil.rmtree(saved_path.parent)
-            except FileNotFoundError:
-                pass
-            return not saved_path.exists() and not saved_path.is_symlink()
-        except OSError as exc:
-            logger.warning(
-                "Failed to remove staged PDF artifacts (%s)",
-                type(exc).__name__,
-                extra={"sentry_skip_event": True},
-            )
-            return False
+    def _cleanup_saved_file_artifacts(
+        saved_path: Path,
+        *,
+        base_storage: Path,
+        user_sub: str,
+        document_id: str,
+    ) -> bool:
+        return remove_staged_paper_artifacts(
+            saved_path,
+            base_storage=base_storage,
+            user_sub=user_sub,
+            document_id=document_id,
+        )
 
     @staticmethod
     def _duplicate_detail(existing: ViewerPDFDocument) -> dict[str, Any]:
@@ -1124,13 +1174,30 @@ class UploadIntakeService:
     def _validate_pdf_filename(filename: str | None) -> None:
         if not filename or not filename.lower().endswith(".pdf"):
             raise UploadIntakeValidationError(f"File must be a PDF. Got: {filename}")
+        if not is_safe_pdf_filename(filename):
+            raise UploadIntakeValidationError(
+                "Invalid PDF filename: must not contain path separators or traversal segments"
+            )
 
     @classmethod
-    def _validate_saved_pdf_size(cls, saved_path: Path, file_size_bytes: int) -> None:
+    def _validate_saved_pdf_size(
+        cls,
+        saved_path: Path,
+        file_size_bytes: int,
+        *,
+        base_storage: Path,
+        user_sub: str,
+        document_id: str,
+    ) -> None:
         if file_size_bytes <= MAX_PDF_FILE_SIZE_BYTES:
             return
 
-        cls._cleanup_saved_file_artifacts(saved_path)
+        cls._cleanup_saved_file_artifacts(
+            saved_path,
+            base_storage=base_storage,
+            user_sub=user_sub,
+            document_id=document_id,
+        )
         raise UploadIntakeValidationError(pdf_file_size_limit_message(file_size_bytes))
 
     @classmethod
@@ -1140,11 +1207,19 @@ class UploadIntakeService:
         *,
         page_count: int,
         max_page_count: int,
+        base_storage: Path,
+        user_sub: str,
+        document_id: str,
     ) -> None:
         if 1 <= page_count <= max_page_count:
             return
 
-        cls._cleanup_saved_file_artifacts(saved_path)
+        cls._cleanup_saved_file_artifacts(
+            saved_path,
+            base_storage=base_storage,
+            user_sub=user_sub,
+            document_id=document_id,
+        )
         message = (
             f"PDF page count ({page_count}) exceeds the configured maximum "
             f"({max_page_count})."

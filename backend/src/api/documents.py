@@ -39,6 +39,8 @@ from ..lib.document_cleanup import (
     cleanup_document_curation_dependencies,
     delete_drain_context,
     drain_shielded,
+    is_cancelled_delete_drain,
+    run_thread_drained,
 )
 from ..lib.document_sources.access import build_document_source_request_context
 from ..lib.packages.document_source_provider_models import DevelopmentReaderUnavailable
@@ -1537,7 +1539,11 @@ async def delete_document_endpoint(
     # pooled connection never blocks the event loop; a pool timeout is a 503.
     from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
-    from ..lib.document_files.paper_lock import PaperOperationInProgress, paper_operation_lock
+    from ..lib.document_files.paper_lock import (
+        PaperOperationInProgress,
+        open_paper_lock_session,
+        paper_operation_lock,
+    )
 
     try:
         # T031: Verify ownership from PostgreSQL FIRST (FR-014)
@@ -1553,10 +1559,13 @@ async def delete_document_endpoint(
 
         pg_doc = await asyncio.to_thread(owned_paper)
 
-        async with paper_operation_lock(document_id):
-            # Only proceed with Weaviate query if ownership verified
+        async with paper_operation_lock(document_id) as lock_conn:
+            # Only proceed with Weaviate query if ownership verified.
+            # Every SQL worker under paper_operation_lock reuses lock_conn (when backed by
+            # a real SQLAlchemy connection) and drains before exiting so lock_conn is never
+            # released/closed concurrently with an in-flight worker thread.
             try:
-                latest_job = await asyncio.to_thread(
+                latest_job = await run_thread_drained(
                     lambda: pdf_job_service.get_latest_job_for_document(
                         document_id=document_id,
                         user_id=pg_doc.user_id,
@@ -1565,12 +1574,12 @@ async def delete_document_endpoint(
                 )
                 # A new paper's supplement stage that only waits for the provider
                 # ends with the delete (P7b); one that is writing files keeps it refused.
-                if pdf_job_service.is_waiting_supplement_stage(latest_job) and await asyncio.to_thread(
+                if pdf_job_service.is_waiting_supplement_stage(latest_job) and await run_thread_drained(
                     lambda: pdf_job_service.end_supplement_wait_for_delete(
                         document_id=document_id, user_id=pg_doc.user_id,
                     )
                 ):
-                    latest_job = await asyncio.to_thread(
+                    latest_job = await run_thread_drained(
                         lambda: pdf_job_service.get_latest_job_for_document(
                             document_id=document_id,
                             user_id=pg_doc.user_id,
@@ -1649,14 +1658,18 @@ async def delete_document_endpoint(
                     )
 
                 def snapshot_for_cleanup() -> dict[str, Any]:
-                    snapshot_session = SessionLocal()
+                    bound_session = open_paper_lock_session(lock_conn)
+                    snapshot_session = bound_session if bound_session is not None else SessionLocal()
                     try:
                         doc_to_cleanup = require_owned_document(snapshot_session, pg_doc.id, pg_doc.user_id)
                         return _document_cleanup_snapshot(doc_to_cleanup)
+                    except Exception:
+                        snapshot_session.rollback()
+                        raise
                     finally:
                         snapshot_session.close()
 
-                cleanup_snapshot = await asyncio.to_thread(snapshot_for_cleanup)
+                cleanup_snapshot = await run_thread_drained(snapshot_for_cleanup)
                 # Every path this delete would remove must stay inside the curator's storage,
                 # checked before anything is deleted (pieces, index object, rows, files): one
                 # outside refuses the whole delete (403) and the paper stays as it was.
@@ -1673,7 +1686,8 @@ async def delete_document_endpoint(
                     # and SQL row intact until every stored file is gone so duplicate checks
                     # cannot treat the retained row as a phantom and strand files on disk.
                     def remove_paper_files() -> None:
-                        file_session = SessionLocal()
+                        bound_session = open_paper_lock_session(lock_conn)
+                        file_session = bound_session if bound_session is not None else SessionLocal()
                         try:
                             doc_to_clean = require_owned_document(
                                 file_session, pg_doc.id, pg_doc.user_id, for_update=True,
@@ -1705,12 +1719,7 @@ async def delete_document_endpoint(
                                     single_files.extend(_removed_paths(file_values))
                             remove_stored_files(single_files, owner_subject=user_sub)
                             _remove_empty_paper_folders(base_storage, user_sub, document_id)
-                        except HTTPException:
-                            file_session.rollback()
-                            raise
-                        except Exception as file_error:
-                            if not drain_state.cancelled:
-                                logger.error('Failed to cleanup stored files for %s: %s', document_id, file_error)
+                        except Exception:
                             file_session.rollback()
                             raise
                         finally:
@@ -1718,7 +1727,8 @@ async def delete_document_endpoint(
 
                     # Keep the owned SQL row available for retry until files and index entries are gone.
                     def finish_delete() -> None:
-                        cleanup_session = SessionLocal()
+                        bound_session = open_paper_lock_session(lock_conn)
+                        cleanup_session = bound_session if bound_session is not None else SessionLocal()
                         try:
                             doc_to_delete = require_owned_document(
                                 cleanup_session, pg_doc.id, pg_doc.user_id, for_update=True,
@@ -1731,12 +1741,7 @@ async def delete_document_endpoint(
                             # Invalidate document metadata cache to prevent stale cache hits
                             from src.lib.document_cache import invalidate_cache
                             invalidate_cache(user["sub"], document_id)
-                        except HTTPException:
-                            cleanup_session.rollback()
-                            raise
-                        except Exception as db_error:
-                            if not drain_state.cancelled:
-                                logger.error('Failed to cleanup PostgreSQL for %s: %s', document_id, db_error)
+                        except Exception:
                             cleanup_session.rollback()
                             raise
                         finally:
@@ -1766,7 +1771,17 @@ async def delete_document_endpoint(
                             )
 
                         failure_step = "stored_files"
-                        await asyncio.to_thread(remove_paper_files)
+                        try:
+                            await run_thread_drained(
+                                remove_paper_files,
+                                cancellable_before_start=False,
+                            )
+                        except HTTPException:
+                            raise
+                        except Exception as file_error:
+                            if not is_cancelled_delete_drain():
+                                logger.error('Failed to cleanup stored files for %s: %s', document_id, file_error)
+                            raise
 
                         if not document_missing_in_weaviate:
                             failure_step = "parent_object"
@@ -1780,7 +1795,17 @@ async def delete_document_endpoint(
                                 )
 
                         failure_step = "sql_cleanup"
-                        await asyncio.to_thread(finish_delete)
+                        try:
+                            await run_thread_drained(
+                                finish_delete,
+                                cancellable_before_start=False,
+                            )
+                        except HTTPException:
+                            raise
+                        except Exception as db_error:
+                            if not is_cancelled_delete_drain():
+                                logger.error('Failed to cleanup PostgreSQL for %s: %s', document_id, db_error)
+                            raise
 
                         return OperationResult(
                             success=True,

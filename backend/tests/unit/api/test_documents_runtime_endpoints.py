@@ -2132,6 +2132,8 @@ async def test_delete_document_endpoint_cancel_at_chunk_wipe_yield_before_submit
         "parent_error",
         "parent_reconnect_error",
         "parent_reconnect_cancel_at_yield",
+        "stored_files_cancel_before_on_cancel",
+        "sql_cleanup_cancel_before_on_cancel",
         "incomplete_wipe",
     ],
 )
@@ -2198,13 +2200,19 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
         sql_db.engine = SimpleNamespace(connect=lambda: _LockConn())
 
         class _Session:
-            def __init__(self, doc=None):
+            def __init__(self, doc=None, *, fail_on_delete=False):
                 self._doc = doc
+                self._fail_on_delete = fail_on_delete
             def execute(self, *_a, **_kw):
                 return SimpleNamespace(
                     scalars=lambda: SimpleNamespace(first=lambda: self._doc),
                     scalar_one_or_none=lambda: self._doc,
                 )
+            def delete(self, _row):
+                if self._fail_on_delete:
+                    raise RuntimeError(f"{{secret_detail}} {{doc_id}}")
+            def commit(self):
+                pass
             def rollback(self):
                 pass
             def close(self):
@@ -2218,19 +2226,34 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
             id=doc_id, user_id=42, document_kind="library",
             main_file=main_file, main_file_or_none=main_file, files=[main_file],
         )
-        sessions = [_Session(), _Session(paper), _Session(paper), _Session(paper)]
+        sessions = [
+            _Session(),
+            _Session(paper),
+            _Session(paper),
+            _Session(paper, fail_on_delete=({failure_mode!r} == "sql_cleanup_cancel_before_on_cancel")),
+        ]
         documents.SessionLocal = lambda: sessions.pop(0)
         documents.provision_user_async = lambda _p: asyncio.sleep(0, result=SimpleNamespace(id=42))
         documents.verify_document_ownership = lambda *_a, **_kw: SimpleNamespace(id=doc_id, user_id=42)
         documents.get_document = lambda *_a, **_kw: asyncio.sleep(0, result={{"document": {{"processing_status": "completed"}}}})
         documents.pdf_job_service.get_latest_job_for_document = lambda **_kw: None
         documents.pipeline_tracker.get_pipeline_status = lambda *_a, **_kw: asyncio.sleep(0, result=None)
+        documents.cleanup_document_curation_dependencies = lambda *_a, **_kw: {{}}
+        if {failure_mode!r} == "stored_files_cancel_before_on_cancel":
+            def _boom_files(*_a, **_kw):
+                raise RuntimeError(f"{{secret_detail}} {{doc_id}}")
+            documents.remove_stored_files = _boom_files
 
         wipe_entered = threading.Event()
         resume_wipe = threading.Event()
         ready_state = {{"ready": True}}
-        wipe_state = {{"done": False, "cancelled_at_parent": False}}
+        wipe_state = {{"done": False, "cancelled_at_parent": False, "cancelled_before_on_cancel": False}}
         is_reconnect_mode = {failure_mode!r} in {{"parent_reconnect_error", "parent_reconnect_cancel_at_yield"}}
+        is_post_wipe_cancel_mode = {failure_mode!r} in {{
+            "parent_reconnect_cancel_at_yield",
+            "stored_files_cancel_before_on_cancel",
+            "sql_cleanup_cancel_before_on_cancel",
+        }}
 
         if is_reconnect_mode:
             WeaviateConnection._instance = None
@@ -2278,9 +2301,6 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
         async def _exercise():
             task_holder = []
             if {failure_mode!r} == "parent_reconnect_cancel_at_yield":
-                # Cancel the owning request task right as delete_paper_object's own sleep(0)
-                # resumes, before request_task runs on_cancel (so state.cancelled is still False
-                # while owner_task.cancelling() > owner_initial_cancels is already True).
                 real_sleep = weaviate_docs.asyncio.sleep
 
                 async def _cancel_at_parent_yield(delay, *args, **kwargs):
@@ -2296,6 +2316,31 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
                     return res
 
                 weaviate_docs.asyncio.sleep = _cancel_at_parent_yield
+            elif {failure_mode!r} in {{
+                "stored_files_cancel_before_on_cancel",
+                "sql_cleanup_cancel_before_on_cancel",
+            }}:
+                target_worker = (
+                    "remove_paper_files"
+                    if {failure_mode!r} == "stored_files_cancel_before_on_cancel"
+                    else "finish_delete"
+                )
+                real_run_thread = documents.run_thread_drained
+
+                async def _cancel_before_on_cancel(func, *args, **kwargs):
+                    if getattr(func, "__name__", None) == target_worker:
+                        try:
+                            return await real_run_thread(func, *args, **kwargs)
+                        except Exception:
+                            # Cancel the owning request task immediately before complete_delete's
+                            # except handler runs so owner_task.cancelling() > initial_cancels
+                            # while drain_state.cancelled is still False.
+                            wipe_state["cancelled_before_on_cancel"] = True
+                            task_holder[0].cancel("client disconnected before on_cancel")
+                            raise
+                    return await real_run_thread(func, *args, **kwargs)
+
+                documents.run_thread_drained = _cancel_before_on_cancel
 
             with tempfile.TemporaryDirectory() as tmp:
                 documents.get_pdf_storage_path = lambda: tmp
@@ -2303,7 +2348,7 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
                 task_holder.append(task)
                 try:
                     assert await asyncio.to_thread(wipe_entered.wait, 5)
-                    if {failure_mode!r} != "parent_reconnect_cancel_at_yield":
+                    if not is_post_wipe_cancel_mode:
                         task.cancel("client disconnected")
                         await asyncio.sleep(0.02)
                 finally:
@@ -2319,6 +2364,11 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
 
         if {failure_mode!r} == "parent_reconnect_cancel_at_yield":
             assert wipe_state["cancelled_at_parent"] is True
+        if {failure_mode!r} in {{
+            "stored_files_cancel_before_on_cancel",
+            "sql_cleanup_cancel_before_on_cancel",
+        }}:
+            assert wipe_state["cancelled_before_on_cancel"] is True
 
         assert len(events) == 1, f"expected 1 Sentry event, got {{len(events)}}: {{events!r}}"
         event = events[0]
@@ -2330,18 +2380,28 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
             assert runtime_ctx["component"] == "weaviate_client"
             assert runtime_ctx["operation"] == "paper_delete_chunk_wipe_incomplete"
         else:
-            expected_step = "chunk_wipe" if {failure_mode!r} == "chunk_error" else "parent_object"
-            expected_exc_type = (
-                "ConnectionRefusedError"
-                if is_reconnect_mode
-                else "HTTPException"
-            )
+            step_by_mode = {{
+                "chunk_error": "chunk_wipe",
+                "parent_error": "parent_object",
+                "parent_reconnect_error": "parent_object",
+                "parent_reconnect_cancel_at_yield": "parent_object",
+                "stored_files_cancel_before_on_cancel": "stored_files",
+                "sql_cleanup_cancel_before_on_cancel": "sql_cleanup",
+            }}
+            exc_by_mode = {{
+                "chunk_error": "HTTPException",
+                "parent_error": "HTTPException",
+                "parent_reconnect_error": "ConnectionRefusedError",
+                "parent_reconnect_cancel_at_yield": "ConnectionRefusedError",
+                "stored_files_cancel_before_on_cancel": "RuntimeError",
+                "sql_cleanup_cancel_before_on_cancel": "RuntimeError",
+            }}
             assert runtime_ctx == {{
                 "component": "documents",
                 "operation": "paper_delete_cancelled_drain_failed",
                 "document_id_hash": hash_sentry_identifier(doc_id),
-                "step": expected_step,
-                "exception_type": expected_exc_type,
+                "step": step_by_mode[{failure_mode!r}],
+                "exception_type": exc_by_mode[{failure_mode!r}],
             }}
     """)
     result = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True)

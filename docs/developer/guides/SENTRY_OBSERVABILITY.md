@@ -850,6 +850,16 @@ chain-free error, a low-cardinality fingerprint of
 `(operation, component, pre_commit|post_commit)`, and context holding only
 `document_id_hash`, `sql_committed`, and `weaviate_retained`.
 
+When post-Weaviate PostgreSQL cleanup fails inside `weaviate_client.delete_document`
+or an intake compensation fallback SQL delete, the failure is never dropped in a
+suppressed warning alone: it logs one sanitized companion warning
+(`sentry_skip_event=True`) and reports once under component `weaviate_client`
+(or `pdf_jobs` / `document_sources` for fallback SQL cleanup) and operation
+`paper_delete_sql_cleanup_failed` with `include_request=False`, a fixed,
+chain-free error, a low-cardinality fingerprint of
+`(operation, component, exception_type)`, and context holding only
+`document_id_hash` and `exception_type`.
+
 Adding converted supplements to a paper (`supplement_add.py`) sends no event for
 a file it leaves out. When every chosen file is left out, it reports one warning
 under component `document_files` and operation `supplement_add_nothing_added`,

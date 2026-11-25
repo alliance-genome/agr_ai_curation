@@ -297,19 +297,24 @@ def _remove_cli_owned_paper_files(
 
 async def _delete_document_for_cli(user_id: str, document_id: str) -> dict[str, Any]:
     """Delete a document via CLI under paper_operation_lock with ownership, active-job, and files-before-owner checks."""
-    from src.lib.document_cleanup import delete_drain_context, drain_shielded
+    from src.lib.document_cleanup import (
+        delete_drain_context,
+        drain_shielded,
+        run_thread_drained,
+    )
     from src.lib.document_files.paper_lock import PaperOperationInProgress, paper_operation_lock
     from src.lib.pdf_jobs import service as pdf_job_service
 
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped document deletion (FR-011, FR-014)")
     document_uuid = UUID(str(document_id))
+    canonical_document_id = str(document_uuid)
 
     try:
         async with paper_operation_lock(document_uuid) as lock_conn:
             # Verify SQL ownership and stored-file preflight FIRST so a wrong user can
             # never mutate or disclose another owner's job state via stale reconciliation.
-            preflight_error, has_sql_owner = await asyncio.to_thread(
+            preflight_error, has_sql_owner = await run_thread_drained(
                 _inspect_cli_sql_owner,
                 user_id,
                 document_uuid,
@@ -319,11 +324,11 @@ async def _delete_document_for_cli(user_id: str, document_id: str) -> dict[str, 
                 return {
                     "success": False,
                     "message": preflight_error,
-                    "documentId": document_id,
+                    "documentId": canonical_document_id,
                     "postgres_deleted": False,
                 }
 
-            active_job = await asyncio.to_thread(
+            active_job = await run_thread_drained(
                 pdf_job_service.get_active_job_for_document,
                 document_id=document_uuid,
                 reconcile_stale=True,
@@ -336,7 +341,7 @@ async def _delete_document_for_cli(user_id: str, document_id: str) -> dict[str, 
                         "Cannot delete document while processing job is active "
                         f"(status '{active_job.status}')"
                     ),
-                    "documentId": document_id,
+                    "documentId": canonical_document_id,
                     "postgres_deleted": False,
                 }
 
@@ -344,17 +349,18 @@ async def _delete_document_for_cli(user_id: str, document_id: str) -> dict[str, 
                 async def _complete() -> dict[str, Any]:
                     if delete_paper_chunks is not _REAL_DELETE_PAPER_CHUNKS:
                         drain_state.started = True
-                    chunk_result = await delete_paper_chunks(user_id, document_id)
+                    chunk_result = await delete_paper_chunks(user_id, canonical_document_id)
                     if not chunk_result.get("success"):
                         return {**chunk_result, "postgres_deleted": False}
 
                     if has_sql_owner:
                         try:
-                            await asyncio.to_thread(
+                            await run_thread_drained(
                                 _remove_cli_owned_paper_files,
                                 user_id,
                                 document_uuid,
                                 connection=lock_conn,
+                                cancellable_before_start=False,
                             )
                         except Exception as file_err:
                             logger.warning(
@@ -365,7 +371,7 @@ async def _delete_document_for_cli(user_id: str, document_id: str) -> dict[str, 
                             return {
                                 "success": False,
                                 "message": f"Failed to remove stored files ({type(file_err).__name__})",
-                                "documentId": document_id,
+                                "documentId": canonical_document_id,
                                 "chunks_deleted": chunk_result.get("chunks_deleted", 0),
                                 "chunks_matched": chunk_result.get("chunks_matched", 0),
                                 "postgres_deleted": False,
@@ -373,7 +379,7 @@ async def _delete_document_for_cli(user_id: str, document_id: str) -> dict[str, 
 
                     parent_result = await delete_paper_object(
                         user_id,
-                        document_id,
+                        canonical_document_id,
                         allow_missing=True,
                     )
                     if not parent_result.get("success"):
@@ -386,10 +392,11 @@ async def _delete_document_for_cli(user_id: str, document_id: str) -> dict[str, 
 
                     sql_delete_failed = False
                     try:
-                        postgres_deleted = await asyncio.to_thread(
+                        postgres_deleted = await run_thread_drained(
                             _delete_sql_row,
                             user_id,
-                            document_id,
+                            canonical_document_id,
+                            cancellable_before_start=False,
                         )
                     except Exception as db_err:
                         logger.warning(
@@ -404,7 +411,7 @@ async def _delete_document_for_cli(user_id: str, document_id: str) -> dict[str, 
                         return {
                             "success": False,
                             "message": "Failed to delete document record from PostgreSQL",
-                            "documentId": document_id,
+                            "documentId": canonical_document_id,
                             "chunks_deleted": chunk_result.get("chunks_deleted", 0),
                             "chunks_matched": chunk_result.get("chunks_matched", 0),
                             "postgres_deleted": False,
@@ -418,7 +425,7 @@ async def _delete_document_for_cli(user_id: str, document_id: str) -> dict[str, 
                             if deleted_any
                             else "Document deletion reported as unsuccessful"
                         ),
-                        "documentId": document_id,
+                        "documentId": canonical_document_id,
                         "chunks_deleted": chunk_result.get("chunks_deleted", 0),
                         "chunks_matched": chunk_result.get("chunks_matched", 0),
                         "postgres_deleted": postgres_deleted,
@@ -436,7 +443,7 @@ async def _delete_document_for_cli(user_id: str, document_id: str) -> dict[str, 
         return {
             "success": False,
             "message": "Another operation on this paper is in progress; try again in a moment.",
-            "documentId": document_id,
+            "documentId": canonical_document_id,
             "postgres_deleted": False,
         }
 

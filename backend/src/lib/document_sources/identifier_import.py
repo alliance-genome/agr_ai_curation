@@ -11,7 +11,6 @@ from src.lib.observability.runtime import report_runtime_exception, sanitized_ru
 from src.lib.observability.sentry import hash_sentry_identifier
 import logging
 import re
-import shutil
 import uuid
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -27,6 +26,8 @@ from src.lib.document_cleanup import (
     cleanup_document_curation_dependencies,
     drain_shielded,
     report_compensation_file_cleanup_failure,
+    report_sql_cleanup_failure,
+    run_thread_drained,
 )
 from src.lib.document_files.paper_lock import (
     PaperOperationInProgress,
@@ -36,6 +37,7 @@ from src.lib.document_files.paper_lock import (
 from src.lib.document_files.service import (
     owned_paper_by_main_file_hash,
     remove_committed_paper_stored_files,
+    remove_staged_paper_artifacts,
 )
 from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.supplement_plan import ChosenSupplement, SupplementPlan
@@ -1265,7 +1267,12 @@ class IdentifierImportService:
                     user_sub=user_sub,
                 )
             if existing_hash_document:
-                _cleanup_saved_pdf(saved_path)
+                _cleanup_saved_pdf(
+                    saved_path,
+                    base_storage=base_storage,
+                    user_sub=user_sub,
+                    document_id=document_id,
+                )
                 return IdentifierImportItemResult(
                     identifier=normalized.original,
                     normalized_identifier=normalized.normalized,
@@ -1501,11 +1508,12 @@ class IdentifierImportService:
     ) -> bool:
         mark_job_failed = self._mark_job_failed_fn or pdf_job_service.mark_failed
         try:
-            await asyncio.to_thread(
+            await run_thread_drained(
                 mark_job_failed,
                 job_id=job_id,
                 message="Import dispatch failed before background processing started",
                 stage="dispatch",
+                cancellable_before_start=False,
             )
             return True
         except Exception as exc:
@@ -1528,13 +1536,19 @@ class IdentifierImportService:
     ) -> bool:
         bound_session = open_paper_lock_session(lock_conn)
         session = bound_session if bound_session is not None else self._session_factory()
+        base_storage = self._storage_path_provider()
         try:
             return remove_committed_paper_stored_files(
                 session,
                 document_id=document_id,
                 user_sub=user_sub,
-                base_storage=self._storage_path_provider(),
-                fallback_cleanup=lambda: _cleanup_saved_pdf(saved_path),
+                base_storage=base_storage,
+                fallback_cleanup=lambda: _cleanup_saved_pdf(
+                    saved_path,
+                    base_storage=base_storage,
+                    user_sub=user_sub,
+                    document_id=document_id,
+                ),
             )
         except Exception as cleanup_err:
             session.rollback()
@@ -1553,7 +1567,6 @@ class IdentifierImportService:
         *,
         document_id: str,
         lock_conn: Any,
-        document_id_hash: str | None,
     ) -> None:
         bound_session = open_paper_lock_session(lock_conn)
         session = bound_session if bound_session is not None else self._session_factory()
@@ -1572,12 +1585,10 @@ class IdentifierImportService:
                 session.commit()
         except Exception as cleanup_err:
             session.rollback()
-            logger.warning(
-                "Best-effort SQL cleanup failed during identifier import compensation "
-                "(%s, document_id_hash=%s)",
-                type(cleanup_err).__name__,
-                document_id_hash,
-                extra={"sentry_skip_event": True},
+            report_sql_cleanup_failure(
+                component="document_sources",
+                document_id=document_id,
+                exception_type=type(cleanup_err).__name__,
             )
         finally:
             session.close()
@@ -1597,7 +1608,12 @@ class IdentifierImportService:
         if not sql_record_committed:
             # Pre-commit compensation: no SQL owner exists yet. If the staged PDF cannot
             # be removed, retain the Weaviate owner and report so no private file is stranded.
-            if not _cleanup_saved_pdf(saved_path):
+            if not _cleanup_saved_pdf(
+                saved_path,
+                base_storage=self._storage_path_provider(),
+                user_sub=user_sub,
+                document_id=document_id,
+            ):
                 report_compensation_file_cleanup_failure(
                     component="document_sources",
                     document_id=document_id,
@@ -1634,7 +1650,7 @@ class IdentifierImportService:
         try:
             async with lock_fn(document_id) as lock_conn:
                 try:
-                    active_job = await asyncio.to_thread(
+                    active_job = await run_thread_drained(
                         get_active_job,
                         document_id=document_id,
                         reconcile_stale=False,
@@ -1658,58 +1674,66 @@ class IdentifierImportService:
                     )
                     return
 
-                # Snapshot and remove live SQL-owned stored files under the paper row lock
-                # first; if cleanup fails, retain both Weaviate and SQL ownership for retry.
-                files_removed = await asyncio.to_thread(
-                    self._remove_committed_paper_files,
-                    document_id=document_id,
-                    user_sub=user_sub,
-                    saved_path=saved_path,
-                    lock_conn=lock_conn,
-                    document_id_hash=document_id_hash,
-                )
-                if not files_removed:
-                    report_compensation_file_cleanup_failure(
-                        component="document_sources",
+                # Deliver any pending cancellation before starting destructive file/index/SQL
+                # cleanup; once file removal starts, drain through completion under the lock.
+                await asyncio.sleep(0)
+
+                async def _complete_committed_compensation() -> None:
+                    # Snapshot and remove live SQL-owned stored files under the paper row lock
+                    # first; if cleanup fails, retain both Weaviate and SQL ownership for retry.
+                    files_removed = await run_thread_drained(
+                        self._remove_committed_paper_files,
                         document_id=document_id,
-                        sql_record_committed=True,
-                        weaviate_document_created=weaviate_document_created,
+                        user_sub=user_sub,
+                        saved_path=saved_path,
+                        lock_conn=lock_conn,
+                        document_id_hash=document_id_hash,
+                        cancellable_before_start=False,
                     )
-                    return
-
-                # Let the Weaviate wipe outcome govern SQL owner deletion: if delete_document
-                # reports an error or incomplete chunk wipe (or raises CancelledError after an
-                # incomplete/unstarted wipe), retain the SQL owner alongside the Weaviate parent.
-                # When delete_document owns SQL deletion (reporting "postgres_deleted"), do not
-                # issue a second SQL delete pass.
-                weaviate_cleanup_ok = True
-                sql_owned_by_delete_document = False
-                if weaviate_document_created:
-                    try:
-                        delete_result = await self._delete_document(user_sub, document_id)
-                    except Exception as cleanup_err:
-                        logger.warning(
-                            "Best-effort Weaviate cleanup failed for identifier import %s: %s",
-                            document_id,
-                            cleanup_err,
+                    if not files_removed:
+                        report_compensation_file_cleanup_failure(
+                            component="document_sources",
+                            document_id=document_id,
+                            sql_record_committed=True,
+                            weaviate_document_created=weaviate_document_created,
                         )
-                        weaviate_cleanup_ok = False
-                    else:
-                        if isinstance(delete_result, dict):
-                            if "error" in delete_result or "chunks_failed" in delete_result:
-                                weaviate_cleanup_ok = False
-                            elif "postgres_deleted" in delete_result:
-                                sql_owned_by_delete_document = True
+                        return
 
-                if not weaviate_cleanup_ok or sql_owned_by_delete_document:
-                    return
+                    # Let the Weaviate wipe outcome govern SQL owner deletion: if delete_document
+                    # reports an error or incomplete chunk wipe (or raises CancelledError after an
+                    # incomplete/unstarted wipe), retain the SQL owner alongside the Weaviate parent.
+                    # When delete_document owns SQL deletion (reporting "postgres_deleted"), do not
+                    # issue a second SQL delete pass (delete_document reports SQL errors).
+                    weaviate_cleanup_ok = True
+                    sql_owned_by_delete_document = False
+                    if weaviate_document_created:
+                        try:
+                            delete_result = await self._delete_document(user_sub, document_id)
+                        except Exception as cleanup_err:
+                            logger.warning(
+                                "Best-effort Weaviate cleanup failed for identifier import %s: %s",
+                                document_id,
+                                cleanup_err,
+                            )
+                            weaviate_cleanup_ok = False
+                        else:
+                            if isinstance(delete_result, dict):
+                                if "error" in delete_result or "chunks_failed" in delete_result:
+                                    weaviate_cleanup_ok = False
+                                elif "postgres_deleted" in delete_result:
+                                    sql_owned_by_delete_document = True
 
-                await asyncio.to_thread(
-                    self._delete_committed_sql_row,
-                    document_id=document_id,
-                    lock_conn=lock_conn,
-                    document_id_hash=document_id_hash,
-                )
+                    if not weaviate_cleanup_ok or sql_owned_by_delete_document:
+                        return
+
+                    await run_thread_drained(
+                        self._delete_committed_sql_row,
+                        document_id=document_id,
+                        lock_conn=lock_conn,
+                        cancellable_before_start=False,
+                    )
+
+                await drain_shielded(_complete_committed_compensation())
         except PaperOperationInProgress:
             logger.warning(
                 "Skipping import compensation because another operation holds the paper lock "
@@ -2090,19 +2114,16 @@ def _write_source_pdf(
     return saved_path
 
 
-def _cleanup_saved_pdf(saved_path: Path) -> bool:
-    try:
-        if not saved_path.exists() and not saved_path.is_symlink():
-            return True
-        try:
-            shutil.rmtree(saved_path.parent)
-        except FileNotFoundError:
-            pass
-        return not saved_path.exists() and not saved_path.is_symlink()
-    except OSError as exc:
-        logger.warning(
-            "Failed to remove staged PDF artifacts (%s)",
-            type(exc).__name__,
-            extra={"sentry_skip_event": True},
-        )
-        return False
+def _cleanup_saved_pdf(
+    saved_path: Path,
+    *,
+    base_storage: Path,
+    user_sub: str,
+    document_id: str,
+) -> bool:
+    return remove_staged_paper_artifacts(
+        saved_path,
+        base_storage=base_storage,
+        user_sub=user_sub,
+        document_id=document_id,
+    )
