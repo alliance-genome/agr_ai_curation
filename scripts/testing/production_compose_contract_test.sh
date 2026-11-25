@@ -104,6 +104,7 @@ write_test_env() {
       continue
     fi
     printf '%s=%s\n' "${key}" "${override}" >>"${env_file}"
+    unset "${key}"
   done <"${fanout_contract}"
   while IFS='|' read -r key default override; do
     if [[ -z "${key}" || "${key}" == \#* ]]; then
@@ -237,8 +238,8 @@ PY
 
 # Exercise the environment created by a fresh `make setup` and the effective
 # development Compose interpolation, without starting containers.
-# Omit the pool capacity and listing cursor cap so this render exercises their Compose defaults.
-grep -Ev -e "${operational_settings}" -e '^(MAX_PARALLEL_VALIDATORS=|DOCUMENT_FILE_LISTING_CHECK_LIMIT=|DOCUMENT_FILE_LISTING_CURSOR_CACHE_MAX_ENTRIES=)' "${repo_root}/.env.example" >"${development_env_file}"
+# Omit these settings so this render exercises their Compose defaults.
+grep -Ev -e "${operational_settings}" -e '^(EXTRACTION_FANOUT_|MAX_PARALLEL_VALIDATORS=|DOCUMENT_FILE_LISTING_CHECK_LIMIT=|DOCUMENT_FILE_LISTING_CURSOR_CACHE_MAX_ENTRIES=)' "${repo_root}/.env.example" >"${development_env_file}"
 cat >>"${development_env_file}" <<'ENV'
 SENTRY_DEV_DSN=http://dev-public-key@dev-ingest.example.internal/3
 SENTRY_ENVIRONMENT=dev
@@ -370,22 +371,29 @@ assert any(
 )
 PY
 
-# Verify an explicitly empty DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT is preserved as ""
-# (not defaulted to 400) so strict backend startup validation rejects it.
-empty_ceiling_env_file="${temp_dir}/empty-ceiling.env"
-empty_ceiling_prod_json="${temp_dir}/empty-ceiling-prod.json"
-empty_ceiling_dev_json="${temp_dir}/empty-ceiling-dev.json"
-sed 's/^DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT=.*/DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT=/' "${env_file}" >"${empty_ceiling_env_file}"
-docker compose --env-file "${empty_ceiling_env_file}" -f "${compose_file}" config --format json >"${empty_ceiling_prod_json}"
-AGR_DEV_ENV_FILE="${empty_ceiling_env_file}" docker compose --env-file "${empty_ceiling_env_file}" \
-  -f "${repo_root}/docker-compose.yml" config --format json >"${empty_ceiling_dev_json}"
-python3 - "${empty_ceiling_prod_json}" "${empty_ceiling_dev_json}" <<'PY'
+# Explicitly empty integer limits must reach the getters for validation.
+empty_limits_env="${temp_dir}/empty-limits.env"
+empty_limits_prod="${temp_dir}/empty-limits-prod.json"
+empty_limits_dev="${temp_dir}/empty-limits-dev.json"
+sed -E 's/^(DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT|EXTRACTION_FANOUT_[A-Z_]+)=[0-9]+$/\1=/' \
+  "${env_file}" >"${empty_limits_env}"
+docker compose --env-file "${empty_limits_env}" -f "${compose_file}" config --format json >"${empty_limits_prod}"
+AGR_DEV_ENV_FILE="${empty_limits_env}" docker compose --env-file "${empty_limits_env}" \
+  -f "${repo_root}/docker-compose.yml" config --format json >"${empty_limits_dev}"
+python3 - "${fanout_contract}" "${empty_limits_prod}" "${empty_limits_dev}" <<'PY'
 import json
+from pathlib import Path
 import sys
 
-for path in sys.argv[1:]:
-    config = json.load(open(path, encoding="utf-8"))
-    assert config["services"]["backend"]["environment"]["DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"] == "", path
+settings = [line.split("|") for line in Path(sys.argv[1]).read_text().splitlines()
+            if line and not line.startswith("#")]
+for path in sys.argv[2:]:
+    services = json.loads(Path(path).read_text())["services"]
+    assert services["backend"]["environment"]["DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"] == "", path
+    for key, default, _ in settings:
+        if default.isdigit():
+            for service in ("backend", "benchmark_worker"):
+                assert services[service]["environment"][key] == "", (path, service, key)
 PY
 
 docker compose --env-file "${env_file}" -f "${compose_file}" config --format json >"${rendered_file}"

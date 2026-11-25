@@ -1419,6 +1419,16 @@ def _get_nonnegative_env_int(key: str, default: int) -> int:
     return value
 
 
+def _get_positive_env_int(key: str, default: int) -> int:
+    try:
+        value = int(_get_env(key, str(default)))
+    except ValueError:
+        raise ValueError(f"{key} must be a positive integer") from None
+    if value < 1:
+        raise ValueError(f"{key} must be a positive integer")
+    return value
+
+
 def _get_env_float(key: str, default: Optional[float]) -> Optional[float]:
     """Get environment variable as float."""
     val = os.getenv(key)
@@ -2945,6 +2955,7 @@ def get_batching_nudge_threshold() -> int:
 
 
 # --- Fan-out extraction (plan, then parallel writers) ---
+# Coercing invalid limits silently changed writer counts and retry budgets.
 
 def get_extraction_fanout_min_items() -> int:
     """Planned records at which a builder extraction fans out (EXTRACTION_FANOUT_MIN_ITEMS).
@@ -2954,7 +2965,7 @@ def get_extraction_fanout_min_items() -> int:
     many records are written by parallel writers, and smaller plans are staged
     by the planner itself. Production sets 15.
     """
-    return max(0, _get_env_int_with_fallback("EXTRACTION_FANOUT_MIN_ITEMS", 0))
+    return _get_nonnegative_env_int("EXTRACTION_FANOUT_MIN_ITEMS", 0)
 
 
 def get_extraction_fanout_items_per_writer() -> int:
@@ -2963,7 +2974,7 @@ def get_extraction_fanout_items_per_writer() -> int:
     Fewer records per writer means more writers and a shorter writing phase,
     at a higher cost. Default 5.
     """
-    return max(1, _get_env_int_with_fallback("EXTRACTION_FANOUT_ITEMS_PER_WRITER", 5))
+    return _get_positive_env_int("EXTRACTION_FANOUT_ITEMS_PER_WRITER", 5)
 
 
 def get_extraction_fanout_max_writers() -> int:
@@ -2972,7 +2983,7 @@ def get_extraction_fanout_max_writers() -> int:
     Each writer opens its own model connection. Larger plans give each writer
     more records instead of starting more writers. Default 8.
     """
-    return max(1, _get_env_int_with_fallback("EXTRACTION_FANOUT_MAX_WRITERS", 8))
+    return _get_positive_env_int("EXTRACTION_FANOUT_MAX_WRITERS", 8)
 
 
 def get_extraction_fanout_max_plan_reminders() -> int:
@@ -2997,7 +3008,7 @@ def get_extraction_fanout_writer_reruns() -> int:
     retryable, a cancellation, or a writer with no re-run left fails the
     extraction. 0 turns re-runs off. Default 1.
     """
-    return max(0, _get_env_int_with_fallback("EXTRACTION_FANOUT_WRITER_RERUNS", 1))
+    return _get_nonnegative_env_int("EXTRACTION_FANOUT_WRITER_RERUNS", 1)
 
 
 def get_extraction_fanout_writer_store_responses() -> bool:
