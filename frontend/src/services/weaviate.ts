@@ -9,6 +9,31 @@ import {
 import { logger } from './logger';
 import { clearAllNamespacedChatLocalStorage } from '../lib/chatCacheKeys';
 import { safeSetItem } from '../lib/browserStorage';
+import type {
+  AddPaperFileInput,
+  AddPaperFilesRequest,
+  ChosenSupplementInput,
+  DocumentFileRemovalCheckResponse,
+  DocumentFileRemovalResponse,
+  FileRemovalRefusalCode,
+  SupplementJobKind,
+  SupplementJobProgress,
+  SupplementProgressEntry,
+  SupplementState,
+} from '../features/documents/supplementProgress';
+
+export type {
+  AddPaperFileInput,
+  AddPaperFilesRequest,
+  ChosenSupplementInput,
+  DocumentFileRemovalCheckResponse,
+  DocumentFileRemovalResponse,
+  FileRemovalRefusalCode,
+  SupplementJobKind,
+  SupplementJobProgress,
+  SupplementProgressEntry,
+  SupplementState,
+};
 
 const API_BASE_URL = '/api/weaviate';
 
@@ -87,6 +112,7 @@ interface RawDocumentListItem {
   weaviate_tenant: string;
   chunk_count: number | null;
   vector_count: number | null;
+  ready_file_count?: number | null;
   embedding_status: string;
   error_message: string | null;
   source_provenance: RawDocumentSourceProvenance | null;
@@ -132,6 +158,7 @@ export interface DocumentDetailResponse {
   file_size_bytes: number | null;
   weaviate_tenant: string;
   chunk_count: number | null;
+  ready_file_count?: number | null;
   error_message: string | null;
   source_provenance: RawDocumentSourceProvenance | null;
 }
@@ -180,6 +207,7 @@ export interface DocumentSummary {
   errorMessage?: string | null;
   chunkCount: number | null;
   vectorCount: number | null;
+  ready_file_count?: number | null;
   sourceProvenance?: DocumentSourceProvenance | null;
 }
 
@@ -467,6 +495,9 @@ export const normalizeDocumentListResponse = (
     errorMessage: document.error_message,
     chunkCount: document.chunk_count,
     vectorCount: document.vector_count,
+    ...(document.ready_file_count !== undefined
+      ? { ready_file_count: document.ready_file_count }
+      : {}),
     sourceProvenance: normalizeDocumentSourceProvenance(document.source_provenance),
   })),
   total: response.total,
@@ -487,6 +518,9 @@ export const normalizeDocumentDetailResponse = (
       processingStatus: payload.status.toLowerCase(),
       errorMessage: payload.error_message,
       chunkCount: payload.chunk_count,
+      ...(payload.ready_file_count !== undefined
+        ? { ready_file_count: payload.ready_file_count }
+        : {}),
       sourceProvenance: normalizeDocumentSourceProvenance(payload.source_provenance),
     },
   };

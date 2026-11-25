@@ -343,6 +343,34 @@ describe('weaviate service', () => {
         sourceProvenance: null,
       });
     });
+
+    it('preserves ready_file_count when returned on list items', () => {
+      const normalized = normalizeDocumentListResponse({
+        documents: [{
+          document_id: 'doc-files',
+          user_id: 'user-1',
+          filename: 'with-supplements.pdf',
+          title: 'With Supplements',
+          status: 'COMPLETED',
+          upload_timestamp: '2026-11-24T00:00:00Z',
+          processing_started_at: null,
+          processing_completed_at: null,
+          file_size_bytes: 1024,
+          weaviate_tenant: 'tenant-user-1',
+          chunk_count: 12,
+          vector_count: 12,
+          ready_file_count: 3,
+          embedding_status: 'completed',
+          error_message: null,
+          source_provenance: null,
+        }],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      });
+
+      expect(normalized.documents[0]?.ready_file_count).toBe(3);
+    });
   });
 
   describe('useDocument', () => {
@@ -462,6 +490,28 @@ describe('weaviate service', () => {
       });
 
       expect(normalized.document.sourceProvenance).toBeNull();
+    });
+
+    it('preserves ready_file_count when returned on document details', () => {
+      const normalized = normalizeDocumentDetailResponse({
+        document_id: 'doc-files',
+        job_id: null,
+        user_id: 5,
+        filename: 'files.pdf',
+        title: null,
+        status: 'COMPLETED',
+        upload_timestamp: '2026-11-24T00:00:00Z',
+        processing_started_at: null,
+        processing_completed_at: null,
+        file_size_bytes: 100,
+        weaviate_tenant: 'tenant-user-1',
+        chunk_count: 5,
+        ready_file_count: 4,
+        error_message: null,
+        source_provenance: null,
+      });
+
+      expect(normalized.document.ready_file_count).toBe(4);
     });
 
     it('rejects the retired nested detail response shape', () => {

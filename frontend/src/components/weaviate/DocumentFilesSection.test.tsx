@@ -156,16 +156,17 @@ describe('DocumentFilesSection (read only)', () => {
     expect(row).not.toHaveTextContent(/Converted by/)
   })
 
-  it('words a PDF supplement that cannot be added yet by its own line', async () => {
-    // #1127's shape: a converted PDF supplement, not tickable on the per-paper listing.
+  it('treats retired pdf_supplement_not_supported_yet on a listing as unrecognized (ALL-1738 item 1)', async () => {
+    // Card 36's line is retired from per-paper listings now that P7c2 supports PDF supplements;
+    // pdf_supplement_not_supported_yet belongs only to historical job outcomes (N17).
     const pdf = { ...PAPER_LISTING.files[1], format: 'pdf', tickable: false, not_tickable_reason: 'pdf_supplement_not_supported_yet' }
     stubApi({ status: 200, payload: listingWith([pdf]) })
     renderSection(PROVIDER)
 
     const list = await screen.findByRole('list', { name: 'Files in ABC Literature not in this paper' })
     const row = within(list).getByRole('listitem')
-    expect(row).toHaveTextContent('PDF supplements cannot be added yet.')
-    expect(row).not.toHaveTextContent('This screen cannot describe this file yet.')
+    expect(row).toHaveTextContent('This screen cannot describe this file yet.')
+    expect(row).not.toHaveTextContent('PDF supplements cannot be added yet.')
     expect(row).not.toHaveTextContent(/Converted by/)
   })
 
