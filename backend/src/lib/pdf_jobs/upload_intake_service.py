@@ -28,6 +28,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from src.config import get_pdf_storage_path
 from src.lib.document_cleanup import (
+    can_start_committed_compensation,
     cleanup_document_curation_dependencies,
     compensate_document_index,
     drain_shielded,
@@ -984,17 +985,15 @@ class UploadIntakeService:
         step = "paper_lock_acquire"
         try:
             async with lock_fn(document_id) as lock_conn:
-                step = "active_job_check"
-                active_job = await run_thread_drained(
+                step = "committed_cleanup"
+                if not await can_start_committed_compensation(
                     get_active_job,
                     document_id=document_id,
-                    reconcile_stale=False,
                     connection=lock_conn,
-                )
-                if active_job is not None:
+                    component="pdf_jobs",
+                ):
                     return
 
-                step = "committed_cleanup"
                 compensation_started = False
 
                 def _mark_compensation_started() -> None:

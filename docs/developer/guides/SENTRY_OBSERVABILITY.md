@@ -911,9 +911,11 @@ handled SQL cleanup.
 An unexpected exception that stops committed compensation reports
 `intake_compensation_aborted` with `document_id_hash`, `exception_type`, and
 the step that failed (`paper_lock_acquire`, `active_job_check`, or
-`committed_cleanup`). A competing paper lock or active job ends compensation
-quietly. Both operations group by operation and intake component, omit the
-request, and use fixed, chain-free errors. Companion warnings carry
+`committed_cleanup`). If cancellation arrives during an active-job lookup or
+lock release, the service still reports a failed lookup once and propagates
+cancellation after releasing the lock. A competing paper lock or active job
+ends compensation quietly. Both operations group by operation and intake
+component, omit the request, and use fixed, chain-free errors. Companion warnings carry
 `sentry_skip_event=True`. The original intake failure reaches the caller even
 if the reporter raises.
 

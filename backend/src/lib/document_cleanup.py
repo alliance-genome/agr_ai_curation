@@ -30,6 +30,7 @@ from src.lib.curation_workspace.models import (
     DomainValidationFinding,
 )
 
+from src.lib.document_files.paper_lock import PaperOperationInProgress
 from src.lib.observability import runtime
 from src.lib.observability.sentry import hash_sentry_identifier
 
@@ -177,6 +178,38 @@ def report_compensation_abort(
         document_id=document_id,
         details={"step": step, "exception_type": exception_type},
     )
+
+
+async def can_start_committed_compensation(
+    get_active_job: Callable[..., object],
+    *,
+    document_id: str,
+    connection: Any,
+    component: str,
+) -> bool:
+    """Check for a competing job on the held paper lock's connection."""
+    def report_lookup_failure(exc: Exception) -> None:
+        if not isinstance(exc, PaperOperationInProgress):
+            report_compensation_abort(
+                component=component,
+                document_id=document_id,
+                step="active_job_check",
+                exception_type=type(exc).__name__,
+            )
+
+    # Observe the lookup failure before cancellation can supersede it during unlock.
+    try:
+        active_job = await run_thread_drained(
+            get_active_job,
+            document_id=document_id,
+            connection=connection,
+            reconcile_stale=False,
+            on_cancelled_error=report_lookup_failure,
+        )
+    except Exception as exc:
+        report_lookup_failure(exc)
+        return False
+    return active_job is None
 
 
 async def compensate_document_index(

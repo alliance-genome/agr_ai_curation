@@ -1,10 +1,13 @@
 """Failure contracts exercised through both public intake services."""
 
 from abc import ABC, abstractmethod
+import asyncio
+import threading
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
+from src.lib.document_files import paper_lock
 from src.lib.observability import runtime
 from src.lib.observability.sentry import hash_sentry_identifier
 
@@ -129,6 +132,75 @@ class IntakeCompensationContract(ABC):
         self.assert_report(
             reporter, caplog, doc_id, "intake_compensation_aborted", step=step, exception_type="LookupError",
         )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("cancel_during", "lookup_error"), [
+        ("lookup", LookupError),
+        ("unlock", LookupError),
+        ("lookup", paper_lock.PaperOperationInProgress),
+        ("lookup", None),
+    ])
+    async def test_cancel_during_active_job_check_or_unlock(
+        self, tmp_path, session, reporter, caplog, monkeypatch, cancel_during, lookup_error,
+    ):
+        paused = threading.Event()
+        resume = threading.Event()
+        events = []
+        release = paper_lock._release
+
+        def pause_worker():
+            paused.set()
+            assert resume.wait(timeout=5)
+
+        def check_active_job(**kwargs):
+            if cancel_during == "lookup":
+                pause_worker()
+            events.append(("lookup", kwargs["connection"]))
+            if lookup_error:
+                raise lookup_error(PRIVATE_DETAIL)
+            return None
+
+        def release_lock(connection, key):
+            if cancel_during == "unlock":
+                pause_worker()
+            release(connection, key)
+            events.append(("released", connection))
+
+        monkeypatch.setattr(paper_lock, "_release", release_lock)
+        create_document = AsyncMock(return_value={"success": True})
+        delete = AsyncMock()
+        task = asyncio.create_task(self.run_intake(
+            tmp_path,
+            session_factory=lambda: session,
+            create_document_fn=create_document,
+            create_job_fn=Mock(side_effect=RuntimeError("intake failed")),
+            get_active_job_fn=check_active_job,
+            delete_document_fn=delete,
+        ))
+        try:
+            assert await asyncio.to_thread(paused.wait, 5)
+            task.cancel("intake cancelled")
+            await asyncio.sleep(0)
+            assert not task.done()
+        finally:
+            resume.set()
+        with pytest.raises(asyncio.CancelledError, match="intake cancelled"):
+            await asyncio.wait_for(task, timeout=5)
+
+        assert [step for step, _ in events] == ["lookup", "released"]
+        assert events[0][1] is events[1][1]
+        delete.assert_not_awaited()
+        session.delete.assert_not_called()
+        assert list(tmp_path.rglob("*.pdf"))
+        if lookup_error is LookupError:
+            document_id = str(create_document.await_args.args[1].id)
+            self.assert_report(
+                reporter, caplog, document_id, "intake_compensation_aborted",
+                step="active_job_check", exception_type="LookupError",
+            )
+        else:
+            reporter.assert_not_called()
+            assert not [r for r in caplog.records if r.name == "src.lib.document_cleanup"]
 
     @pytest.mark.asyncio
     async def test_abort_after_lock_acquisition(self, tmp_path, session, reporter, caplog):
