@@ -1915,7 +1915,7 @@ async def test_intake_upload_job_creation_compensation_cancelled_during_chunk_wi
     events: list[str] = []
 
     @contextmanager
-    def _session():
+    def _session(*, caller_reports_failure):
         yield MagicMock()
 
     connection = MagicMock()
@@ -1942,7 +1942,7 @@ async def test_intake_upload_job_creation_compensation_cancelled_during_chunk_wi
 
     chunks.data.delete_many.side_effect = _delete_many
     papers.data.delete_by_id.side_effect = _delete_by_id
-    monkeypatch.setattr(weaviate_docs, "get_connection", lambda: connection)
+    monkeypatch.setattr(weaviate_docs, "get_connection", lambda *, caller_reports_failure: connection)
     monkeypatch.setattr(weaviate_docs, "get_user_collections", lambda *_: (chunks, papers))
     monkeypatch.setattr(weaviate_docs, "_delete_sql_row", _delete_sql_row)
 
@@ -2179,7 +2179,7 @@ async def test_intake_upload_job_creation_compensation_retains_owner_on_incomple
     resume_wipe = threading.Event()
 
     @contextmanager
-    def _session():
+    def _session(*, caller_reports_failure):
         yield MagicMock()
 
     connection = MagicMock()
@@ -2193,7 +2193,7 @@ async def test_intake_upload_job_creation_compensation_retains_owner_on_incomple
         return SimpleNamespace(successful=0, matches=1, failed=1)
 
     chunks.data.delete_many.side_effect = _delete_many
-    monkeypatch.setattr(weaviate_docs, "get_connection", lambda: connection)
+    monkeypatch.setattr(weaviate_docs, "get_connection", lambda *, caller_reports_failure: connection)
     monkeypatch.setattr(weaviate_docs, "get_user_collections", lambda *_: (chunks, papers))
     delete_sql_row = MagicMock()
     monkeypatch.setattr(weaviate_docs, "_delete_sql_row", delete_sql_row)
@@ -2580,7 +2580,7 @@ def test_intake_upload_compensation_reports_one_sanitized_sentry_event_when_dele
         chunks, papers = MagicMock(), MagicMock()
         chunks.data.delete_many.return_value = SimpleNamespace(successful=0, matches=0, failed=0)
         papers.data.delete_by_id.return_value = True
-        weaviate_docs.get_connection = lambda: w_conn
+        weaviate_docs.get_connection = lambda *, caller_reports_failure: w_conn
         weaviate_docs.get_user_collections = lambda *_a: (chunks, papers)
 
         sql_delete_calls = 0

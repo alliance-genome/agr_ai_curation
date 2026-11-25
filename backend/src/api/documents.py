@@ -71,9 +71,11 @@ from ..lib.weaviate_client.documents import (
     async_list_documents as list_documents,
 )
 from ..lib.weaviate_client.documents import (
+    PAPER_DELETE_FAILURE_DETAIL,
     delete_paper_chunks,
     delete_paper_object,
     get_document,
+    get_paper_status_for_delete,
     update_document_filename,
 )
 from ..lib.weaviate_helpers import get_tenant_name
@@ -1559,6 +1561,31 @@ async def delete_document_endpoint(
     )
 
     canonical_document_id = document_id
+
+    def report_delete_failure(operation: str, message: str, exc: Exception, *, step: str | None = None) -> None:
+        exc_type = type(exc).__name__
+        document_id_hash = hash_sentry_identifier(canonical_document_id)
+        context = {"document_id_hash": document_id_hash, "exception_type": exc_type}
+        fingerprint = [operation]
+        if step is not None:
+            context["step"] = step
+            fingerprint.append(step)
+        logger.warning(
+            "%s step=%s document_id_hash=%s exception_type=%s",
+            message, step, document_id_hash, exc_type, extra={"sentry_skip_event": True},
+        )
+        try:
+            report_runtime_exception(
+                sanitized_runtime_error(message),
+                component="documents",
+                operation=operation,
+                context=context,
+                fingerprint=[*fingerprint, exc_type],
+                include_request=False,
+            )
+        except Exception:
+            logger.warning("Failed to report paper delete failure", extra={"sentry_skip_event": True})
+
     try:
         # T031: Verify ownership from PostgreSQL FIRST (FR-014)
         # Returns 404 if not found, 403 if not owned by user
@@ -1583,7 +1610,23 @@ async def delete_document_endpoint(
             # Every SQL worker under paper_operation_lock reuses lock_conn explicitly
             # and drains before exiting so lock_conn is never released/closed concurrently
             # with an in-flight worker thread.
-            try:
+            latest_job = await run_thread_drained(
+                lambda: pdf_job_service.get_latest_job_for_document(
+                    document_id=canonical_document_id,
+                    user_id=pg_doc.user_id,
+                    reconcile_stale=True,
+                    connection=lock_conn,
+                )
+            )
+            # A new paper's supplement stage that only waits for the provider
+            # ends with the delete (P7b); one that is writing files keeps it refused.
+            if pdf_job_service.is_waiting_supplement_stage(latest_job) and await run_thread_drained(
+                lambda: pdf_job_service.end_supplement_wait_for_delete(
+                    document_id=canonical_document_id,
+                    user_id=pg_doc.user_id,
+                    connection=lock_conn,
+                )
+            ):
                 latest_job = await run_thread_drained(
                     lambda: pdf_job_service.get_latest_job_for_document(
                         document_id=canonical_document_id,
@@ -1592,352 +1635,299 @@ async def delete_document_endpoint(
                         connection=lock_conn,
                     )
                 )
-                # A new paper's supplement stage that only waits for the provider
-                # ends with the delete (P7b); one that is writing files keeps it refused.
-                if pdf_job_service.is_waiting_supplement_stage(latest_job) and await run_thread_drained(
-                    lambda: pdf_job_service.end_supplement_wait_for_delete(
-                        document_id=canonical_document_id,
-                        user_id=pg_doc.user_id,
-                        connection=lock_conn,
-                    )
-                ):
-                    latest_job = await run_thread_drained(
-                        lambda: pdf_job_service.get_latest_job_for_document(
-                            document_id=canonical_document_id,
-                            user_id=pg_doc.user_id,
-                            reconcile_stale=True,
-                            connection=lock_conn,
-                        )
-                    )
-                pipeline_status = await pipeline_tracker.get_pipeline_status(canonical_document_id)
-                active_job_status = latest_job.status if latest_job else None
-                pipeline_is_active = _is_pipeline_status_active(pipeline_status)
-                stale_pipeline_tracker = _is_stale_pipeline_tracker(
-                    pipeline_status=pipeline_status,
-                    latest_job=latest_job,
+            pipeline_status = await pipeline_tracker.get_pipeline_status(canonical_document_id)
+            active_job_status = latest_job.status if latest_job else None
+            pipeline_is_active = _is_pipeline_status_active(pipeline_status)
+            stale_pipeline_tracker = _is_stale_pipeline_tracker(
+                pipeline_status=pipeline_status,
+                latest_job=latest_job,
+            )
+
+            indexed_status = await get_paper_status_for_delete(
+                user["sub"], canonical_document_id, connection=lock_conn,
+            )
+            document_missing_in_weaviate = indexed_status is None
+            if indexed_status is None:
+                document_processing_status = "missing"
+                logger.warning(
+                    "Paper missing from Weaviate during delete checks (document_id_hash=%s)",
+                    hash_sentry_identifier(canonical_document_id),
+                    extra={"sentry_skip_event": True},
+                )
+            else:
+                document_processing_status = _extract_document_processing_status(indexed_status)
+
+            if active_job_status in _ACTIVE_PDF_JOB_STATUSES:
+                job_hint = f" and job status '{active_job_status}'" if active_job_status else ""
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Cannot delete document while it is being processed "
+                        f"(status '{document_processing_status}'{job_hint})"
+                    ),
+                )
+            if pipeline_is_active and not stale_pipeline_tracker:
+                stage_value = getattr(getattr(pipeline_status, "current_stage", None), "value", getattr(pipeline_status, "current_stage", None))
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Cannot delete document while pipeline is actively processing (stage '{stage_value}')",
+                )
+            if stale_pipeline_tracker:
+                logger.warning(
+                    "Allowing delete despite stale pipeline tracker with terminal job status=%s document_id_hash=%s",
+                    active_job_status,
+                    hash_sentry_identifier(canonical_document_id),
+                    extra={"sentry_skip_event": True},
+                )
+            if (
+                document_processing_status in _ACTIVE_PROCESSING_STATUSES
+                and active_job_status not in _TERMINAL_PDF_JOB_STATUSES
+            ):
+                job_hint = f" and job status '{active_job_status}'" if active_job_status else ""
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Cannot delete document while it is being processed "
+                        f"(status '{document_processing_status}'{job_hint})"
+                    ),
+                )
+            if (
+                document_processing_status in _ACTIVE_PROCESSING_STATUSES
+                and active_job_status in _TERMINAL_PDF_JOB_STATUSES
+            ):
+                logger.warning(
+                    "Allowing delete despite stale document processing status=%s with terminal job status=%s document_id_hash=%s",
+                    document_processing_status,
+                    active_job_status,
+                    hash_sentry_identifier(canonical_document_id),
+                    extra={"sentry_skip_event": True},
                 )
 
-                document = None
-                document_processing_status = "missing"
-                document_missing_in_weaviate = False
+            def snapshot_for_cleanup() -> dict[str, Any]:
+                bound_session = open_paper_lock_session(lock_conn)
+                snapshot_session = bound_session if bound_session is not None else SessionLocal()
                 try:
-                    document = await get_document(
-                        user["sub"],
-                        canonical_document_id,
-                        connection=lock_conn,
-                    )
-                except ValueError as exc:
-                    if "not found" in str(exc).lower():
-                        document_missing_in_weaviate = True
-                        logger.warning(
-                            "Document %s exists in PostgreSQL but is missing in Weaviate; proceeding with stale-record delete checks.",
-                            canonical_document_id,
-                        )
-                    else:
-                        raise
+                    doc_to_cleanup = require_owned_document(snapshot_session, pg_doc.id, pg_doc.user_id)
+                    return _document_cleanup_snapshot(doc_to_cleanup)
+                except Exception:
+                    snapshot_session.rollback()
+                    raise
+                finally:
+                    snapshot_session.close()
 
-                if document:
-                    doc_payload = document.get("document", {})
-                    document_processing_status = _extract_document_processing_status(doc_payload)
+            cleanup_snapshot = await run_thread_drained(snapshot_for_cleanup)
+            # Every path this delete would remove must stay inside the curator's storage,
+            # checked before anything is deleted (pieces, index object, rows, files): one
+            # outside refuses the whole delete (403) and the paper stays as it was.
+            await asyncio.to_thread(
+                _require_removable_paths, cleanup_snapshot, FilePath(get_pdf_storage_path()), str(user["sub"]),
+            )
 
-                if active_job_status in _ACTIVE_PDF_JOB_STATUSES:
-                    job_hint = f" and job status '{active_job_status}'" if active_job_status else ""
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            "Cannot delete document while it is being processed "
-                            f"(status '{document_processing_status}'{job_hint})"
-                        ),
-                    )
-                if pipeline_is_active and not stale_pipeline_tracker:
-                    stage_value = getattr(getattr(pipeline_status, "current_stage", None), "value", getattr(pipeline_status, "current_stage", None))
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"Cannot delete document while pipeline is actively processing (stage '{stage_value}')",
-                    )
-                if stale_pipeline_tracker:
-                    logger.warning(
-                        "Allowing delete despite stale pipeline tracker with terminal job status=%s document=%s",
-                        active_job_status,
-                        canonical_document_id,
-                    )
-                if (
-                    document_processing_status in _ACTIVE_PROCESSING_STATUSES
-                    and active_job_status not in _TERMINAL_PDF_JOB_STATUSES
-                ):
-                    job_hint = f" and job status '{active_job_status}'" if active_job_status else ""
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            "Cannot delete document while it is being processed "
-                            f"(status '{document_processing_status}'{job_hint})"
-                        ),
-                    )
-                if (
-                    document_processing_status in _ACTIVE_PROCESSING_STATUSES
-                    and active_job_status in _TERMINAL_PDF_JOB_STATUSES
-                ):
-                    logger.warning(
-                        "Allowing delete despite stale document processing status=%s with terminal job status=%s document=%s",
-                        document_processing_status,
-                        active_job_status,
-                        canonical_document_id,
-                    )
+            failure_step = "chunk_wipe"
+            failure_already_reported = False
 
-                def snapshot_for_cleanup() -> dict[str, Any]:
+            with delete_drain_context() as drain_state:
+                # Remove physical files while holding a row lock so an in-flight rename
+                # cannot race with the final path snapshot. Keep the Weaviate parent object
+                # and SQL row intact until every stored file is gone so duplicate checks
+                # cannot treat the retained row as a phantom and strand files on disk.
+                def remove_paper_files() -> None:
                     bound_session = open_paper_lock_session(lock_conn)
-                    snapshot_session = bound_session if bound_session is not None else SessionLocal()
+                    file_session = bound_session if bound_session is not None else SessionLocal()
                     try:
-                        doc_to_cleanup = require_owned_document(snapshot_session, pg_doc.id, pg_doc.user_id)
-                        return _document_cleanup_snapshot(doc_to_cleanup)
+                        doc_to_clean = require_owned_document(
+                            file_session, pg_doc.id, pg_doc.user_id, for_update=True,
+                        )
+                        cleanup_values = _document_cleanup_snapshot(doc_to_clean)
+                        base_storage = FilePath(get_pdf_storage_path())
+                        user_sub = str(user["sub"])
+                        _require_removable_paths(cleanup_values, base_storage, user_sub)
+                        single_files: list[str] = []
+                        for file_values in cleanup_values["files"]:
+                            # A main stored PDF may take its paper folder with it (only
+                            # when the path proves the folder is this paper's). Every
+                            # other stored path, whatever the row's status, is removed
+                            # one file at a time by the one shared helper, which never
+                            # removes a folder and never follows a link (ALL-1460).
+                            if (file_values["role"] != FILE_ROLE_SUPPLEMENT
+                                    and file_values["display_mode"] != DISPLAY_MODE_TEXT):
+                                _delete_user_document_directory_or_file_if_present(
+                                    base_storage=base_storage,
+                                    relative_path=file_values["file_path"],
+                                    user_sub=user_sub,
+                                    document_id=canonical_document_id,
+                                )
+                                single_files.extend(
+                                    path for path in _removed_paths(file_values)
+                                    if path != file_values["file_path"]
+                                )
+                            else:
+                                single_files.extend(_removed_paths(file_values))
+                        remove_stored_files(single_files, owner_subject=user_sub)
+                        _remove_empty_paper_folders(base_storage, user_sub, canonical_document_id)
                     except Exception:
-                        snapshot_session.rollback()
+                        file_session.rollback()
                         raise
                     finally:
-                        snapshot_session.close()
+                        file_session.close()
 
-                cleanup_snapshot = await run_thread_drained(snapshot_for_cleanup)
-                # Every path this delete would remove must stay inside the curator's storage,
-                # checked before anything is deleted (pieces, index object, rows, files): one
-                # outside refuses the whole delete (403) and the paper stays as it was.
-                await asyncio.to_thread(
-                    _require_removable_paths, cleanup_snapshot, FilePath(get_pdf_storage_path()), str(user["sub"]),
-                )
+                # Keep the owned SQL row available for retry until files and index entries are gone.
+                def finish_delete() -> None:
+                    bound_session = open_paper_lock_session(lock_conn)
+                    cleanup_session = bound_session if bound_session is not None else SessionLocal()
+                    try:
+                        doc_to_delete = require_owned_document(
+                            cleanup_session, pg_doc.id, pg_doc.user_id, for_update=True,
+                        )
+                        cleanup_document_curation_dependencies(cleanup_session, doc_to_delete.id)
+                        cleanup_session.delete(doc_to_delete)
+                        cleanup_session.commit()
+                        logger.info(
+                            "Deleted PostgreSQL record (document_id_hash=%s)", hash_sentry_identifier(canonical_document_id),
+                        )
 
-                failure_step = "chunk_wipe"
-                failure_already_reported = False
+                        # Invalidate document metadata cache to prevent stale cache hits
+                        from src.lib.document_cache import invalidate_cache
+                        invalidate_cache(user["sub"], canonical_document_id)
+                    except Exception:
+                        cleanup_session.rollback()
+                        raise
+                    finally:
+                        cleanup_session.close()
 
-                with delete_drain_context() as drain_state:
-                    # Remove physical files while holding a row lock so an in-flight rename
-                    # cannot race with the final path snapshot. Keep the Weaviate parent object
-                    # and SQL row intact until every stored file is gone so duplicate checks
-                    # cannot treat the retained row as a phantom and strand files on disk.
-                    def remove_paper_files() -> None:
-                        bound_session = open_paper_lock_session(lock_conn)
-                        file_session = bound_session if bound_session is not None else SessionLocal()
-                        try:
-                            doc_to_clean = require_owned_document(
-                                file_session, pg_doc.id, pg_doc.user_id, for_update=True,
-                            )
-                            cleanup_values = _document_cleanup_snapshot(doc_to_clean)
-                            base_storage = FilePath(get_pdf_storage_path())
-                            user_sub = str(user["sub"])
-                            _require_removable_paths(cleanup_values, base_storage, user_sub)
-                            single_files: list[str] = []
-                            for file_values in cleanup_values["files"]:
-                                # A main stored PDF may take its paper folder with it (only
-                                # when the path proves the folder is this paper's). Every
-                                # other stored path, whatever the row's status, is removed
-                                # one file at a time by the one shared helper, which never
-                                # removes a folder and never follows a link (ALL-1460).
-                                if (file_values["role"] != FILE_ROLE_SUPPLEMENT
-                                        and file_values["display_mode"] != DISPLAY_MODE_TEXT):
-                                    _delete_user_document_directory_or_file_if_present(
-                                        base_storage=base_storage,
-                                        relative_path=file_values["file_path"],
-                                        user_sub=user_sub,
-                                        document_id=canonical_document_id,
-                                    )
-                                    single_files.extend(
-                                        path for path in _removed_paths(file_values)
-                                        if path != file_values["file_path"]
-                                    )
-                                else:
-                                    single_files.extend(_removed_paths(file_values))
-                            remove_stored_files(single_files, owner_subject=user_sub)
-                            _remove_empty_paper_folders(base_storage, user_sub, canonical_document_id)
-                        except Exception:
-                            file_session.rollback()
-                            raise
-                        finally:
-                            file_session.close()
-
-                    # Keep the owned SQL row available for retry until files and index entries are gone.
-                    def finish_delete() -> None:
-                        bound_session = open_paper_lock_session(lock_conn)
-                        cleanup_session = bound_session if bound_session is not None else SessionLocal()
-                        try:
-                            doc_to_delete = require_owned_document(
-                                cleanup_session, pg_doc.id, pg_doc.user_id, for_update=True,
-                            )
-                            cleanup_document_curation_dependencies(cleanup_session, doc_to_delete.id)
-                            cleanup_session.delete(doc_to_delete)
-                            cleanup_session.commit()
-                            logger.info('Deleted PostgreSQL record for %s', canonical_document_id)
-
-                            # Invalidate document metadata cache to prevent stale cache hits
-                            from src.lib.document_cache import invalidate_cache
-                            invalidate_cache(user["sub"], canonical_document_id)
-                        except Exception:
-                            cleanup_session.rollback()
-                            raise
-                        finally:
-                            cleanup_session.close()
-
-                    def _report_ordinary_delete_cleanup_failure(step: str, exc: Exception) -> None:
-                        nonlocal failure_already_reported
-                        exc_type = type(exc).__name__
-                        document_id_hash = hash_sentry_identifier(canonical_document_id)
+                async def complete_delete() -> OperationResult:
+                    nonlocal failure_step, failure_already_reported
+                    # Always run the tenant-scoped chunk wipe, even when the parent index object
+                    # is already absent, so a retry clears any stray chunks before files and SQL.
+                    # ``delete_paper_chunks`` flips ``drain_state.started`` via
+                    # ``mark_destructive_delete_started()`` immediately upon submitting its
+                    # executor worker (after its pre-submission cancellation checkpoint).
+                    # Preflight checks above (including ending a waiting supplement stage)
+                    # remain cancellable before the wipe starts.
+                    failure_step = "chunk_wipe"
+                    chunk_result = await delete_paper_chunks(user["sub"], canonical_document_id)
+                    if not chunk_result.get("success"):
+                        # The index helper owns both rejected and incomplete wipes.
                         failure_already_reported = True
-                        sanitized = sanitized_runtime_error("Paper delete cleanup failed")
-                        try:
-                            report_runtime_exception(
-                                sanitized,
-                                component="documents",
-                                operation="paper_delete_cleanup_failed",
-                                context={
-                                    "document_id_hash": document_id_hash,
-                                    "step": step,
-                                    "exception_type": exc_type,
-                                },
-                                fingerprint=["paper_delete_cleanup_failed", step, exc_type],
-                                include_request=False,
-                            )
-                        except Exception:
-                            logger.warning(
-                                "Failed to report paper delete cleanup failure",
-                                extra={"sentry_skip_event": True},
-                            )
-                        logger.warning(
-                            "Paper delete cleanup failed step=%s document_id_hash=%s exception_type=%s",
-                            step,
-                            document_id_hash,
-                            exc_type,
-                            extra={"sentry_skip_event": True},
+                        raise HTTPException(
+                            status_code=500,
+                            detail=PAPER_DELETE_FAILURE_DETAIL,
                         )
 
-                    async def complete_delete() -> OperationResult:
-                        nonlocal failure_step, failure_already_reported
-                        # Always run the tenant-scoped chunk wipe, even when the parent index object
-                        # is already absent, so a retry clears any stray chunks before files and SQL.
-                        # ``delete_paper_chunks`` flips ``drain_state.started`` via
-                        # ``mark_destructive_delete_started()`` immediately upon submitting its
-                        # executor worker (after its pre-submission cancellation checkpoint).
-                        # Preflight checks above (including ending a waiting supplement stage)
-                        # remain cancellable before the wipe starts.
-                        failure_step = "chunk_wipe"
-                        chunk_result = await delete_paper_chunks(user["sub"], canonical_document_id)
-                        if not chunk_result.get("success"):
-                            if "chunks_failed" in chunk_result:
-                                # ``_build_chunk_wipe_result`` already emitted
-                                # ``paper_delete_chunk_wipe_incomplete``; avoid double capture.
-                                failure_already_reported = True
-                            raise HTTPException(
-                                status_code=500,
-                                detail=chunk_result.get("message", "Failed to delete document"),
-                            )
-
-                        failure_step = "stored_files"
-                        try:
-                            await run_thread_drained(
-                                remove_paper_files,
-                                cancellable_before_start=False,
-                            )
-                        except (HTTPException, PoolTimeoutError):
+                    failure_step = "stored_files"
+                    try:
+                        await run_thread_drained(
+                            remove_paper_files,
+                            cancellable_before_start=False,
+                        )
+                    except (HTTPException, PoolTimeoutError):
+                        raise
+                    except Exception as file_error:
+                        if is_cancelled_delete_drain():
                             raise
-                        except Exception as file_error:
-                            if is_cancelled_delete_drain():
-                                raise
-                            _report_ordinary_delete_cleanup_failure("stored_files", file_error)
+                        failure_already_reported = True
+                        report_delete_failure(
+                            "paper_delete_cleanup_failed", "Paper delete cleanup failed", file_error, step="stored_files",
+                        )
+                        raise HTTPException(
+                            status_code=500,
+                            detail=PAPER_DELETE_FAILURE_DETAIL,
+                        ) from None
+
+                    if not document_missing_in_weaviate:
+                        failure_step = "parent_object"
+                        parent_result = await delete_paper_object(
+                            user["sub"], canonical_document_id, allow_missing=True,
+                        )
+                        if not parent_result.get("success"):
+                            failure_already_reported = True
                             raise HTTPException(
                                 status_code=500,
-                                detail="Failed to delete document",
-                            ) from None
-
-                        if not document_missing_in_weaviate:
-                            failure_step = "parent_object"
-                            parent_result = await delete_paper_object(
-                                user["sub"], canonical_document_id, allow_missing=True,
+                                detail=PAPER_DELETE_FAILURE_DETAIL,
                             )
-                            if not parent_result.get("success"):
-                                raise HTTPException(
-                                    status_code=500,
-                                    detail=parent_result.get("message", "Failed to delete document"),
-                                )
 
-                        failure_step = "sql_cleanup"
-                        try:
-                            await run_thread_drained(
-                                finish_delete,
-                                cancellable_before_start=False,
-                            )
-                        except (HTTPException, PoolTimeoutError):
+                    failure_step = "sql_cleanup"
+                    try:
+                        await run_thread_drained(
+                            finish_delete,
+                            cancellable_before_start=False,
+                        )
+                    except (HTTPException, PoolTimeoutError):
+                        raise
+                    except Exception as db_error:
+                        if is_cancelled_delete_drain():
                             raise
-                        except Exception as db_error:
-                            if is_cancelled_delete_drain():
-                                raise
-                            _report_ordinary_delete_cleanup_failure("sql_cleanup", db_error)
-                            raise HTTPException(
-                                status_code=500,
-                                detail="Failed to delete document",
-                            ) from None
-
-                        return OperationResult(
-                            success=True,
-                            message=f"Document {canonical_document_id} and {chunk_result['chunks_deleted']} chunks deleted successfully",
-                            operation="delete_document",
-                            document_id=canonical_document_id,
+                        failure_already_reported = True
+                        report_delete_failure(
+                            "paper_delete_cleanup_failed", "Paper delete cleanup failed", db_error, step="sql_cleanup",
                         )
+                        raise HTTPException(
+                            status_code=500,
+                            detail=PAPER_DELETE_FAILURE_DETAIL,
+                        ) from None
 
-                    def _mark_delete_cancelled() -> None:
-                        drain_state.cancelled = True
-
-                    def _report_cancelled_delete_failure(exc: Exception) -> None:
-                        exc_type = type(exc).__name__
-                        document_id_hash = hash_sentry_identifier(canonical_document_id)
-                        logger.warning(
-                            "Paper delete stopped with %s at %s while draining after cancellation (document_id_hash=%s)",
-                            exc_type,
-                            failure_step,
-                            document_id_hash,
-                            extra={"sentry_skip_event": True},
-                        )
-                        if failure_already_reported:
-                            return
-                        sanitized = sanitized_runtime_error("Paper delete failed while draining after cancellation")
-                        report_runtime_exception(
-                            sanitized,
-                            component="documents",
-                            operation="paper_delete_cancelled_drain_failed",
-                            context={
-                                "document_id_hash": document_id_hash,
-                                "step": failure_step,
-                                "exception_type": exc_type,
-                            },
-                            fingerprint=["paper_delete_cancelled_drain_failed", failure_step, exc_type],
-                            include_request=False,
-                        )
-
-                    # Once the first destructive write is submitted, keep ownership under the paper
-                    # lock through completion or a recorded failure before delivering cancellation.
-                    return await drain_shielded(
-                        complete_delete(),
-                        started=lambda: drain_state.started,
-                        on_cancel=_mark_delete_cancelled,
-                        on_cancelled_error=_report_cancelled_delete_failure,
+                    return OperationResult(
+                        success=True,
+                        message=f"Document {canonical_document_id} and {chunk_result['chunks_deleted']} chunks deleted successfully",
+                        operation="delete_document",
+                        document_id=canonical_document_id,
                     )
 
-            except (HTTPException, PoolTimeoutError):
-                raise
-            except Exception as e:
-                raise_sanitized_http_exception(
-                    logger,
-                    status_code=500,
-                    detail="Failed to delete document",
-                    log_message=f"Error deleting document {canonical_document_id}",
-                    exc=e,
+                def _mark_delete_cancelled() -> None:
+                    drain_state.cancelled = True
+
+                def _report_cancelled_delete_failure(exc: Exception) -> None:
+                    exc_type = type(exc).__name__
+                    document_id_hash = hash_sentry_identifier(canonical_document_id)
+                    logger.warning(
+                        "Paper delete stopped with %s at %s while draining after cancellation (document_id_hash=%s)",
+                        exc_type,
+                        failure_step,
+                        document_id_hash,
+                        extra={"sentry_skip_event": True},
+                    )
+                    if failure_already_reported:
+                        return
+                    sanitized = sanitized_runtime_error("Paper delete failed while draining after cancellation")
+                    report_runtime_exception(
+                        sanitized,
+                        component="documents",
+                        operation="paper_delete_cancelled_drain_failed",
+                        context={
+                            "document_id_hash": document_id_hash,
+                            "step": failure_step,
+                            "exception_type": exc_type,
+                        },
+                        fingerprint=["paper_delete_cancelled_drain_failed", failure_step, exc_type],
+                        include_request=False,
+                    )
+
+                # Once the first destructive write is submitted, keep ownership under the paper
+                # lock through completion or a recorded failure before delivering cancellation.
+                return await drain_shielded(
+                    complete_delete(),
+                    started=lambda: drain_state.started,
+                    on_cancel=_mark_delete_cancelled,
+                    on_cancelled_error=_report_cancelled_delete_failure,
                 )
+    except HTTPException:
+        raise
     except PaperOperationInProgress:
         raise HTTPException(
             status_code=409,
             detail="Another operation on this paper is in progress; try again in a moment.",
         ) from None
-    except PoolTimeoutError:
-        logger.warning("Paper delete refused: no database connection free", extra={"document_id": canonical_document_id})
+    except PoolTimeoutError as exc:
+        report_delete_failure(
+            "paper_delete_db_pool_exhausted", "Paper delete refused: no database connection free", exc,
+        )
         raise HTTPException(
             status_code=503,
             detail="The server is busy right now; try deleting the paper again in a moment.",
         ) from None
+    except Exception as exc:
+        report_delete_failure("paper_delete_failed", "Paper delete failed", exc)
+        raise HTTPException(status_code=500, detail=PAPER_DELETE_FAILURE_DETAIL) from None
 
 
 @router.post("/documents/upload", response_model=DocumentResponse, status_code=201)

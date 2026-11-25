@@ -76,7 +76,7 @@ def _event_loop_with_sync_executor():
 
 def _connection_with_client(client):
     @contextmanager
-    def _session():
+    def _session(*, caller_reports_failure=False):
         yield client
 
     connection = MagicMock()
@@ -417,7 +417,7 @@ async def test_delete_document_preserves_owners_until_chunk_wipe_completes(
     pdf_collection = MagicMock()
     pdf_collection.data.delete_by_id.return_value = True
     client = MagicMock()
-    monkeypatch.setattr(documents, "get_connection", lambda: _connection_with_client(client))
+    monkeypatch.setattr(documents, "get_connection", lambda *, caller_reports_failure: _connection_with_client(client))
     collections = MagicMock(return_value=(chunk_collection, pdf_collection))
     monkeypatch.setattr(documents, "get_user_collections", collections)
     db = MagicMock()
@@ -477,7 +477,7 @@ async def test_delete_document_without_chunks_keeps_success_when_sql_unavailable
     chunks, papers = MagicMock(), MagicMock()
     chunks.data.delete_many.return_value = SimpleNamespace(successful=0, matches=0, failed=0)
     papers.data.delete_by_id.return_value = True
-    monkeypatch.setattr(documents, "get_connection", lambda: _connection_with_client(MagicMock()))
+    monkeypatch.setattr(documents, "get_connection", lambda *, caller_reports_failure: _connection_with_client(MagicMock()))
     monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
     monkeypatch.setattr(documents, "get_db", MagicMock(side_effect=RuntimeError("db unavailable")))
 
@@ -494,7 +494,7 @@ async def test_delete_document_cleans_sql_when_index_object_is_already_absent(mo
     chunks, papers = MagicMock(), MagicMock()
     chunks.data.delete_many.return_value = SimpleNamespace(successful=0, matches=0, failed=0)
     papers.data.delete_by_id.return_value = False
-    monkeypatch.setattr(documents, "get_connection", lambda: _connection_with_client(MagicMock()))
+    monkeypatch.setattr(documents, "get_connection", lambda *, caller_reports_failure: _connection_with_client(MagicMock()))
     monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
     delete_sql_row = MagicMock(return_value=True)
     monkeypatch.setattr(documents, "_delete_sql_row", delete_sql_row)
@@ -510,7 +510,7 @@ async def test_delete_document_cleans_sql_when_index_object_is_already_absent(mo
 async def test_delete_paper_chunks_wipes_tenant_chunks_without_deleting_parent(monkeypatch):
     chunks, papers = MagicMock(), MagicMock()
     chunks.data.delete_many.return_value = SimpleNamespace(successful=2, matches=2, failed=0)
-    monkeypatch.setattr(documents, "get_connection", lambda: _connection_with_client(MagicMock()))
+    monkeypatch.setattr(documents, "get_connection", lambda *, caller_reports_failure: _connection_with_client(MagicMock()))
     monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
 
     result = await documents.delete_paper_chunks("user-1", "doc-1")
@@ -529,7 +529,7 @@ async def test_delete_paper_chunks_wipes_tenant_chunks_without_deleting_parent(m
 async def test_delete_paper_chunks_reports_incomplete_wipe(monkeypatch):
     chunks, papers = MagicMock(), MagicMock()
     chunks.data.delete_many.return_value = SimpleNamespace(successful=1, matches=2, failed=1)
-    monkeypatch.setattr(documents, "get_connection", lambda: _connection_with_client(MagicMock()))
+    monkeypatch.setattr(documents, "get_connection", lambda *, caller_reports_failure: _connection_with_client(MagicMock()))
     monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
     report = MagicMock()
     monkeypatch.setattr(documents.runtime, "report_runtime_exception", report)
@@ -556,7 +556,7 @@ async def test_delete_paper_object_respects_allow_missing(
 ):
     chunks, papers = MagicMock(), MagicMock()
     papers.data.delete_by_id.return_value = deleted
-    monkeypatch.setattr(documents, "get_connection", lambda: _connection_with_client(MagicMock()))
+    monkeypatch.setattr(documents, "get_connection", lambda *, caller_reports_failure: _connection_with_client(MagicMock()))
     monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
 
     result = await documents.delete_paper_object("user-1", "doc-1", allow_missing=allow_missing)
@@ -568,33 +568,67 @@ async def test_delete_paper_object_respects_allow_missing(
 
 
 @pytest.mark.asyncio
-async def test_delete_paper_object_returns_error_on_exception(monkeypatch):
+@pytest.mark.parametrize(("helper", "step"), [
+    ("delete_paper_chunks", "chunk_wipe"),
+    ("delete_paper_object", "parent_object"),
+    ("delete_document", "search_entries"),
+])
+@pytest.mark.parametrize("failure_site", ["connect", "session", "worker", "reporter"])
+async def test_index_delete_failure_has_one_sanitized_owner(
+    monkeypatch, caplog, helper, step, failure_site,
+):
+    from src.lib.observability.sentry import hash_sentry_identifier
+
+    doc_id = "dddddddd-1111-2222-3333-444444444444"
+    private = "fake-private-index-detail"
+    exc = RuntimeError(f"{doc_id} {private}")
     chunks, papers = MagicMock(), MagicMock()
-    papers.data.delete_by_id.side_effect = RuntimeError("weaviate unavailable")
-    monkeypatch.setattr(documents, "get_connection", lambda: _connection_with_client(MagicMock()))
-    monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
-
-    result = await documents.delete_paper_object("user-1", "doc-1", allow_missing=True)
-
-    assert result["success"] is False
-    assert result["deleted"] is False
-    assert result["error"]["code"] == "DELETE_FAILED"
-
-
-@pytest.mark.asyncio
-async def test_delete_document_failure_returns_error_payload():
-    chunk_collection = MagicMock()
-    chunk_collection.data.delete_many.side_effect = RuntimeError("delete failed")
-    pdf_collection = MagicMock()
+    chunks.data.delete_many.side_effect = exc
+    papers.data.delete_by_id.side_effect = exc
     connection = _connection_with_client(MagicMock())
+    get_connection = MagicMock(return_value=connection)
+    if failure_site == "connect":
+        get_connection.side_effect = exc
+    elif failure_site == "session":
+        connection.session.return_value.__enter__.side_effect = exc
+        connection.session.side_effect = None
+    report = MagicMock(side_effect=RuntimeError(private) if failure_site == "reporter" else None)
+    monkeypatch.setattr(documents, "get_connection", get_connection)
+    monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
+    monkeypatch.setattr(documents.runtime, "report_runtime_exception", report)
+    sql = MagicMock()
+    monkeypatch.setattr(documents, "_delete_sql_row", sql)
 
-    with patch("src.lib.weaviate_client.documents.get_connection", return_value=connection), \
-         patch("src.lib.weaviate_client.documents.get_user_collections", return_value=(chunk_collection, pdf_collection)), \
-         patch("src.lib.weaviate_client.documents.asyncio.get_event_loop", return_value=_event_loop_with_sync_executor()):
-        result = await documents.delete_document("user-1", "doc-1")
+    result = await getattr(documents, helper)("fake-private-curator", doc_id)
 
     assert result["success"] is False
     assert result["error"]["code"] == "DELETE_FAILED"
+    assert result["message"] == "The paper could not be deleted. Please try again."
+    assert private not in repr(result)
+    if step == "parent_object":
+        assert result["deleted"] is False
+    else:
+        assert result["chunks_deleted"] == 0
+    sql.assert_not_called()
+    get_connection.assert_called_once_with(caller_reports_failure=True)
+    if failure_site != "connect":
+        connection.session.assert_called_once_with(caller_reports_failure=True)
+    report.assert_called_once()
+    (error,) = report.call_args.args
+    assert error.__context__ is None and error.__cause__ is None
+    assert report.call_args.kwargs == {
+        "component": "weaviate_client",
+        "operation": "paper_delete_index_failed",
+        "context": {
+            "document_id_hash": hash_sentry_identifier(doc_id), "step": step, "exception_type": "RuntimeError",
+        },
+        "fingerprint": ["paper_delete_index_failed", step, "RuntimeError"],
+        "include_request": False,
+    }
+    assert caplog.records and all(record.sentry_skip_event for record in caplog.records)
+    for sensitive in (doc_id, private, "fake-private-curator"):
+        assert sensitive not in repr(report.call_args)
+        assert sensitive not in repr([vars(record) for record in caplog.records])
 
 
 @pytest.mark.asyncio
@@ -607,7 +641,8 @@ async def test_delete_document_cancel_during_chunk_wipe_drains_index_and_sql(mon
     session_open = False
 
     @contextmanager
-    def _tracked_session():
+    def _tracked_session(*, caller_reports_failure):
+        assert caller_reports_failure is True
         nonlocal session_open
         session_open = True
         try:
@@ -640,7 +675,7 @@ async def test_delete_document_cancel_during_chunk_wipe_drains_index_and_sql(mon
     chunks, papers = MagicMock(), MagicMock()
     chunks.data.delete_many.side_effect = _delete_many
     papers.data.delete_by_id.side_effect = _delete_by_id
-    monkeypatch.setattr(documents, "get_connection", lambda: connection)
+    monkeypatch.setattr(documents, "get_connection", lambda *, caller_reports_failure: connection)
     monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
     monkeypatch.setattr(documents, "_delete_sql_row", _delete_sql)
 
@@ -681,7 +716,7 @@ async def test_delete_document_cancel_during_incomplete_chunk_wipe_retains_owner
 
     chunks, papers = MagicMock(), MagicMock()
     chunks.data.delete_many.side_effect = _delete_many
-    monkeypatch.setattr(documents, "get_connection", lambda: _connection_with_client(MagicMock()))
+    monkeypatch.setattr(documents, "get_connection", lambda *, caller_reports_failure: _connection_with_client(MagicMock()))
     monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
     delete_sql_row = MagicMock()
     monkeypatch.setattr(documents, "_delete_sql_row", delete_sql_row)
@@ -713,7 +748,8 @@ async def test_delete_paper_chunks_cancel_drains_worker_before_closing_session(m
     wipe_finished_while_open = False
 
     @contextmanager
-    def _tracked_session():
+    def _tracked_session(*, caller_reports_failure):
+        assert caller_reports_failure is True
         nonlocal session_open
         session_open = True
         try:
@@ -733,7 +769,7 @@ async def test_delete_paper_chunks_cancel_drains_worker_before_closing_session(m
 
     chunks, papers = MagicMock(), MagicMock()
     chunks.data.delete_many.side_effect = _delete_many
-    monkeypatch.setattr(documents, "get_connection", lambda: connection)
+    monkeypatch.setattr(documents, "get_connection", lambda *, caller_reports_failure: connection)
     monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
 
     task = asyncio.create_task(documents.delete_paper_chunks("user-1", "doc-1"))
@@ -762,7 +798,7 @@ async def test_delete_helpers_cancelled_before_submission_do_not_start_destructi
     monkeypatch, helper_name,
 ):
     chunks, papers = MagicMock(), MagicMock()
-    monkeypatch.setattr(documents, "get_connection", lambda: _connection_with_client(MagicMock()))
+    monkeypatch.setattr(documents, "get_connection", lambda *, caller_reports_failure: _connection_with_client(MagicMock()))
     monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
     delete_sql_row = MagicMock()
     monkeypatch.setattr(documents, "_delete_sql_row", delete_sql_row)
@@ -945,7 +981,7 @@ async def test_delete_document_sanitizes_postgres_cleanup_warning(monkeypatch, c
     chunks, papers = MagicMock(), MagicMock()
     chunks.data.delete_many.return_value = SimpleNamespace(successful=0, matches=0, failed=0)
     papers.data.delete_by_id.return_value = True
-    monkeypatch.setattr(documents, "get_connection", lambda: _connection_with_client(MagicMock()))
+    monkeypatch.setattr(documents, "get_connection", lambda *, caller_reports_failure: _connection_with_client(MagicMock()))
     monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
     secret_sql_detail = "private-sql-param-value-for-curator"
     monkeypatch.setattr(

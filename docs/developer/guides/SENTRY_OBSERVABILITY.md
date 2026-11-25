@@ -840,24 +840,43 @@ uses the usual `paper_lock_release_failed` operation. Both warnings omit HTTP
 request metadata (`include_request=False`), carry only the exception type as
 failure detail, and preserve the request's cancellation.
 
-When a paper delete (`DELETE /weaviate/documents/{document_id}`) is cancelled
-after destructive cleanup starts, the delete drains under `paper_operation_lock`
-through completion or a recorded failure before releasing the lock and
-delivering `asyncio.CancelledError`. An incomplete chunk wipe stays owned solely
-by `weaviate_client` / `paper_delete_chunk_wipe_incomplete` with
-`include_request=False` and no second capture. Any other failure encountered
-while draining a cancelled paper delete (such as a chunk or parent worker error,
-Weaviate session reconnect failure whose connection delegates failure reporting
-via `caller_reports_failure=True`, stored-file removal error, Weaviate parent
-delete failure, or database pool timeout) suppresses raw worker log-event
-promotion and reports once under component `documents` and operation
-`paper_delete_cancelled_drain_failed` with `include_request=False`, a fixed,
-chain-free error, a low-cardinality fingerprint of
-`(operation, step, exception_type)`, and context holding only
-`document_id_hash`, `step`, and `exception_type`. Companion warnings skip
-log-event promotion (`sentry_skip_event=True`), omit raw document IDs and raw
-exception details, and never prevent the original cancellation from propagating
-even if reporting fails.
+When a paper delete (`DELETE /weaviate/documents/{document_id}`) exhausts the
+database connection pool, `documents` reports `paper_delete_db_pool_exhausted`
+and returns HTTP 503. The context contains only `document_id_hash` and
+`exception_type`. The fingerprint groups by operation and exception type.
+Ordinary contention for the paper lock returns HTTP 409 without an event.
+
+The Weaviate delete helpers own `weaviate_client` / `paper_delete_index_failed`
+for exceptions during index deletion, including initial connection and session
+reconnect failures. Both connection boundaries delegate reporting with
+`caller_reports_failure=True`. The event groups by operation, step and
+exception type. Its context contains only `document_id_hash`, `step`
+(`chunk_wipe`, `parent_object` or `search_entries` for the combined helper),
+and `exception_type`. An incomplete bulk wipe retains its separate
+`paper_delete_chunk_wipe_incomplete` event with the deleted, matched and
+failed counts. The HTTP endpoint returns “The paper could not be deleted.
+Please try again.” for a failed deletion with status 500. Its catch-all handler
+reports `documents` / `paper_delete_failed` with the same context and grouping
+as the pool-exhaustion handler. It covers ownership verification, lock acquisition
+and the tenant-scoped parent status lookup before cleanup. This lookup reads
+only the indexed processing status and delegates connection and query failures
+to the endpoint. An absent parent permits the existing chunk cleanup on retry.
+Missing-parent and stale-status warnings use the document hash.
+
+These exception reports use fixed, chain-free errors and `include_request=False`.
+Their companion warnings carry `sentry_skip_event=True` and omit raw IDs and
+exception text. A reporter failure preserves the HTTP response or the helper's
+failed result.
+
+After destructive cleanup starts, a cancelled delete drains under
+`paper_operation_lock` before delivering `asyncio.CancelledError`. The index
+helpers retain ownership of index failures during the drain. Other drain
+failures, including stored-file removal and database pool timeouts, report
+once under `documents` / `paper_delete_cancelled_drain_failed`. The fixed,
+chain-free report omits the request, groups by operation, step and exception
+type, and includes only `document_id_hash`, `step` and `exception_type`.
+The companion warning skips event promotion. Cancellation propagates even if
+reporting fails.
 
 When an ordinary (non-cancelled) HTTP paper delete fails during stored-file
 removal or PostgreSQL record deletion, it avoids raw `logger.error` promotion
