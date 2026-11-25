@@ -390,7 +390,7 @@ def _create_get_prompt_handler():
 
     Uses the PromptCatalogService to fetch agent prompts.
     """
-    from src.lib.agent_studio.catalog_service import get_prompt_catalog
+    from src.lib.agent_studio import catalog_service
 
     def handler(
         agent_id: str,
@@ -420,7 +420,7 @@ def _create_get_prompt_handler():
         guidance = _custom_agent_catalog_guidance(agent_id, section="prompt_manifest", revision_id=revision_id)
         if guidance is not None:
             return guidance
-        catalog = get_prompt_catalog()
+        catalog = catalog_service.get_prompt_catalog()
         active_groups = _ACTIVE_DIAGNOSTIC_GROUP_IDS.get()
         agent = (
             catalog.get_agent(agent_id)

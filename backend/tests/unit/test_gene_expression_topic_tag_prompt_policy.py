@@ -193,6 +193,7 @@ def test_get_prompt_diagnostic_hides_topic_tag_from_non_wb_and_allows_wb(monkeyp
     from src.lib.prompts.assembly import PromptLayer, PromptLayerBundle
 
     try:
+        diagnostic_tools.reset_registry()
         definitions = _load_shipped_agents(monkeypatch)
         registry = build_agent_registry()
         monkeypatch.setattr(catalog_service, "AGENT_REGISTRY", registry)
