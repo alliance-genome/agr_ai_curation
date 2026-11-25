@@ -134,18 +134,31 @@ def _validate_hashed_lockfile(
     pkg_pins: dict[str, str] = {}
     for entry in logical_entries:
         tokens = entry.split()
-        spec_token = tokens[0]
-        hash_tokens = tokens[1:]
+        option_index = next(
+            (idx for idx, token in enumerate(tokens) if token.startswith("-")),
+            len(tokens),
+        )
+        spec_text = " ".join(tokens[:option_index]).strip()
+        hash_tokens = tokens[option_index:]
+        if not spec_text:
+            raise PackageEnvironmentBootstrapError(
+                package_id,
+                (
+                    f"Invalid requirement '{entry}' in '{requirements_lock_file}' "
+                    f"for package '{package_id}'"
+                ),
+                details={"step": "validate_lockfile", "entry": entry},
+            )
         try:
-            req = Requirement(spec_token)
+            req = Requirement(spec_text)
         except InvalidRequirement as exc:
             raise PackageEnvironmentBootstrapError(
                 package_id,
                 (
-                    f"Invalid requirement '{spec_token}' in '{requirements_lock_file}' "
+                    f"Invalid requirement '{spec_text}' in '{requirements_lock_file}' "
                     f"for package '{package_id}': {exc}"
                 ),
-                details={"step": "validate_lockfile", "entry": spec_token},
+                details={"step": "validate_lockfile", "entry": spec_text},
             ) from exc
 
         specifiers = list(req.specifier)
@@ -154,9 +167,9 @@ def _validate_hashed_lockfile(
                 package_id,
                 (
                     f"Package lockfile '{requirements_lock_file}' for '{package_id}' "
-                    f"must use exact '==' version pins only; got '{spec_token}'"
+                    f"must use exact '==' version pins only; got '{spec_text}'"
                 ),
-                details={"step": "validate_lockfile", "entry": spec_token},
+                details={"step": "validate_lockfile", "entry": spec_text},
             )
         if not hash_tokens or not all(
             _SHA256_HASH_TOKEN_PATTERN.fullmatch(token) for token in hash_tokens
@@ -165,10 +178,12 @@ def _validate_hashed_lockfile(
                 package_id,
                 (
                     f"Package lockfile '{requirements_lock_file}' for '{package_id}' "
-                    f"must include valid --hash=sha256:... entries for '{spec_token}'"
+                    f"must include valid --hash=sha256:... entries for '{spec_text}'"
                 ),
-                details={"step": "validate_lockfile", "entry": spec_token},
+                details={"step": "validate_lockfile", "entry": spec_text},
             )
+        if req.marker is not None and not req.marker.evaluate():
+            continue
         canonical = canonicalize_name(req.name)
         if canonical in pkg_pins:
             raise PackageEnvironmentBootstrapError(
@@ -189,6 +204,8 @@ def _validate_hashed_lockfile(
         try:
             req = Requirement(line)
         except InvalidRequirement:
+            continue
+        if req.marker is not None and not req.marker.evaluate():
             continue
         specifiers = list(req.specifier)
         if len(specifiers) == 1 and specifiers[0].operator == "==":
@@ -691,6 +708,24 @@ class PackageEnvironmentManager:
                 },
             )
 
+        bin_dir = python_executable.parent
+        resolved_bin_dir = bin_dir.resolve(strict=False)
+        if bin_dir.is_symlink() or not resolved_bin_dir.is_relative_to(venv_dir):
+            raise PackageEnvironmentBootstrapError(
+                package.package_id,
+                (
+                    f"Prebuilt package environment interpreter bin directory for "
+                    f"'{package.package_id}' escapes virtual environment '{venv_dir}': "
+                    f"{bin_dir}"
+                ),
+                details={
+                    "mode": PACKAGE_ENV_BOOTSTRAP_MODE_PREBUILT,
+                    "prebuilt_env_dir": str(env_dir),
+                    "venv_dir": str(venv_dir),
+                    "bin_dir": str(bin_dir),
+                },
+            )
+
         if not python_executable.is_file() or not os.access(python_executable, os.X_OK):
             raise PackageEnvironmentBootstrapError(
                 package.package_id,
@@ -704,6 +739,43 @@ class PackageEnvironmentManager:
                     "prebuilt_env_dir": str(env_dir),
                     "python_executable": str(python_executable),
                     "expected_fingerprint": resolved.fingerprint,
+                },
+            )
+
+        try:
+            resolved_python = python_executable.resolve(strict=True)
+        except OSError as exc:
+            raise PackageEnvironmentBootstrapError(
+                package.package_id,
+                (
+                    f"Prebuilt package environment interpreter could not be resolved for "
+                    f"package '{package.package_id}': {python_executable}"
+                ),
+                details={
+                    "mode": PACKAGE_ENV_BOOTSTRAP_MODE_PREBUILT,
+                    "prebuilt_env_dir": str(env_dir),
+                    "python_executable": str(python_executable),
+                },
+            ) from exc
+
+        if (
+            not resolved_python.is_relative_to(venv_dir)
+            and resolved_python not in self._allowed_base_pythons()
+        ):
+            raise PackageEnvironmentBootstrapError(
+                package.package_id,
+                (
+                    f"Prebuilt package environment interpreter for package "
+                    f"'{package.package_id}' resolves outside virtual environment "
+                    f"'{venv_dir}' to unexpected executable '{resolved_python}': "
+                    f"{python_executable}"
+                ),
+                details={
+                    "mode": PACKAGE_ENV_BOOTSTRAP_MODE_PREBUILT,
+                    "prebuilt_env_dir": str(env_dir),
+                    "venv_dir": str(venv_dir),
+                    "python_executable": str(python_executable),
+                    "resolved_python": str(resolved_python),
                 },
             )
 
@@ -746,6 +818,21 @@ class PackageEnvironmentManager:
                     mode=PACKAGE_ENV_BOOTSTRAP_MODE_DYNAMIC,
                 )
 
+            has_declared_lock = (
+                resolved.requirements_lock_path is not None
+                and resolved.requirements_lock_text is not None
+                and package.manifest.requirements_lock_file is not None
+            )
+            if has_declared_lock:
+                _validate_hashed_lockfile(
+                    package_id=package.package_id,
+                    requirements_file=package.manifest.requirements_file,
+                    requirements_text=resolved.requirements_text,
+                    requirements_lock_file=package.manifest.requirements_lock_file,
+                    requirements_lock_text=resolved.requirements_lock_text,
+                    constraints_text=resolved.constraints_text,
+                )
+
             if venv_dir.exists():
                 shutil.rmtree(venv_dir)
             if metadata_path.exists():
@@ -755,8 +842,10 @@ class PackageEnvironmentManager:
                 package,
                 resolved,
                 venv_dir=venv_dir,
-                run_pip_check=False,
-                allowed_pth_files=None,
+                run_pip_check=has_declared_lock,
+                allowed_pth_files=(
+                    ALLOWED_PACKAGE_VENV_PTH_FILES if has_declared_lock else None
+                ),
             )
 
             metadata_payload = self._build_metadata_payload(
@@ -940,6 +1029,39 @@ class PackageEnvironmentManager:
         # Preserve the venv-local interpreter path. Resolving symlinks here can
         # collapse back to the base interpreter and defeat isolation.
         return (venv_dir / bin_dir / executable).expanduser()
+
+    def _allowed_base_pythons(self) -> frozenset[Path]:
+        """Return resolved host/base Python executables allowed as venv symlink targets."""
+        candidates: list[Path] = [self._host_python, Path(sys.executable)]
+        base_executable = getattr(sys, "_base_executable", None)
+        if base_executable:
+            candidates.append(Path(base_executable))
+        base_prefix = Path(sys.base_prefix)
+        if sys.platform.startswith("win"):
+            candidates.extend(
+                [
+                    base_prefix / "python.exe",
+                    base_prefix / "Scripts" / "python.exe",
+                ]
+            )
+        else:
+            version_name = f"python{sys.version_info.major}.{sys.version_info.minor}"
+            candidates.extend(
+                [
+                    base_prefix / "bin" / "python",
+                    base_prefix / "bin" / "python3",
+                    base_prefix / "bin" / version_name,
+                ]
+            )
+        allowed: set[Path] = set()
+        for candidate in candidates:
+            try:
+                resolved = candidate.expanduser().resolve(strict=True)
+            except OSError:
+                continue
+            if resolved.is_file():
+                allowed.add(resolved)
+        return frozenset(allowed)
 
     @contextmanager
     def _bootstrap_lock(self, state_dir: Path) -> Iterator[None]:

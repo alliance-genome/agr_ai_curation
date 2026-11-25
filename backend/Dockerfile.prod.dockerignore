@@ -13,7 +13,11 @@
 **/*.py[cod]
 **/.pytest_cache
 **/.env
-**/.env.*
+**/.env*
+**/*.env
 **/*.pem
 **/*.key
+**/*.ovpn
+**/*credentials*
+**/*secret*
 **/.git

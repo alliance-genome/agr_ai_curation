@@ -1667,6 +1667,110 @@ def test_production_image_ships_the_backend_lock_for_package_environments():
     assert "AGR_PREBUILT_PACKAGE_ENVS_DIR=/opt/package-envs" in runtime_stage
 
 
+def _dockerignore_is_ignored(rel_path: str, rules: list[tuple[bool, str]]) -> bool:
+    """Evaluate Dockerignore last-match-wins rules with ** glob support."""
+    import re
+
+    def _compile_pattern(pattern: str) -> re.Pattern[str]:
+        normalized = pattern.strip().lstrip("/")
+        parts: list[str] = []
+        idx = 0
+        while idx < len(normalized):
+            if normalized[idx : idx + 3] == "**/":
+                parts.append("(?:.*/)?")
+                idx += 3
+            elif normalized[idx : idx + 2] == "**":
+                parts.append(".*")
+                idx += 2
+            elif normalized[idx] == "*":
+                parts.append("[^/]*")
+                idx += 1
+            elif normalized[idx] == "?":
+                parts.append("[^/]")
+                idx += 1
+            elif normalized[idx] == "[":
+                end = normalized.find("]", idx + 1)
+                if end != -1:
+                    parts.append(normalized[idx : end + 1])
+                    idx = end + 1
+                else:
+                    parts.append(re.escape(normalized[idx]))
+                    idx += 1
+            else:
+                parts.append(re.escape(normalized[idx]))
+                idx += 1
+        body = "".join(parts)
+        return re.compile(f"^(?:{body})(?:/.*)?$")
+
+    ignored = False
+    for negated, pattern in rules:
+        if _compile_pattern(pattern).match(rel_path):
+            ignored = not negated
+    return ignored
+
+
+def test_production_dockerignore_excludes_nested_secrets_and_keeps_build_inputs():
+    dockerignore_path = BACKEND_ROOT / "Dockerfile.prod.dockerignore"
+    raw_lines = [
+        line.strip()
+        for line in dockerignore_path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    rules = [
+        (line.startswith("!"), line[1:] if line.startswith("!") else line)
+        for line in raw_lines
+    ]
+
+    for secret_path in (
+        ".env",
+        "packages/custom/.env",
+        "packages/custom/.env.local",
+        "packages/custom/.envrc",
+        "packages/custom/local.env",
+        "packages/custom/tls/client.pem",
+        "packages/custom/tls/private.key",
+        "packages/custom/vpn.ovpn",
+        "packages/custom/aws_credentials.json",
+        "packages/custom/api_secrets.yaml",
+        "packages/custom/my_secret.txt",
+        "packages/custom/.git/config",
+        "backend/src/.env",
+        "backend/src/tls/server.key",
+        "backend/src/credentials.json",
+        "frontend/src/App.tsx",
+    ):
+        assert _dockerignore_is_ignored(secret_path, rules), (
+            f"Expected {secret_path} to be excluded by backend/Dockerfile.prod.dockerignore"
+        )
+
+    for build_input in (
+        "backend/requirements.lock.txt",
+        "backend/requirements.txt",
+        "backend/main.py",
+        "backend/alembic.ini",
+        "backend/src/lib/packages/env_manager.py",
+        "packages/core/package.yaml",
+        "packages/alliance/package.yaml",
+        "packages/alliance/requirements/runtime.lock.txt",
+    ):
+        assert not _dockerignore_is_ignored(build_input, rules), (
+            f"Expected build input {build_input} to remain included"
+        )
+
+    for tree in (REPO_ROOT / "packages", BACKEND_ROOT / "src"):
+        for file_path in tree.rglob("*"):
+            if not file_path.is_file():
+                continue
+            if any(part in {"__pycache__", ".pytest_cache"} for part in file_path.parts):
+                continue
+            if file_path.suffix in {".pyc", ".pyo", ".pyd"}:
+                continue
+            rel = file_path.relative_to(REPO_ROOT).as_posix()
+            assert not _dockerignore_is_ignored(rel, rules), (
+                f"Tracked/build repo file unexpectedly excluded by dockerignore: {rel}"
+            )
+
+
 def _stage_locked_demo_package(
     packages_root: Path,
     *,
@@ -1878,6 +1982,73 @@ def test_prebuilt_mode_fails_loudly_without_download_fallback(
     assert not (tmp_path / "runtime-state-root" / "state" / "package_runner").exists()
 
 
+def test_prebuilt_mode_validates_interpreter_symlinks_and_bin_containment(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from src.lib.packages.env_manager import (
+        PACKAGE_ENV_BOOTSTRAP_MODE_PREBUILT,
+        PackageEnvironmentBootstrapError,
+    )
+
+    package = _stage_locked_demo_package(tmp_path / "runtime" / "packages")
+    constraints = tmp_path / "requirements.lock.txt"
+    constraints.write_text("demo-dependency==1.0.0\n", encoding="utf-8")
+    prebuilt_root = tmp_path / "opt" / "package-envs"
+
+    builder = PackageEnvironmentManager(
+        host_python=Path(sys.executable),
+        constraints_path=constraints,
+    )
+
+    def fake_build_run(command, *, package_id, step):
+        if step == "create_venv":
+            py = prebuilt_root / package_id / "venv" / "bin" / "python"
+            py.parent.mkdir(parents=True, exist_ok=True)
+            py.symlink_to(Path(sys.executable).resolve(strict=True))
+
+    monkeypatch.setattr(builder, "_run_command", fake_build_run)
+    builder.build_environment(
+        package,
+        target_dir=prebuilt_root / package.package_id,
+    )
+
+    monkeypatch.setenv("AGR_PACKAGE_ENV_BOOTSTRAP_MODE", "prebuilt")
+    monkeypatch.setenv("AGR_PREBUILT_PACKAGE_ENVS_DIR", str(prebuilt_root))
+    manager = PackageEnvironmentManager(constraints_path=constraints)
+
+    # 1. Standard venv symlink to the host/base Python passes and preserves venv-local path.
+    verified = manager.ensure_environment(package)
+    assert verified.mode == PACKAGE_ENV_BOOTSTRAP_MODE_PREBUILT
+    expected_local_python = prebuilt_root / "demo.runner" / "venv" / "bin" / "python"
+    assert verified.python_executable == expected_local_python
+
+    # 2. Symlink pointing to an arbitrary executable outside venv is rejected.
+    arbitrary_exec = tmp_path / "arbitrary_exec.sh"
+    arbitrary_exec.write_text("#!/bin/sh\necho unexpected\n", encoding="utf-8")
+    arbitrary_exec.chmod(0o755)
+    expected_local_python.unlink()
+    expected_local_python.symlink_to(arbitrary_exec)
+    with pytest.raises(
+        PackageEnvironmentBootstrapError,
+        match="resolves outside virtual environment",
+    ):
+        manager.ensure_environment(package)
+
+    # 3. Symlinked venv/bin directory escaping venv_dir is rejected.
+    outside_bin = tmp_path / "outside_bin"
+    outside_bin.mkdir()
+    outside_py = outside_bin / "python"
+    outside_py.symlink_to(Path(sys.executable).resolve(strict=True))
+    shutil.rmtree(prebuilt_root / "demo.runner" / "venv" / "bin")
+    (prebuilt_root / "demo.runner" / "venv" / "bin").symlink_to(outside_bin)
+    with pytest.raises(
+        PackageEnvironmentBootstrapError,
+        match="interpreter bin directory .* escapes virtual environment",
+    ):
+        manager.ensure_environment(package)
+
+
 def test_resolve_requirements_blocks_symlink_escapes_and_empty_declared_lock(
     monkeypatch,
     tmp_path: Path,
@@ -1994,6 +2165,18 @@ def test_build_environment_scans_pth_allowlist_before_running_pip_check(
             "demo-dependency==1.0.0\n",
             "must include valid --hash=sha256",
         ),
+        (
+            "requests>=2\n",
+            'requests==2.32.5;sys_platform=="win32" \\\n    --hash=sha256:' + ("a" * 64) + "\n",
+            "requests==2.32.5\n",
+            "missing direct requirement 'requests'",
+        ),
+        (
+            "requests>=2\n",
+            'requests==2.32.5 ; sys_platform == "win32" \\\n    --hash=sha256:' + ("a" * 64) + "\n",
+            "requests==2.32.5\n",
+            "missing direct requirement 'requests'",
+        ),
     ],
 )
 def test_build_environment_rejects_stale_or_invalid_custom_package_lockfile(
@@ -2044,7 +2227,8 @@ def test_dynamic_mode_uses_hashed_lockfile_and_fails_when_declared_lock_is_missi
 
     env = manager.ensure_environment(package)
     assert env.reused is False
-    install_cmd = commands[-1]
+    assert len(commands) == 3
+    install_cmd = commands[1]
     assert "--require-hashes" in install_cmd
     assert "--no-deps" in install_cmd
     assert "--no-build-isolation" in install_cmd
@@ -2052,6 +2236,7 @@ def test_dynamic_mode_uses_hashed_lockfile_and_fails_when_declared_lock_is_missi
         "-r",
         str(package.package_path / "requirements" / "runtime.lock.txt"),
     ]
+    assert commands[2][-3:] == ["-m", "pip", "check"]
 
     # Missing declared lockfile must fail loudly without falling back to runtime.txt.
     missing_lock_pkg = _stage_locked_demo_package(
@@ -2063,6 +2248,76 @@ def test_dynamic_mode_uses_hashed_lockfile_and_fails_when_declared_lock_is_missi
     with pytest.raises(PackageEnvironmentBootstrapError, match="Requirements lockfile not found"):
         manager.ensure_environment(missing_lock_pkg)
     assert commands == []
+
+
+def test_dynamic_mode_validates_lockfile_and_pth_allowlist_on_cache_miss(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from src.lib.packages.env_manager import PackageEnvironmentBootstrapError
+
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime"))
+    constraints = tmp_path / "requirements.lock.txt"
+    constraints.write_text("demo-dependency==1.0.0\n", encoding="utf-8")
+
+    # 1. Stale/drifting declared lockfile fails before creating a venv or invoking pip.
+    stale_pkg = _stage_locked_demo_package(
+        tmp_path / "packages-stale",
+        requirements_text="demo-dependency>=2.0\n",
+        lock_text="demo-dependency==1.0.0 \\\n    --hash=sha256:" + ("a" * 64) + "\n",
+        declare_lock=True,
+    )
+    manager, commands = _recording_manager(monkeypatch, constraints)
+    with pytest.raises(PackageEnvironmentBootstrapError, match="does not satisfy 'demo-dependency>=2.0'"):
+        manager.ensure_environment(stale_pkg)
+    assert commands == []
+
+    # 2. Active environment marker alongside inactive platform marker passes validation.
+    marker_pkg = _stage_locked_demo_package(
+        tmp_path / "packages-marker-ok",
+        requirements_text="demo-dependency>=1.0\n",
+        lock_text=(
+            'demo-dependency==0.9.0 ; sys_platform == "win32" \\\n'
+            "    --hash=sha256:" + ("b" * 64) + "\n"
+            'demo-dependency==1.0.0 ; sys_platform != "win32" \\\n'
+            "    --hash=sha256:" + ("a" * 64) + "\n"
+        ),
+        declare_lock=True,
+    )
+    env = manager.ensure_environment(marker_pkg)
+    assert env.reused is False
+    assert commands[-1][-3:] == ["-m", "pip", "check"]
+
+    # 3. Unknown .pth file installed during dynamic cache miss aborts BEFORE pip check.
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime-pth"))
+    pth_pkg = _stage_locked_demo_package(tmp_path / "packages-pth")
+    pth_manager = PackageEnvironmentManager(
+        host_python=Path(sys.executable),
+        constraints_path=constraints,
+    )
+    steps: list[str] = []
+
+    def fake_pth_run(command, *, package_id, step):
+        steps.append(step)
+        if step == "create_venv":
+            venv_dir = Path(command[-1])
+            py = venv_dir / "bin" / "python"
+            py.parent.mkdir(parents=True, exist_ok=True)
+            py.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            py.chmod(0o755)
+        elif step == "install_requirements":
+            venv_dir = Path(command[0]).parent.parent
+            site_pkgs = venv_dir / "lib" / "python3.11" / "site-packages"
+            site_pkgs.mkdir(parents=True, exist_ok=True)
+            (site_pkgs / "unexpected_dev.pth").write_text("import os\n", encoding="utf-8")
+        elif step == "verify_requirements":
+            raise AssertionError("pip check must not run when an unknown .pth file is present")
+
+    monkeypatch.setattr(pth_manager, "_run_command", fake_pth_run)
+    with pytest.raises(PackageEnvironmentBootstrapError, match="Unknown .pth file") as exc_info:
+        pth_manager.ensure_environment(pth_pkg)
+    assert exc_info.value.details["step"] == "verify_pth_whitelist"
+    assert steps == ["create_venv", "install_requirements"]
 
 
 def test_build_package_environments_cli_requires_hashed_lock_and_skips_non_tool_packages(

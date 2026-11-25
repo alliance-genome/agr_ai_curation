@@ -301,6 +301,7 @@ def test_bootstrap_package_environments_only_targets_tool_packages(monkeypatch, 
 
     class FakeEnvironment:
         reused = False
+        mode = "dynamic"
 
     class FakeManager:
         def ensure_environment(self, package: LoadedPackage):
@@ -418,6 +419,7 @@ def test_bootstrap_package_environments_marks_startup_sentinel(monkeypatch, tmp_
 
     class FakeEnvironment:
         reused = False
+        mode = "dynamic"
 
     class FakeManager:
         def ensure_environment(self, _package: LoadedPackage):

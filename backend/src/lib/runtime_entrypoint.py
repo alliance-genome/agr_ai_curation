@@ -243,20 +243,12 @@ def _bootstrap_package_environments(registry: PackageRegistry) -> None:
 
         environment = env_manager.ensure_environment(package)
         bootstrapped += 1
-        mode = getattr(environment, "mode", None)
-        if mode:
-            logger.info(
-                "Package environment ready for %s (reused=%s, mode=%s)",
-                package.package_id,
-                environment.reused,
-                mode,
-            )
-        else:
-            logger.info(
-                "Package environment ready for %s (reused=%s)",
-                package.package_id,
-                environment.reused,
-            )
+        logger.info(
+            "Package environment ready for %s (reused=%s, mode=%s)",
+            package.package_id,
+            environment.reused,
+            environment.mode,
+        )
 
     os.environ[PACKAGE_ENV_BOOTSTRAP_DONE_ENV_VAR] = "1"
     logger.info("Eager package environment bootstrap complete for %s package(s)", bootstrapped)
