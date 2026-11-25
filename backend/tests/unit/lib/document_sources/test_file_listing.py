@@ -111,7 +111,7 @@ def _limits(**overrides) -> FileCheckLimits:
 
 async def _listing(
     rows, *, groups=("WB",), payloads=None, store=None, licence_open=None, licence_name=None,
-    in_paper=(), limits=None, check_limit=20,
+    in_paper=(), limits=None, check_limit=20, caller_reports_download_outages=False,
 ):
     client = _Client(payloads or {})
     client.show_reference_payload = _abc_reference_record(
@@ -129,6 +129,7 @@ async def _listing(
         route=ListingRoute.PAPER if in_paper else ListingRoute.IDENTIFIER,
         provider_observations={},
         find_paper_in_library=None if in_paper else _not_in_library,
+        caller_reports_download_outages=caller_reports_download_outages,
     )
     return listing, client
 

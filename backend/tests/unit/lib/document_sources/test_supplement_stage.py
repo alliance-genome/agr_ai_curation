@@ -129,7 +129,7 @@ class _Paper:
         self.reused_listings = 0
         self.store = None
 
-    async def list_files(self, document_id, *, owner_user_id, provider, context):
+    async def list_files(self, document_id, *, owner_user_id, provider, context, caller_reports_download_outages):
         from tests.unit.lib.document_sources.test_file_listing import _Store
 
         self.listings += 1
@@ -143,11 +143,13 @@ class _Paper:
             licence_open=self.licence_open,
             licence_name=self.licence_name,
             in_paper=("10",),
+            caller_reports_download_outages=caller_reports_download_outages,
         )
         return listing
 
     async def list_files_from_artifacts(
-        self, document_id, *, owner_user_id, provider, context, reference, artifacts, check_unchecked=True,
+        self, document_id, *, owner_user_id, provider, context, reference, artifacts,
+        caller_reports_download_outages, check_unchecked=True,
     ):
         from src.lib.document_sources.file_listing import ListingRoute, list_reference_files
         from tests.unit.lib.document_sources.test_file_listing import _Store, _limits
@@ -171,6 +173,7 @@ class _Paper:
             find_paper_in_library=None,
             artifacts=artifacts,
             check_unchecked=check_unchecked,
+            caller_reports_download_outages=caller_reports_download_outages,
         )
 
 
@@ -890,7 +893,7 @@ async def test_a_stage_ended_by_a_delete_mid_listing_is_not_a_stage_failure(job,
     class _DeletedPaper:
         listings = 0
 
-        async def list_files(self, document_id, *, owner_user_id, provider, context):
+        async def list_files(self, document_id, *, owner_user_id, provider, context, caller_reports_download_outages):
             job.status = "cancelled"  # the delete ended the stage's job first
             from fastapi import HTTPException
 
@@ -997,6 +1000,17 @@ class _HttpAbc:
             else {}
         )
         self.pdf_md5 = {file_id: hashlib.md5(data).hexdigest() for file_id, data in self.pdf_bytes.items()}
+
+    def track_listing(self, list_files):
+        """Mark HTTP calls made inside the listing service, forwarding its full arguments."""
+        async def tracked(*args, **kwargs):
+            self.in_listing = True
+            try:
+                return await list_files(*args, **kwargs)
+            finally:
+                self.in_listing = False
+
+        return tracked
 
     def _rows(self):
         rows = [_abc_show_all_main_pdf(10, "WB")]
@@ -1193,27 +1207,6 @@ async def _one_supplement_wait(
             ),
         )
 
-    async def _list_files(document_id, *, owner_user_id, provider, context):
-        client.in_listing = True
-        try:
-            return await file_listing_service.list_files_for_paper(
-                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
-            )
-        finally:
-            client.in_listing = False
-
-    async def _list_files_from_artifacts(
-        document_id, *, owner_user_id, provider, context, reference, artifacts, check_unchecked=True,
-    ):
-        client.in_listing = True
-        try:
-            return await file_listing_service.list_files_for_paper_from_artifacts(
-                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
-                reference=reference, artifacts=artifacts, check_unchecked=check_unchecked,
-            )
-        finally:
-            client.in_listing = False
-
     chosen = tuple(
         ChosenSupplement(provider_file_id=str(i), md5=client.pdf_md5.get(i, f"md5-{i}"), converted_md5=None)
         for i in ids
@@ -1226,13 +1219,62 @@ async def _one_supplement_wait(
                                 login_expires_at=clock() + 86400, owner_user_id=7),
             conversion_requested=True, last_answer=_map_conversion_result(RUNNING, provider="abc_literature"),
             main_ready_at=clock(), provider=provider, weaviate_client=object(), outcomes=_Outcomes(),
-            list_files=_list_files, list_files_from_artifacts=_list_files_from_artifacts,
+            list_files=client.track_listing(file_listing_service.list_files_for_paper),
+            list_files_from_artifacts=client.track_listing(file_listing_service.list_files_for_paper_from_artifacts),
             add_files=add_fn, clock=clock, sleep=clock.sleep,
         )
     finally:
         await provider.aclose()
     assert not any(kind == "conversion" for kind, _ in client.calls)  # never asks ABC to convert
     return client.polls, len(client.calls), client
+
+
+@pytest.mark.asyncio
+async def test_import_reports_one_add_outage_across_initial_and_poll_listings(job, monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
+    from src.lib.document_sources import file_listing_service, supplement_add
+    from src.lib.observability import runtime
+    from tests.unit.lib.document_sources.test_file_listing import _Store, _http_error
+
+    _install_fake_add_storage(monkeypatch, _Store(), tmp_path)
+    paper = _Paper(
+        [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), _unconverted(30, "xlsx")],
+        payloads={"21": _http_error(503), "31": GOOD_TABLE},
+    )
+
+    def convert_second_file():
+        paper.rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), *_pair(30, "WB")]
+
+    client = _AbcClient(paper=paper, on_read={2: convert_second_file})
+    downloads = AsyncMock(wraps=client.download_referencefile)
+    monkeypatch.setattr(client, "download_referencefile", downloads)
+    provider = provider_from_fake(client)
+    reports = []
+    monkeypatch.setattr(runtime, "report_runtime_exception", lambda exc, **kwargs: reports.append(kwargs))
+    clock = _Clock()
+    outcomes = _Outcomes()
+    await stage.run_supplement_stage(
+        job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7,
+        plan=SupplementPlan(
+            chosen=(_chosen("20", converted_md5=GOOD_TABLE_MD5), _chosen("30")),
+            request_context=_context(), login_expires_at=None, owner_user_id=7,
+        ),
+        conversion_requested=True, last_answer=_map_conversion_result(RUNNING, provider="abc_literature"),
+        main_ready_at=clock(), provider=provider, weaviate_client=object(), outcomes=outcomes,
+        list_files=file_listing_service.list_files_for_paper,
+        list_files_from_artifacts=file_listing_service.list_files_for_paper_from_artifacts,
+        add_files=supplement_add.add_files_to_paper_with_listing, clock=clock, sleep=clock.sleep,
+    )
+
+    assert client.reads == 2
+    # The unavailable text was checked at startup, checked again on the poll, and tried at add.
+    assert [call.args[0] for call in downloads.await_args_list].count("21") == 3
+    assert outcomes.ended == ["completed"]
+    assert _final_entries(job) == {"20": ("left_out", "source_unavailable"), "30": ("added", None)}
+    assert [report["operation"] for report in reports] == ["supplement_add_download_unavailable"]
+    assert reports[0]["context"] == {"unavailable_count": 1, "added_count": 1, "chosen_count": 2}
 
 
 @pytest.mark.asyncio
@@ -1412,27 +1454,6 @@ async def test_queued_supplement_revalidated_against_latest_poll_before_add_with
     client = _RevokingHttpAbc(ids=[30], extension="xlsx", converts_at=lambda _n: None, fails=lambda *_: False)
     provider = client.provider()
 
-    async def _list_files(document_id, *, owner_user_id, provider, context):
-        client.in_listing = True
-        try:
-            return await file_listing_service.list_files_for_paper(
-                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
-            )
-        finally:
-            client.in_listing = False
-
-    async def _list_files_from_artifacts(
-        document_id, *, owner_user_id, provider, context, reference, artifacts, check_unchecked=True,
-    ):
-        client.in_listing = True
-        try:
-            return await file_listing_service.list_files_for_paper_from_artifacts(
-                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
-                reference=reference, artifacts=artifacts, check_unchecked=check_unchecked,
-            )
-        finally:
-            client.in_listing = False
-
     try:
         await stage.run_supplement_stage(
             job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7,
@@ -1443,7 +1464,8 @@ async def test_queued_supplement_revalidated_against_latest_poll_before_add_with
             ),
             conversion_requested=True, last_answer=_map_conversion_result(RUNNING, provider="abc_literature"),
             main_ready_at=clock(), provider=provider, weaviate_client=object(), outcomes=_Outcomes(),
-            list_files=_list_files, list_files_from_artifacts=_list_files_from_artifacts,
+            list_files=client.track_listing(file_listing_service.list_files_for_paper),
+            list_files_from_artifacts=client.track_listing(file_listing_service.list_files_for_paper_from_artifacts),
             add_files=supplement_add.add_files_to_paper_with_listing, clock=clock, sleep=clock.sleep,
         )
     finally:
@@ -1659,7 +1681,7 @@ async def test_stage_with_initial_listing_failure_leaves_queued_files_out_withou
     client, provider = _plain_provider()
 
     class _UnavailablePaper(_Paper):
-        async def list_files(self, document_id, *, owner_user_id, provider, context):
+        async def list_files(self, document_id, *, owner_user_id, provider, context, caller_reports_download_outages):
             self.listings += 1
             raise DocumentSourceUnavailable("provider unavailable")
 
@@ -1802,27 +1824,6 @@ async def test_max_failed_reads_on_waiting_file_does_not_retry_a_fourth_time_and
     )
     provider = client.provider()
 
-    async def _list_files(document_id, *, owner_user_id, provider, context):
-        client.in_listing = True
-        try:
-            return await file_listing_service.list_files_for_paper(
-                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
-            )
-        finally:
-            client.in_listing = False
-
-    async def _list_files_from_artifacts(
-        document_id, *, owner_user_id, provider, context, reference, artifacts, check_unchecked=True,
-    ):
-        client.in_listing = True
-        try:
-            return await file_listing_service.list_files_for_paper_from_artifacts(
-                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
-                reference=reference, artifacts=artifacts, check_unchecked=check_unchecked,
-            )
-        finally:
-            client.in_listing = False
-
     try:
         await stage.run_supplement_stage(
             job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7,
@@ -1832,7 +1833,8 @@ async def test_max_failed_reads_on_waiting_file_does_not_retry_a_fourth_time_and
             ),
             conversion_requested=True, last_answer=_map_conversion_result(RUNNING, provider="abc_literature"),
             main_ready_at=clock(), provider=provider, weaviate_client=object(), outcomes=_Outcomes(),
-            list_files=_list_files, list_files_from_artifacts=_list_files_from_artifacts,
+            list_files=client.track_listing(file_listing_service.list_files_for_paper),
+            list_files_from_artifacts=client.track_listing(file_listing_service.list_files_for_paper_from_artifacts),
             add_files=supplement_add.add_files_to_paper_with_listing, clock=clock, sleep=clock.sleep,
         )
     finally:
@@ -2052,27 +2054,6 @@ async def test_open_access_reference_revalidated_once_before_add_after_polls(
     )
     provider = client.provider()
 
-    async def _list_files(document_id, *, owner_user_id, provider, context):
-        client.in_listing = True
-        try:
-            return await file_listing_service.list_files_for_paper(
-                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
-            )
-        finally:
-            client.in_listing = False
-
-    async def _list_files_from_artifacts(
-        document_id, *, owner_user_id, provider, context, reference, artifacts, check_unchecked=True,
-    ):
-        client.in_listing = True
-        try:
-            return await file_listing_service.list_files_for_paper_from_artifacts(
-                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
-                reference=reference, artifacts=artifacts, check_unchecked=check_unchecked,
-            )
-        finally:
-            client.in_listing = False
-
     try:
         await stage.run_supplement_stage(
             job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7,
@@ -2082,7 +2063,8 @@ async def test_open_access_reference_revalidated_once_before_add_after_polls(
             ),
             conversion_requested=True, last_answer=_map_conversion_result(RUNNING, provider="abc_literature"),
             main_ready_at=clock(), provider=provider, weaviate_client=object(), outcomes=_Outcomes(),
-            list_files=_list_files, list_files_from_artifacts=_list_files_from_artifacts,
+            list_files=client.track_listing(file_listing_service.list_files_for_paper),
+            list_files_from_artifacts=client.track_listing(file_listing_service.list_files_for_paper_from_artifacts),
             add_files=supplement_add.add_files_to_paper_with_listing, clock=clock, sleep=clock.sleep,
         )
     finally:
@@ -2170,15 +2152,6 @@ async def test_stage_prebuilt_add_401_preserves_earlier_settled_refusal_and_disp
     client._rows = _two_files  # type: ignore[method-assign]
     provider = client.provider()
 
-    async def _list_files(document_id, *, owner_user_id, provider, context):
-        client.in_listing = True
-        try:
-            return await file_listing_service.list_files_for_paper(
-                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
-            )
-        finally:
-            client.in_listing = False
-
     outcomes = _Outcomes()
     try:
         await stage.run_supplement_stage(
@@ -2192,7 +2165,7 @@ async def test_stage_prebuilt_add_401_preserves_earlier_settled_refusal_and_disp
             ),
             conversion_requested=False, last_answer=None, main_ready_at=clock(),
             provider=provider, weaviate_client=object(), outcomes=outcomes,
-            list_files=_list_files,
+            list_files=client.track_listing(file_listing_service.list_files_for_paper),
             list_files_from_artifacts=file_listing_service.list_files_for_paper_from_artifacts,
             add_files=supplement_add.add_files_to_paper_with_listing,
             clock=clock, sleep=clock.sleep,

@@ -334,6 +334,7 @@ async def list_files_for_paper_from_artifacts(
     reference: SourceReference,
     artifacts: Sequence[SourceArtifact],
     check_unchecked: bool = True,
+    caller_reports_download_outages: bool = False,
 ) -> FileListing:
     """List an imported paper's files from a resolved reference and already-fetched artifacts.
 
@@ -369,4 +370,5 @@ async def list_files_for_paper_from_artifacts(
         expected_reference_id=paper.reference_id,
         artifacts=artifacts,
         check_unchecked=check_unchecked,
+        caller_reports_download_outages=caller_reports_download_outages,
     )

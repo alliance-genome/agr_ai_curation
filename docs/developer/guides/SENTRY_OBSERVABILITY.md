@@ -833,11 +833,12 @@ warnings use fixed messages and `sentry_skip_event=True`.
   `supplement_add_download_unavailable` under `document_files`. Its context
   contains `chosen_count`, `added_count` and `unavailable_count`. The latter
   counts chosen files left out after a converted-text or original-PDF outage.
-  The add reports once its ready files commit. A standalone add job owns
-  outage reporting for its internal listing.
+  The add reports once its ready files commit. Both the standalone add job
+  and the identifier import delegate reporting for their internal file checks
+  to the add, including checks during conversion polling.
 
 Ordinary file refusals in a listing or partial add stay quiet. When every chosen
-file is left out, the add job reports only `supplement_add_nothing_added`,
+file is left out, the standalone add job reports only `supplement_add_nothing_added`,
 unless cancelled or all files were already in the paper. This warning under
 `document_files` has a fixed fingerprint and carries the hashed `document_id`
 and, per file, the reason code, measured value, limit and hashed

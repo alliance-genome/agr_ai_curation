@@ -339,7 +339,7 @@ async def run_supplement_stage(
         try:
             listing = await list_files(
                 UUID(document_id), owner_user_id=owner_user_id, provider=provider,
-                context=plan.request_context,
+                context=plan.request_context, caller_reports_download_outages=True,
             )
         except DocumentSourceLoginExpired:
             listing = None
@@ -605,6 +605,7 @@ async def _poll_until_done(
                 context=stage.plan.request_context,
                 reference=resolved_reference,
                 artifacts=artifacts,
+                caller_reports_download_outages=True,
             )
         except DocumentSourceLoginExpired:
             for provider_file_id in stage.ids_in(SupplementState.WAITING):
@@ -671,6 +672,7 @@ async def _poll_until_done(
                         reference=resolved_reference,
                         artifacts=latest_artifacts,
                         check_unchecked=False,
+                        caller_reports_download_outages=True,
                     )
                 except DocumentSourceLoginExpired:
                     return False, listing

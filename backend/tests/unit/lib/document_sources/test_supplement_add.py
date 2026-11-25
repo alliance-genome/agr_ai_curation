@@ -798,41 +798,52 @@ async def test_a_merged_reference_stops_the_add_before_any_download(monkeypatch,
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancelled", [False, True])
-async def test_all_refused_add_warns_once_unless_cancelled(monkeypatch, cancelled):
-    from types import SimpleNamespace
+async def test_all_refused_add_warns_once_unless_cancelled(monkeypatch, storage, cancelled):
+    from src.lib.observability.sentry import hash_sentry_identifier
+    from tests.unit.lib.document_sources.test_file_listing import _http_error
+    from tests.unit.lib.pdf_jobs.test_pdf_job_service import _FakeSession
 
-    left_out = AddResult(files=(
-        supplement_add.FileOutcome("20", "left_out", FileReason.TOO_LARGE, limit_value=40, display_name="Secret_Name.xlsx"),
-        supplement_add.FileOutcome("30", "left_out", FileReason.SOURCE_UNAVAILABLE),
-    ))
-    monkeypatch.setattr(supplement_add, "add_files_to_paper", AsyncMock(return_value=left_out))
-    provider = AsyncMock()
+    _, provider = _provider(ROWS, {**GOOD, "21": _http_error(413), "31": _http_error(503)})
+    provider.aclose = AsyncMock()
+    _paper_lookup(monkeypatch)
+    monkeypatch.setattr(
+        "src.lib.observability.cost_context.execution_context",
+        lambda **_: {"activity": "background", "run_id": str(JOB_ID)},
+    )
     monkeypatch.setattr("src.lib.document_sources.registry.get_configured_document_source_provider", lambda: provider)
     monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda **_kwargs: object())
+    monkeypatch.setattr("src.lib.pdf_jobs.service.is_cancel_requested", lambda **_: False)
+    monkeypatch.setattr("src.lib.pdf_jobs.service.update_progress", lambda **_: None)
     reports = []
     monkeypatch.setattr(
         "src.lib.observability.runtime.report_runtime_exception",
         lambda exc, **kwargs: reports.append((exc, kwargs)),
     )
-    mark_failed = Mock(return_value=SimpleNamespace(status="cancelled" if cancelled else "failed"))
-    monkeypatch.setattr("src.lib.pdf_jobs.service.mark_failed", mark_failed)
+    job = _pending_supplement_job(status="running")
+    # Model cancellation arriving at the terminal write, after the download checkpoints.
+    job.cancel_requested = cancelled
+    session = _FakeSession([job])
+    monkeypatch.setattr("src.lib.pdf_jobs.service.SessionLocal", lambda: session)
 
-    await supplement_add.run_supplement_add_job(supplement_add.SupplementAddJobRequest(
-        job_id=JOB_ID, document_id=DOCUMENT_ID, user_id="owner-subject", owner_user_id=7, context=CONTEXT,
-        files=(_chosen(20), _chosen(30)),
-    ))
+    await supplement_add.run_supplement_add_job(_job_request((_chosen(20), _chosen(30))))
 
-    mark_failed.assert_called_once()
-    assert mark_failed.call_args.kwargs["metadata"]["supplements"][0]["reason_code"] == "too_large"
+    assert session.commit_calls == 1
+    assert job.status == ("cancelled" if cancelled else "failed")
+    assert not storage.ready
     provider.aclose.assert_awaited_once()
     if cancelled:
         assert reports == []
         return
+    entries = job.metadata_json["supplements"]
+    assert [item["reason_code"] for item in entries] == ["too_large", "source_unavailable"]
     (exc, kwargs), = reports
     assert kwargs["level"] == "warning" and kwargs["operation"] == "supplement_add_nothing_added"
     assert [item["reason_code"] for item in kwargs["context"]["refusals"]] == ["too_large", "source_unavailable"]
-    assert "Secret_Name" not in repr(kwargs) and "Secret_Name" not in str(exc)
-    assert "20" not in [item["artifact_id_hash"] for item in kwargs["context"]["refusals"]]
+    for item, refusal in zip(entries, kwargs["context"]["refusals"], strict=True):
+        assert item["display_name"] and item["display_name"] not in repr(kwargs)
+        assert item["display_name"] not in str(exc)
+        assert refusal["artifact_id_hash"] == hash_sentry_identifier(item["provider_file_id"])
+        assert refusal["limit_value"] == item["limit_value"]
 
 
 @pytest.mark.asyncio
