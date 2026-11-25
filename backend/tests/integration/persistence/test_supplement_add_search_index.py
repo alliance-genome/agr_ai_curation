@@ -91,7 +91,10 @@ def index(weaviate_connection, setup_collections, clean_chunks, monkeypatch, tmp
     """The real test Weaviate for every read, store and delete of this test."""
 
     monkeypatch.setattr(chunk_reads, "get_connection", lambda: weaviate_connection)
-    monkeypatch.setattr("src.lib.weaviate_client.documents.get_connection", lambda: weaviate_connection)
+    monkeypatch.setattr(
+        "src.lib.weaviate_client.documents.get_connection",
+        lambda *, caller_reports_failure=False: weaviate_connection,
+    )
     monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: tmp_path)
     monkeypatch.setattr(pdf_viewer, "get_pdf_storage_path", lambda: tmp_path)
     monkeypatch.setattr(documents_api, "get_pdf_storage_path", lambda: tmp_path)
