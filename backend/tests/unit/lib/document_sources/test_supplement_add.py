@@ -102,7 +102,7 @@ def storage(monkeypatch):
 
     monkeypatch.setattr(ingestion, "_save_source_markdown", save_markdown)
     monkeypatch.setattr(ingestion, "_save_processed_json", save_json)
-    def _fake_insert(_doc, rows, _copy_ids=None):
+    def _fake_insert(_doc, rows, _copy_ids=None, _text_bytes=None):
         record.inserted.extend(rows)
         return {}
 
@@ -950,9 +950,9 @@ async def test_rows_naming_the_files_are_written_before_the_files(monkeypatch, s
 
     original_insert = supplement_add._insert_rows
 
-    def insert(document_id, rows, copy_ids_by_file=None):
+    def insert(document_id, rows, copy_ids_by_file=None, text_bytes_by_file=None):
         order.append("rows")
-        return original_insert(document_id, rows, copy_ids_by_file)
+        return original_insert(document_id, rows, copy_ids_by_file, text_bytes_by_file)
 
     async def save_markdown(*, markdown, file_id, user_id):
         order.append("markdown")

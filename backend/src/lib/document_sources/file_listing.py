@@ -65,6 +65,7 @@ from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
     DocumentSourceArtifactNotFound,
     DocumentSourceArtifactTooLarge,
+    DocumentSourceError,
     DocumentSourceLoginExpired,
     DocumentSourceProvider,
     DocumentSourceUnavailable,
@@ -252,17 +253,17 @@ logger = logging.getLogger(__name__)
 
 
 def _report_drained_check_failure(exc: Exception) -> None:
-    """Report one unexpected sibling check failure drained alongside a 401 without blocking re-raise."""
+    """Report one unexpected sibling check failure drained alongside another error without blocking re-raise."""
     from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 
     logger.warning(
-        "Drained listing check failed while stopping for expired login (%s)",
+        "Drained listing check failed while stopping concurrent checks (%s)",
         type(exc).__name__,
         extra={"sentry_skip_event": True},
     )
     try:
         report_runtime_exception(
-            sanitized_runtime_error("File listing check failed while stopping for expired login"),
+            sanitized_runtime_error("File listing check failed while draining concurrent checks"),
             component="document_sources",
             operation="file_listing_drained_check_failed",
             context={"exception_type": type(exc).__name__},
@@ -660,13 +661,22 @@ async def list_reference_files(
         )
         if login_expired is not None:
             for item in raw_results:
-                if isinstance(item, Exception) and not isinstance(item, DocumentSourceLoginExpired):
+                if isinstance(item, Exception) and not isinstance(item, DocumentSourceError):
                     _report_drained_check_failure(item)
             raise login_expired
+        propagated = next((item for item in raw_results if isinstance(item, BaseException)), None)
+        if propagated is not None:
+            for item in raw_results:
+                if (
+                    item is not propagated
+                    and isinstance(item, Exception)
+                    and not isinstance(item, DocumentSourceError)
+                ):
+                    _report_drained_check_failure(item)
+            raise propagated
         results: list[ListedFileCheck] = []
         for item in raw_results:
-            if isinstance(item, BaseException):
-                raise item
+            assert not isinstance(item, BaseException)
             results.append(item)
         checks.update(zip((candidate.original.artifact_id for candidate in to_check), results))
 

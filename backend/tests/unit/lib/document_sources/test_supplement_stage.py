@@ -179,8 +179,10 @@ class _Add:
         self.calls: list[list[Any]] = []
         self.listings: list[Any] = []
 
-    async def __call__(self, document_id, owner_user_id, request_context, files, *, listing, job_id,
-                       provider, weaviate_client, stage_checkpoint):
+    async def __call__(
+        self, document_id, owner_user_id, request_context, files, *, listing, job_id,
+        provider, weaviate_client, stage_checkpoint, settled_outcomes=None, display_names=None,
+    ):
         await stage_checkpoint("checking_files")
         self.calls.append(list(files))
         self.listings.append(listing)
@@ -1118,7 +1120,7 @@ def _install_fake_add_storage(monkeypatch, store, tmp_path):
 
     monkeypatch.setattr(ingestion, "_save_source_markdown", _save_md)
     monkeypatch.setattr(ingestion, "_save_processed_json", _save_json)
-    def _fake_insert(_doc, rows, _copy_ids=None):
+    def _fake_insert(_doc, rows, _copy_ids=None, _text_bytes=None):
         inserted.extend(rows)
         return {}
 
@@ -1938,7 +1940,7 @@ async def test_stage_catches_file_removal_unfinished_cleanly_without_stage_failu
             ),
         )
     else:
-        def _race_removed(doc_id, _rows, _copy_ids=None):
+        def _race_removed(doc_id, _rows, _copy_ids=None, _text_bytes=None):
             raise supplement_add.FileRemovalUnfinished(doc_id)
 
         monkeypatch.setattr(supplement_add, "_insert_rows", _race_removed)
@@ -1970,19 +1972,24 @@ async def test_stage_catches_file_removal_unfinished_cleanly_without_stage_failu
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("licence_outcome", ["restricted", "unchanged", "resolve_error"])
+@pytest.mark.parametrize(
+    "licence_outcome",
+    ["restricted", "unchanged", "resolve_error", "resolve_401", "all_polls_fail_then_restricted"],
+)
 async def test_open_access_reference_revalidated_once_before_add_after_polls(
     job, monkeypatch, tmp_path, licence_outcome,
 ):
     """ALL-1751 review: an open-access (GLOBAL) reference revalidates GET /reference once
-    before adding after polls run. If the licence became restricted, show_all is refreshed
-    once with the new reference so a queued Office supplement that lost access is NOT added
-    (0 add downloads). If unchanged, 0 extra show_all calls are made and the file joins."""
+    before adding after polls run (including when every poll failed). If the licence became
+    restricted, show_all is refreshed once with the new reference so a queued Office
+    supplement that lost access is NOT added (0 add downloads). If GET /reference returns 401,
+    it ends login_expired. If unchanged, 0 extra show_all calls are made and the file joins."""
     from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
     from src.lib.document_sources import file_listing_service, supplement_add
     from tests.unit.lib.document_sources.test_file_listing import _Store
 
-    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", "120")
+    wait_seconds = "600" if licence_outcome == "all_polls_fail_then_restricted" else "120"
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", wait_seconds)
     monkeypatch.setenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", "60")
     clock = _Clock()
     store = _Store()
@@ -1999,20 +2006,29 @@ async def test_open_access_reference_revalidated_once_before_add_after_polls(
             ]
 
         def handle(self, request):
-            if self.polls >= 1 and licence_outcome == "restricted":
+            if self.polls >= 1 and licence_outcome in ("restricted", "all_polls_fail_then_restricted"):
                 self.show_reference_payload = _abc_reference_record(
                     copyright_license_open_access=False,
                     copyright_license_name="Restricted License",
                 )
             return super().handle(request)
 
+    def _fails(kind: str, n: int, in_listing: bool):
+        if licence_outcome == "resolve_error" and kind == "reference" and n == 2:
+            return 500
+        if licence_outcome == "resolve_401" and kind == "reference" and n == 2:
+            return 401
+        if licence_outcome == "all_polls_fail_then_restricted" and kind == "show_all" and not in_listing and n <= 4:
+            # Show-all #1 is initial listing; #2..#4 are the 3 failed polls hitting max_failed_reads=3;
+            # #5 is the post-licence-change refresh which succeeds with the updated reference.
+            return 502
+        return False
+
     client = _OpenAccessHttpAbc(
         ids=[30],
         extension="xlsx",
         converts_at=lambda _n: None,
-        fails=lambda kind, n, _in_listing: 500 if (
-            licence_outcome == "resolve_error" and kind == "reference" and n == 2
-        ) else False,
+        fails=_fails,
     )
     client.show_reference_payload = _abc_reference_record(
         copyright_license_open_access=True,
@@ -2066,16 +2082,107 @@ async def test_open_access_reference_revalidated_once_before_add_after_polls(
             "20": ("left_out", FileReason.FILE_NOT_IN_REFERENCE.value),
             "30": ("left_out", IN_TIME),
         }
+    elif licence_outcome == "all_polls_fail_then_restricted":
+        # 1 initial + 3 failed polls + 1 refresh after licence changed = 5 show_all; 0 add downloads
+        assert kinds.count("show_all") == 5
+        assert kinds.count("download") == 1
+        assert _final_entries(job) == {
+            "20": ("left_out", FileReason.FILE_NOT_IN_REFERENCE.value),
+            "30": ("left_out", IN_TIME),
+        }
     elif licence_outcome == "unchanged":
         # 1 initial + 1 poll; ZERO extra show_all when reference metadata is unchanged
         assert kinds.count("show_all") == 2
         assert kinds.count("download") == 2  # 1 initial check + 1 add download
         assert _final_entries(job) == {"20": ("added", None), "30": ("left_out", IN_TIME)}
+    elif licence_outcome == "resolve_401":
+        # 401 on pre-add resolve_reference maps to DocumentSourceLoginExpired -> login_expired (0 add downloads)
+        assert kinds.count("show_all") == 2
+        assert kinds.count("download") == 1
+        assert _final_entries(job) == {
+            "20": ("left_out", FileReason.LOGIN_EXPIRED.value),
+            "30": ("left_out", IN_TIME),
+        }
     else:
-        # Fail closed on pre-add resolve_reference error: 0 extra show_all, 0 add downloads
+        # Fail closed on pre-add resolve_reference 500: 0 extra show_all, 0 add downloads
         assert kinds.count("show_all") == 2
         assert kinds.count("download") == 1
         assert _final_entries(job) == {
             "20": ("left_out", FileReason.SOURCE_UNAVAILABLE.value),
             "30": ("left_out", IN_TIME),
         }
+
+
+@pytest.mark.asyncio
+async def test_stage_prebuilt_add_401_preserves_earlier_settled_refusal_and_display_name(
+    job, monkeypatch, tmp_path,
+):
+    """ALL-1751 review: in run_supplement_stage's prebuilt-listing add, if file 1 settles as
+    file_changed_since_listed before file 2's download returns 401, file 1 keeps its settled
+    refusal and display name while file 2 ends login_expired with zero further requests."""
+    from src.lib.document_sources import file_listing_service, supplement_add
+    from tests.unit.lib.document_sources.test_file_listing import _Store
+
+    clock = _Clock()
+    store = _Store()
+    _install_fake_add_storage(monkeypatch, store, tmp_path)
+
+    client = _HttpAbc(
+        ids=[],
+        extension="xlsx",
+        converts_at=lambda _n: None,
+        # Downloads #1 and #2 are initial listing checks for 21 and 41; #3 is add download of 41 -> 401.
+        fails=lambda kind, n, _in_listing: 401 if kind == "download" and n == 3 else False,
+    )
+
+    def _two_files():
+        return [
+            _abc_show_all_main_pdf(10, "WB"),
+            *_pair(20, "WB", content=GOOD_TABLE),
+            *_pair(40, "WB", content=GOOD_TABLE),
+        ]
+
+    client._rows = _two_files  # type: ignore[method-assign]
+    provider = client.provider()
+
+    async def _list_files(document_id, *, owner_user_id, provider, context):
+        client.in_listing = True
+        try:
+            return await file_listing_service.list_files_for_paper(
+                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
+            )
+        finally:
+            client.in_listing = False
+
+    outcomes = _Outcomes()
+    try:
+        await stage.run_supplement_stage(
+            job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7,
+            plan=SupplementPlan(
+                chosen=(
+                    _chosen("20", converted_md5="0" * 32),  # stale checksum -> file_changed_since_listed
+                    _chosen("40", converted_md5=GOOD_TABLE_MD5),
+                ),
+                request_context=_context(), login_expires_at=clock() + 86400, owner_user_id=7,
+            ),
+            conversion_requested=False, last_answer=None, main_ready_at=clock(),
+            provider=provider, weaviate_client=object(), outcomes=outcomes,
+            list_files=_list_files,
+            list_files_from_artifacts=file_listing_service.list_files_for_paper_from_artifacts,
+            add_files=supplement_add.add_files_to_paper_with_listing,
+            clock=clock, sleep=clock.sleep,
+        )
+    finally:
+        await provider.aclose()
+
+    assert outcomes.ended == ["completed"]
+    entries = {
+        entry["provider_file_id"]: (entry["display_name"], entry["state"], entry["reason_code"])
+        for entry in job.progress[-1]["metadata"]["supplements"]
+    }
+    assert entries == {
+        "20": ("Made_up_S20.xlsx", "left_out", FileReason.FILE_CHANGED_SINCE_LISTED.value),
+        "40": ("Made_up_S40.xlsx", "left_out", FileReason.LOGIN_EXPIRED.value),
+    }
+    kinds = [kind for kind, _ in client.calls]
+    assert (kinds.count("reference"), kinds.count("show_all"), kinds.count("download")) == (1, 1, 3)

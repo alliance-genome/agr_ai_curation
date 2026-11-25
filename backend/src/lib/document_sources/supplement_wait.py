@@ -418,6 +418,8 @@ async def run_supplement_stage(
             await stage.record(pdf_job_service.ADDING_SUPPLEMENTS_STAGE, "Adding supplements")
             from src.lib.document_sources.supplement_add import ChosenFile, FileRemovalUnfinished
 
+            settled_outcomes: dict[str, Any] = {}
+            display_names: dict[str, str | None] = {}
             try:
                 result = await add_files(
                     UUID(document_id),
@@ -436,6 +438,8 @@ async def run_supplement_stage(
                     provider=provider,
                     weaviate_client=weaviate_client,
                     stage_checkpoint=stage.checkpoint,
+                    settled_outcomes=settled_outcomes,
+                    display_names=display_names,
                 )
             except FileRemovalUnfinished as refused:
                 # An earlier removal on this paper has not finished clearing its row;
@@ -451,6 +455,24 @@ async def run_supplement_stage(
                 await outcomes.completed()
                 return
             except DocumentSourceLoginExpired:
+                for outcome in settled_outcomes.values():
+                    entry = stage.entries.get(outcome.provider_file_id)
+                    if entry is None:
+                        continue
+                    cleaned_name = _clean_display_name(outcome.display_name)
+                    if cleaned_name is not None:
+                        entry.display_name = cleaned_name
+                    stage.leave_out(
+                        outcome.provider_file_id,
+                        outcome.reason_code,
+                        measured_value=outcome.measured_value,
+                        limit_value=outcome.limit_value,
+                    )
+                for file_id, name in display_names.items():
+                    entry = stage.entries.get(file_id)
+                    cleaned_name = _clean_display_name(name)
+                    if entry is not None and cleaned_name is not None:
+                        entry.display_name = cleaned_name
                 stage.end_unfinished(FileReason.LOGIN_EXPIRED)
             except DocumentSourceError:
                 # The provider failed during the add (its listing or downloads):
@@ -549,6 +571,7 @@ async def _poll_until_done(
         await stage.checkpoint()
         if stage.clock() >= stage.wait_ends_at:
             break
+        polls_ran = True
         try:
             artifacts = await provider.list_artifacts(resolved_reference, request_bearer_token=token)
         except DocumentSourceLoginExpired:
@@ -562,7 +585,6 @@ async def _poll_until_done(
             if failed_reads >= max_failed_reads:
                 break
             continue
-        polls_ran = True
         latest_artifacts = artifacts
         waiting = set(stage.ids_in(SupplementState.WAITING))
         new_texts = {

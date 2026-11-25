@@ -746,3 +746,107 @@ async def test_prebuilt_add_matches_duplicate_copy_against_live_and_removed_rows
     ]
     assert not list(storage.rglob("*.md")) and not list(storage.rglob("*.json"))
     assert index.stored == []
+
+
+@pytest.mark.asyncio
+async def test_manual_add_refuses_duplicate_copy_with_retained_removed_row_even_when_representative_fails_checksum(
+    paper, monkeypatch,
+):
+    """ALL-1751 review: in manual add_files_to_paper, when duplicate copy 50 has a retained
+    removed row, choosing representative 40 (even with a mismatched checksum) plus valid file 20
+    raises FileRemovalUnfinished upfront so file 20 is NOT committed."""
+    from dataclasses import replace
+
+    document_id, owner_id, subject, storage = paper
+    index = _Index().install(monkeypatch)
+
+    removed_id = uuid4()
+    with SessionLocal.begin() as db:
+        db.add(PDFDocumentFile(
+            id=removed_id, document_id=document_id, role="supplement",
+            display_name="Made_up_S50.xlsx", status="removed", tab_order=1,
+            display_mode="text", file_path=f"{subject}/source_markdown/{removed_id}.md",
+            file_hash=removed_id.hex * 2, file_size=10,
+            source_provider_source_file_id="50",
+            source_markdown_path=f"{subject}/source_markdown/{removed_id}.md",
+            added_at=datetime.now(timezone.utc),
+        ))
+
+    listing = _bound_listing(20, 40)
+    listed_20, listed_40 = listing.files
+    listing_with_copy = replace(
+        listing,
+        files=(listed_20, replace(listed_40, copy_provider_file_ids=("40", "50"))),
+    )
+
+    async def _list_with_copy(*_args, **_kwargs):
+        return listing_with_copy
+
+    monkeypatch.setattr(file_listing_service, "list_files_for_paper", _list_with_copy)
+
+    stale_40 = ChosenFile("40", md5="md5-40", converted_md5="0" * 32)
+    with pytest.raises(supplement_add.FileRemovalUnfinished):
+        await supplement_add.add_files_to_paper(
+            document_id, owner_id, CONTEXT, [stale_40, _chosen(20)],
+            job_id=uuid4(), provider=_AbcBoundProvider(WORKBOOKS),
+            weaviate_client=object(), stage_checkpoint=AsyncMock(),
+        )
+
+    assert [(row.source_provider_source_file_id, row.status) for row in _files(document_id)] == [
+        ("10", "ready"), ("50", "removed"),
+    ]
+    assert not list(storage.rglob("*.md")) and not list(storage.rglob("*.json"))
+    assert index.stored == []
+
+
+@pytest.mark.asyncio
+async def test_prebuilt_add_enforces_paper_text_limit_under_insert_lock(paper, monkeypatch):
+    """ALL-1751 review: a concurrent ready file inserted before _insert_rows locks the paper
+    consumes part of DOCUMENT_PAPER_MAX_TEXT_BYTES so the locked check rejects the over-budget
+    file with paper_text_limit and persists zero rows, files, or chunks for it."""
+    from src.lib.document_sources.file_reasons import FileReason
+
+    # Paper main file has text_bytes=1000. Each prepared workbook is small (<200 bytes).
+    # Allow 1600 bytes initially so both 20 and 40 pass _check_and_write (1000 + ~100 + ~100 <= 1600),
+    # then race a concurrent ready row consuming 500 bytes (1000 + 500 = 1500) so only 20 fits!
+    monkeypatch.setenv("DOCUMENT_PAPER_MAX_TEXT_BYTES", "1600")
+    document_id, owner_id, subject, storage = paper
+    index = _Index().install(monkeypatch)
+    raced = False
+
+    async def _race_ready_bytes_before_insert(stage: str) -> None:
+        nonlocal raced
+        if stage == "saving_files" and not raced:
+            raced = True
+            concurrent_id = uuid4()
+            with SessionLocal.begin() as db:
+                db.add(PDFDocumentFile(
+                    id=concurrent_id, document_id=document_id, role="supplement",
+                    display_name="Made_up_S99.xlsx", status="ready", tab_order=1,
+                    display_mode="text", file_path=f"{subject}/source_markdown/{concurrent_id}.md",
+                    file_hash=concurrent_id.hex * 2, file_size=500,
+                    source_provider_source_file_id="99",
+                    source_markdown_path=f"{subject}/source_markdown/{concurrent_id}.md",
+                    chunk_index_start=30, chunk_index_end=31, chunk_count=2, text_bytes=500,
+                    added_at=datetime.now(timezone.utc),
+                ))
+                db.get(PDFDocument, document_id).next_chunk_index = 32
+
+    result = await supplement_add.add_files_to_paper_with_listing(
+        document_id, owner_id, CONTEXT, [_chosen(20), _chosen(40)],
+        listing=_bound_listing(20, 40), job_id=uuid4(), provider=_AbcBoundProvider(WORKBOOKS),
+        weaviate_client=object(), stage_checkpoint=_race_ready_bytes_before_insert,
+    )
+
+    outcomes = {item.provider_file_id: item for item in result.files}
+    assert outcomes["20"].outcome == "added" and outcomes["20"].file_id is not None
+    assert outcomes["40"].outcome == "left_out"
+    assert outcomes["40"].reason_code is FileReason.PAPER_TEXT_LIMIT
+    assert outcomes["40"].limit_value == 1600
+    assert outcomes["40"].measured_value is not None and outcomes["40"].measured_value > 1600
+    assert [(row.source_provider_source_file_id, row.status, row.tab_order) for row in _files(document_id)] == [
+        ("10", "ready", 0), ("99", "ready", 1), ("20", "ready", 2),
+    ]
+    assert [path.name for path in storage.rglob("*.md")] == [f"{outcomes['20'].file_id}.md"]
+    assert [path.name for path in storage.rglob("*.json")] == [f"{outcomes['20'].file_id}.json"]
+    assert len(index.stored) == 1

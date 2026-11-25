@@ -386,6 +386,8 @@ async def add_files_to_paper_with_listing(
     weaviate_client: Any,
     stage_checkpoint: Checkpoint,
     commit_state: SupplementAddCommit | None = None,
+    settled_outcomes: dict[str, FileOutcome] | None = None,
+    display_names: dict[str, str | None] | None = None,
 ) -> AddResult:
     """Add the chosen converted supplements using a listing the caller already holds.
 
@@ -413,22 +415,12 @@ async def add_files_to_paper_with_listing(
         raise FileListingUnavailable("paper_reference_incomplete")
     if listing.reference_id != paper.source_provider_reference_id:
         raise FileListingUnavailable("paper_reference_mismatch")
-    if any(chosen.provider_file_id in paper.removed_provider_file_ids for chosen in files):
-        raise FileRemovalUnfinished(document_id)
     authorized_files = _validate_and_filter_prebuilt_listing(
         listing,
         provider_id=provider.provider_id,
         paper=paper,
         authorized_group_ids=tuple(request_context.authorized_group_ids),
     )
-    chosen_ids = {chosen.provider_file_id for chosen in files}
-    if any(
-        cid in paper.removed_provider_file_ids
-        for item in authorized_files
-        if item.provider_file_id in chosen_ids
-        for cid in _listed_copy_ids(item)
-    ):
-        raise FileRemovalUnfinished(document_id)
     return await _add_files_using_listing(
         document_id,
         owner_user_id,
@@ -440,6 +432,8 @@ async def add_files_to_paper_with_listing(
         weaviate_client=weaviate_client,
         stage_checkpoint=stage_checkpoint,
         commit_state=commit_state,
+        settled_outcomes=settled_outcomes,
+        display_names=display_names,
     )
 
 
@@ -465,6 +459,15 @@ async def _add_files_using_listing(
     )
 
     listed_by_id = {item.provider_file_id: item for item in listed_files}
+    if any(chosen.provider_file_id in paper.removed_provider_file_ids for chosen in files):
+        raise FileRemovalUnfinished(document_id)
+    if any(
+        cid in paper.removed_provider_file_ids
+        for chosen in files
+        if (listed := listed_by_id.get(chosen.provider_file_id)) is not None
+        for cid in _listed_copy_ids(listed)
+    ):
+        raise FileRemovalUnfinished(document_id)
     if display_names is not None:
         for item in listed_files:
             display_names[item.provider_file_id] = _public_display_name(item)
@@ -919,8 +922,9 @@ async def _write(
             for tab_order, (item, markdown_path, processed_path) in enumerate(planned, start=paper.next_tab_order)
         ]
         copy_ids_by_file = {item.listed.provider_file_id: _listed_copy_ids(item.listed) for item in written}
+        text_bytes_by_file = {item.listed.provider_file_id: item.prepared.text_bytes for item in written}
         skipped = await _finish_mutation(
-            asyncio.to_thread(_insert_rows, document_id, rows, copy_ids_by_file)
+            asyncio.to_thread(_insert_rows, document_id, rows, copy_ids_by_file, text_bytes_by_file)
         )
         if not isinstance(skipped, Mapping):
             raise TypeError("_insert_rows must return a mapping of skipped provider file ids")
@@ -1138,32 +1142,40 @@ def _insert_rows(
     document_id: UUID,
     rows: list[PDFDocumentFile],
     copy_ids_by_file: Mapping[str, tuple[str, ...]] | None = None,
+    text_bytes_by_file: Mapping[str, int] | None = None,
 ) -> dict[str, tuple[FileReason, int | None, int | None]]:
-    from src.lib.openai_agents.config import get_document_max_files_per_paper
+    from src.lib.document_files.service import FileRangeMissingError
+    from src.lib.openai_agents.config import (
+        get_document_max_files_per_paper,
+        get_document_paper_max_text_bytes,
+    )
     from src.models.sql.database import SessionLocal
 
     max_files = get_document_max_files_per_paper()
+    max_text_bytes = get_document_paper_max_text_bytes()
     with SessionLocal() as session, session.begin():
         # Serialize with other writers of the paper's files (range reservation locks it too).
         session.execute(select(PDFDocument.id).where(PDFDocument.id == document_id).with_for_update())
         existing = session.execute(
             select(
+                PDFDocumentFile.id,
                 PDFDocumentFile.status,
                 PDFDocumentFile.source_provider_source_file_id,
                 PDFDocumentFile.source_provider_pdf_artifact_id,
                 PDFDocumentFile.tab_order,
+                PDFDocumentFile.text_bytes,
             ).where(PDFDocumentFile.document_id == document_id)
         ).all()
         removed_ids = {
             identifier
-            for status, source_id, pdf_id, _ in existing
+            for _, status, source_id, pdf_id, _, _ in existing
             if status == FILE_STATUS_REMOVED
             for identifier in (source_id, pdf_id)
             if identifier
         }
         active_ids = {
             identifier
-            for status, source_id, pdf_id, _ in existing
+            for _, status, source_id, pdf_id, _, _ in existing
             if status != FILE_STATUS_REMOVED
             for identifier in (source_id, pdf_id)
             if identifier
@@ -1174,8 +1186,14 @@ def _insert_rows(
                 raise FileRemovalUnfinished(document_id)
         skipped: dict[str, tuple[FileReason, int | None, int | None]] = {}
         to_insert: list[PDFDocumentFile] = []
-        live_count = sum(1 for status, _, _, _ in existing if status not in _NOT_LIVE)
-        next_tab_order = max((tab_order for _, _, _, tab_order in existing), default=-1) + 1
+        live_count = sum(1 for _, status, _, _, _, _ in existing if status not in _NOT_LIVE)
+        ready_text_bytes = 0
+        for file_id, status, _, _, _, text_bytes in existing:
+            if status == FILE_STATUS_READY:
+                if text_bytes is None:
+                    raise FileRangeMissingError(f"Ready file {file_id} has no measured text size")
+                ready_text_bytes += text_bytes
+        next_tab_order = max((tab_order for _, _, _, _, tab_order, _ in existing), default=-1) + 1
         for row in rows:
             source_id = row.source_provider_source_file_id
             row_copy_ids = _row_copy_ids(source_id, copy_ids_by_file)
@@ -1186,9 +1204,20 @@ def _insert_rows(
                 if source_id:
                     skipped[source_id] = (FileReason.PAPER_FILE_LIMIT, live_count + 1, max_files)
                 continue
+            row_text_bytes = (
+                text_bytes_by_file[source_id]
+                if text_bytes_by_file is not None and source_id and source_id in text_bytes_by_file
+                else None
+            )
+            if row_text_bytes is not None and ready_text_bytes + row_text_bytes > max_text_bytes:
+                assert source_id is not None
+                skipped[source_id] = (FileReason.PAPER_TEXT_LIMIT, ready_text_bytes + row_text_bytes, max_text_bytes)
+                continue
             row.tab_order = next_tab_order
             next_tab_order += 1
             live_count += 1
+            if row_text_bytes is not None:
+                ready_text_bytes += row_text_bytes
             active_ids.update(row_copy_ids)
             to_insert.append(row)
         if to_insert:
