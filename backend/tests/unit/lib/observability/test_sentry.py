@@ -2104,14 +2104,16 @@ def test_pdf_conversion_timeouts_have_one_capture_owner_with_logging_enabled():
         service._execute_provider_conversion_unbounded = AsyncMock(side_effect=asyncio.TimeoutError())
         service._sync_provider_conversion_sql_failure = AsyncMock()
         service._mark_failed_and_sync_tracker = AsyncMock()
-        module.update_document_status = AsyncMock()
         module.pdf_job_service.get_job_by_id = lambda **_kwargs: None
         request = SimpleNamespace(document_id="private-doc", user_id="private-user", job_id="private-job")
         async def run():
             await service.execute_provider_conversion(request)
             await service.execute_provider_conversion(request)
-        # Isolate the attribution DB dependency so only conversion timeouts fail.
-        with patch("src.models.sql.database.SessionLocal") as session_factory:
+        # Let attribution and index reconciliation succeed so only conversion timeouts fail.
+        with (
+            patch("src.models.sql.database.SessionLocal") as session_factory,
+            patch.object(module, "update_document_status_detailed", return_value={"success": True}),
+        ):
             db = session_factory.return_value.__enter__.return_value
             db.query.return_value.join.return_value.filter.return_value.one_or_none.return_value = None
             asyncio.run(run())
