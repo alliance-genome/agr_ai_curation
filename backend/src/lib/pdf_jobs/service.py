@@ -747,7 +747,6 @@ def complete_import_and_start_supplement_wait(
     filename: Optional[str],
     message: Optional[str] = None,
     metadata: Optional[dict] = None,
-    fallback_supplements: Optional[list[dict]] = None,
 ) -> tuple[Optional[PdfJobResponse], Optional[PdfJobResponse]]:
     """Atomically complete an import job and hand off or close its queued supplements.
 
@@ -756,11 +755,15 @@ def complete_import_and_start_supplement_wait(
       already terminal (cancelled/failed/completed elsewhere), returns it untouched
       with ``stage_job=None`` so a late worker can never overwrite terminal outcomes
       or reopen supplements.
-    - Otherwise transitions the import job to ``completed`` and either:
-      1. Transfers its persisted queued ``supplements`` entries to a newly created
-         ``supplement_wait`` stage job (removing ``supplements`` from the completed
-         import job), OR
-      2. When the paper is busy or missing, closes those entries directly on the
+    - Otherwise transitions the import job to ``completed`` and reads its persisted
+      open ``queued`` entries in ``metadata.supplements``:
+      1. If ``source_job.cancel_requested`` is True, closes those queued entries on
+         the completed import job as ``import_cancelled`` and returns ``stage_job=None``
+         (never launching a new supplement stage after a live cancel landed).
+      2. Else if the paper lock is acquired and no other active job conflicts,
+         transfers those persisted entries to a newly created ``supplement_wait``
+         stage job (removing ``supplements`` from the completed import job).
+      3. Else (paper is busy or missing), closes those entries directly on the
          completed import job as ``paper_busy_when_ready`` in the same transaction.
     """
     from src.lib.document_files.paper_lock import try_lock_paper_for_add
@@ -799,21 +802,23 @@ def complete_import_and_start_supplement_wait(
             completed_at=now,
         )
 
-        source_metadata = dict(source_job.metadata_json or {})
-        raw_persisted = source_metadata.get("supplements")
-        if isinstance(raw_persisted, list) and raw_persisted:
-            handoff_entries = _open_queued_supplement_entries(source_job)
-            if not handoff_entries:
-                # Defensive: persisted entries were already finalized.
-                session.commit()
-                session.refresh(source_job)
-                return _to_response(source_job), None
-        elif fallback_supplements:
-            handoff_entries = [dict(entry) for entry in fallback_supplements]
-        else:
+        handoff_entries = _open_queued_supplement_entries(source_job)
+        if not handoff_entries:
             session.commit()
             session.refresh(source_job)
             return _to_response(source_job), None
+
+        if source_job.cancel_requested:
+            _close_open_supplement_entries(
+                source_job,
+                reason=FileReason.IMPORT_CANCELLED.value,
+                now=now,
+            )
+            session.commit()
+            session.refresh(source_job)
+            return _to_response(source_job), None
+
+        source_metadata = dict(source_job.metadata_json or {})
 
         # Flush completion first so ONE_ACTIVE_JOB_PER_PAPER_INDEX releases source_job's active slot.
         session.flush()
@@ -893,10 +898,11 @@ def start_supplement_wait_job(
     Ordered against a delete of the same paper by the paper's lock (never waiting
     for it). Raises ``ActiveJobExistsError`` when the paper already has an active
     job, or a delete or an add holds its lock. When ``source_job_id`` is provided,
-    the locked source job must match ``document_id``, be ``completed``, and still
-    own open ``queued`` entries in ``metadata.supplements``; those persisted entries
-    are transferred atomically and cleared from the source job (so a late worker
-    after cancel/failure can never overwrite terminal outcomes or reopen supplements).
+    the locked source job must match ``document_id``, be ``completed`` without
+    ``cancel_requested``, and still own open ``queued`` entries in
+    ``metadata.supplements``; those persisted entries are transferred atomically
+    and cleared from the source job (so a late worker after cancel/failure can
+    never overwrite terminal outcomes or reopen supplements).
     """
     from src.lib.document_files.paper_lock import try_lock_paper_for_add
 
@@ -922,6 +928,9 @@ def start_supplement_wait_job(
                 raise SupplementHandoffRefusedError(
                     source_job_id, f"source job status is {source_job.status}"
                 )
+            if source_job.cancel_requested:
+                session.rollback()
+                raise SupplementHandoffRefusedError(source_job_id, "source job cancellation was requested")
             transferred_supplements = _open_queued_supplement_entries(source_job)
             if not transferred_supplements:
                 session.rollback()
@@ -954,29 +963,6 @@ def start_supplement_wait_job(
             metadata=metadata,
             current_stage=WAITING_FOR_SUPPLEMENTS_STAGE,
         )
-    finally:
-        session.close()
-
-
-def record_supplement_outcomes_on_finished_job(*, job_id: UUID | str, supplements: list[dict]) -> None:
-    """Write an import's per-file supplement outcomes onto its already-finished job.
-
-    Used when the paper became busy or was deleted at the moment it was ready, so
-    no supplement stage started: the import's result still says what happened to
-    each chosen file. A job that no longer exists (the paper was deleted) is left alone.
-    """
-    session = SessionLocal()
-    try:
-        job = session.execute(
-            select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id)).with_for_update()
-        ).scalar_one_or_none()
-        if job is None:
-            session.rollback()
-            return
-        metadata = dict(job.metadata_json or {})
-        metadata["supplements"] = supplements
-        job.metadata_json = metadata
-        session.commit()
     finally:
         session.close()
 

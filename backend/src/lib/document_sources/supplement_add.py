@@ -203,13 +203,20 @@ def _public_display_name(listed: ListedFile) -> str | None:
     return _with_extension(raw, listed)
 
 
+_UNNAMED_SUPPLEMENT_DISPLAY_NAME = "Supplement file"
+
+
 def _storage_display_name(listed: ListedFile) -> str:
-    """Required non-empty internal filename for SQL storage and text section fallback."""
+    """Required non-empty display/section name for SQL storage and text preparation.
+
+    Never substitutes the raw ``provider_file_id`` because ``PDFDocumentFile.display_name``
+    is returned verbatim by the viewer file list (``pdf_viewer/files.py``).
+    """
 
     public = _public_display_name(listed)
     if public is not None:
         return public
-    return _with_extension(listed.provider_file_id.strip(), listed)
+    return _UNNAMED_SUPPLEMENT_DISPLAY_NAME
 
 
 def _scoped_file_hash(owner_user_id: int, sha256: str) -> str:

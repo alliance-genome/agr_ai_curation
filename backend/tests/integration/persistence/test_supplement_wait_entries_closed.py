@@ -239,7 +239,6 @@ def test_atomic_complete_and_handoff_transfers_persisted_queued_entries(owner):
         user_id=owner_id,
         filename=paper.filename,
         message="Processing completed",
-        fallback_supplements=[_entry("99", "queued")],  # persisted entries win over fallback
     )
 
     assert completed_main is not None and completed_main.status == "completed"
@@ -320,7 +319,6 @@ def test_late_worker_after_cancel_or_fail_never_reopens_or_erases_supplement_out
         user_id=owner_id,
         filename=paper.filename,
         message="Processing completed",
-        fallback_supplements=queued,
     )
     assert returned_main is not None and returned_main.status == terminal_kind
     assert stage_job is None
@@ -373,4 +371,47 @@ def test_main_import_login_expired_closes_queued_supplements_with_login_expired(
         "40": ("left_out", "login_expired"),
     }
     assert all(observed)
+
+
+def test_atomic_complete_honors_cancel_requested_under_row_lock_without_starting_stage(owner):
+    owner_id, _ = owner
+    paper = _ready_paper(owner_id)
+    queued = [_entry("30", "queued"), _entry("40", "queued")]
+    main_job = job_service.create_job(
+        document_id=paper.id,
+        user_id=owner_id,
+        filename=paper.filename,
+        metadata={"supplements": queued},
+    )
+    # Simulate a live cancel arriving after the worker's last is_cancel_requested check
+    # and before handoff acquires the row lock.
+    with SessionLocal.begin() as db:
+        row = db.get(PdfProcessingJob, main_job.job_id)
+        row.status = "cancel_requested"
+        row.cancel_requested = True
+
+    completed_main, stage_job = job_service.complete_import_and_start_supplement_wait(
+        job_id=main_job.job_id,
+        document_id=paper.id,
+        user_id=owner_id,
+        filename=paper.filename,
+        message="Processing completed",
+    )
+
+    assert completed_main is not None
+    assert completed_main.status == "completed"
+    assert completed_main.cancel_requested is True
+    assert stage_job is None
+    status, entries, observed = _entries(main_job.job_id)
+    assert status == "completed"
+    assert entries == {
+        "30": ("left_out", "import_cancelled"),
+        "40": ("left_out", "import_cancelled"),
+    }
+    assert all(observed)
+    with SessionLocal() as db:
+        saved = db.get(PdfProcessingJob, main_job.job_id).metadata_json["supplements"]
+        all_jobs = db.query(PdfProcessingJob).filter(PdfProcessingJob.document_id == paper.id).all()
+    assert [entry["display_name"] for entry in saved] == ["Made_up_S30", "Made_up_S40"]
+    assert [j for j in all_jobs if (j.metadata_json or {}).get("job_kind") == "supplement_wait"] == []
 

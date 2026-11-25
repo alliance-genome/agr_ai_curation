@@ -1071,11 +1071,12 @@ async def test_a_sweep_of_legal_settings_never_exceeds_the_supplement_waits_cap(
     assert equal > 0
 
 
-def test_not_started_entries_and_queued_entries_use_real_display_name_never_provider_id():
+def test_queued_entries_use_real_display_name_never_provider_id():
     plan = SupplementPlan(
         chosen=(
             _chosen("30", display_name="Table_S1.xlsx"),
             _chosen("40", converted_md5="md5-41", display_name=None),
+            _chosen("50", display_name="   "),
         ),
         request_context=_context(),
         login_expires_at=None,
@@ -1087,17 +1088,9 @@ def test_not_started_entries_and_queued_entries_use_real_display_name_never_prov
     assert [(entry["provider_file_id"], entry["display_name"], entry["state"]) for entry in queued] == [
         ("30", "Table_S1.xlsx", "queued"),
         ("40", None, "queued"),
+        ("50", None, "queued"),
     ]
-
-    busy = stage.not_started_entries(plan, now=1_000_000.0)
-    assert [
-        (entry["provider_file_id"], entry["display_name"], entry["state"], entry["reason_code"])
-        for entry in busy
-    ] == [
-        ("30", "Table_S1.xlsx", "left_out", "paper_busy_when_ready"),
-        ("40", None, "left_out", "paper_busy_when_ready"),
-    ]
-    assert all(entry["display_name"] != entry["provider_file_id"] for entry in busy)
+    assert all(entry["display_name"] != entry["provider_file_id"] for entry in queued)
 
 
 @pytest.mark.asyncio

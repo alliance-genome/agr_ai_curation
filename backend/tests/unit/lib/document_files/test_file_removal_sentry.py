@@ -198,9 +198,10 @@ async def test_cleanup_report_preserves_sanitized_traceback_and_survives_capture
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("redaction_enabled", ["true", "false"])
 @pytest.mark.parametrize("failing_step", ["pieces", "piece_count"])
 async def test_real_weaviate_reconnect_failure_emits_single_sanitized_event_without_url_leak(
-    monkeypatch, caplog, failing_step
+    monkeypatch, caplog, failing_step, redaction_enabled
 ):
     """Real WeaviateConnection.session(caller_reports_failure=True) avoids promoted-log URL leaks."""
     from src.lib.weaviate_client.connection import WeaviateConnection
@@ -219,6 +220,8 @@ async def test_real_weaviate_reconnect_failure_emits_single_sanitized_event_with
     monkeypatch.setattr("src.lib.document_files.service.remove_stored_files", lambda *_a, **_k: None)
     monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_a, **_k: None)
 
+    # Isolate WeaviateConnection singleton so later tests never see a stale test instance.
+    monkeypatch.setattr(WeaviateConnection, "_instance", None)
     broken_conn = WeaviateConnection(url="http://weaviate.invalid:8080")
     monkeypatch.setattr(
         "src.lib.weaviate_client.connection.weaviate.connect_to_custom",
@@ -238,8 +241,7 @@ async def test_real_weaviate_reconnect_failure_emits_single_sanitized_event_with
         weaviate_arg = broken_conn
 
     captured_events: list[dict] = []
-    # Production default: content redaction off; sanitization must not depend on redaction.
-    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "false")
+    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", redaction_enabled)
     sentry_sdk.init(
         dsn="https://public@example.invalid/1",
         transport=captured_events.append,
@@ -278,9 +280,12 @@ async def test_real_weaviate_reconnect_failure_emits_single_sanitized_event_with
     assert event["fingerprint"] == ["file_removal_cleanup_failed", failing_step]
     assert "request" not in event
     assert event["contexts"]["runtime_exception"]["document_id"] == hash_sentry_identifier(str(document_id))
-    assert event["exception"]["values"][0]["value"] == (
-        f"Clearing a removed file's {failing_step} failed (ConnectionError)"
+    expected_value = (
+        "[Filtered]"
+        if redaction_enabled == "true"
+        else f"Clearing a removed file's {failing_step} failed (ConnectionError)"
     )
+    assert event["exception"]["values"][0]["value"] == expected_value
 
     serialized = json.dumps(event)
     for sensitive in (

@@ -286,10 +286,17 @@ async def test_unnamed_supplement_keeps_public_display_name_null_on_add_and_refu
     result = await _add(provider, [_chosen(20), _chosen(30)])
     outcomes = _by_id(result)
 
-    # Added unnamed file: SQL row has non-empty storage name, public FileOutcome has display_name=None.
+    # Added unnamed file: SQL row uses neutral label (never raw provider_file_id),
+    # viewer file list never leaks "20" / "20.xlsx", and public FileOutcome has display_name=None.
+    from types import SimpleNamespace
+    from src.lib.pdf_viewer.files import viewer_file_refs
+
     assert outcomes["20"].outcome == "added"
     assert outcomes["20"].display_name is None
-    assert [row.display_name for row in storage.inserted] == ["20.xlsx"]
+    assert [row.display_name for row in storage.inserted] == ["Supplement file"]
+    viewer_refs = viewer_file_refs(SimpleNamespace(id=DOCUMENT_ID, files=storage.inserted))
+    assert [ref.display_name for ref in viewer_refs] == ["Supplement file"]
+    assert all("20" not in ref.display_name for ref in viewer_refs)
 
     # Refused unnamed file: public FileOutcome has display_name=None (never "30" or "30.xlsx").
     assert outcomes["30"].outcome == "left_out"

@@ -13,9 +13,9 @@ from fastapi import BackgroundTasks
 
 from src.lib.document_sources.access import DocumentSourceRequestContext
 from src.lib.document_sources.identifier_import import (
-    FILE_NOT_TICKABLE_MESSAGE,
     IdentifierImportService,
     SupplementSelectionError,
+    file_not_tickable_message,
     select_reference_import_candidate,
 )
 from src.lib.document_sources.models import (
@@ -317,10 +317,28 @@ def test_supplement_choice_display_name_is_optional_and_bounded_to_255_chars():
 
 
 @pytest.mark.asyncio
-async def test_an_unconverted_file_is_not_tickable_when_this_import_does_not_ask_abc(tmp_path):
+async def test_an_unconverted_file_is_not_tickable_when_this_import_does_not_ask_abc(tmp_path, monkeypatch):
     """The main text is converted (READY, no request): an unconverted supplement
     would never be converted by this import."""
 
+    from src.lib.document_sources import identifier_import as import_module
+
+    # Canonical Alliance registration resolves short_label="ABC" without hardcoding.
+    assert file_not_tickable_message("abc_literature") == (
+        "This file can no longer be chosen: ABC has not converted it and this import will not ask ABC to."
+    )
+    assert file_not_tickable_message("unregistered_provider") == (
+        "This file can no longer be chosen: the document source has not converted it "
+        "and this import will not ask the document source to."
+    )
+
+    monkeypatch.setattr(
+        import_module,
+        "get_document_source_provider_metadata",
+        lambda provider_id: {"short_label": "EXL", "display_label": "Example Literature"}
+        if provider_id == "fake_provider"
+        else None,
+    )
     provider = _FakeProvider(artifacts=(*_ready_artifacts(), _provider_metadata_artifact()))
     dispatch = _DispatchRecorder()
 
@@ -331,7 +349,11 @@ async def test_an_unconverted_file_is_not_tickable_when_this_import_does_not_ask
     )
 
     row = result.results[0]
-    assert (row.status, row.error_code, row.message) == ("error", "file_not_tickable", FILE_NOT_TICKABLE_MESSAGE)
+    assert (row.status, row.error_code, row.message) == (
+        "error",
+        "file_not_tickable",
+        "This file can no longer be chosen: EXL has not converted it and this import will not ask EXL to.",
+    )
     assert dispatch.provider_markdown_calls == dispatch.upload_calls == dispatch.provider_conversion_calls == []
 
 

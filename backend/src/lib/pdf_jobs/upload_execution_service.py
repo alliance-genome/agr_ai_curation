@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import logging
 import math
@@ -260,10 +261,15 @@ def _format_conversion_wait_duration(seconds: float) -> str:
 
 @dataclass
 class _ConversionExecutionState:
-    """In-flight conversion execution state used to classify bounded timeouts accurately."""
+    """Task-local conversion execution state used to classify bounded timeouts accurately."""
 
     started_at: float
     ingesting_markdown: bool = False
+
+
+_CONVERSION_EXECUTION_STATE: contextvars.ContextVar[_ConversionExecutionState | None] = (
+    contextvars.ContextVar("provider_conversion_execution_state", default=None)
+)
 
 
 def _timestamp_from_datetime(value: Any) -> float | None:
@@ -282,7 +288,9 @@ def _recorded_import_started_at(job: Any, fallback_started_at: float) -> float:
         raw_sent_at = sent.get("on_demand_sent_at")
         if isinstance(raw_sent_at, str) and raw_sent_at.strip():
             try:
-                candidates.append(datetime.fromisoformat(raw_sent_at).timestamp())
+                sent_ts = _timestamp_from_datetime(datetime.fromisoformat(raw_sent_at))
+                if sent_ts is not None:
+                    candidates.append(sent_ts)
             except ValueError:
                 pass
         created_ts = _timestamp_from_datetime(getattr(job, "created_at", None))
@@ -394,7 +402,6 @@ class UploadExecutionService:
         self._queues_by_job: weakref.WeakValueDictionary[str, _RequestJobQueue] = (
             weakref.WeakValueDictionary()
         )
-        self._conversion_state_by_job: dict[str, _ConversionExecutionState] = {}
 
     def _record_queued_job(self, background_tasks: BackgroundTasks, job_id: str) -> None:
         queue = self._queues_by_request.setdefault(background_tasks, _RequestJobQueue())
@@ -669,7 +676,7 @@ class UploadExecutionService:
     async def _execute_provider_conversion_bounded(self, request: ProviderConversionExecutionRequest) -> None:
         timeout_seconds = get_document_source_import_timeout_seconds()
         state = _ConversionExecutionState(started_at=time.time())
-        self._conversion_state_by_job[request.job_id] = state
+        state_token = _CONVERSION_EXECUTION_STATE.set(state)
         try:
             await asyncio.wait_for(
                 self._execute_provider_conversion_unbounded(request),
@@ -738,7 +745,7 @@ class UploadExecutionService:
                 stage=ProcessingStage.FAILED.value,
             )
         finally:
-            self._conversion_state_by_job.pop(request.job_id, None)
+            _CONVERSION_EXECUTION_STATE.reset(state_token)
 
     async def _execute_provider_conversion_unbounded(
         self,
@@ -878,7 +885,7 @@ class UploadExecutionService:
                         request,
                         selected_artifact,
                     )
-                    state = self._conversion_state_by_job.get(request.job_id)
+                    state = _CONVERSION_EXECUTION_STATE.get()
                     if state is not None:
                         state.ingesting_markdown = True
                     await self._execute_provider_markdown_unbounded(
@@ -1420,80 +1427,126 @@ class UploadExecutionService:
             if observability_receipt
             else None
         )
-        stored_job, stage_job = await asyncio.to_thread(
-            pdf_job_service.complete_import_and_start_supplement_wait,
-            job_id=request.job_id,
-            document_id=request.document_id,
-            user_id=plan.owner_user_id,
-            filename=getattr(request, "filename", None),
-            message=message,
-            metadata=terminal_metadata,
-            fallback_supplements=supplement_wait.queued_entries(plan),
+        # Shield the atomic completion + stage-job creation commit so a timeout or
+        # cancellation arriving mid-commit cannot discard a newly committed stage_job
+        # before its worker task is launched (or explicitly failed on launch error).
+        handoff_task = asyncio.create_task(
+            asyncio.to_thread(
+                pdf_job_service.complete_import_and_start_supplement_wait,
+                job_id=request.job_id,
+                document_id=request.document_id,
+                user_id=plan.owner_user_id,
+                filename=getattr(request, "filename", None),
+                message=message,
+                metadata=terminal_metadata,
+            )
         )
-        await self._sync_tracker_from_terminal_job(
-            request,
-            stored_job=stored_job,
-        )
-        if stage_job is None:
-            if stored_job is not None and stored_job.status == PdfJobStatus.COMPLETED.value:
+        cancelled_exc: asyncio.CancelledError | None = None
+        while not handoff_task.done():
+            try:
+                await asyncio.shield(handoff_task)
+            except asyncio.CancelledError as exc:
+                cancelled_exc = exc
+        stored_job, stage_job = handoff_task.result()
+
+        if stage_job is not None:
+            stage_job_id = str(stage_job.job_id)
+
+            class _Outcomes:
+                async def completed(self) -> None:
+                    await asyncio.to_thread(
+                        pdf_job_service.mark_completed, job_id=stage_job_id,
+                        message="Supplements finished",
+                    )
+
+                async def cancelled(self) -> None:
+                    await asyncio.to_thread(
+                        pdf_job_service.mark_cancelled, job_id=stage_job_id,
+                        reason="Processing cancelled by user request",
+                    )
+
+                async def failed(self, failure_message: str) -> None:
+                    await asyncio.to_thread(
+                        pdf_job_service.mark_failed, job_id=stage_job_id,
+                        message=failure_message, stage=ProcessingStage.FAILED.value,
+                    )
+
+            outcomes = _Outcomes()
+            main_ready_at = time.time()
+
+            async def run() -> None:
+                provider = self._document_source_provider_factory()
+                try:
+                    await supplement_wait.run_supplement_stage(
+                        job_id=stage_job_id,
+                        document_id=str(request.document_id),
+                        owner_user_id=plan.owner_user_id,
+                        reference=plan.reference,
+                        plan=plan,
+                        conversion_requested=conversion_requested,
+                        last_answer=last_answer,
+                        main_ready_at=main_ready_at,
+                        provider=provider,
+                        weaviate_client=get_connection(),
+                        outcomes=outcomes,
+                        list_files=list_files_for_paper,
+                        add_files=add_files_to_paper,
+                    )
+                finally:
+                    await provider.aclose()
+
+            try:
+                supplement_wait.start_supplement_stage(job_id=stage_job_id, run=run, outcomes=outcomes)
+            except Exception:
+                fail_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        pdf_job_service.mark_failed,
+                        job_id=stage_job_id,
+                        message=supplement_wait.SUPPLEMENT_STAGE_FAILED_MESSAGE,
+                        stage=ProcessingStage.FAILED.value,
+                    )
+                )
+                while not fail_task.done():
+                    try:
+                        await asyncio.shield(fail_task)
+                    except asyncio.CancelledError as exc:
+                        cancelled_exc = exc
+                fail_task.result()
+                raise
+        elif stored_job is not None and stored_job.status == PdfJobStatus.COMPLETED.value:
+            if stored_job.cancel_requested:
+                logger.info(
+                    "Supplement stage of document %s not started: cancellation was requested on import job %s",
+                    request.document_id,
+                    request.job_id,
+                )
+            else:
                 logger.info(
                     "Supplement stage of document %s not started: the paper is busy or gone",
                     request.document_id,
                 )
-            else:
-                logger.info(
-                    "Supplement stage of document %s not started: import job %s already finalized as %s",
-                    request.document_id,
-                    request.job_id,
-                    stored_job.status if stored_job is not None else "missing",
-                )
-            return
-        stage_job_id = str(stage_job.job_id)
+        else:
+            logger.info(
+                "Supplement stage of document %s not started: import job %s already finalized as %s",
+                request.document_id,
+                request.job_id,
+                stored_job.status if stored_job is not None else "missing",
+            )
 
-        class _Outcomes:
-            async def completed(self) -> None:
-                await asyncio.to_thread(
-                    pdf_job_service.mark_completed, job_id=stage_job_id,
-                    message="Supplements finished",
-                )
-
-            async def cancelled(self) -> None:
-                await asyncio.to_thread(
-                    pdf_job_service.mark_cancelled, job_id=stage_job_id,
-                    reason="Processing cancelled by user request",
-                )
-
-            async def failed(self, failure_message: str) -> None:
-                await asyncio.to_thread(
-                    pdf_job_service.mark_failed, job_id=stage_job_id,
-                    message=failure_message, stage=ProcessingStage.FAILED.value,
-                )
-
-        outcomes = _Outcomes()
-        main_ready_at = time.time()
-
-        async def run() -> None:
-            provider = self._document_source_provider_factory()
+        sync_task = asyncio.create_task(
+            self._sync_tracker_from_terminal_job(
+                request,
+                stored_job=stored_job,
+            )
+        )
+        while not sync_task.done():
             try:
-                await supplement_wait.run_supplement_stage(
-                    job_id=stage_job_id,
-                    document_id=str(request.document_id),
-                    owner_user_id=plan.owner_user_id,
-                    reference=plan.reference,
-                    plan=plan,
-                    conversion_requested=conversion_requested,
-                    last_answer=last_answer,
-                    main_ready_at=main_ready_at,
-                    provider=provider,
-                    weaviate_client=get_connection(),
-                    outcomes=outcomes,
-                    list_files=list_files_for_paper,
-                    add_files=add_files_to_paper,
-                )
-            finally:
-                await provider.aclose()
-
-        supplement_wait.start_supplement_stage(job_id=stage_job_id, run=run, outcomes=outcomes)
+                await asyncio.shield(sync_task)
+            except asyncio.CancelledError as exc:
+                cancelled_exc = exc
+        sync_task.result()
+        if cancelled_exc is not None:
+            raise cancelled_exc
 
     async def _mark_completed_and_sync_tracker(
         self,

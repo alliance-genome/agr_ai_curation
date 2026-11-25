@@ -167,17 +167,25 @@ def test_with_no_file_being_added_the_outline_does_not_mention_it():
         _outline(_file("paper.pdf", "main", "PDF", 0, 41, [METHODS])))
 
 
-def test_while_abc_converts_the_supplements_the_outline_says_so_after_the_files():
+def test_while_abc_converts_the_supplements_the_outline_says_so_after_the_files(monkeypatch):
+    monkeypatch.setenv("DOCUMENT_SOURCE_PROVIDER", "abc_literature")
     outline = {**_outline(_file("paper.pdf", "main", "PDF", 0, 41, [METHODS])), "supplements_converting": True}
 
     result = format_hierarchy_for_prompt(outline)
 
-    # Approved by Chris, 23 Nov 2026 (replacing card 42), character for character.
+    # Approved by Chris, 23 Nov 2026 (replacing card 42), resolved from registered provider short_label.
     assert "\nABC has not finished converting this paper's supplements; they cannot be read yet.\n" in result
     assert result.index("**Materials and Methods**") < result.index("ABC has not finished converting") < result.index(
         "### How to use this outline:")
     assert "  └─ Fly strains (p.3, 1 chunks)\n\nABC has not finished converting this paper's supplements; they cannot " \
            "be read yet.\n\n### How to use this outline:" in result
+
+    monkeypatch.setenv("DOCUMENT_SOURCE_PROVIDER", "local_pdf")
+    neutral_result = format_hierarchy_for_prompt(outline)
+    assert (
+        "\nThe document source has not finished converting this paper's supplements; they cannot be read yet.\n"
+        in neutral_result
+    )
 
 
 def test_with_no_abc_wait_the_outline_does_not_mention_it():

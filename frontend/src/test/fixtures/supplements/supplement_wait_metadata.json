@@ -133,7 +133,37 @@
         "measured_value": null,
         "limit_value": null
       }
-    ]
+    ],
+    "pdf_processing_receipt": {
+      "schema_version": 2,
+      "started_at": "2026-11-24T15:00:00+00:00",
+      "completed_at": "2026-11-24T15:05:00+00:00",
+      "outcome": "completed",
+      "selection": {},
+      "stages": {
+        "external_request": {
+          "status": "not_started"
+        },
+        "hierarchy": {
+          "status": "not_started"
+        },
+        "chunking": {
+          "status": "not_started"
+        },
+        "figure_locator": {
+          "status": "not_started"
+        },
+        "embedding_storage": {
+          "status": "not_started"
+        },
+        "total": {
+          "status": "completed",
+          "started_at": "2026-11-24T15:00:00+00:00",
+          "completed_at": "2026-11-24T15:05:00+00:00",
+          "duration_ms": 300000.0
+        }
+      }
+    }
   },
   "finished_with_wait_timestamp": {
     "job_kind": "supplement_wait",

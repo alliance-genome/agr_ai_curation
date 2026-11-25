@@ -52,7 +52,10 @@ from src.lib.document_sources.provenance import (
     find_existing_document_by_source,
     sanitize_document_source_provenance,
 )
-from src.lib.document_sources.registry import get_configured_document_source_provider
+from src.lib.document_sources.registry import (
+    get_configured_document_source_provider,
+    get_document_source_provider_metadata,
+)
 from src.lib.openai_agents.config import (
     get_document_max_files_per_paper,
     get_document_source_import_batch_limit,
@@ -120,11 +123,28 @@ class SupplementSelectionError(ValueError):
         self.limit_value = limit_value
 
 
-# Per-identifier result for an unconverted supplement this import will not ask the
-# provider to convert. Curator-facing; approved wording (Chris, 23 Nov 2026, card 41).
-FILE_NOT_TICKABLE_MESSAGE = (
-    "This file can no longer be chosen: ABC has not converted it and this import will not ask ABC to."
-)
+def _provider_short_label(provider_id: str | None) -> str:
+    resolved_id = (provider_id or "").strip()
+    if resolved_id:
+        metadata = get_document_source_provider_metadata(resolved_id)
+        if isinstance(metadata, Mapping):
+            for key in ("short_label", "display_label"):
+                raw = metadata.get(key)
+                if isinstance(raw, str) and raw.strip():
+                    return raw.strip()
+    return "the document source"
+
+
+def file_not_tickable_message(provider_id: str | None = None) -> str:
+    """Curator-facing message for an unconverted supplement this import will not ask to convert.
+
+    Approved wording (Chris, 23 Nov 2026, card 41), parameterized by registered provider label.
+    """
+    label = _provider_short_label(provider_id)
+    return (
+        f"This file can no longer be chosen: {label} has not converted it "
+        f"and this import will not ask {label} to."
+    )
 
 
 class ReferenceImportDecisionStatus(str):
@@ -1017,7 +1037,7 @@ class IdentifierImportService:
                     normalized_identifier=normalized.normalized,
                     status="error",
                     error_code="file_not_tickable",
-                    message=FILE_NOT_TICKABLE_MESSAGE,
+                    message=file_not_tickable_message(decision.provider),
                 )
             plan = None
             if chosen:

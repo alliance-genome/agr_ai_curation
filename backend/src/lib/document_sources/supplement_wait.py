@@ -189,22 +189,6 @@ def queued_entries(plan: SupplementPlan) -> list[dict[str, Any]]:
     ]
 
 
-def not_started_entries(plan: SupplementPlan, *, now: float | None = None) -> list[dict[str, Any]]:
-    """Per-file outcomes when no supplement stage could start (the paper was busy or gone)."""
-
-    observed = _iso(time.time() if now is None else now)
-    return [
-        _Entry(
-            provider_file_id=chosen.provider_file_id,
-            display_name=_clean_display_name(chosen.display_name),
-            state=SupplementState.LEFT_OUT,
-            reason_code=FileReason.PAPER_BUSY_WHEN_READY.value,
-            observed_at=observed,
-        ).as_metadata()
-        for chosen in plan.chosen
-    ]
-
-
 class _Stage:
     """One import's supplement stage: its entries, its job writes and its limits."""
 
