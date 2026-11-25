@@ -24,6 +24,7 @@ import {
   fileDisplayLabel,
   isPdfFile,
   type ViewerFile,
+  type ViewerFilesPayload,
 } from '@/components/pdfViewer/viewerFiles'
 import {
   PDF_JOB_FALLBACK_POLL_INTERVAL_MS,
@@ -125,13 +126,21 @@ interface PendingViewerRefreshEntry {
   recordedAt: number
 }
 
+interface ActiveViewerRecoveryEntry {
+  generation: number
+  promise: Promise<ViewerFilesPayload>
+}
+
 /**
- * Per-document direct `/files` refresh sequence and abort controllers so an older post-mutation
- * refresh finishing late can never overwrite a newer removal in cache or the open viewer.
+ * Per-document direct `/files` refresh sequence, abort controllers, and shared in-flight
+ * recovery promises so an older post-mutation refresh finishing late can never overwrite a
+ * newer removal, recovery survives dialog close/unmount, and reopening during recovery
+ * reuses the same GET.
  */
 let nextViewerRefreshGeneration = 0
 const latestViewerRefreshGenerationByDocument = new Map<string, number>()
 const activeViewerRefreshControllerByDocument = new Map<string, AbortController>()
+const activeViewerRecoveryByDocument = new Map<string, ActiveViewerRecoveryEntry>()
 
 /**
  * Documents whose post-removal `/files` fetch failed and still need to publish a
@@ -139,6 +148,16 @@ const activeViewerRefreshControllerByDocument = new Map<string, AbortController>
  * Bounded by `PAPER_SOURCE_FILES_STALE_MS` so inactive documents are never retained indefinitely.
  */
 const pendingViewerRefreshByDocument = new Map<string, PendingViewerRefreshEntry>()
+
+function pruneViewerRefreshGenerationIfIdle(documentId: string): void {
+  if (
+    !activeViewerRefreshControllerByDocument.has(documentId)
+    && !activeViewerRecoveryByDocument.has(documentId)
+    && !pendingViewerRefreshByDocument.has(documentId)
+  ) {
+    latestViewerRefreshGenerationByDocument.delete(documentId)
+  }
+}
 
 function pruneStalePendingAddJobs(now = Date.now()): void {
   for (const [docId, entry] of pendingAddJobIdsByDocument.entries()) {
@@ -160,6 +179,7 @@ function pruneStalePendingViewerRefreshes(now = Date.now()): void {
   for (const [docId, entry] of pendingViewerRefreshByDocument.entries()) {
     if (now - entry.recordedAt > PAPER_SOURCE_FILES_STALE_MS) {
       pendingViewerRefreshByDocument.delete(docId)
+      pruneViewerRefreshGenerationIfIdle(docId)
     }
   }
 }
@@ -208,6 +228,7 @@ function markPendingViewerRefresh(documentId: string, generation: number): void 
 
 function clearPendingViewerRefresh(documentId: string): void {
   pendingViewerRefreshByDocument.delete(documentId)
+  pruneViewerRefreshGenerationIfIdle(documentId)
 }
 
 function consumePendingViewerRefresh(documentId: string, expectedGeneration: number): boolean {
@@ -220,6 +241,7 @@ function consumePendingViewerRefresh(documentId: string, expectedGeneration: num
     return false
   }
   pendingViewerRefreshByDocument.delete(documentId)
+  pruneViewerRefreshGenerationIfIdle(documentId)
   return true
 }
 
@@ -229,11 +251,18 @@ export function hasPendingViewerRefresh(documentId: string): boolean {
   return pendingViewerRefreshByDocument.has(documentId)
 }
 
+/** Whether a document currently has a tracked viewer refresh generation entry (for tests). */
+export function hasTrackedViewerRefreshGeneration(documentId: string): boolean {
+  pruneStalePendingViewerRefreshes()
+  return latestViewerRefreshGenerationByDocument.has(documentId)
+}
+
 /** Clear retained add job ids and deferred refresh markers (used for test isolation). */
 export function clearPendingAddJobIds(): void {
   pendingAddJobIdsByDocument.clear()
   pending404RefreshByDocument.clear()
   pendingViewerRefreshByDocument.clear()
+  activeViewerRecoveryByDocument.clear()
   latestViewerRefreshGenerationByDocument.clear()
   for (const controller of activeViewerRefreshControllerByDocument.values()) {
     controller.abort()
@@ -1500,6 +1529,13 @@ export default function DocumentFilesSection({
   const filesQuery = useQuery({
     queryKey: paperFilesQueryKey(documentId),
     queryFn: async ({ signal }) => {
+      const activeRecovery = activeViewerRecoveryByDocument.get(documentId)
+      if (
+        activeRecovery
+        && latestViewerRefreshGenerationByDocument.get(documentId) === activeRecovery.generation
+      ) {
+        return await activeRecovery.promise
+      }
       const expectedGeneration = latestViewerRefreshGenerationByDocument.get(documentId) ?? 0
       const payload = await fetchViewerFiles(documentId, signal)
       if (consumePendingViewerRefresh(documentId, expectedGeneration)) {
@@ -1530,6 +1566,7 @@ export default function DocumentFilesSection({
       const refreshGeneration = ++nextViewerRefreshGeneration
       latestViewerRefreshGenerationByDocument.set(targetDocumentId, refreshGeneration)
       activeViewerRefreshControllerByDocument.get(targetDocumentId)?.abort()
+      activeViewerRecoveryByDocument.delete(targetDocumentId)
       const directRefreshController = new AbortController()
       activeViewerRefreshControllerByDocument.set(targetDocumentId, directRefreshController)
       const isLatestGeneration = () =>
@@ -1566,41 +1603,54 @@ export default function DocumentFilesSection({
               return
             }
             markPendingViewerRefresh(targetDocumentId, refreshGeneration)
+            // Share ONE unmount-surviving recovery request per (documentId, generation) bound
+            // only to `directRefreshController.signal` (never to dialog unmount/close), so
+            // closing the dialog mid-recovery still updates cache + open viewer and reopening
+            // during recovery awaits the same GET without issuing a duplicate request.
+            const recoveryPromise = Promise.resolve().then(async (): Promise<ViewerFilesPayload> => {
+              try {
+                const recoveredPayload = await fetchViewerFiles(
+                  targetDocumentId,
+                  directRefreshController.signal,
+                )
+                if (!directRefreshController.signal.aborted && isLatestGeneration()) {
+                  clearPendingViewerRefresh(targetDocumentId)
+                  queryClient.setQueryData(paperFilesQueryKey(targetDocumentId), recoveredPayload)
+                  showPaperFilesInViewer(targetDocumentId, recoveredPayload.files, {
+                    refreshOnlyIfOpen: true,
+                  })
+                }
+                return recoveredPayload
+              } finally {
+                if (activeViewerRecoveryByDocument.get(targetDocumentId)?.promise === recoveryPromise) {
+                  activeViewerRecoveryByDocument.delete(targetDocumentId)
+                  pruneViewerRefreshGenerationIfIdle(targetDocumentId)
+                }
+              }
+            })
+            activeViewerRecoveryByDocument.set(targetDocumentId, {
+              generation: refreshGeneration,
+              promise: recoveryPromise,
+            })
+
             const hasActiveFilesObserver =
               queryClient.getQueryCache().find({
                 queryKey: paperFilesQueryKey(targetDocumentId),
                 type: 'active',
               }) !== undefined
             if (hasActiveFilesObserver) {
-              await queryClient.invalidateQueries({ queryKey: paperFilesQueryKey(targetDocumentId) })
-              return
-            }
-            // Paper is inactive (dialog closed or switched to another paper): mark any cached
-            // entry stale and attempt an independent recovery fetch so an open viewer for this
-            // paper still reconciles without waiting for reopen or retaining the id forever.
-            await queryClient.invalidateQueries({
-              queryKey: paperFilesQueryKey(targetDocumentId),
-              refetchType: 'none',
-            })
-            if (directRefreshController.signal.aborted || !isLatestGeneration()) {
-              return
-            }
-            try {
-              const recoveredPayload = await fetchViewerFiles(
-                targetDocumentId,
-                directRefreshController.signal,
-              )
-              if (directRefreshController.signal.aborted || !isLatestGeneration()) {
-                return
-              }
-              clearPendingViewerRefresh(targetDocumentId)
-              queryClient.setQueryData(paperFilesQueryKey(targetDocumentId), recoveredPayload)
-              showPaperFilesInViewer(targetDocumentId, recoveredPayload.files, {
-                refreshOnlyIfOpen: true,
-              })
-            } catch {
-              // Keep TTL-bounded pending marker so reopening within PAPER_SOURCE_FILES_STALE_MS
-              // still reconciles the viewer, without retaining the document id indefinitely.
+              await Promise.allSettled([
+                queryClient.invalidateQueries({ queryKey: paperFilesQueryKey(targetDocumentId) }),
+                recoveryPromise,
+              ])
+            } else {
+              await Promise.allSettled([
+                queryClient.invalidateQueries({
+                  queryKey: paperFilesQueryKey(targetDocumentId),
+                  refetchType: 'none',
+                }),
+                recoveryPromise,
+              ])
             }
           }
         } finally {
@@ -1610,6 +1660,7 @@ export default function DocumentFilesSection({
           ) {
             activeViewerRefreshControllerByDocument.delete(targetDocumentId)
           }
+          pruneViewerRefreshGenerationIfIdle(targetDocumentId)
         }
       })()
 

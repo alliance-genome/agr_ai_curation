@@ -19,8 +19,9 @@ import type {
   CurationSessionStatsRequest,
   CurationSessionStatsResponse,
 } from '../types'
-import { readCurationApiError } from '../services/api'
+import { readCurationApiErrorWithCode } from '../services/api'
 import { buildCurationSessionFilterQueryParams } from '../services/curationSessionQueryParams'
+import { CurationWorkspaceRequestError } from '../services/curationWorkspaceService'
 
 interface CurationInventoryQueryOptions {
   enabled?: boolean
@@ -41,7 +42,8 @@ async function fetchCurationJson<T>(path: string, init?: RequestInit): Promise<T
   })
 
   if (!response.ok) {
-    throw new Error(await readCurationApiError(response))
+    const { message, code } = await readCurationApiErrorWithCode(response)
+    throw new CurationWorkspaceRequestError(response.status, message, code)
   }
 
   return response.json() as Promise<T>

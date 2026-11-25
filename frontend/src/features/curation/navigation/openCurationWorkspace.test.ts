@@ -369,6 +369,35 @@ describe('openCurationWorkspace', () => {
     expect((notFound404 as Error).message).not.toContain('Raw internal document lookup')
   })
 
+  it('hides raw server detail when the pre-bootstrap /sessions GET fails with 403', async () => {
+    vi.mocked(global.fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          detail: 'Internal session-list ACL rule denied user_id=42',
+        }),
+        {
+          status: 403,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    )
+
+    let caught: unknown = null
+    try {
+      await resolveCurationWorkspaceSessionId({ documentId: 'doc-1' })
+    } catch (error) {
+      caught = error
+    }
+
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    expect(caught).toBeInstanceOf(CurationWorkspaceRequestError)
+    expect(caught).toMatchObject({
+      status: 403,
+      message: 'Could not open the curation workspace.',
+    })
+    expect((caught as Error).message).not.toContain('Internal session-list ACL')
+  })
+
   it('reports launch availability when no session exists yet but bootstrap is possible', async () => {
     vi.mocked(global.fetch)
       .mockResolvedValueOnce(

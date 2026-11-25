@@ -98,18 +98,34 @@ export async function findExistingCurationSessionId(
   assertWorkspaceTarget(target)
   const singleAdapterKey = resolveSingleScopeValue(target.adapterKeys)
 
-  const response = await fetchCurationSessionList({
-    filters: {
-      document_id: target.documentId ?? null,
-      flow_run_id: target.flowRunId ?? null,
-      origin_session_id: target.originSessionId ?? null,
-      adapter_keys: normalizeCurationWorkspaceScopeValues(target.adapterKeys),
-    },
-    sort_by: 'prepared_at',
-    sort_direction: 'desc',
-    page: 1,
-    page_size: singleAdapterKey ? 1 : 2,
-  })
+  let response: Awaited<ReturnType<typeof fetchCurationSessionList>>
+  try {
+    response = await fetchCurationSessionList({
+      filters: {
+        document_id: target.documentId ?? null,
+        flow_run_id: target.flowRunId ?? null,
+        origin_session_id: target.originSessionId ?? null,
+        adapter_keys: normalizeCurationWorkspaceScopeValues(target.adapterKeys),
+      },
+      sort_by: 'prepared_at',
+      sort_direction: 'desc',
+      page: 1,
+      page_size: singleAdapterKey ? 1 : 2,
+    })
+  } catch (error) {
+    if (error instanceof CurationWorkspaceRequestError) {
+      throw new CurationWorkspaceRequestError(
+        error.status,
+        'Could not open the curation workspace.',
+        error.code,
+      )
+    }
+    throw new CurationWorkspaceRequestError(
+      0,
+      'Could not open the curation workspace.',
+      null,
+    )
+  }
 
   const distinctAdapterKeys = [
     ...new Set(

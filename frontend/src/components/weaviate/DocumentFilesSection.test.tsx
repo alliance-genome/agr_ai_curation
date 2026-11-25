@@ -33,6 +33,7 @@ import DocumentFilesSection, {
   PAPER_SOURCE_FILES_STALE_MS,
   clearPendingAddJobIds,
   hasPendingViewerRefresh,
+  hasTrackedViewerRefreshGeneration,
   listedProviderLabel,
   paperActiveJobsQueryKey,
   paperFilesQueryKey,
@@ -3597,6 +3598,7 @@ describe('DocumentFilesSection (Library Remove)', () => {
       expect(cached?.files.map((file) => file.file_id)).toEqual([MAIN_FILE_ID])
       expect(viewerEvents).toHaveLength(1)
       expect(viewerEvents[0]!.files.map((file) => file.file_id)).toEqual([MAIN_FILE_ID])
+      expect(hasTrackedViewerRefreshGeneration(DOCUMENT_ID)).toBe(false)
     } finally {
       unsubscribeViewer()
     }
@@ -3702,6 +3704,7 @@ describe('DocumentFilesSection (Library Remove)', () => {
         PDF_SUPPLEMENT_FILE_ID,
       ])
       expect(hasPendingViewerRefresh(DOCUMENT_ID)).toBe(false)
+      expect(hasTrackedViewerRefreshGeneration(DOCUMENT_ID)).toBe(false)
       view.unmount()
 
       // Part 2: When BOTH direct and recovery `/files` fail 503 while Paper A is inactive,
@@ -3766,9 +3769,11 @@ describe('DocumentFilesSection (Library Remove)', () => {
         )
         await waitFor(() => expect(persistentFailCalls).toBe(3))
         expect(hasPendingViewerRefresh(DOCUMENT_ID)).toBe(true)
+        expect(hasTrackedViewerRefreshGeneration(DOCUMENT_ID)).toBe(true)
 
         dateNowSpy.mockReturnValue(baseNow + PAPER_SOURCE_FILES_STALE_MS + 1)
         expect(hasPendingViewerRefresh(DOCUMENT_ID)).toBe(false)
+        expect(hasTrackedViewerRefreshGeneration(DOCUMENT_ID)).toBe(false)
       } finally {
         dateNowSpy.mockRestore()
       }
@@ -3820,6 +3825,117 @@ describe('DocumentFilesSection (Library Remove)', () => {
       expect(unmountedDirectCallback).toHaveBeenCalledTimes(1)
     } finally {
       unsubscribeLibrary()
+    }
+  })
+
+  it('survives closing the dialog mid-recovery and reuses the single in-flight recovery GET when reopened', async () => {
+    const user = userEvent.setup()
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const viewerEvents: PDFViewerDocumentChangedDetail[] = []
+    const unsubscribeViewer = onPDFDocumentChanged((event) => viewerEvents.push(event.detail))
+    let paperFilesCalls = 0
+    let recoverySignal: AbortSignal | undefined
+    let resolveRecovery!: (response: Response) => void
+
+    stubApi({
+      paperFiles: (_url, init) => {
+        paperFilesCalls += 1
+        if (paperFilesCalls === 1) {
+          return jsonResponse(FOUR_FILES_PAYLOAD)
+        }
+        if (paperFilesCalls === 2) {
+          // Direct post-removal fetch fails with 503 while dialog is open.
+          return jsonResponse({ detail: 'Temporarily unavailable' }, 503)
+        }
+        // Shared recovery GET stays in flight while dialog closes and reopens.
+        recoverySignal = init?.signal ?? undefined
+        return new Promise<Response>((resolve) => {
+          resolveRecovery = resolve
+        })
+      },
+      onRemovalCheck: () => jsonResponse(removalCheckFor('removable_plain')),
+      onRemoveFile: (fileId) =>
+        jsonResponse({
+          document_id: DOCUMENT_ID,
+          file_id: fileId,
+          removed: true,
+          cleanup_finished: true,
+          ready_file_count: 2,
+        }),
+    })
+
+    try {
+      const view = renderSection(
+        { providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT },
+        client,
+      )
+      const removeButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+      await waitFor(() => expect(removeButton).toBeEnabled())
+      await user.click(removeButton)
+      const dialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+      await user.click(within(dialog).getByRole('button', { name: 'Remove file' }))
+
+      // Wait until the single shared recovery GET (call 3) is in flight.
+      await waitFor(() => expect(paperFilesCalls).toBe(3))
+      expect(recoverySignal?.aborted).toBe(false)
+
+      // Close the dialog mid-recovery -> must NOT abort the shared recovery GET.
+      view.rerender(
+        <QueryClientProvider client={client}>
+          <DocumentFilesSection
+            documentId={DOCUMENT_ID}
+            providerLabel={PROVIDER}
+            providerShortLabel={PROVIDER_SHORT}
+            processingStatus="completed"
+            open={false}
+            pollIntervalMs={20}
+          />
+        </QueryClientProvider>,
+      )
+      await new Promise((resolve) => setTimeout(resolve, 25))
+      expect(recoverySignal?.aborted).toBe(false)
+
+      // Reopen the dialog while recovery is STILL in flight -> must reuse the same GET (still 3).
+      view.rerender(
+        <QueryClientProvider client={client}>
+          <DocumentFilesSection
+            documentId={DOCUMENT_ID}
+            providerLabel={PROVIDER}
+            providerShortLabel={PROVIDER_SHORT}
+            processingStatus="completed"
+            open
+            pollIntervalMs={20}
+          />
+        </QueryClientProvider>,
+      )
+      await new Promise((resolve) => setTimeout(resolve, 25))
+      expect(paperFilesCalls).toBe(3)
+      expect(recoverySignal?.aborted).toBe(false)
+
+      // Complete the single recovery GET -> cache, viewer, and reopened UI all update; maps pruned.
+      resolveRecovery(jsonResponse(THREE_FILES_AFTER_REMOVAL))
+
+      await waitFor(() => {
+        expect(viewerEvents).toHaveLength(1)
+        expect(screen.queryByRole('button', { name: 'Remove Table_S1.xlsx' })).not.toBeInTheDocument()
+      })
+      expect(paperFilesCalls).toBe(3)
+      expect(viewerEvents[0]).toMatchObject({
+        documentId: DOCUMENT_ID,
+        refreshOnlyIfOpen: true,
+      })
+      expect(viewerEvents[0]!.files.map((file) => file.file_id)).toEqual([
+        MAIN_FILE_ID,
+        PDF_SUPPLEMENT_FILE_ID,
+      ])
+      const cached = client.getQueryData<ViewerFilesPayload>(paperFilesQueryKey(DOCUMENT_ID))
+      expect(cached?.files.map((file) => file.file_id)).toEqual(
+        THREE_FILES_AFTER_REMOVAL.files.map((file) => file.file_id),
+      )
+      expect(hasPendingViewerRefresh(DOCUMENT_ID)).toBe(false)
+      expect(hasTrackedViewerRefreshGeneration(DOCUMENT_ID)).toBe(false)
+    } finally {
+      unsubscribeViewer()
     }
   })
 })
