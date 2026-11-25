@@ -212,20 +212,31 @@ Configured knobs:
 - `DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS`: the main paper's wait interval
   (default 30 seconds). Every poll is one read of ABC's read-only file listing
   (`show_all`), not a conversion request (see "The main paper's wait" below);
-  ABC recycles a worker, restarting its running conversion, after about 1,000
-  requests of any kind, so the interval bounds how many requests one wait sends
-  (at most 121 in an hour at 30 seconds). Minimum 5
-  seconds. Start-up refuses settings whose deadline divided by this interval
-  exceeds 400 polls in one wait (`DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT`: under
-  half of ABC's roughly 1,000 requests per worker, which other callers share),
-  with a named error naming both settings; an `.env` still pinning the old 2
-  seconds stops the deploy instead of degrading imports.
+  about 121 reads in an hour at 30 seconds. Minimum 5 seconds; an `.env`
+  still pinning the old 2 seconds stops the deploy instead of degrading imports.
+- `DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT` (default 400; ALL-1678, owner's ruling of
+  24 Nov 2026): **our own polling cap**, the most polls one wait may make: the
+  listing reads it makes while it waits, plus the main paper's wait's two
+  conversion requests. Start-up computes each wait's worst case from its
+  settings and refuses any configuration over it, with a named error giving the
+  smallest interval that fits: a main paper's wait makes at most
+  `ceil(deadline / poll) + 5` (125 at the defaults), a supplement wait at most
+  `ceil(wait / listing poll) - 1` (179). Both bounds are derived from the waits'
+  loops and proven by tests at the HTTP boundary, which also report how many
+  requests a worst-case wait really sends (downloads and full listings
+  included). Nothing counts at run time.
+  **It is not a protection for ABC's API workers.** ABC's API recycles each
+  worker after about 1,000 requests (gunicorn `max_requests`, from all of its
+  clients), and an on-demand conversion runs inside the worker that accepted
+  it (ABC's `conversion_job_manager.py`), so a recycle ends that conversion.
+  What can recycle that worker is the total traffic it receives from everyone,
+  which no per-wait number can bound; our downloads, full listings and the
+  add's requests are not counted here at all. A deployment on another provider
+  sets its own value.
 - `DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS`: interval between a supplement
   wait's reads of ABC's read-only file listing (default 60 seconds, minimum 5).
-  The supplement wait never re-sends the conversion request. Start-up refuses a
-  value whose reads in one wait (`DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS`
-  divided by it) exceed the same 400, since every read still counts toward
-  ABC's worker recycling; at the default it is 180. The dead-wait test for a
+  The supplement wait never re-sends the conversion request. Its listing reads
+  count toward `DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT` (above). The dead-wait test for a
   stage in `waiting_for_supplements` uses this interval.
 - `DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS`: deadline for one provider
   conversion/import job of a main paper (default 3,600 seconds), covering the
