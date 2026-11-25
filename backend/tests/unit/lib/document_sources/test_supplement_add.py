@@ -3010,3 +3010,129 @@ async def test_cancellation_during_insert_rows_file_removal_unfinished_emits_no_
         if record.levelno >= logging.ERROR and not getattr(record, "sentry_skip_event", False)
     ]
     assert promotable_errors == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_redaction", ["false", "true"])
+async def test_undo_reports_sanitized_secondary_row_fail_error_once_and_reraises_original_rollback_error(
+    monkeypatch, caplog, content_redaction,
+):
+    import json
+
+    import sentry_sdk
+    from sentry_sdk import Client
+    from sentry_sdk.integrations.logging import LoggingIntegration
+    from sentry_sdk.transport import Transport
+    from sqlalchemy.exc import OperationalError
+
+    from src.lib.observability.sentry import before_send
+
+    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", content_redaction)
+    fake_email = "curator.rollback.secret@alliance-example.org"
+    fake_doc_id = UUID("aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb")
+    fake_file_id = UUID("cccccccc-4444-5555-6666-dddddddddddd")
+    fake_filename = "Confidential_Rollback_S77.xlsx"
+    fake_db_secret = (
+        f"DB write failed for secret-curator-paper-9999 "
+        f"({fake_email}, doc={fake_doc_id}, file={fake_file_id}, name={fake_filename})"
+    )
+    original_rollback_error = OSError(f"primary-rollback-unlink-error-secret {fake_filename}")
+
+    leftover = supplement_add._Leftover(
+        file_id=fake_file_id,
+        chunk_index_start=12,
+        chunk_index_end=15,
+        paths=(f"{fake_email}/source_markdown/{fake_file_id}.md",),
+    )
+    monkeypatch.setattr(supplement_add, "_rollback_files", lambda _doc, _ids: [leftover])
+    monkeypatch.setattr(supplement_add, "_delete_pieces", AsyncMock())
+    monkeypatch.setattr(
+        supplement_add,
+        "_remove_stored_files",
+        Mock(side_effect=original_rollback_error),
+    )
+    secondary_db_error = OperationalError(
+        "UPDATE pdf_document_files SET status='failed'",
+        {"doc": str(fake_doc_id), "file": fake_filename, "secret": "secret-curator-paper-9999"},
+        RuntimeError(fake_db_secret),
+    )
+    monkeypatch.setattr(
+        supplement_add,
+        "_mark_pending_rows_failed",
+        Mock(side_effect=secondary_db_error),
+    )
+
+    events: list[dict[str, Any]] = []
+
+    class MemoryTransport(Transport):
+        def capture_envelope(self, envelope):
+            for item in envelope.items:
+                if item.headers.get("type") == "event":
+                    events.append(item.payload.json)
+
+    client = Client(
+        dsn="http://public@localhost/1",
+        transport=MemoryTransport,
+        default_integrations=False,
+        integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+        before_send=before_send,
+        send_default_pii=False,
+        include_local_variables=False,
+    )
+    try:
+        with caplog.at_level(logging.INFO), sentry_sdk.isolation_scope() as sentry_scope:
+            sentry_scope.set_client(client)
+
+            def _attach_request(event, _hint):
+                event.setdefault(
+                    "request",
+                    {"method": "POST", "url": f"https://app.example.org/api/documents/{fake_doc_id}/files"},
+                )
+                return event
+
+            sentry_scope.add_event_processor(_attach_request)
+            with pytest.raises(OSError) as raised:
+                await supplement_add._undo(
+                    fake_doc_id,
+                    fake_email,
+                    [fake_file_id],
+                    [f"{fake_email}/source_markdown/{fake_file_id}.md"],
+                    caller_reports_failure=True,
+                )
+            assert raised.value is original_rollback_error
+            client.flush()
+    finally:
+        client.close()
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["tags"]["runtime_component"] == "document_files"
+    assert event["tags"]["operation"] == "supplement_add_rollback_row_fail_failed"
+    assert event["level"] == "error"
+    assert event["fingerprint"] == ["supplement_add_rollback_row_fail_failed"]
+    assert event["contexts"]["runtime_exception"] == {
+        "component": "document_files",
+        "operation": "supplement_add_rollback_row_fail_failed",
+        "exception_type": "[Filtered]" if content_redaction == "true" else "OperationalError",
+    }
+    assert "request" not in event
+    assert "Supplement add rollback could not mark surviving rows failed (OperationalError)" in caplog.text
+
+    serialized = json.dumps(event)
+    for sensitive in (
+        fake_email,
+        str(fake_doc_id),
+        str(fake_file_id),
+        fake_filename,
+        "secret-curator-paper-9999",
+        "primary-rollback-unlink-error-secret",
+    ):
+        assert sensitive not in serialized, f"Leaked {sensitive!r} into Sentry payload: {serialized}"
+        assert sensitive not in caplog.text, f"Leaked {sensitive!r} into logs: {caplog.text}"
+
+    promotable_errors = [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.ERROR and not getattr(record, "sentry_skip_event", False)
+    ]
+    assert promotable_errors == []
