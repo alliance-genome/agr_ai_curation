@@ -102,7 +102,7 @@ class _Index:
                 raise RuntimeError("made-up storage failure")
             self.stored.append(chunk_range)
 
-        def delete_range(document_id, user_id, *, start, end):
+        def delete_range(document_id, user_id, *, start, end, caller_reports_failure=False):
             self.deleted.append((start, end))
             return end - start + 1
 

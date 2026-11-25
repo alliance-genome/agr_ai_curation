@@ -518,8 +518,27 @@ async def _prepare(listed: ListedFile, markdown: str, *, document_id: UUID, disp
     )
 
 
+def _report_supplement_failure(exc: BaseException, *, operation: str, message: str) -> None:
+    from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
+
+    try:
+        report_runtime_exception(
+            sanitized_runtime_error(message),
+            component="document_files",
+            operation=operation,
+            context={"exception_type": type(exc).__name__},
+            fingerprint=[operation],
+            include_request=False,
+        )
+    except Exception:
+        logger.warning("Supplement failure reporting unavailable", extra={"sentry_skip_event": True})
+
+
 async def _drain_after_cancel(
-    work: Awaitable[Any], *, operation: str = "supplement_add_cancelled_mutation_failed",
+    work: Awaitable[Any],
+    *,
+    operation: str = "supplement_add_cancelled_mutation_failed",
+    message: str = "Supplement mutation failed during cancellation",
 ) -> None:
     """Finish outstanding work and report a discarded failure before the caller re-raises cancellation."""
     async def drain() -> None:
@@ -529,16 +548,7 @@ async def _drain_after_cancel(
             # A chunk writer can finish its own cancellation and failure reporting.
             pass
         except Exception as exc:
-            from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
-
-            try:
-                report_runtime_exception(
-                    sanitized_runtime_error("Supplement mutation failed during cancellation"),
-                    component="document_files", operation=operation,
-                    context={"exception_type": type(exc).__name__}, fingerprint=[operation], include_request=False,
-                )
-            except Exception:
-                logger.warning("Supplement failure reporting unavailable", extra={"sentry_skip_event": True})
+            _report_supplement_failure(exc, operation=operation, message=message)
 
     finalizer = asyncio.create_task(drain())
     while not finalizer.done():
@@ -549,13 +559,18 @@ async def _drain_after_cancel(
     finalizer.result()
 
 
-async def _finish_mutation(mutation: Coroutine[Any, Any, _T]) -> _T:
+async def _finish_mutation(
+    mutation: Coroutine[Any, Any, _T],
+    *,
+    operation: str = "supplement_add_cancelled_mutation_failed",
+    message: str = "Supplement mutation failed during cancellation",
+) -> _T:
     """Keep ownership of an executor-backed mutation until rollback can safely run."""
     task = asyncio.create_task(mutation)
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
-        await _drain_after_cancel(task)
+        await _drain_after_cancel(task, operation=operation, message=message)
         raise
 
 
@@ -599,6 +614,7 @@ async def _write(
 ) -> None:
     from src.lib.document_files.service import mark_files_ready
     from src.lib.document_sources.ingestion import _save_processed_json, _save_source_markdown
+    from src.lib.exceptions import PDFCancellationError
 
     subject = paper.owner_subject
 
@@ -652,11 +668,34 @@ async def _write(
         await _finish_mutation(commit())
     except BaseException as exc:
         if not commit_state.committed:
-            rollback = _undo(document_id, subject, [item.file_id for item in accepted], planned_paths)
-            if isinstance(exc, asyncio.CancelledError):
-                await _drain_after_cancel(rollback, operation="supplement_add_cancelled_rollback_failed")
+            rollback = _undo(
+                document_id,
+                subject,
+                [item.file_id for item in accepted],
+                planned_paths,
+                caller_reports_failure=True,
+            )
+            if isinstance(exc, (asyncio.CancelledError, PDFCancellationError)):
+                await _drain_after_cancel(
+                    rollback,
+                    operation="supplement_add_cancelled_rollback_failed",
+                    message="Supplement rollback failed during cancellation",
+                )
             else:
-                await _finish_mutation(rollback)
+                try:
+                    await _finish_mutation(
+                        rollback,
+                        operation="supplement_add_cancelled_rollback_failed",
+                        message="Supplement rollback failed during cancellation",
+                    )
+                except asyncio.CancelledError:
+                    if isinstance(exc, Exception):
+                        _report_supplement_failure(
+                            exc,
+                            operation="supplement_add_displaced_write_failed",
+                            message="Supplement write failed before cancellation",
+                        )
+                    raise
         raise
 
 
@@ -827,14 +866,34 @@ def _remove_stored_files(paths: Sequence[str], subject: str) -> None:
     remove_stored_files(paths, owner_subject=subject)
 
 
-async def _delete_pieces(document_id: UUID, subject: str, ranges: Sequence[tuple[int, int]]) -> None:
+async def _delete_pieces(
+    document_id: UUID,
+    subject: str,
+    ranges: Sequence[tuple[int, int]],
+    *,
+    caller_reports_failure: bool = False,
+) -> None:
     from src.lib.weaviate_client.chunks import delete_chunk_range
 
     for start, end in ranges:
-        await asyncio.to_thread(delete_chunk_range, str(document_id), subject, start=start, end=end)
+        await asyncio.to_thread(
+            delete_chunk_range,
+            str(document_id),
+            subject,
+            start=start,
+            end=end,
+            caller_reports_failure=caller_reports_failure,
+        )
 
 
-async def _undo(document_id: UUID, subject: str, file_ids: list[UUID], planned_paths: list[str]) -> None:
+async def _undo(
+    document_id: UUID,
+    subject: str,
+    file_ids: list[UUID],
+    planned_paths: list[str],
+    *,
+    caller_reports_failure: bool = False,
+) -> None:
     """Remove what this add wrote: pieces in its ranges, its stored files, its rows.
 
     When the paper itself was deleted while the add ran, its rows (and so the ranges)
@@ -844,25 +903,45 @@ async def _undo(document_id: UUID, subject: str, file_ids: list[UUID], planned_p
 
     leftovers = await asyncio.to_thread(_rollback_files, document_id, file_ids)
     if leftovers is not None:
-        await _remove_leftovers(document_id, subject, leftovers)
+        await _remove_leftovers(
+            document_id, subject, leftovers, caller_reports_failure=caller_reports_failure,
+        )
         return
-    await _delete_pieces_of_deleted_paper(document_id, subject)
+    await _delete_pieces_of_deleted_paper(
+        document_id, subject, caller_reports_failure=caller_reports_failure,
+    )
     await asyncio.to_thread(_remove_stored_files, planned_paths, subject)
 
 
-async def _delete_pieces_of_deleted_paper(document_id: UUID, subject: str) -> None:
+async def _delete_pieces_of_deleted_paper(
+    document_id: UUID,
+    subject: str,
+    *,
+    caller_reports_failure: bool = False,
+) -> None:
     from src.lib.weaviate_client.chunks import delete_pieces_of_deleted_paper
 
-    await asyncio.to_thread(delete_pieces_of_deleted_paper, str(document_id), subject)
+    await asyncio.to_thread(
+        delete_pieces_of_deleted_paper,
+        str(document_id),
+        subject,
+        caller_reports_failure=caller_reports_failure,
+    )
 
 
-async def _remove_leftovers(document_id: UUID, subject: str, leftovers: Sequence[_Leftover]) -> None:
+async def _remove_leftovers(
+    document_id: UUID,
+    subject: str,
+    leftovers: Sequence[_Leftover],
+    *,
+    caller_reports_failure: bool = False,
+) -> None:
     ranges = [
         (item.chunk_index_start, item.chunk_index_end)
         for item in leftovers
         if item.chunk_index_start is not None and item.chunk_index_end is not None
     ]
-    await _delete_pieces(document_id, subject, ranges)
+    await _delete_pieces(document_id, subject, ranges, caller_reports_failure=caller_reports_failure)
     await asyncio.to_thread(
         _remove_stored_files, [path for item in leftovers for path in item.paths], subject,
     )
