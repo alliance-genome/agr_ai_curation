@@ -11,6 +11,7 @@ For ABC Literature imports, a ZFIN publication identifier such as `ZDB-PUB-20022
 | I want to… | Guide |
 |------------|-------|
 | Upload a paper and ask a question | [Getting started](GETTING_STARTED.md) |
+| Choose, add, or remove supplemental files | [Work with supplemental files](GETTING_STARTED.md#work-with-supplemental-files) |
 | Decide what to ask and assess the results | [Best practices](BEST_PRACTICES.md) |
 | See which extractors and lookup agents are available | [Available agents](AVAILABLE_AGENTS.md) |
 | Create or edit an agent, or get help from AI Chat | [Agent Studio](AGENT_STUDIO.md) |

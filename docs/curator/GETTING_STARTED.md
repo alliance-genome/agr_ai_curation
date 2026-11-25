@@ -11,6 +11,38 @@ Open [AI Curation](https://ai-curation.alliancegenome.org) and sign in with your
 
 An uploaded file may still be processing. Check its status before starting an extraction; uploading the same paper again does not fix an unfinished processing job.
 
+## Work with supplemental files
+
+Papers imported through **Documents → Add Literature** can include supplemental files alongside the main paper.
+
+### Choose supplements when importing a paper
+
+1. Open **Documents → Add Literature**, enter your identifiers under **Identifiers**, and click **Resolve**.
+2. On a resolved paper, click **Choose supplements** to see its files. The main paper is always included; tick any supplemental files you want to import with it.
+   - Supplements already converted by your configured literature source are ready to add right away.
+   - When an import can request conversion, you may also tick an unconverted supplement. Your literature source converts it in the background, and the main paper becomes usable without waiting for it.
+   - Files that cannot be added (such as unsupported file types, large data files, or text that did not pass readability checks) explain why without a checkbox.
+3. Click **Import with 1 supplement** (or **Import with {n} supplements**) to start the import. To import only the main paper, leave supplements unticked and click **Resolve and Import**.
+4. Follow per-file progress in the **PDF Jobs** panel below. Each supplement reports whether it is waiting for the main paper, waiting to be added, waiting for conversion, being added, **Added**, or **Not added** with the reason. You can leave the page once the import starts.
+
+If a paper is already in your **Library**, Add Literature links you to it there so you can add its files instead of importing it again.
+
+### Add converted supplements later from the Library
+
+1. Open **Documents → Library**. The **Files** column shows how many ready files each paper holds.
+2. Click **View Details** on a paper to open its details dialog. The **Files** section lists files already in the paper along with other files available from your configured literature source.
+3. Tick any converted supplements you want to include and click **Add 1 file** (or **Add {n} files**).
+   - Adding from the Library only offers files that your literature source has already converted; use **Refresh details** in the dialog header to check again later.
+   - Files can be added only to papers imported from your literature source (not manually uploaded PDFs), and adding or removing is paused while an import or add job is running on the paper.
+4. When the files finish adding, the paper's file list, the Library **Files** count, and any open PDF viewer for that paper refresh automatically.
+
+### Remove a supplement
+
+1. Open the paper's details dialog from **Documents → Library** and click **Remove** next to a supplement in **Files**. (The main paper and a paper's only file cannot be removed individually.)
+2. Review the confirmation dialog and click **Remove file**. AI Curation will no longer read the file or show it in the viewer, while evidence already saved stays intact. Any open PDF viewer and the Library **Files** count update automatically.
+   - If the paper's newest extraction result quotes that file, the confirmation dialog warns that Review & Curate will ask you to run the extraction again.
+   - A file quoted in an existing review session cannot be removed on its own; to remove it, delete the paper.
+
 ## Find your way around
 
 The main workspace has a PDF viewer, chat, and a right panel with **Audit** and **Tools**.
