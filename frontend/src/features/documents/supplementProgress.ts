@@ -221,6 +221,13 @@ export interface DocumentFileRemovalResponse {
   ready_file_count: number
 }
 
+export class DocumentFileRemovalContractError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'DocumentFileRemovalContractError'
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -238,6 +245,124 @@ function nonNegativeIntegerOrNull(value: unknown): number | null {
     return null
   }
   return value
+}
+
+/**
+ * Strictly validate the response from
+ * `GET /api/weaviate/documents/{document_id}/files/{file_id}/removal-check`.
+ */
+export function parseDocumentFileRemovalCheckResponse(
+  value: unknown,
+): DocumentFileRemovalCheckResponse {
+  if (!isRecord(value)) {
+    throw new DocumentFileRemovalContractError('Removal check response must be an object')
+  }
+  const documentId = nonEmptyStringOrNull(value.document_id)
+  const fileId = nonEmptyStringOrNull(value.file_id)
+  if (documentId === null || fileId === null) {
+    throw new DocumentFileRemovalContractError(
+      'Removal check response must identify the paper and file',
+    )
+  }
+  if (typeof value.removable !== 'boolean') {
+    throw new DocumentFileRemovalContractError(
+      'Removal check response field "removable" must be a boolean',
+    )
+  }
+  if (
+    typeof value.newest_result_quotes_file !== 'boolean'
+    || typeof value.has_review_session !== 'boolean'
+    || typeof value.review_and_curate_would_refuse !== 'boolean'
+  ) {
+    throw new DocumentFileRemovalContractError(
+      'Removal check response review flags must be booleans',
+    )
+  }
+
+  let errorCode: string | null
+  if (value.removable) {
+    if (value.error !== null) {
+      throw new DocumentFileRemovalContractError(
+        'Removable pre-check response must not include an error code',
+      )
+    }
+    errorCode = null
+  } else {
+    const parsedError = nonEmptyStringOrNull(value.error)
+    if (parsedError === null) {
+      throw new DocumentFileRemovalContractError(
+        'Refused pre-check response must include an error code',
+      )
+    }
+    errorCode = parsedError
+  }
+
+  let sessionIds: string[] | undefined
+  if (value.session_ids !== undefined) {
+    if (
+      !Array.isArray(value.session_ids)
+      || !value.session_ids.every((entry): entry is string => nonEmptyStringOrNull(entry) !== null)
+    ) {
+      throw new DocumentFileRemovalContractError(
+        'Removal check response field "session_ids" must be a list of non-empty strings',
+      )
+    }
+    sessionIds = [...value.session_ids]
+  }
+
+  return {
+    document_id: documentId,
+    file_id: fileId,
+    removable: value.removable,
+    error: errorCode,
+    ...(sessionIds !== undefined ? { session_ids: sessionIds } : {}),
+    newest_result_quotes_file: value.newest_result_quotes_file,
+    has_review_session: value.has_review_session,
+    review_and_curate_would_refuse: value.review_and_curate_would_refuse,
+  }
+}
+
+/**
+ * Strictly validate the response from
+ * `DELETE /api/weaviate/documents/{document_id}/files/{file_id}`.
+ */
+export function parseDocumentFileRemovalResponse(
+  value: unknown,
+): DocumentFileRemovalResponse {
+  if (!isRecord(value)) {
+    throw new DocumentFileRemovalContractError('File removal response must be an object')
+  }
+  const documentId = nonEmptyStringOrNull(value.document_id)
+  const fileId = nonEmptyStringOrNull(value.file_id)
+  if (documentId === null || fileId === null) {
+    throw new DocumentFileRemovalContractError(
+      'File removal response must identify the paper and file',
+    )
+  }
+  if (value.removed !== true) {
+    throw new DocumentFileRemovalContractError(
+      'File removal response must confirm removed=true',
+    )
+  }
+  if (typeof value.cleanup_finished !== 'boolean') {
+    throw new DocumentFileRemovalContractError(
+      'File removal response field "cleanup_finished" must be a boolean',
+    )
+  }
+  const readyFileCount = nonNegativeIntegerOrNull(value.ready_file_count)
+  if (readyFileCount === null) {
+    throw new DocumentFileRemovalContractError(
+      'File removal response field "ready_file_count" must be a non-negative integer',
+    )
+  }
+
+  return {
+    document_id: documentId,
+    file_id: fileId,
+    removed: true,
+    cleanup_finished: value.cleanup_finished,
+    ready_file_count: readyFileCount,
+  }
 }
 
 function parseSupplementEntry(raw: unknown): SupplementProgressEntry {

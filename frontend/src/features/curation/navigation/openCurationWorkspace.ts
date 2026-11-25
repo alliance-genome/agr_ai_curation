@@ -1,5 +1,11 @@
+import { LIBRARY_REMOVE_TEXT } from '@/components/weaviate/paperFileReasonText'
 import { fetchCurationSessionList } from '@/features/curation/inventory/curationInventoryService'
-import { readCurationApiError } from '@/features/curation/services/api'
+import {
+  RESULT_QUOTES_REMOVED_FILE_ERROR_CODE,
+  readCurationApiError,
+  readCurationApiErrorWithCode,
+} from '@/features/curation/services/api'
+import { CurationWorkspaceRequestError } from '@/features/curation/services/curationWorkspaceService'
 import type {
   CurationDocumentBootstrapAvailabilityResponse,
   CurationDocumentBootstrapResponse,
@@ -92,18 +98,34 @@ export async function findExistingCurationSessionId(
   assertWorkspaceTarget(target)
   const singleAdapterKey = resolveSingleScopeValue(target.adapterKeys)
 
-  const response = await fetchCurationSessionList({
-    filters: {
-      document_id: target.documentId ?? null,
-      flow_run_id: target.flowRunId ?? null,
-      origin_session_id: target.originSessionId ?? null,
-      adapter_keys: normalizeCurationWorkspaceScopeValues(target.adapterKeys),
-    },
-    sort_by: 'prepared_at',
-    sort_direction: 'desc',
-    page: 1,
-    page_size: singleAdapterKey ? 1 : 2,
-  })
+  let response: Awaited<ReturnType<typeof fetchCurationSessionList>>
+  try {
+    response = await fetchCurationSessionList({
+      filters: {
+        document_id: target.documentId ?? null,
+        flow_run_id: target.flowRunId ?? null,
+        origin_session_id: target.originSessionId ?? null,
+        adapter_keys: normalizeCurationWorkspaceScopeValues(target.adapterKeys),
+      },
+      sort_by: 'prepared_at',
+      sort_direction: 'desc',
+      page: 1,
+      page_size: singleAdapterKey ? 1 : 2,
+    })
+  } catch (error) {
+    if (error instanceof CurationWorkspaceRequestError) {
+      throw new CurationWorkspaceRequestError(
+        error.status,
+        'Could not open the curation workspace.',
+        error.code,
+      )
+    }
+    throw new CurationWorkspaceRequestError(
+      0,
+      'Could not open the curation workspace.',
+      null,
+    )
+  }
 
   const distinctAdapterKeys = [
     ...new Set(
@@ -168,7 +190,26 @@ async function bootstrapCurationSession(
   )
 
   if (!response.ok) {
-    throw new Error(await readCurationApiError(response))
+    const { code } = await readCurationApiErrorWithCode(response)
+    if (response.status === 409 && code === RESULT_QUOTES_REMOVED_FILE_ERROR_CODE) {
+      throw new CurationWorkspaceRequestError(
+        409,
+        LIBRARY_REMOVE_TEXT.reviewAndCurateAfterRemoval,
+        RESULT_QUOTES_REMOVED_FILE_ERROR_CODE,
+      )
+    }
+    if (response.status === 404) {
+      throw new CurationWorkspaceRequestError(
+        404,
+        'No prepared curation session is available for this document.',
+        code,
+      )
+    }
+    throw new CurationWorkspaceRequestError(
+      response.status,
+      'Could not open the curation workspace.',
+      code,
+    )
   }
 
   const payload = await response.json() as CurationDocumentBootstrapResponse

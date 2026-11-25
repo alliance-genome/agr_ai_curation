@@ -1,3 +1,4 @@
+import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '../../test/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
@@ -5,7 +6,11 @@ import type {
   DocumentPaginationModel,
   DocumentSortModel,
 } from '@/features/documents/documentTableTypes';
-import type { DocumentFilter, DocumentSummary } from '../../services/weaviate';
+import {
+  dispatchDocumentsListInvalidated,
+  type DocumentFilter,
+  type DocumentSummary,
+} from '../../services/weaviate';
 import DocumentsPage, { lastDocumentPage } from './DocumentsPage';
 
 vi.hoisted(() => {
@@ -34,6 +39,8 @@ interface MockInlineFilterBarProps {
   onClear: () => void;
 }
 
+let capturedDocumentListRefresh: (() => void) | undefined;
+
 vi.mock('../../components/weaviate/DocumentList', () => ({
   default: ({
     documents,
@@ -48,7 +55,9 @@ vi.mock('../../components/weaviate/DocumentList', () => ({
     onDelete,
     onReembed,
     onMetadataUpdate,
-  }: MockDocumentListProps) => (
+  }: MockDocumentListProps) => {
+    capturedDocumentListRefresh = onRefresh;
+    return (
     <section
       data-testid="document-list"
       data-loading={String(loading)}
@@ -95,7 +104,8 @@ vi.mock('../../components/weaviate/DocumentList', () => ({
         Rename first document
       </button>
     </section>
-  ),
+    );
+  },
 }));
 
 vi.mock('../../components/weaviate/InlineFilterBar', () => ({
@@ -437,5 +447,81 @@ describe('DocumentsPage request ownership', () => {
     expect(fetchUrl(1)).toContain('page=3&page_size=50');
     expect(fetchUrl(2)).toContain('page=2&page_size=50');
     expect(screen.getByTestId('document-list')).toHaveAttribute('data-page', '1');
+  });
+
+  it('reloads the current active page when a delayed refresh callback captured on an earlier page fires after page navigation', async () => {
+    vi.mocked(global.fetch).mockImplementation(async () => documentListResponse('page-doc', 200));
+
+    render(<DocumentsPage />);
+    await screen.findByText('page-doc.pdf');
+    expect(fetchUrl(0)).toContain('page=1&page_size=20');
+
+    // Capture the onRefresh callback while still on page 1 (as an open details dialog would).
+    const refreshCapturedOnPageOne = capturedDocumentListRefresh;
+    expect(refreshCapturedOnPageOne).toBeDefined();
+
+    // Navigate Library to page 3 (page=3, page_size=50).
+    fireEvent.click(screen.getByRole('button', { name: 'Show page three' }));
+    await waitFor(() => expect(vi.mocked(global.fetch)).toHaveBeenCalledTimes(2));
+    expect(fetchUrl(1)).toContain('page=3&page_size=50');
+
+    // Now invoke the delayed callback captured on page 1 -> must reload page 3, NOT stale page 1!
+    await act(async () => {
+      refreshCapturedOnPageOne?.();
+    });
+    await waitFor(() => expect(vi.mocked(global.fetch)).toHaveBeenCalledTimes(3));
+    expect(fetchUrl(2)).toContain('page=3&page_size=50');
+  });
+
+  it('loads initial documents cleanly under React.StrictMode double-effect mount', async () => {
+    vi.mocked(global.fetch).mockImplementation(async () => documentListResponse('strict-mode-doc', 7));
+
+    render(
+      <React.StrictMode>
+        <DocumentsPage />
+      </React.StrictMode>,
+    );
+
+    expect(await screen.findByText('strict-mode-doc.pdf')).toBeInTheDocument();
+    expect(screen.getByTestId('document-list')).toHaveAttribute('data-total-count', '7');
+  });
+
+  it('refreshes a remounted DocumentsPage with its current page when an earlier DELETE finishes after navigation away and back', async () => {
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(documentListResponse('before-unmount', 120))
+      .mockResolvedValueOnce(documentListResponse('remount-page-one', 120))
+      .mockResolvedValueOnce(documentListResponse('remount-page-three-before', 120, {
+        limit: 50,
+        offset: 100,
+      }))
+      .mockResolvedValueOnce(documentListResponse('remount-page-three-after', 119, {
+        limit: 50,
+        offset: 100,
+      }));
+
+    // Instance 1 mounts, starts an in-flight DELETE (capturing its onRefresh callback), then unmounts.
+    const firstMount = render(<DocumentsPage />);
+    await screen.findByText('before-unmount.pdf');
+    const staleRefreshFromFirstMount = capturedDocumentListRefresh;
+    expect(staleRefreshFromFirstMount).toBeDefined();
+    firstMount.unmount();
+
+    // User navigates back: Instance 2 mounts and navigates to page 3.
+    render(<DocumentsPage />);
+    await screen.findByText('remount-page-one.pdf');
+    fireEvent.click(screen.getByRole('button', { name: 'Show page three' }));
+    await screen.findByText('remount-page-three-before.pdf');
+    expect(fetchUrl(2)).toContain('page=3&page_size=50');
+
+    // Earlier DELETE finishes and dispatches invalidation via Instance 1's captured callback:
+    // Instance 1 no-ops (unmounted), so Instance 2 refreshes its active page 3 with the updated count.
+    await act(async () => {
+      dispatchDocumentsListInvalidated(staleRefreshFromFirstMount);
+    });
+
+    expect(await screen.findByText('remount-page-three-after.pdf')).toBeInTheDocument();
+    expect(screen.getByTestId('document-list')).toHaveAttribute('data-total-count', '119');
+    expect(vi.mocked(global.fetch)).toHaveBeenCalledTimes(4);
+    expect(fetchUrl(3)).toContain('page=3&page_size=50');
   });
 });

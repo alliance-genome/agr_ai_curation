@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@/test/test-utils'
 
+import { LIBRARY_REMOVE_TEXT } from '@/components/weaviate/paperFileReasonText'
+import { RESULT_QUOTES_REMOVED_FILE_ERROR_CODE } from '@/features/curation/services/api'
+import { CurationWorkspaceRequestError } from '@/features/curation/services/curationWorkspaceService'
+
 import ReviewAndCurateButton from './ReviewAndCurateButton'
 
 const mockNavigate = vi.fn()
@@ -78,5 +82,28 @@ describe('ReviewAndCurateButton', () => {
         severity: 'error',
       })
     })
+  })
+
+  it('displays the exact approved Card 19 message when bootstrap refuses with result_quotes_removed_file', async () => {
+    const onError = vi.fn()
+    openCurationWorkspaceMock.mockRejectedValueOnce(
+      new CurationWorkspaceRequestError(
+        409,
+        LIBRARY_REMOVE_TEXT.reviewAndCurateAfterRemoval,
+        RESULT_QUOTES_REMOVED_FILE_ERROR_CODE,
+      ),
+    )
+
+    render(<ReviewAndCurateButton documentId="doc-1" iconOnly={true} onError={onError} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /review & curate/i }))
+
+    await waitFor(() => {
+      expect(emitGlobalToastMock).toHaveBeenCalledWith({
+        message: LIBRARY_REMOVE_TEXT.reviewAndCurateAfterRemoval,
+        severity: 'error',
+      })
+    })
+    expect(onError).toHaveBeenCalledWith(LIBRARY_REMOVE_TEXT.reviewAndCurateAfterRemoval)
   })
 })

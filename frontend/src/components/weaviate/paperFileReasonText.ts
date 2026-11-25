@@ -589,6 +589,51 @@ export function fileRemovalRefusalText(
   return UNRECOGNIZED_FILE_TEXT
 }
 
+export interface FileRemovalErrorDisplay {
+  text: string
+  retryable: boolean
+  /** Structured refusal code (`detail.error`), or null when mapped by HTTP status / fallback. */
+  code: string | null
+}
+
+/**
+ * Map a file-removal HTTP refusal strictly by structured `detail.error` code or HTTP status
+ * (`409` busy / `503` server busy), never reading raw server `detail` strings.
+ */
+export function fileRemovalHttpErrorText(options: {
+  httpStatus: number
+  code: string | null
+  sessionCount?: number
+  fallbackText: string
+}): FileRemovalErrorDisplay {
+  if (options.code !== null) {
+    return {
+      text: fileRemovalRefusalText(options.code, { sessionCount: options.sessionCount }),
+      retryable: false,
+      code: options.code,
+    }
+  }
+  if (options.httpStatus === 409) {
+    return {
+      text: LIBRARY_REMOVE_TEXT.operationInProgress,
+      retryable: true,
+      code: null,
+    }
+  }
+  if (options.httpStatus === 503) {
+    return {
+      text: LIBRARY_REMOVE_TEXT.serverBusy,
+      retryable: true,
+      code: null,
+    }
+  }
+  return {
+    text: options.fallbackText,
+    retryable: true,
+    code: null,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Library Files column (N46–N47)
 // ---------------------------------------------------------------------------

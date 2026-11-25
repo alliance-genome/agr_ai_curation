@@ -1,4 +1,11 @@
-import { readCurationApiError } from './api'
+import { LIBRARY_REMOVE_TEXT } from '@/components/weaviate/paperFileReasonText'
+
+import {
+  RESULT_QUOTES_REMOVED_FILE_ERROR_CODE,
+  readCurationApiError,
+  readCurationApiErrorWithCode,
+} from './api'
+import { CurationWorkspaceRequestError } from './curationWorkspaceService'
 
 export interface CurationPrepPreview {
   ready: boolean
@@ -61,7 +68,19 @@ export async function runCurationPrep(request: CurationPrepRunRequest): Promise<
   })
 
   if (!response.ok) {
-    throw new Error(await readCurationApiError(response))
+    const { code } = await readCurationApiErrorWithCode(response)
+    if (response.status === 409 && code === RESULT_QUOTES_REMOVED_FILE_ERROR_CODE) {
+      throw new CurationWorkspaceRequestError(
+        409,
+        LIBRARY_REMOVE_TEXT.reviewAndCurateAfterRemoval,
+        RESULT_QUOTES_REMOVED_FILE_ERROR_CODE,
+      )
+    }
+    throw new CurationWorkspaceRequestError(
+      response.status,
+      'Failed to prepare curation scope.',
+      code,
+    )
   }
 
   return response.json() as Promise<CurationPrepRunResponse>

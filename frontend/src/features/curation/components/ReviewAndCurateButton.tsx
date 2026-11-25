@@ -6,6 +6,8 @@ import type { ButtonProps, IconButtonProps } from '@mui/material'
 import type { SxProps, Theme } from '@mui/material/styles'
 
 import { emitGlobalToast } from '@/lib/globalNotifications'
+import { RESULT_QUOTES_REMOVED_FILE_ERROR_CODE } from '@/features/curation/services/api'
+import { CurationWorkspaceRequestError } from '@/features/curation/services/curationWorkspaceService'
 import {
   openCurationWorkspace,
   type CurationWorkspaceLaunchTarget,
@@ -65,8 +67,11 @@ export default function ReviewAndCurateButton({
       onOpened?.(openedSessionId)
     } catch (error) {
       const message = getErrorMessage(error)
+      const isRemovedFileRefusal =
+        error instanceof CurationWorkspaceRequestError
+        && error.code === RESULT_QUOTES_REMOVED_FILE_ERROR_CODE
       emitGlobalToast({
-        message: `Review & Curate failed: ${message}`,
+        message: isRemovedFileRefusal ? message : `Review & Curate failed: ${message}`,
         severity: 'error',
       })
       onError?.(message)

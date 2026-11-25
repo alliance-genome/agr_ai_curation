@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { LIBRARY_REMOVE_TEXT } from '@/components/weaviate/paperFileReasonText'
+import { RESULT_QUOTES_REMOVED_FILE_ERROR_CODE } from '@/features/curation/services/api'
+import { CurationWorkspaceRequestError } from '@/features/curation/services/curationWorkspaceService'
+
 import {
   getCurationWorkspaceLaunchAvailability,
   normalizeCurationWorkspaceScopeValues,
@@ -206,6 +210,192 @@ describe('openCurationWorkspace', () => {
         flowRunId: 'flow-7',
       })
     ).rejects.toThrow('No prepared curation session is available for this document.')
+  })
+
+  it('maps 409 detail.error result_quotes_removed_file to approved Card 19 wording without message-text matching', async () => {
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(buildSessionListResponse([])), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            detail: { error: 'result_quotes_removed_file' },
+          }),
+          {
+            status: 409,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        ),
+      )
+
+    let caught: unknown = null
+    try {
+      await resolveCurationWorkspaceSessionId({ documentId: 'doc-1' })
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(CurationWorkspaceRequestError)
+    expect(caught).toMatchObject({
+      status: 409,
+      code: RESULT_QUOTES_REMOVED_FILE_ERROR_CODE,
+      message: LIBRARY_REMOVE_TEXT.reviewAndCurateAfterRemoval,
+    })
+
+    // Unmapped 409 (plain string mentioning the code) and 500 must NOT match by message text
+    // and must NOT echo raw unstructured server detail verbatim to curators.
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(buildSessionListResponse([])), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            detail: 'Plain server string mentioning result_quotes_removed_file',
+          }),
+          {
+            status: 409,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        ),
+      )
+
+    let unmapped409: unknown = null
+    try {
+      await resolveCurationWorkspaceSessionId({ documentId: 'doc-1' })
+    } catch (error) {
+      unmapped409 = error
+    }
+    expect(unmapped409).toBeInstanceOf(CurationWorkspaceRequestError)
+    expect((unmapped409 as Error).message).toBe('Could not open the curation workspace.')
+    expect((unmapped409 as Error).message).not.toContain('Plain server string')
+    expect((unmapped409 as Error).message).not.toBe(LIBRARY_REMOVE_TEXT.reviewAndCurateAfterRemoval)
+
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(buildSessionListResponse([])), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            detail: 'Raw database traceback detail',
+          }),
+          {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        ),
+      )
+
+    await expect(
+      resolveCurationWorkspaceSessionId({ documentId: 'doc-1' }),
+    ).rejects.toThrow('Could not open the curation workspace.')
+
+    // Uncoded 4xx (e.g. 403) must also use client-owned wording and NEVER echo raw server detail.
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(buildSessionListResponse([])), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            detail: 'Internal RBAC policy rejected tenant override',
+          }),
+          {
+            status: 403,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        ),
+      )
+
+    let forbidden403: unknown = null
+    try {
+      await resolveCurationWorkspaceSessionId({ documentId: 'doc-1' })
+    } catch (error) {
+      forbidden403 = error
+    }
+    expect(forbidden403).toBeInstanceOf(CurationWorkspaceRequestError)
+    expect(forbidden403).toMatchObject({
+      status: 403,
+      code: null,
+      message: 'Could not open the curation workspace.',
+    })
+    expect((forbidden403 as Error).message).not.toContain('Internal RBAC policy')
+
+    // 404 uses client-owned wording rather than echoing raw server detail.
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(buildSessionListResponse([])), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            detail: 'Raw internal document lookup miss for doc-1',
+          }),
+          {
+            status: 404,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        ),
+      )
+
+    let notFound404: unknown = null
+    try {
+      await resolveCurationWorkspaceSessionId({ documentId: 'doc-1' })
+    } catch (error) {
+      notFound404 = error
+    }
+    expect(notFound404).toBeInstanceOf(CurationWorkspaceRequestError)
+    expect(notFound404).toMatchObject({
+      status: 404,
+      message: 'No prepared curation session is available for this document.',
+    })
+    expect((notFound404 as Error).message).not.toContain('Raw internal document lookup')
+  })
+
+  it('hides raw server detail when the pre-bootstrap /sessions GET fails with 403', async () => {
+    vi.mocked(global.fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          detail: 'Internal session-list ACL rule denied user_id=42',
+        }),
+        {
+          status: 403,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    )
+
+    let caught: unknown = null
+    try {
+      await resolveCurationWorkspaceSessionId({ documentId: 'doc-1' })
+    } catch (error) {
+      caught = error
+    }
+
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    expect(caught).toBeInstanceOf(CurationWorkspaceRequestError)
+    expect(caught).toMatchObject({
+      status: 403,
+      message: 'Could not open the curation workspace.',
+    })
+    expect((caught as Error).message).not.toContain('Internal session-list ACL')
   })
 
   it('reports launch availability when no session exists yet but bootstrap is possible', async () => {
