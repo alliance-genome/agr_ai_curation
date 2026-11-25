@@ -35,6 +35,10 @@ Settings (all in `.env.example` under Operational limits, forwarded to `backend`
 | `EXTRACTION_FANOUT_WRITER_RERUNS` | `1` | Times a failed writer runs again from its assignment (see Failures). `0` turns re-runs off. |
 | `EXTRACTION_FANOUT_WRITER_STORE_RESPONSES` | `false` | Whether writers keep their responses at OpenAI. With `false`, writers on a native OpenAI provider send `store=false` (see below). `true` leaves `store` as the planner has it. |
 
+Leave an integer setting unset to use its default. Items per writer and maximum writers
+must be at least 1. The other four integers allow 0. An empty, malformed, or
+below-minimum value raises a configuration error naming the setting when it is read.
+
 Writers do not store their responses at OpenAI by default (KANBAN-2081 / ALL-1564): each
 writer's own copy of the model settings carries `store=False` (`ModelSettings.store`)
 when the agent's model resolves to a native OpenAI provider (`driver: openai_native`).

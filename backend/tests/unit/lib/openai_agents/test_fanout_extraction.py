@@ -114,32 +114,26 @@ def test_writer_slices_are_contiguous_balanced_and_capped(count, per, maximum, s
     assert [position for piece in slices for position in piece] == list(range(count))
 
 
-def test_fanout_settings_default_off_and_read_overrides(monkeypatch):
+@pytest.mark.parametrize("key,default,minimum,override", [
+    ("EXTRACTION_FANOUT_MIN_ITEMS", 0, 0, 6),
+    ("EXTRACTION_FANOUT_ITEMS_PER_WRITER", 5, 1, 3),
+    ("EXTRACTION_FANOUT_MAX_WRITERS", 8, 1, 12),
+    ("EXTRACTION_FANOUT_WRITER_RERUNS", 1, 0, 2),
+])
+def test_fanout_integer_setting(monkeypatch, key, default, minimum, override):
     from src.lib.openai_agents import config
 
-    for key in ("EXTRACTION_FANOUT_MIN_ITEMS", "EXTRACTION_FANOUT_ITEMS_PER_WRITER", "EXTRACTION_FANOUT_MAX_WRITERS"):
-        monkeypatch.delenv(key, raising=False)
-    assert config.get_extraction_fanout_min_items() == 0
-    assert config.get_extraction_fanout_items_per_writer() == 5
-    assert config.get_extraction_fanout_max_writers() == 8
+    getter = getattr(config, "get_" + key.lower())
+    monkeypatch.delenv(key, raising=False)
+    assert getter() == default
+    for value in (minimum, override):
+        monkeypatch.setenv(key, str(value))
+        assert getter() == value
 
-    monkeypatch.setenv("EXTRACTION_FANOUT_MIN_ITEMS", "6")
-    monkeypatch.setenv("EXTRACTION_FANOUT_ITEMS_PER_WRITER", "3")
-    monkeypatch.setenv("EXTRACTION_FANOUT_MAX_WRITERS", "12")
-    assert config.get_extraction_fanout_min_items() == 6
-    assert config.get_extraction_fanout_items_per_writer() == 3
-    assert config.get_extraction_fanout_max_writers() == 12
-
-
-def test_writer_reruns_default_to_one_and_zero_turns_them_off(monkeypatch):
-    from src.lib.openai_agents import config
-
-    monkeypatch.delenv("EXTRACTION_FANOUT_WRITER_RERUNS", raising=False)
-    assert config.get_extraction_fanout_writer_reruns() == 1
-    monkeypatch.setenv("EXTRACTION_FANOUT_WRITER_RERUNS", "0")
-    assert config.get_extraction_fanout_writer_reruns() == 0
-    monkeypatch.setenv("EXTRACTION_FANOUT_WRITER_RERUNS", "-3")
-    assert config.get_extraction_fanout_writer_reruns() == 0
+    for invalid in ("", "disabled", "-3", str(minimum - 1)):
+        monkeypatch.setenv(key, invalid)
+        with pytest.raises(ValueError, match=key):
+            getter()
 
 
 def test_writer_store_responses_defaults_off_and_reads_overrides(monkeypatch):

@@ -1463,20 +1463,30 @@ FANOUT_CONTRACT = [
         WORKSPACE_ROOT / "scripts/testing/fixtures/extraction_fanout_env.txt"
     ).read_text().splitlines() if line and not line.startswith("#")
 ]
-FANOUT_RECOVERY_BUDGETS = (
+FANOUT_POSITIVE_SETTINGS = (
+    "EXTRACTION_FANOUT_ITEMS_PER_WRITER",
+    "EXTRACTION_FANOUT_MAX_WRITERS",
+)
+FANOUT_INTEGER_SETTINGS = (
+    *FANOUT_POSITIVE_SETTINGS,
+    "EXTRACTION_FANOUT_MIN_ITEMS",
     "EXTRACTION_FANOUT_MAX_PLAN_REMINDERS",
     "EXTRACTION_FANOUT_MAX_FINALIZE_CORRECTIONS",
+    "EXTRACTION_FANOUT_WRITER_RERUNS",
 )
 
 
-@pytest.mark.parametrize("key", FANOUT_RECOVERY_BUDGETS)
-@pytest.mark.parametrize("value", ["disabled", "-1", ""])
-def test_extraction_fanout_recovery_budget_rejects_invalid_values(key, value, monkeypatch):
+@pytest.mark.parametrize("key", FANOUT_INTEGER_SETTINGS)
+def test_extraction_fanout_integer_setting_rejects_invalid_values(key, monkeypatch):
     from src.lib.openai_agents import config
 
-    monkeypatch.setenv(key, value)
-    with pytest.raises(ValueError, match=key):
-        getattr(config, "get_" + key.lower())()
+    invalid_values = ["", "abc", "-1"]
+    if key in FANOUT_POSITIVE_SETTINGS:
+        invalid_values.append("0")
+    for value in invalid_values:
+        monkeypatch.setenv(key, value)
+        with pytest.raises(ValueError, match=key):
+            getattr(config, "get_" + key.lower())()
 
 
 def _fanout_value(raw):
@@ -1490,7 +1500,7 @@ def test_extraction_fanout_settings_reach_every_extraction_consumer(key, default
     getter = getattr(config, "get_" + key.lower())
     monkeypatch.delenv(key, raising=False)
     assert getter() == _fanout_value(default)
-    default_operator = "-" if key in FANOUT_RECOVERY_BUDGETS else ":-"
+    default_operator = "-" if key in FANOUT_INTEGER_SETTINGS else ":-"
     expected = "${" + key + default_operator + default + "}"
     for path in (DEV_COMPOSE_PATH, COMPOSE_PATH):
         services = yaml.safe_load(path.read_text())["services"]
