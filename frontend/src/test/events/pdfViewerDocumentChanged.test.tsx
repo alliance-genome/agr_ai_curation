@@ -139,6 +139,7 @@ describe('pdf-viewer-document-changed event contract (paper files)', () => {
   it('broadcasts cross-tab refresh via BroadcastChannel and falls back to localStorage storage events', () => {
     const received: Array<{ documentId: string; nonce: string }> = []
     const posted: Array<{ channel: string; payload: unknown }> = []
+    const teardownOrder: string[] = []
 
     class FakeBroadcastChannel {
       static instances: FakeBroadcastChannel[] = []
@@ -156,6 +157,13 @@ describe('pdf-viewer-document-changed event contract (paper files)', () => {
         }
       }
 
+      removeEventListener(type: string, listener: (event: MessageEvent) => void) {
+        if (type === 'message') {
+          this.listeners.delete(listener)
+          teardownOrder.push('removeEventListener')
+        }
+      }
+
       postMessage(data: unknown) {
         posted.push({ channel: this.name, payload: data })
         for (const instance of FakeBroadcastChannel.instances) {
@@ -166,6 +174,7 @@ describe('pdf-viewer-document-changed event contract (paper files)', () => {
       }
 
       close() {
+        teardownOrder.push('close')
         this.listeners.clear()
         FakeBroadcastChannel.instances = FakeBroadcastChannel.instances.filter((item) => item !== this)
       }
@@ -176,7 +185,6 @@ describe('pdf-viewer-document-changed event contract (paper files)', () => {
       const unsubscribe = onPaperFilesRefresh((signal) => {
         received.push({ documentId: signal.documentId, nonce: signal.nonce })
       })
-      cleanups.push(unsubscribe)
 
       // Same-tab publish posts to BroadcastChannel, and our own tab ignores its own senderId.
       showPaperFilesInViewer(DOCUMENT_ID, FOUR_FILES_PAYLOAD.files, { refreshOnlyIfOpen: true })
@@ -221,6 +229,11 @@ describe('pdf-viewer-document-changed event contract (paper files)', () => {
         { documentId: DOCUMENT_ID, nonce: 'remote-nonce-1' },
         { documentId: DOCUMENT_ID, nonce: 'storage-nonce-2' },
       ])
+
+      // Unsubscribing removes the message listener before closing the BroadcastChannel.
+      teardownOrder.length = 0
+      unsubscribe()
+      expect(teardownOrder).toEqual(['removeEventListener', 'close'])
     } finally {
       vi.unstubAllGlobals()
     }

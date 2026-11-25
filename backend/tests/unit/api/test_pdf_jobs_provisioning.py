@@ -18,6 +18,7 @@ async def test_rest_and_stream_connection_provision_before_dispatch(monkeypatch)
     result = await pdf_jobs.list_pdf_jobs(user=user, status=None, window_days=7, limit=50, offset=0)
     assert result.jobs == []
     assert listing.call_args.kwargs['user_id'] == 23
+    assert listing.call_args.kwargs['document_id'] is None
     provision.assert_awaited_once()
     response = await pdf_jobs.stream_pdf_jobs(user=user, window_days=7, limit=50)
     assert provision.await_count == 2
@@ -41,3 +42,30 @@ async def test_preprovisioned_ownership_keeps_request_session_in_caller(monkeypa
     assert result is owned.return_value
     owned.assert_called_once_with(request_session, document_id, 29, for_update=True)
     provision.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_list_pdf_jobs_forwards_document_id_filter_to_service(monkeypatch):
+    provision = AsyncMock(return_value=SimpleNamespace(id=31))
+    monkeypatch.setattr(pdf_jobs, 'provision_user_async', provision)
+    listing = Mock(return_value=SimpleNamespace(jobs=[], total=0, limit=50, offset=0))
+    monkeypatch.setattr(pdf_jobs.job_service, 'list_jobs', listing)
+    target_document_id = uuid4()
+
+    await pdf_jobs.list_pdf_jobs(
+        user={'sub': 'verified-subject'},
+        status=['pending', 'running', 'cancel_requested'],
+        document_id=target_document_id,
+        window_days=7,
+        limit=50,
+        offset=0,
+    )
+
+    assert listing.call_args.kwargs == {
+        'user_id': 31,
+        'window_days': 7,
+        'statuses': ['pending', 'running', 'cancel_requested'],
+        'document_id': target_document_id,
+        'limit': 50,
+        'offset': 0,
+    }

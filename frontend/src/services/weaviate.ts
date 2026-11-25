@@ -1034,6 +1034,7 @@ export const usePdfExtractionHealth = (
 export const fetchPdfJobs = async (
   params: {
     status?: PdfJobStatus[];
+    documentId?: string;
     windowDays?: number;
     limit?: number;
     offset?: number;
@@ -1042,6 +1043,7 @@ export const fetchPdfJobs = async (
 ): Promise<PdfJobListResponse> => {
   const query = new URLSearchParams();
   (params.status ?? []).forEach((statusValue) => query.append('status', statusValue));
+  if (params.documentId) query.set('document_id', params.documentId);
   if (params.windowDays) query.set('window_days', String(params.windowDays));
   if (params.limit) query.set('limit', String(params.limit));
   if (params.offset) query.set('offset', String(params.offset));
@@ -1050,8 +1052,8 @@ export const fetchPdfJobs = async (
 };
 
 /**
- * Paginate through all active PDF jobs for the signed-in curator using the configured
- * `PDF_JOB_LIMIT` page size and return every active job belonging to `documentId`.
+ * Query active PDF jobs for `documentId` using server-side `document_id` filtering and
+ * paginate across pages using the configured `PDF_JOB_LIMIT` page size.
  */
 export const fetchActivePdfJobsForDocument = async (
   documentId: string,
@@ -1069,6 +1071,7 @@ export const fetchActivePdfJobsForDocument = async (
     const page = await fetchPdfJobs(
       {
         status: [...ACTIVE_PDF_JOB_STATUSES],
+        documentId,
         limit: pageSize,
         offset,
       },

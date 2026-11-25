@@ -134,10 +134,11 @@ export function onPaperFilesRefresh(
   }
 
   let channel: BroadcastChannel | null = null
+  const handleMessage = (event: MessageEvent) => deliver(event.data)
   if (typeof BroadcastChannel !== 'undefined') {
     try {
       channel = new BroadcastChannel(PAPER_FILES_REFRESH_CHANNEL)
-      channel.addEventListener('message', (event: MessageEvent) => deliver(event.data))
+      channel.addEventListener('message', handleMessage)
     } catch {
       channel = null
     }
@@ -159,6 +160,7 @@ export function onPaperFilesRefresh(
     window.removeEventListener('storage', handleStorage)
     if (channel) {
       try {
+        channel.removeEventListener('message', handleMessage)
         channel.close()
       } catch {
         // Ignore channel close failures on teardown.

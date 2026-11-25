@@ -964,26 +964,37 @@ def list_jobs(
     user_id: int,
     window_days: int = 7,
     statuses: Optional[Iterable[str]] = None,
+    document_id: Optional[UUID | str] = None,
     limit: int = 50,
     offset: int = 0,
     reconcile_stale: bool = True,
 ) -> PdfJobListResponse:
-    """List user jobs within a time window, newest first."""
+    """List user jobs within a time window, newest first.
+
+    When ``statuses`` requests strictly active statuses (``pending``, ``running``,
+    ``cancel_requested``), the ``window_days`` creation cutoff is skipped so a long-lived
+    active job is never hidden by the history window.
+    """
     session = SessionLocal()
     try:
         window_days = max(1, min(window_days, 90))
         since = datetime.now(timezone.utc) - timedelta(days=window_days)
+        status_values = [str(s).strip().lower() for s in (statuses or []) if str(s).strip()]
+        active_only_query = bool(status_values) and set(status_values).issubset(_ACTIVE_STATUSES)
+        document_uuid = _to_uuid(document_id) if document_id is not None else None
 
         if reconcile_stale:
             stale_after_seconds = _stale_timeout_seconds()
             now = datetime.now(timezone.utc)
-            active_rows = session.execute(
-                select(PdfProcessingJob).where(
-                    PdfProcessingJob.user_id == user_id,
-                    PdfProcessingJob.created_at >= since,
-                    PdfProcessingJob.status.in_(tuple(_ACTIVE_STATUSES)),
-                ).with_for_update()
-            ).scalars().all()
+            stale_stmt = select(PdfProcessingJob).where(
+                PdfProcessingJob.user_id == user_id,
+                PdfProcessingJob.status.in_(tuple(_ACTIVE_STATUSES)),
+            )
+            if not active_only_query:
+                stale_stmt = stale_stmt.where(PdfProcessingJob.created_at >= since)
+            if document_uuid is not None:
+                stale_stmt = stale_stmt.where(PdfProcessingJob.document_id == document_uuid)
+            active_rows = session.execute(stale_stmt.with_for_update()).scalars().all()
             changed = False
             for row in active_rows:
                 changed = _reconcile_stale_job(
@@ -995,16 +1006,19 @@ def list_jobs(
             if changed:
                 session.commit()
 
-        stmt = select(PdfProcessingJob).where(
-            PdfProcessingJob.user_id == user_id,
-            PdfProcessingJob.created_at >= since,
-        )
+        stmt = select(PdfProcessingJob).where(PdfProcessingJob.user_id == user_id)
         count_stmt = select(func.count(PdfProcessingJob.id)).where(
-            PdfProcessingJob.user_id == user_id,
-            PdfProcessingJob.created_at >= since,
+            PdfProcessingJob.user_id == user_id
         )
 
-        status_values = [str(s).strip().lower() for s in (statuses or []) if str(s).strip()]
+        if not active_only_query:
+            stmt = stmt.where(PdfProcessingJob.created_at >= since)
+            count_stmt = count_stmt.where(PdfProcessingJob.created_at >= since)
+
+        if document_uuid is not None:
+            stmt = stmt.where(PdfProcessingJob.document_id == document_uuid)
+            count_stmt = count_stmt.where(PdfProcessingJob.document_id == document_uuid)
+
         if status_values:
             stmt = stmt.where(PdfProcessingJob.status.in_(status_values))
             count_stmt = count_stmt.where(PdfProcessingJob.status.in_(status_values))

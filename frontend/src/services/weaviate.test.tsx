@@ -431,12 +431,12 @@ describe('weaviate service', () => {
       expect(activeForDocA).toEqual([targetJobOnPage2]);
       expect(mockFetch).toHaveBeenNthCalledWith(
         1,
-        '/api/weaviate/pdf-jobs?status=pending&status=running&status=cancel_requested&limit=1',
+        '/api/weaviate/pdf-jobs?status=pending&status=running&status=cancel_requested&document_id=doc-a&limit=1',
         expect.objectContaining({ signal: controller.signal }),
       );
       expect(mockFetch).toHaveBeenNthCalledWith(
         2,
-        '/api/weaviate/pdf-jobs?status=pending&status=running&status=cancel_requested&limit=1&offset=1',
+        '/api/weaviate/pdf-jobs?status=pending&status=running&status=cancel_requested&document_id=doc-a&limit=1&offset=1',
         expect.objectContaining({ signal: controller.signal }),
       );
 
@@ -458,12 +458,16 @@ describe('weaviate service', () => {
       expect(caught).toBeInstanceOf(ApiHttpError);
       expect((caught as ApiHttpError).httpStatus).toBe(404);
 
-      // fetchPdfJobs returns the exact server payload with total preserved.
+      // fetchPdfJobs forwards document_id and preserves the server payload's total.
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({ jobs: [otherJob], total: 75, limit: 50, offset: 0 }),
       });
-      const rawPage = await fetchPdfJobs({ status: ['running'], limit: 50 });
+      const rawPage = await fetchPdfJobs({ status: ['running'], documentId: 'doc-b', limit: 50 });
+      expect(mockFetch).toHaveBeenLastCalledWith(
+        '/api/weaviate/pdf-jobs?status=running&document_id=doc-b&limit=50',
+        expect.any(Object),
+      );
       expect(rawPage.total).toBe(75);
       expect(rawPage.jobs).toEqual([otherJob]);
     });

@@ -72,11 +72,42 @@ export const documentSourceProviderConfigQueryKey = () =>
  */
 export const PAPER_SOURCE_FILES_STALE_MS = 5 * 60 * 1000
 
+interface PendingAddJobEntry {
+  jobId: string
+  recordedAt: number
+}
+
 /**
  * Retained in-flight add job ids keyed by document id so closing the dialog mid-add and
- * reopening the same paper reconciles the completed job and busts the 5-minute listing cache.
+ * reopening the same paper within `PAPER_SOURCE_FILES_STALE_MS` reconciles the completed
+ * job and busts the 5-minute listing cache.
  */
-const pendingAddJobIdsByDocument = new Map<string, string>()
+const pendingAddJobIdsByDocument = new Map<string, PendingAddJobEntry>()
+
+function pruneStalePendingAddJobs(now = Date.now()): void {
+  for (const [docId, entry] of pendingAddJobIdsByDocument.entries()) {
+    if (now - entry.recordedAt > PAPER_SOURCE_FILES_STALE_MS) {
+      pendingAddJobIdsByDocument.delete(docId)
+    }
+  }
+}
+
+function getRetainedAddJobId(documentId: string): string | null {
+  pruneStalePendingAddJobs()
+  return pendingAddJobIdsByDocument.get(documentId)?.jobId ?? null
+}
+
+function setRetainedAddJobId(documentId: string, jobId: string): void {
+  const now = Date.now()
+  pruneStalePendingAddJobs(now)
+  pendingAddJobIdsByDocument.set(documentId, { jobId, recordedAt: now })
+}
+
+function deleteRetainedAddJobIdIfMatches(documentId: string, jobId: string): void {
+  if (pendingAddJobIdsByDocument.get(documentId)?.jobId === jobId) {
+    pendingAddJobIdsByDocument.delete(documentId)
+  }
+}
 
 /** Clear retained add job ids (used for test isolation). */
 export function clearPendingAddJobIds(): void {
@@ -152,8 +183,8 @@ export interface DocumentFilesSectionProps {
   providerShortLabel?: string | null
   /** Optional override for the server's configured provider short label on uploaded papers (Card 34). */
   configuredProviderShortLabel?: string | null
-  /** The paper's processing status; Library Add is enabled only when `completed`. */
-  processingStatus?: string | null
+  /** The paper's processing status; Library Add fails closed unless explicitly `completed`. */
+  processingStatus: string | null
   open: boolean
   /** Called after an active or submitted supplement job finishes so parent document details can refresh. */
   onFilesChanged?: () => void
@@ -281,17 +312,14 @@ function ProviderFilesPart({
   documentId: string
   provider: string
   providerShortLabel?: string | null
-  processingStatus?: string | null
+  processingStatus: string | null
   open: boolean
   onFilesChanged?: () => void
   pollIntervalMs: number
 }) {
   const queryClient = useQueryClient()
   const shortProvider = providerShortLabel?.trim() || provider
-  const isPaperCompleted =
-    processingStatus === undefined
-      ? true
-      : typeof processingStatus === 'string' && processingStatus.toLowerCase() === 'completed'
+  const isPaperCompleted = processingStatus?.toLowerCase() === 'completed'
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const [submitting, setSubmitting] = useState(false)
@@ -299,9 +327,11 @@ function ProviderFilesPart({
   const [importDisabled, setImportDisabled] = useState(false)
   const [trackedJobState, setTrackedJobState] = useState<TrackedJobState | null>(null)
   const [reconcilingRetainedJob, setReconcilingRetainedJob] = useState(
-    () => open && pendingAddJobIdsByDocument.has(documentId),
+    () => open && getRetainedAddJobId(documentId) !== null,
   )
+  const [retainedReconcileFailed, setRetainedReconcileFailed] = useState(false)
   const [retainedRetryCount, setRetainedRetryCount] = useState(0)
+  const [refreshingAfterAdd, setRefreshingAfterAdd] = useState(false)
   const [pollError, setPollError] = useState<string | null>(null)
   const [pollRetryCount, setPollRetryCount] = useState(0)
 
@@ -330,6 +360,8 @@ function ProviderFilesPart({
     setAddRefusal(null)
     setImportDisabled(false)
     setTrackedJobState(null)
+    setRetainedReconcileFailed(false)
+    setRefreshingAfterAdd(false)
     setPollError(null)
     setPollRetryCount(0)
   }, [documentId, open])
@@ -360,23 +392,38 @@ function ProviderFilesPart({
   )
 
   const handleTrackedJobFinished = useCallback(async (targetDocumentId: string) => {
-    const [viewerResult] = await Promise.allSettled([
-      queryClient.fetchQuery({
+    if (mountedRef.current && activeDocumentIdRef.current === targetDocumentId) {
+      setRefreshingAfterAdd(true)
+    }
+
+    // Fetch fresh viewer files independently of /source-files and ALWAYS publish the
+    // document-scoped viewer refresh (same-tab + cross-tab) even if this dialog closes mid-flight.
+    const viewerRefreshPromise = queryClient
+      .fetchQuery({
         queryKey: paperFilesQueryKey(targetDocumentId),
-        queryFn: ({ signal }) => fetchViewerFiles(targetDocumentId, signal),
+        queryFn: () => fetchViewerFiles(targetDocumentId),
         staleTime: 0,
-      }),
-      queryClient.invalidateQueries({ queryKey: paperSourceFilesQueryKey(targetDocumentId) }),
-      queryClient.invalidateQueries({ queryKey: paperActiveJobsQueryKey(targetDocumentId) }),
-    ])
-    if (!mountedRef.current || activeDocumentIdRef.current !== targetDocumentId) {
-      return
+      })
+      .then((payload) => {
+        showPaperFilesInViewer(targetDocumentId, payload.files, { refreshOnlyIfOpen: true })
+      })
+      .catch(() => {
+        // Best-effort viewer refresh; React Query captures query error state if still mounted.
+      })
+
+    try {
+      await Promise.allSettled([
+        viewerRefreshPromise,
+        queryClient.invalidateQueries({ queryKey: paperSourceFilesQueryKey(targetDocumentId) }),
+        queryClient.invalidateQueries({ queryKey: paperActiveJobsQueryKey(targetDocumentId) }),
+      ])
+    } finally {
+      if (mountedRef.current && activeDocumentIdRef.current === targetDocumentId) {
+        setRefreshingAfterAdd(false)
+        setAddRefusal((prev) => (prev?.code === 'import_in_progress' ? null : prev))
+        onFilesChangedRef.current?.()
+      }
     }
-    setAddRefusal((prev) => (prev?.code === 'import_in_progress' ? null : prev))
-    if (viewerResult.status === 'fulfilled') {
-      showPaperFilesInViewer(targetDocumentId, viewerResult.value.files, { refreshOnlyIfOpen: true })
-    }
-    onFilesChangedRef.current?.()
   }, [queryClient])
 
   const handleTrackedJobFinishedRef = useRef(handleTrackedJobFinished)
@@ -387,31 +434,38 @@ function ProviderFilesPart({
   useEffect(() => {
     if (!open) {
       setReconcilingRetainedJob(false)
+      setRetainedReconcileFailed(false)
       return
     }
-    const retainedJobId = pendingAddJobIdsByDocument.get(documentId)
+    const retainedJobId = getRetainedAddJobId(documentId)
     if (!retainedJobId) {
       setReconcilingRetainedJob(false)
+      setRetainedReconcileFailed(false)
       return
     }
     let cancelled = false
     const controller = new AbortController()
     const targetDocumentId = documentId
     setReconcilingRetainedJob(true)
+    setRetainedReconcileFailed(false)
 
     void (async () => {
       try {
         const latest = await fetchPdfJob(retainedJobId, { signal: controller.signal })
-        if (cancelled || controller.signal.aborted || latest.document_id !== targetDocumentId) {
+        if (cancelled || controller.signal.aborted) {
+          return
+        }
+        if (latest.document_id !== targetDocumentId) {
+          deleteRetainedAddJobIdIfMatches(targetDocumentId, retainedJobId)
+          setRetainedReconcileFailed(false)
           return
         }
         setAddRefusal((prev) => (prev?.code === 'import_in_progress' ? null : prev))
         setPollError(null)
+        setRetainedReconcileFailed(false)
         setTrackedJobState({ job: latest, origin: 'user_add' })
         if (!isActivePdfJobStatus(latest.status)) {
-          if (pendingAddJobIdsByDocument.get(targetDocumentId) === retainedJobId) {
-            pendingAddJobIdsByDocument.delete(targetDocumentId)
-          }
+          deleteRetainedAddJobIdIfMatches(targetDocumentId, retainedJobId)
           await handleTrackedJobFinishedRef.current(targetDocumentId)
         }
       } catch (error) {
@@ -419,11 +473,12 @@ function ProviderFilesPart({
           return
         }
         if (error instanceof ApiHttpError && error.httpStatus === 404) {
-          if (pendingAddJobIdsByDocument.get(targetDocumentId) === retainedJobId) {
-            pendingAddJobIdsByDocument.delete(targetDocumentId)
-          }
+          deleteRetainedAddJobIdIfMatches(targetDocumentId, retainedJobId)
+          setRetainedReconcileFailed(false)
           await handleTrackedJobFinishedRef.current(targetDocumentId)
         } else {
+          // Fail closed while retained job status is unknown so stale 5-minute cached files are never re-offered.
+          setRetainedReconcileFailed(true)
           setPollError('Could not check progress for adding files.')
         }
       } finally {
@@ -476,7 +531,11 @@ function ProviderFilesPart({
     const pollOnce = async () => {
       try {
         const latest = await fetchPdfJob(trackedJobId, { signal: controller.signal })
-        if (cancelled || controller.signal.aborted || latest.document_id !== polledDocumentId) {
+        if (cancelled || controller.signal.aborted) {
+          return
+        }
+        if (latest.document_id !== polledDocumentId) {
+          deleteRetainedAddJobIdIfMatches(polledDocumentId, trackedJobId)
           return
         }
         setTrackedJobState((current) =>
@@ -486,9 +545,7 @@ function ProviderFilesPart({
         )
         setPollError(null)
         if (!isActivePdfJobStatus(latest.status)) {
-          if (pendingAddJobIdsByDocument.get(polledDocumentId) === trackedJobId) {
-            pendingAddJobIdsByDocument.delete(polledDocumentId)
-          }
+          deleteRetainedAddJobIdIfMatches(polledDocumentId, trackedJobId)
           await handleTrackedJobFinishedRef.current(polledDocumentId)
           return
         }
@@ -497,32 +554,30 @@ function ProviderFilesPart({
           return
         }
         if (error instanceof ApiHttpError && error.httpStatus === 404) {
-          if (pendingAddJobIdsByDocument.get(polledDocumentId) === trackedJobId) {
-            pendingAddJobIdsByDocument.delete(polledDocumentId)
+          const refetched = await refetchActiveJobsRef.current({ throwOnError: false })
+          if (cancelled || controller.signal.aborted) {
+            return
           }
-          try {
-            const refetched = await refetchActiveJobsRef.current()
-            if (cancelled || controller.signal.aborted) {
-              return
-            }
-            const remainingActive =
-              refetched.data?.find((job) => isActivePdfJobStatus(job.status)) ?? null
-            if (remainingActive && remainingActive.job_id !== trackedJobId) {
-              setTrackedJobState({
-                job: remainingActive,
-                origin: isSupplementAddJob(remainingActive) ? 'user_add' : 'server_active',
-              })
-              setPollError(null)
-            } else {
-              setTrackedJobState(null)
-              setPollError(null)
-              await handleTrackedJobFinishedRef.current(polledDocumentId)
-            }
-          } catch {
-            if (!cancelled && !controller.signal.aborted) {
-              setTrackedJobState(null)
-              setPollError('Could not check progress for adding files.')
-            }
+          if (refetched.isError) {
+            // Active-jobs refetch failed after 404: fail closed via activeJobsQuery.isError
+            // (renders one retryable warning and never treats stale cached data as completion).
+            setTrackedJobState(null)
+            setPollError(null)
+            return
+          }
+          deleteRetainedAddJobIdIfMatches(polledDocumentId, trackedJobId)
+          const remainingActive =
+            refetched.data?.find((job) => isActivePdfJobStatus(job.status)) ?? null
+          if (remainingActive && remainingActive.job_id !== trackedJobId) {
+            setTrackedJobState({
+              job: remainingActive,
+              origin: isSupplementAddJob(remainingActive) ? 'user_add' : 'server_active',
+            })
+            setPollError(null)
+          } else {
+            setTrackedJobState(null)
+            setPollError(null)
+            await handleTrackedJobFinishedRef.current(polledDocumentId)
           }
           return
         }
@@ -585,12 +640,15 @@ function ProviderFilesPart({
   const showImportRunningNotice =
     (serverJobStillActive && !isSupplementAddJob(serverActiveJob))
     || (trackedJob !== null && !isAddTrackedJob && isTrackedJobActive)
+  const activeJobsSettled =
+    !activeJobsQuery.isPending && !activeJobsQuery.isFetching && !activeJobsQuery.isError
   const showTickboxes =
     isPaperCompleted
     && !hasActiveJobForPaper
-    && !activeJobsQuery.isPending
-    && !activeJobsQuery.isError
+    && activeJobsSettled
     && !reconcilingRetainedJob
+    && !retainedReconcileFailed
+    && !refreshingAfterAdd
 
   const handleToggleSelect = useCallback((providerFileId: string) => {
     setAddRefusal(null)
@@ -606,7 +664,16 @@ function ProviderFilesPart({
   }, [])
 
   const handleAddSelected = useCallback(async () => {
-    if (!isPaperCompleted || selectedFiles.length === 0 || submitting || hasActiveJobForPaper || activeJobsQuery.isError) {
+    if (
+      !isPaperCompleted
+      || selectedFiles.length === 0
+      || submitting
+      || hasActiveJobForPaper
+      || !activeJobsSettled
+      || reconcilingRetainedJob
+      || retainedReconcileFailed
+      || refreshingAfterAdd
+    ) {
       return
     }
     submitAbortControllerRef.current?.abort()
@@ -636,7 +703,7 @@ function ProviderFilesPart({
       setTrackedJobState({ job: acceptedJob, origin: 'user_add' })
       setSubmitting(false)
       if (isActivePdfJobStatus(acceptedJob.status)) {
-        pendingAddJobIdsByDocument.set(documentId, acceptedJob.job_id)
+        setRetainedAddJobId(documentId, acceptedJob.job_id)
       } else {
         pendingAddJobIdsByDocument.delete(documentId)
         await handleTrackedJobFinishedRef.current(documentId)
@@ -672,7 +739,22 @@ function ProviderFilesPart({
             limitValue: error.limitValue,
           })
           if (error.code === 'import_in_progress') {
-            void queryClient.invalidateQueries({ queryKey: paperActiveJobsQueryKey(documentId) })
+            if (text !== null) {
+              setAddRefusal({ code: error.code, text, retryable: false })
+            }
+            const refetched = await refetchActiveJobsRef.current({ throwOnError: false })
+            if (
+              !controller.signal.aborted
+              && mountedRef.current
+              && activeDocumentIdRef.current === documentId
+              && !refetched.isError
+              && !refetched.data?.some((job) => isActivePdfJobStatus(job.status))
+            ) {
+              // The conflicting job finished before the follow-up lookup completed; clear N35
+              // so it never sits alongside enabled checkboxes.
+              setAddRefusal((prev) => (prev?.code === 'import_in_progress' ? null : prev))
+            }
+            return
           }
           if (text !== null) {
             const retryable =
@@ -690,12 +772,15 @@ function ProviderFilesPart({
       }
     }
   }, [
-    activeJobsQuery.isError,
+    activeJobsSettled,
     documentId,
     hasActiveJobForPaper,
     isPaperCompleted,
     provider,
     queryClient,
+    reconcilingRetainedJob,
+    refreshingAfterAdd,
+    retainedReconcileFailed,
     selectedFiles,
     shortProvider,
     submitting,
@@ -708,6 +793,7 @@ function ProviderFilesPart({
 
   const handleRetryRetainedOrActiveJobs = useCallback(() => {
     setPollError(null)
+    setRetainedReconcileFailed(false)
     setRetainedRetryCount((count) => count + 1)
     void activeJobsQuery.refetch()
   }, [activeJobsQuery])
@@ -772,7 +858,7 @@ function ProviderFilesPart({
         <Alert severity="info">{LIBRARY_ADD_TEXT.importStillRunning}</Alert>
       ) : null}
 
-      {activeJobsQuery.isError && !hasActiveJobForPaper ? (
+      {activeJobsQuery.isError && !hasActiveJobForPaper && !pollError ? (
         <Alert
           severity="warning"
           action={(
