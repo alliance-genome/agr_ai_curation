@@ -11,7 +11,9 @@ import pytest
 import yaml
 
 from src.lib.openai_agents.config import (
+    get_agent_context_capacity_headroom_tokens,
     get_batch_zip_metadata_chunk_size,
+    get_connections_health_snapshot_ttl_seconds,
     get_document_table_header_max_rows,
     get_document_table_header_min_filled_fraction,
     get_langfuse_timeout,
@@ -78,20 +80,32 @@ def test_production_forwards_batch_zip_metadata_chunk_size(monkeypatch, configur
     assert get_batch_zip_metadata_chunk_size() == expected
 
 
-@pytest.mark.parametrize("configured,expected", [(None, 250), ("40", 40)])
-def test_compose_forwards_weaviate_chunk_fetch_page_size(monkeypatch, configured, expected):
-    key = "WEAVIATE_CHUNK_FETCH_PAGE_SIZE"
-    production = _load_compose()["services"]["backend"]["environment"]
-    development = _list_environment(_load_dev_compose()["services"]["backend"]["environment"])
-    # Assert the actual Compose substitution contract, including its source key.
-    assert production[key] == "${WEAVIATE_CHUNK_FETCH_PAGE_SIZE:-250}"
-    assert development[key] == "${WEAVIATE_CHUNK_FETCH_PAGE_SIZE:-250}"
-    assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == "250"
-    if configured is None:
-        monkeypatch.delenv(key, raising=False)
-    else:
-        monkeypatch.setenv(key, configured)
-    assert get_weaviate_chunk_fetch_page_size() == expected
+@pytest.mark.parametrize(
+    "key,default,override,getter,consumers",
+    [
+        ("AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS", 20000, 12000,
+         get_agent_context_capacity_headroom_tokens, ("backend", "benchmark_worker")),
+        ("LANGFUSE_TIMEOUT", 5, 13, get_langfuse_timeout, ("backend", "benchmark_worker")),
+        ("WEAVIATE_CHUNK_FETCH_PAGE_SIZE", 250, 60,
+         get_weaviate_chunk_fetch_page_size, ("backend", "benchmark_worker")),
+        ("CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS", 45, 8.5,
+         get_connections_health_snapshot_ttl_seconds, ("backend",)),
+    ],
+)
+def test_compose_forwards_operational_settings_to_consumers(
+    monkeypatch, key, default, override, getter, consumers
+):
+    for compose in (_load_dev_compose(), _load_compose()):
+        for service in consumers:
+            environment = compose["services"][service]["environment"]
+            if isinstance(environment, list):
+                environment = _list_environment(environment)
+            assert environment[key] == f"${{{key}:-{default}}}"
+    assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == str(default)
+    monkeypatch.delenv(key, raising=False)
+    assert getter() == default
+    monkeypatch.setenv(key, str(override))
+    assert getter() == override
 
 
 @pytest.mark.parametrize(
@@ -137,19 +151,8 @@ def _load_dev_compose() -> dict:
     return yaml.safe_load(DEV_COMPOSE_PATH.read_text(encoding="utf-8"))
 
 
-@pytest.mark.parametrize("configured,expected", [(None, 5), ("9", 9)])
-def test_langfuse_timeout(monkeypatch, configured, expected):
-    key = "LANGFUSE_TIMEOUT"
-    services = _load_compose()["services"]
-    for service in ("backend", "benchmark_worker"):
-        assert services[service]["environment"][key] == "${LANGFUSE_TIMEOUT:-5}"
-    assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == "5"
-    assert _load_env_assignments(ENV_TEMPLATE_PATH)[key] == "5"
-    if configured is None:
-        monkeypatch.delenv(key, raising=False)
-    else:
-        monkeypatch.setenv(key, configured)
-    assert get_langfuse_timeout() == expected
+def test_standalone_template_documents_langfuse_timeout():
+    assert _load_env_assignments(ENV_TEMPLATE_PATH)["LANGFUSE_TIMEOUT"] == "5"
 
 
 @pytest.mark.parametrize("compose_path,backend_name,worker_name", [

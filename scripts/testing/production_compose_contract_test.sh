@@ -49,6 +49,7 @@ write_test_env() {
       'VALIDATION_REVIEW_QUICK_CHECK_TIMEOUT_SECONDS=12.5' \
       'VALIDATION_REVIEW_QUICK_CHECK_MAX_RETRIES=0' \
       'MAX_PARALLEL_VALIDATORS=3' \
+      'AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS=11000' \
       'LANGFUSE_TIMEOUT=9' \
       'BATCH_STREAM_POLL_INTERVAL_SECONDS=2.5' \
       'CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=7.5' \
@@ -144,7 +145,16 @@ assert_rejected_with() {
 
 write_test_env
 unset MAX_PARALLEL_VALIDATORS ADMIN_EMAILS
-grep -Ev '^(ADMIN_EMAILS=|AGR_PREBUILT_PACKAGE_ENVS_DIR=|MAX_PARALLEL_VALIDATORS=|LANGFUSE_TIMEOUT=|OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES=|WORKSPACE_REVIEW_CONCURRENCY=|VALIDATION_REVIEW_|EXTRACTION_FANOUT_|VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=|WEAVIATE_CHUNK_FETCH_PAGE_SIZE=|DOCUMENT_TABLE_HEADER_|DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES=|DOCUMENT_FILE_DOWNLOAD_CONCURRENCY=|DOCUMENT_FILE_LISTING_CHECK_LIMIT=|DOCUMENT_FILE_LISTING_CURSOR_CACHE_MAX_ENTRIES=|DOCUMENT_MAX_FILES_PER_PAPER=|DOCUMENT_PAPER_MAX_TEXT_BYTES=|DOCUMENT_FILE_MAX_PDF_BYTES=|DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW=|DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=|DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=|DOCUMENT_SOURCE_DEAD_WAIT_POLLS=|DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS=|DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS=|DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS=|DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT=|DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS=|DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS=)' "${env_file}" >"${default_env_file}"
+# The defaults render must omit these settings from both interpolation sources.
+operational_settings='^(AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS|LANGFUSE_TIMEOUT|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS|WEAVIATE_CHUNK_FETCH_PAGE_SIZE)='
+host_overrides=(
+  AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS=12000
+  LANGFUSE_TIMEOUT=13
+  CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=8.5
+  WEAVIATE_CHUNK_FETCH_PAGE_SIZE=60
+)
+unset "${host_overrides[@]%%=*}"
+grep -Ev -e "${operational_settings}" -e '^(ADMIN_EMAILS=|AGR_PREBUILT_PACKAGE_ENVS_DIR=|MAX_PARALLEL_VALIDATORS=|OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES=|WORKSPACE_REVIEW_CONCURRENCY=|VALIDATION_REVIEW_|EXTRACTION_FANOUT_|VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|BATCH_STREAM_POLL_INTERVAL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=|DOCUMENT_TABLE_HEADER_|DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES=|DOCUMENT_FILE_DOWNLOAD_CONCURRENCY=|DOCUMENT_FILE_LISTING_CHECK_LIMIT=|DOCUMENT_FILE_LISTING_CURSOR_CACHE_MAX_ENTRIES=|DOCUMENT_MAX_FILES_PER_PAPER=|DOCUMENT_PAPER_MAX_TEXT_BYTES=|DOCUMENT_FILE_MAX_PDF_BYTES=|DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW=|DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS=|DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS=|DOCUMENT_SOURCE_DEAD_WAIT_POLLS=|DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS=|DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS=|DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS=|DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT=|DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS=|DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS=)' "${env_file}" >"${default_env_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":false,"git_sha":"abcdef1"}' \
   >"${frontend_build_metadata_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":true,"git_sha":"abcdef1"}' \
@@ -207,10 +217,8 @@ assert str(backend_env["PDF_JOB_RECOVERY_INTERVAL_SECONDS"]) == "60"
 assert str(backend_env["PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS"]) == "5400"
 assert str(backend_env["PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS"]) == "30"
 assert str(backend_env["BATCH_STREAM_POLL_INTERVAL_SECONDS"]) == "1.0"
-assert str(backend_env["CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS"]) == "45"
 assert str(backend_env["PDF_JOB_RECOVERY_BATCH_SIZE"]) == "100"
 assert str(backend_env["PDF_JOB_RECOVERY_TIMEOUT_SECONDS"]) == "30"
-assert str(backend_env["WEAVIATE_CHUNK_FETCH_PAGE_SIZE"]) == "250"
 for service in ("backend", "benchmark_worker"):
     service_env = config["services"][service]["environment"]
     assert str(service_env["DOCUMENT_TABLE_HEADER_MAX_ROWS"]) == "5"
@@ -230,7 +238,7 @@ PY
 # Exercise the environment created by a fresh `make setup` and the effective
 # development Compose interpolation, without starting containers.
 # Omit the pool capacity and listing cursor cap so this render exercises their Compose defaults.
-grep -Ev '^(MAX_PARALLEL_VALIDATORS=|DOCUMENT_FILE_LISTING_CHECK_LIMIT=|DOCUMENT_FILE_LISTING_CURSOR_CACHE_MAX_ENTRIES=)' "${repo_root}/.env.example" >"${development_env_file}"
+grep -Ev -e "${operational_settings}" -e '^(MAX_PARALLEL_VALIDATORS=|DOCUMENT_FILE_LISTING_CHECK_LIMIT=|DOCUMENT_FILE_LISTING_CURSOR_CACHE_MAX_ENTRIES=)' "${repo_root}/.env.example" >"${development_env_file}"
 cat >>"${development_env_file}" <<'ENV'
 SENTRY_DEV_DSN=http://dev-public-key@dev-ingest.example.internal/3
 SENTRY_ENVIRONMENT=dev
@@ -267,7 +275,7 @@ env \
   -f "${repo_root}/docker-compose.yml" \
   config --format json >"${development_rendered_file}"
 # The host capacity must win over the service env file's value of 3.
-AGR_PACKAGE_ENV_BOOTSTRAP_MODE=prebuilt MAX_PARALLEL_VALIDATORS=2 AGR_DEV_ENV_FILE="${env_file}" docker compose --env-file "${env_file}" \
+env "${host_overrides[@]}" AGR_PACKAGE_ENV_BOOTSTRAP_MODE=prebuilt MAX_PARALLEL_VALIDATORS=2 AGR_DEV_ENV_FILE="${env_file}" docker compose --env-file "${env_file}" \
   -f "${repo_root}/docker-compose.yml" config --format json >"${development_override_file}"
 # AGR_DEV_ENV_FILE must preserve ADMIN_EMAILS even when --env-file omits it and
 # ADMIN_EMAILS is unset in the shell.
@@ -354,7 +362,6 @@ assert backend_env["ELASTICSEARCH_HOST"] == ""
 assert backend_env["ELASTICSEARCH_SCHEME"] == "https"
 assert str(backend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
 assert str(frontend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
-assert str(backend_env["WEAVIATE_CHUNK_FETCH_PAGE_SIZE"]) == "250"
 assert "backup-filesystem" in str(weaviate_env["ENABLE_MODULES"]).split(",")
 assert weaviate_env["BACKUP_FILESYSTEM_PATH"] == "/var/lib/weaviate-backups"
 assert any(
@@ -382,14 +389,14 @@ for path in sys.argv[1:]:
 PY
 
 docker compose --env-file "${env_file}" -f "${compose_file}" config --format json >"${rendered_file}"
-prod_admin_override_file="${temp_dir}/rendered-admin-override.json"
-ADMIN_EMAILS=prod-override@example.org docker compose --env-file "${env_file}" -f "${compose_file}" \
-  config --format json >"${prod_admin_override_file}"
+prod_host_override_file="${temp_dir}/rendered-host-overrides.json"
+env "${host_overrides[@]}" ADMIN_EMAILS=prod-override@example.org docker compose --env-file "${env_file}" -f "${compose_file}" \
+  config --format json >"${prod_host_override_file}"
 # Exercise the same validator with deterministic image metadata while the
 # installer tests cover its real image-inspection invocation.
 "${preflight}" --env-file "${env_file}" --config-json "${rendered_file}" \
   --frontend-build-metadata-json "${frontend_build_metadata_file}"
-python3 - "${rendered_file}" "${provider_boundary_contract}" "${prod_admin_override_file}" <<'PY'
+python3 - "${rendered_file}" "${provider_boundary_contract}" "${prod_host_override_file}" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -432,10 +439,8 @@ assert str(backend_env["PDF_JOB_RECOVERY_INTERVAL_SECONDS"]) == "75"
 assert str(backend_env["PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS"]) == "6000"
 assert str(backend_env["PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS"]) == "17"
 assert str(backend_env["BATCH_STREAM_POLL_INTERVAL_SECONDS"]) == "2.5"
-assert str(backend_env["CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS"]) == "7.5"
 assert str(backend_env["PDF_JOB_RECOVERY_BATCH_SIZE"]) == "25"
 assert str(backend_env["PDF_JOB_RECOVERY_TIMEOUT_SECONDS"]) == "15"
-assert str(backend_env["WEAVIATE_CHUNK_FETCH_PAGE_SIZE"]) == "40"
 for service in ("backend", "benchmark_worker"):
     service_env = config["services"][service]["environment"]
     assert str(service_env["DOCUMENT_TABLE_HEADER_MAX_ROWS"]) == "3"
@@ -480,6 +485,37 @@ for raw_line in Path(sys.argv[2]).read_text(encoding="utf-8").splitlines():
         )
 PY
 
+# Distinct shell and env-file values expose missing development environment mappings:
+# a service env_file alone would forward the file value and ignore the shell.
+python3 - "${default_rendered_file}" "${development_rendered_file}" "${rendered_file}" \
+  "${prod_host_override_file}" "${development_override_file}" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+defaults = sys.argv[1:3]
+env_file_only = sys.argv[3]
+host_overrides = sys.argv[4:]
+settings = (
+    ("AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS", ("backend", "benchmark_worker"), "20000", "11000", "12000"),
+    ("LANGFUSE_TIMEOUT", ("backend", "benchmark_worker"), "5", "9", "13"),
+    ("WEAVIATE_CHUNK_FETCH_PAGE_SIZE", ("backend", "benchmark_worker"), "250", "40", "60"),
+    ("CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS", ("backend",), "45", "7.5", "8.5"),
+)
+for path in (*defaults, env_file_only, *host_overrides):
+    services = json.loads(Path(path).read_text())["services"]
+    for key, consumers, default, file_value, host_value in settings:
+        if path in defaults:
+            expected = default
+        elif path == env_file_only:
+            expected = file_value
+        else:
+            expected = host_value
+        for service in consumers:
+            actual = services[service]["environment"].get(key)
+            assert actual == expected, f"{path}: {service}.{key}: {actual!r} != {expected!r}"
+PY
+
 # Exercise every review limit in both consumers and both supported deployments.
 python3 - "${review_limit_contract}" "${default_rendered_file}" "${development_rendered_file}" \
   "${rendered_file}" "${development_override_file}" <<'PY'
@@ -494,8 +530,6 @@ assert len(settings) == 15
 # reach both consumers in the actual rendered development/production config.
 for index, path in enumerate(sys.argv[2:]):
     services = json.loads(Path(path).read_text())["services"]
-    for service in ("backend", "benchmark_worker"):
-        assert str(services[service]["environment"]["LANGFUSE_TIMEOUT"]) == ("5" if index < 2 else "9")
     for key, default, override in settings:
         expected = default if index < 2 else override
         for service in ("backend", "benchmark_worker"):
