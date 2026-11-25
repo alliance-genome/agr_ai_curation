@@ -21,6 +21,15 @@ _CHECK_CODE_VERSION = "3"
 _ALLOWED_CONTROL_CHARACTERS = frozenset("\t\n\r")
 
 
+def normalize_md5(value: str | None) -> str | None:
+    """Normalize a provider MD5 hex string to trimmed lowercase, or ``None`` when blank."""
+
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
+
+
 @dataclass(frozen=True, slots=True)
 class FileProfile:
     """What the provider says about a file; core never assumes a provider's conventions."""

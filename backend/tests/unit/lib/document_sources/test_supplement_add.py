@@ -230,6 +230,30 @@ async def test_changed_download_is_left_out_without_writes(monkeypatch, storage,
 
 
 @pytest.mark.asyncio
+async def test_uppercase_md5_passes_add_and_reuses_cached_assessment(monkeypatch, storage):
+    store = _Store()
+    lower_md5 = hashlib.md5(GOOD["21"]).hexdigest()
+    lower_rows = _pair(20, "WB", content=GOOD["21"])
+    await _listing(lower_rows, payloads=GOOD, store=store)
+    assert [key[1] for key in store.saved] == [lower_md5]
+
+    upper_rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB", md5="  MD5-20  ", content=GOOD["21"])]
+    upper_rows[2]["md5sum"] = f" {lower_md5.upper()} "
+
+    monkeypatch.setattr(file_listing_service, "_stores", lambda _provider: (store.load, store.save))
+    monkeypatch.setattr(supplement_add, "assess_converted_file", lambda *_: pytest.fail("cached check should be reused"))
+    _, provider = _provider(upper_rows, {"21": GOOD["21"]})
+    _paper_lookup(monkeypatch)
+    chosen = ChosenFile(provider_file_id="20", md5="MD5-20", converted_md5=lower_md5.upper())
+
+    result = await _add(provider, [chosen])
+    assert _by_id(result)["20"].outcome == "added"
+    assert len(storage.inserted) == 1
+    assert storage.inserted[0].source_md5 == "md5-20"
+    assert [key[1] for key in store.saved] == [lower_md5]
+
+
+@pytest.mark.asyncio
 async def test_a_refused_second_file_of_three_is_left_out_and_the_other_two_are_added(monkeypatch, storage):
     client, provider = _provider(ROWS, GOOD)
     _paper_lookup(monkeypatch)

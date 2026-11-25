@@ -237,6 +237,27 @@ async def test_a_write_failure_removes_the_stored_pdf_with_the_rest(monkeypatch,
 
 
 @pytest.mark.asyncio
+async def test_uppercase_pdf_and_converted_md5_pass_spool_and_add(monkeypatch, pdf_store):
+    pdf_md5 = hashlib.md5(PDF).hexdigest()
+    text_md5 = hashlib.md5(PDF_TEXT).hexdigest()
+    rows = [
+        _abc_show_all_main_pdf(10, "WB"),
+        *_pair(50, "WB", extension="pdf", content=PDF_TEXT, md5=f" {pdf_md5.upper()} "),
+    ]
+    rows[2]["md5sum"] = f" {text_md5.upper()} "
+    _, provider = _provider(rows, {"50": PDF, "51": PDF_TEXT})
+    _paper_lookup(monkeypatch)
+    chosen = ChosenFile(provider_file_id="50", md5=pdf_md5.upper(), converted_md5=text_md5.upper())
+
+    result = await _add(provider, [chosen])
+
+    assert _by_id(result)["50"].outcome == "added"
+    (row,) = pdf_store["storage"].inserted
+    assert row.source_md5 == pdf_md5
+    assert pdf_store["saved"] == {row.file_path: PDF}
+
+
+@pytest.mark.asyncio
 async def test_no_pdf_bytes_stay_in_memory_and_no_spooled_file_is_left(monkeypatch, pdf_store):
     import gc
 

@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from src.lib.document_sources.file_assessment import FileAssessment
+from src.lib.document_sources.file_assessment import FileAssessment, normalize_md5
 from src.lib.document_sources.file_reasons import CHECK_REASONS, reason_in_group
 from src.models.sql.document_file_assessment import (
     ASSESSMENT_RESULT_OK,
@@ -23,11 +23,14 @@ from src.models.sql.document_file_assessment import (
 def stored_assessment(
     session: Session, *, provider: str, provider_file_id: str, md5: str, check_version: str,
 ) -> FileAssessment | None:
+    normalized_md5 = normalize_md5(md5)
+    if normalized_md5 is None:
+        return None
     row = session.execute(
         select(DocumentFileAssessment).where(
             DocumentFileAssessment.provider == provider,
             DocumentFileAssessment.provider_file_id == provider_file_id,
-            DocumentFileAssessment.md5 == md5,
+            DocumentFileAssessment.md5 == normalized_md5,
             DocumentFileAssessment.check_version == check_version,
         )
     ).scalar_one_or_none()
@@ -60,12 +63,15 @@ def store_assessment(
     always hold the same result.
     """
 
+    normalized_md5 = normalize_md5(md5)
+    if normalized_md5 is None:
+        raise ValueError("md5 is required to store a file assessment")
     session.execute(
         insert(DocumentFileAssessment)
         .values(
             provider=provider,
             provider_file_id=provider_file_id,
-            md5=md5,
+            md5=normalized_md5,
             check_version=check_version,
             result=ASSESSMENT_RESULT_REFUSED if assessment.refused else ASSESSMENT_RESULT_OK,
             reason_code=assessment.reason.value if assessment.reason is not None else None,

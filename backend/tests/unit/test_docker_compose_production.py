@@ -545,6 +545,7 @@ def test_compose_forwards_request_ceiling_preserving_empty_string():
     [
         ("DOCUMENT_FILE_DOWNLOAD_CONCURRENCY", "4"),
         ("DOCUMENT_FILE_LISTING_CHECK_LIMIT", "20"),
+        ("DOCUMENT_FILE_LISTING_CURSOR_CACHE_MAX_ENTRIES", "512"),
         ("DOCUMENT_MAX_FILES_PER_PAPER", "20"),
         ("DOCUMENT_PAPER_MAX_TEXT_BYTES", "2000000"),
         ("DOCUMENT_FILE_MAX_PDF_BYTES", "20000000"),

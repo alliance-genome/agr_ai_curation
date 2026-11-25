@@ -2618,6 +2618,14 @@ def get_document_file_listing_check_limit() -> int:
     return max(1, _get_env_int_with_fallback("DOCUMENT_FILE_LISTING_CHECK_LIMIT", 20))
 
 
+def get_document_file_listing_cursor_cache_max_entries() -> int:
+    """Most per-reference listing refresh cursors held in memory per worker process."""
+    return max(
+        1,
+        _get_env_int_with_fallback("DOCUMENT_FILE_LISTING_CURSOR_CACHE_MAX_ENTRIES", 512),
+    )
+
+
 def get_document_max_files_per_paper() -> int:
     """Most files one paper holds, its main file included; an add leaves out files past it."""
     return max(1, _get_env_int_with_fallback("DOCUMENT_MAX_FILES_PER_PAPER", 20))

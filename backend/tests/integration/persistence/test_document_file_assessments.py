@@ -78,3 +78,15 @@ def test_a_stored_code_that_is_not_a_check_reason_is_a_named_error(file_id):
         )
     with SessionLocal() as db, pytest.raises(FileReasonGroupError):
         stored_assessment(db, **_key(file_id))
+
+
+def test_stored_assessment_normalizes_md5_case_and_whitespace(file_id):
+    passed = FileAssessment(refused=False)
+    with SessionLocal.begin() as db:
+        store_assessment(db, **_key(file_id, md5=f" {'A' * 32} "), assessment=passed)
+    with SessionLocal() as db:
+        assert stored_assessment(db, **_key(file_id, md5="a" * 32)) == passed
+        assert stored_assessment(db, **_key(file_id, md5="A" * 32)) == passed
+        assert stored_assessment(db, **_key(file_id, md5="   ")) is None
+        row = db.query(DocumentFileAssessment).filter_by(provider_file_id=file_id).one()
+        assert row.md5 == "a" * 32
