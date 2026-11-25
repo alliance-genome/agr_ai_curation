@@ -1,28 +1,36 @@
-"""Admin API for connection health monitoring.
+"""Admin and public APIs for connection health monitoring.
 
 Provides endpoints for checking external service and runtime health:
-- GET /api/admin/health/connections - Cached health of all configured services
-- GET /api/admin/health/connections/{service_id} - One service from that cache
+- GET /api/health/connections - Public minimal status for the curator banner
+- GET /api/admin/health/connections - Admin-only cached health of all configured services
+- GET /api/admin/health/connections/{service_id} - Admin-only single service from that cache
 - GET /api/admin/health/llm-providers - LLM provider and model configuration
 - GET /api/admin/health/packages - Runtime package discovery and compatibility
 
-Authorization: the two connection routes are public so load balancers,
-monitoring and deployment scripts can poll them without a login. Both answer
-from the same bounded-age, per-worker snapshot; neither starts a probe per
-request. The llm-providers and packages routes describe how the system is
-configured and require login like the neighbouring protected routes.
+Authorization:
+- GET /api/health/connections is public and returns only non-sensitive overall
+  status and explicit benign `public_label` strings for unhealthy services.
+- GET /api/admin/health/connections and /connections/{service_id} expose service
+  URLs, diagnostic descriptions, internal service IDs, and sanitized error text,
+  so they require admin authorization via ADMIN_EMAILS (`require_admin`).
+- All three connection routes answer from the same bounded-age, per-worker
+  snapshot; none starts an uncached probe per request.
+- The llm-providers and packages routes describe how the system is configured
+  and require login like the neighbouring protected routes.
 """
 
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from src.api.admin.auth import require_admin
 from src.api.auth import get_auth_dependency
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/admin/health", tags=["Admin - Health"])
+public_router = APIRouter(prefix="/api/health", tags=["Health"])
 
 
 # =============================================================================
@@ -30,13 +38,19 @@ router = APIRouter(prefix="/api/admin/health", tags=["Admin - Health"])
 # =============================================================================
 
 
+class PublicConnectionsHealthResponse(BaseModel):
+    """Minimal public connection health status for the curator banner."""
+
+    status: str  # "healthy", "degraded", "unhealthy"
+    unhealthy_services: List[str]
+
+
 class ServiceHealthResponse(BaseModel):
-    """Health status for a single service.
+    """Health status for a single service (admin diagnostics).
 
     Security Notes:
     - url field contains redacted URL (credentials replaced with ***)
     - last_error field is sanitized (URLs redacted, truncated if too long)
-    This is intentional to prevent information exposure on public endpoints.
     """
 
     service_id: str
@@ -152,8 +166,98 @@ class PackagesHealthResponse(BaseModel):
 
 
 # =============================================================================
+# Shared Snapshot Helpers
+# =============================================================================
+
+
+async def _get_connections_snapshot(request: Request):
+    """Return the shared cached connections health snapshot or raise 503."""
+    from src.lib.config.connections_loader import is_initialized
+
+    if not is_initialized():
+        raise HTTPException(
+            status_code=503,
+            detail="Connections not loaded. Service may still be starting up.",
+        )
+
+    from src.lib.config.connections_monitor import SnapshotUnavailable
+
+    try:
+        return await request.app.state.connections_health_monitor.get()
+    except SnapshotUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+def _summarize_connections_status(
+    status_dict: Dict[str, Dict[str, Any]],
+) -> tuple[str, bool]:
+    """Compute overall health status and whether all required services are healthy."""
+    # Required services must be explicitly healthy. Optional services that are
+    # intentionally unconfigured report None and should not degrade overall health.
+    required_healthy = all(
+        s.get("is_healthy") is True
+        for s in status_dict.values()
+        if s.get("required")
+    )
+    optional_unhealthy = any(
+        s.get("required") is False and s.get("is_healthy") is False
+        for s in status_dict.values()
+    )
+
+    if not required_healthy:
+        overall_status = "unhealthy"  # Required services are down or unconfigured
+    elif optional_unhealthy:
+        overall_status = "degraded"  # Optional configured services are down
+    else:
+        overall_status = "healthy"
+
+    return overall_status, required_healthy
+
+
+# =============================================================================
 # Endpoints
 # =============================================================================
+
+
+@public_router.get(
+    "/connections",
+    response_model=PublicConnectionsHealthResponse,
+    summary="Public minimal connection status for the curator banner",
+    description="""
+    Returns minimal, non-sensitive connection health status (`status` and
+    explicit benign `public_label` strings for unhealthy services) from the
+    shared bounded-age, per-worker cached observation. Never starts an uncached
+    probe and never exposes diagnostic descriptions, URLs, hostnames, ports,
+    raw errors, or internal service IDs.
+    """,
+)
+async def check_public_connections_status(
+    request: Request,
+) -> PublicConnectionsHealthResponse:
+    """Return minimal public connection health status for the curator banner."""
+    snapshot = await _get_connections_snapshot(request)
+    status_dict = snapshot.services
+    overall_status, _required_healthy = _summarize_connections_status(status_dict)
+
+    unhealthy_services: List[str] = []
+    seen_labels: set[str] = set()
+    for service in status_dict.values():
+        is_unhealthy = service.get("is_healthy") is False or (
+            bool(service.get("required")) and service.get("is_healthy") is not True
+        )
+        if not is_unhealthy:
+            continue
+        raw_label = service.get("public_label")
+        if isinstance(raw_label, str):
+            label = raw_label.strip()
+            if label and label not in seen_labels:
+                seen_labels.add(label)
+                unhealthy_services.append(label)
+
+    return PublicConnectionsHealthResponse(
+        status=overall_status,
+        unhealthy_services=unhealthy_services,
+    )
 
 
 @router.get(
@@ -163,7 +267,9 @@ class PackagesHealthResponse(BaseModel):
     description="""
     Shares a bounded-age, per-worker observation of configured services.
     observed_at is the UTC sweep start, preserved on cache hits.
-    The single-service route reads the same observation.
+    The single-service route and public status route read the same observation.
+
+    Requires admin authorization (ADMIN_EMAILS allowlist).
 
     Health checks are performed based on each service's configuration:
     - HTTP endpoints: Makes request to configured endpoint
@@ -177,24 +283,12 @@ class PackagesHealthResponse(BaseModel):
     - Detailed status for each service
     """,
 )
-async def check_all_connections(request: Request) -> ConnectionsHealthResponse:
-    """Check health of all configured external services."""
-    from src.lib.config.connections_loader import (
-        is_initialized,
-    )
-
-    if not is_initialized():
-        raise HTTPException(
-            status_code=503,
-            detail="Connections not loaded. Service may still be starting up.",
-        )
-
-    from src.lib.config.connections_monitor import SnapshotUnavailable
-
-    try:
-        snapshot = await request.app.state.connections_health_monitor.get()
-    except SnapshotUnavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from None
+async def check_all_connections(
+    request: Request,
+    _admin: dict = Depends(require_admin),
+) -> ConnectionsHealthResponse:
+    """Check health of all configured external services (admin only)."""
+    snapshot = await _get_connections_snapshot(request)
     status_dict = snapshot.services
 
     # Calculate summary statistics
@@ -202,26 +296,7 @@ async def check_all_connections(request: Request) -> ConnectionsHealthResponse:
     healthy = sum(1 for s in status_dict.values() if s.get("is_healthy") is True)
     unhealthy = sum(1 for s in status_dict.values() if s.get("is_healthy") is False)
     unknown = sum(1 for s in status_dict.values() if s.get("is_healthy") is None)
-
-    # Required services must be explicitly healthy. Optional services that are
-    # intentionally unconfigured report None and should not degrade overall health.
-    required_healthy = all(
-        s.get("is_healthy") is True
-        for s in status_dict.values()
-        if s.get("required")
-    )
-    optional_unhealthy = any(
-        s.get("required") is False and s.get("is_healthy") is False
-        for s in status_dict.values()
-    )
-
-    # Determine overall status
-    if not required_healthy:
-        overall_status = "unhealthy"  # Required services are down or unconfigured
-    elif optional_unhealthy:
-        overall_status = "degraded"  # Optional configured services are down
-    else:
-        overall_status = "healthy"
+    overall_status, required_healthy = _summarize_connections_status(status_dict)
 
     # Build response
     services = {
@@ -249,24 +324,17 @@ async def check_all_connections(request: Request) -> ConnectionsHealthResponse:
     observation the summary route shares. It never starts a probe of its own;
     an expired observation is refreshed by one shared sweep, exactly as for
     the summary route.
+
+    Requires admin authorization (ADMIN_EMAILS allowlist).
     """,
 )
-async def check_single_connection(service_id: str, request: Request) -> ServiceHealthResponse:
-    """Return the cached health observation for one configured service."""
-    from src.lib.config.connections_loader import is_initialized
-
-    if not is_initialized():
-        raise HTTPException(
-            status_code=503,
-            detail="Connections not loaded. Service may still be starting up.",
-        )
-
-    from src.lib.config.connections_monitor import SnapshotUnavailable
-
-    try:
-        snapshot = await request.app.state.connections_health_monitor.get()
-    except SnapshotUnavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from None
+async def check_single_connection(
+    service_id: str,
+    request: Request,
+    _admin: dict = Depends(require_admin),
+) -> ServiceHealthResponse:
+    """Return the cached health observation for one configured service (admin only)."""
+    snapshot = await _get_connections_snapshot(request)
 
     service = snapshot.services.get(service_id)
     if service is None:

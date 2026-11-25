@@ -1,8 +1,11 @@
 import { ThemeProvider } from '@mui/material/styles'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ConnectionsHealthResponse } from '@/services/adminService'
+import {
+  fetchConnectionsHealth,
+  type ConnectionsHealthResponse,
+} from '@/services/adminService'
 import theme from '@/theme'
 import ConnectionsHealthBanner from './ConnectionsHealthBanner'
 
@@ -31,21 +34,14 @@ function buildHealth(
 ): ConnectionsHealthResponse {
   return {
     status,
-    total_services: 1,
-    healthy_count: status === 'healthy' ? 1 : 0,
-    unhealthy_count: status === 'healthy' ? 0 : 1,
-    unknown_count: 0,
-    required_healthy: status !== 'unhealthy',
-    services: {
-      weaviate: {
-        service_id: 'weaviate',
-        description: 'Weaviate',
-        url: 'http://weaviate:8080',
-        required: status === 'unhealthy',
-        is_healthy: status === 'healthy',
-        last_error: status === 'healthy' ? null : 'Connection refused',
-      },
-    },
+    unhealthy_services:
+      status === 'healthy'
+        ? []
+        : [
+            status === 'unhealthy'
+              ? 'Document search'
+              : 'Observability and tracing',
+          ],
     ...overrides,
   }
 }
@@ -53,6 +49,35 @@ function buildHealth(
 describe('ConnectionsHealthBanner', () => {
   beforeEach(() => {
     mockUseConnectionsHealth.mockReset()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('polls the public minimal status endpoint instead of the admin endpoint', async () => {
+    const payload = buildHealth('degraded')
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => payload,
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await fetchConnectionsHealth()
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/health/connections')
+    expect(result).toEqual(payload)
+  })
+
+  it('throws startup message on 503 from the public minimal status endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchConnectionsHealth()).rejects.toThrow('Service is starting up')
   })
 
   it('stays hidden while health is loading or healthy', () => {
@@ -72,7 +97,7 @@ describe('ConnectionsHealthBanner', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
-  it('shows degraded services and lets users dismiss that status level', async () => {
+  it('shows degraded service labels and lets users dismiss that status level', async () => {
     mockUseConnectionsHealth.mockReturnValue({
       data: buildHealth('degraded'),
       isLoading: false,
@@ -84,8 +109,7 @@ describe('ConnectionsHealthBanner', () => {
     expect(screen.getByText('Service Degraded')).toBeInTheDocument()
     expect(screen.getByText('Some optional services are unavailable. Core features still work.')).toBeInTheDocument()
     expect(screen.getByText('Affected services:')).toBeInTheDocument()
-    expect(screen.getByText(/weaviate/)).toBeInTheDocument()
-    expect(screen.getByText(/Connection refused/)).toBeInTheDocument()
+    expect(screen.getByText('Observability and tracing')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
 
@@ -118,6 +142,27 @@ describe('ConnectionsHealthBanner', () => {
     expect(screen.getByRole('status')).toBeInTheDocument()
     expect(screen.getByText('Service Unavailable')).toBeInTheDocument()
     expect(screen.getByText('Required services are unavailable. Some features may not work.')).toBeInTheDocument()
-    expect(screen.getByText(/weaviate \(required\)/)).toBeInTheDocument()
+    expect(screen.getByText('Document search')).toBeInTheDocument()
+  })
+
+  it('truncates lists longer than four affected services', () => {
+    mockUseConnectionsHealth.mockReturnValue({
+      data: buildHealth('degraded', {
+        unhealthy_services: [
+          'Service One',
+          'Service Two',
+          'Service Three',
+          'Service Four',
+          'Service Five',
+        ],
+      }),
+      isLoading: false,
+    })
+
+    renderBanner()
+
+    expect(screen.getByText('Service Four')).toBeInTheDocument()
+    expect(screen.queryByText('Service Five')).not.toBeInTheDocument()
+    expect(screen.getByText('...and 1 more')).toBeInTheDocument()
   })
 })

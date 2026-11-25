@@ -81,7 +81,9 @@ This script:
 2. Starts the `local-reranker` Compose profile only for `local_transformers`.
 3. Verifies backend startup with `GET /health`.
 4. Verifies the reranker requirement contract with
-   `GET /api/admin/health/connections`.
+   `GET /api/admin/health/connections` (requires admin authorization: local dev
+   mode without `ADMIN_EMAILS`, or `TESTING_API_KEY` whose email is on
+   `ADMIN_EMAILS`).
 5. For `local_transformers`, verifies that the effective reranker URL matches
    the configured target resolved from the exported `RERANKER_URL`, then the
    local backend env file, then the default

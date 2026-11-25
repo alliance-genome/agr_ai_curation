@@ -640,6 +640,54 @@ def test_run_local_rerank_provider_smoke_reads_nested_evidence(monkeypatch, tmp_
     assert summary["fail_count"] == 0
 
 
+def test_run_local_rerank_provider_smoke_forwards_api_key_in_env(monkeypatch, tmp_path):
+    smoke = _load_smoke_module()
+    script_path = tmp_path / "rerank_provider_smoke_local.sh"
+    script_path.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    evidence_path = tmp_path / "rerank_provider_smoke.json"
+    evidence_path.write_text(
+        json.dumps({"overall_status": "pass", "pass_count": 1, "fail_count": 0, "derived_checks": []}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("KEEP_EXISTING_VAR", "preserved")
+    monkeypatch.delenv("TESTING_API_KEY", raising=False)
+    captured: dict[str, object] = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env")
+        return SimpleNamespace(
+            returncode=0,
+            stdout=f"Evidence file: {evidence_path}\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(smoke.subprocess, "run", _fake_run)
+
+    smoke.run_local_rerank_provider_smoke(
+        script_path=script_path,
+        base_url="http://localhost:8000",
+        api_key="resolved-admin-key",
+    )
+
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["TESTING_API_KEY"] == "resolved-admin-key"
+    assert env["KEEP_EXISTING_VAR"] == "preserved"
+
+    smoke.run_local_rerank_provider_smoke(
+        script_path=script_path,
+        base_url="http://localhost:8000",
+        api_key=None,
+    )
+
+    env_without_key = captured["env"]
+    assert isinstance(env_without_key, dict)
+    assert "TESTING_API_KEY" not in env_without_key
+    assert env_without_key["KEEP_EXISTING_VAR"] == "preserved"
+
+
 def test_run_local_rerank_provider_smoke_rejects_failed_subprocess(monkeypatch, tmp_path):
     smoke = _load_smoke_module()
     script_path = tmp_path / "rerank_provider_smoke_local.sh"

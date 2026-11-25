@@ -1318,3 +1318,50 @@ def test_default_snapshot_ttl_outlasts_slowest_configured_probe(monkeypatch):
         loader.reset_cache()
 
     assert get_connections_health_snapshot_ttl_seconds() > slowest_probe
+
+
+def test_repo_connections_yaml_sets_benign_public_labels(monkeypatch):
+    """Every checked-in service defines a non-empty public_label without URLs or ports."""
+    from pathlib import Path
+
+    from src.lib.config import connections_loader as loader
+
+    monkeypatch.delenv("CONNECTIONS_CONFIG_OVERLAY_PATH", raising=False)
+    repo_connections = Path(__file__).resolve().parents[5] / "config" / "connections.yaml"
+    try:
+        connections = loader.load_connections(repo_connections, force_reload=True)
+        assert connections
+        for service_id, conn in connections.items():
+            assert conn.public_label, f"{service_id} should define public_label"
+            assert "://" not in conn.public_label
+            assert ":" not in conn.public_label
+    finally:
+        loader.reset_cache()
+
+
+def test_connection_from_yaml_parses_public_label_without_env_expansion(monkeypatch):
+    from src.lib.config.connections_loader import ConnectionDefinition
+
+    monkeypatch.setenv("SECRET_HOST", "private.internal:5432")
+
+    explicit = ConnectionDefinition.from_yaml(
+        "svc",
+        {
+            "description": "Diagnostic text",
+            "public_label": "  ${SECRET_HOST}  ",
+            "url": "http://localhost:8080",
+        },
+    )
+    assert explicit.public_label == "${SECRET_HOST}"
+
+    omitted = ConnectionDefinition.from_yaml(
+        "svc2",
+        {
+            "description": "Private host private.internal:5432",
+            "url": "http://localhost:8080",
+        },
+    )
+    assert omitted.public_label is None
+
+    with pytest.raises(ValueError, match="public_label must be a string"):
+        ConnectionDefinition.from_yaml("svc3", {"public_label": 123, "url": "http://localhost:8080"})

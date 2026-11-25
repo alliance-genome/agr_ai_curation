@@ -174,6 +174,14 @@ The overlay is deep-merged over the base file, so it can add services or replace
 only selected nested fields. Secret values should still come from environment
 variables or a secret manager rather than the overlay itself.
 
+Each service may also set an explicit `public_label` (a static, non-sensitive
+curator-facing label). The unauthenticated `GET /api/health/connections` banner
+route projects only `public_label` for unhealthy services and never exposes
+free-form diagnostic `description` strings, URLs, hostnames, ports, raw errors,
+or internal service IDs. Services without an explicit `public_label` still
+affect the overall `status` (`degraded` / `unhealthy`) without being named
+publicly.
+
 PostgreSQL services may declare `credentials.url_env_var` as the name of an
 explicit full-URL environment override. When set, that environment value takes
 priority over the service URL and configured credential source; health checks

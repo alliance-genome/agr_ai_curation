@@ -85,6 +85,16 @@ print(json.dumps(sys.argv[1]))
 PY
 }
 
+compose_yaml_escape() {
+  local value="${1:-}"
+  ensure_python_bin
+  "${PY_BIN}" - "$value" <<'PY'
+import json
+import sys
+print(json.dumps(sys.argv[1].replace("$", "$$")))
+PY
+}
+
 compose() {
   local compose_args=()
   append_smoke_compose_args compose_args
@@ -123,17 +133,34 @@ cleanup_smoke_compose_override() {
 }
 
 ensure_smoke_compose_override_file() {
-  if [[ -n "${SMOKE_COMPOSE_OVERRIDE_FILE:-}" || -z "${RERANKER_URL:-}" ]]; then
+  if [[ -n "${SMOKE_COMPOSE_OVERRIDE_FILE:-}" ]]; then
+    return 0
+  fi
+
+  local has_reranker_url=0
+  local has_admin_emails=0
+  if [[ -n "${RERANKER_URL:-}" ]]; then
+    has_reranker_url=1
+  fi
+  if [[ -n "${ADMIN_EMAILS+set}" ]]; then
+    has_admin_emails=1
+  fi
+  if [[ "${has_reranker_url}" -eq 0 && "${has_admin_emails}" -eq 0 ]]; then
     return 0
   fi
 
   SMOKE_COMPOSE_OVERRIDE_FILE="$(mktemp)"
-  cat > "${SMOKE_COMPOSE_OVERRIDE_FILE}" <<EOF
-services:
-  backend:
-    environment:
-      RERANKER_URL: $(json_escape "${RERANKER_URL}")
-EOF
+  {
+    echo "services:"
+    echo "  backend:"
+    echo "    environment:"
+    if [[ "${has_reranker_url}" -eq 1 ]]; then
+      echo "      RERANKER_URL: $(compose_yaml_escape "${RERANKER_URL}")"
+    fi
+    if [[ "${has_admin_emails}" -eq 1 ]]; then
+      echo "      ADMIN_EMAILS: $(compose_yaml_escape "${ADMIN_EMAILS}")"
+    fi
+  } > "${SMOKE_COMPOSE_OVERRIDE_FILE}"
 }
 
 source_smoke_extra_env_file() {
@@ -225,7 +252,11 @@ run_http_check() {
   local tmp_body
   tmp_body="$(mktemp)"
   local http_code
-  http_code="$(curl -sS --max-time "${max_time}" -w "%{http_code}" -o "${tmp_body}" "${BASE_URL}${path}" || true)"
+  if [[ "${path}" == /api/admin/* && -n "${TESTING_API_KEY:+set}" ]]; then
+    http_code="$(curl -sS --max-time "${max_time}" -H @- -w "%{http_code}" -o "${tmp_body}" "${BASE_URL}${path}" <<<"X-API-Key: ${TESTING_API_KEY}" || true)"
+  else
+    http_code="$(curl -sS --max-time "${max_time}" -w "%{http_code}" -o "${tmp_body}" "${BASE_URL}${path}" || true)"
+  fi
 
   local body
   body="$(cat "${tmp_body}" 2>/dev/null || true)"
@@ -563,6 +594,102 @@ configure_stack_for_provider() {
   RERANK_PROVIDER="${provider}" compose up -d backend
 }
 
+read_env_file_value() {
+  local env_file="$1"
+  local key="$2"
+  if [[ -z "${env_file}" || ! -f "${env_file}" || ! -r "${env_file}" ]]; then
+    return 0
+  fi
+
+  ensure_python_bin
+  "${PY_BIN}" - "${env_file}" "${key}" <<'PY'
+import re
+import sys
+
+env_file, target_key = sys.argv[1], sys.argv[2]
+assign_re = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+found = False
+matched = ""
+
+with open(env_file, "r", encoding="utf-8", errors="replace") as handle:
+    for raw_line in handle:
+        line = raw_line.rstrip("\r\n")
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        match = assign_re.match(line)
+        if not match or match.group(1) != target_key:
+            continue
+        raw_val = match.group(2)
+        stripped = raw_val.lstrip(" \t")
+        if stripped.startswith('"'):
+            chars = []
+            i = 1
+            closed = False
+            while i < len(stripped):
+                ch = stripped[i]
+                if ch == "\\" and i + 1 < len(stripped):
+                    nxt = stripped[i + 1]
+                    if nxt in ('"', "\\"):
+                        chars.append(nxt)
+                    else:
+                        chars.append("\\")
+                        chars.append(nxt)
+                    i += 2
+                    continue
+                if ch == '"':
+                    closed = True
+                    break
+                chars.append(ch)
+                i += 1
+            value = "".join(chars) if closed else stripped
+        elif stripped.startswith("'"):
+            end = stripped.find("'", 1)
+            value = stripped[1:end] if end != -1 else stripped
+        else:
+            comment_match = re.search(r"[ \t]+#", raw_val)
+            uncommented = raw_val[: comment_match.start()] if comment_match else raw_val
+            value = uncommented.strip(" \t")
+        matched = value
+        found = True
+
+if found:
+    sys.stdout.write(matched)
+PY
+}
+
+load_smoke_environment() {
+  local caller_testing_api_key="${TESTING_API_KEY:-}"
+  local caller_admin_emails_set=0
+  local caller_admin_emails=""
+  if [[ -n "${ADMIN_EMAILS+set}" ]]; then
+    caller_admin_emails_set=1
+    caller_admin_emails="${ADMIN_EMAILS}"
+  fi
+
+  # shellcheck disable=SC1091
+  . "${SCRIPT_DIR}/load-home-test-env.sh"
+  source_smoke_extra_env_file
+
+  if [[ -n "${caller_testing_api_key}" ]]; then
+    export TESTING_API_KEY="${caller_testing_api_key}"
+  elif [[ -z "${TESTING_API_KEY:-}" ]]; then
+    local compose_env_file="${SMOKE_COMPOSE_ENV_FILE:-${AGR_DEV_ENV_FILE:-${REPO_ENV_FILE}}}"
+    local file_api_key
+    file_api_key="$(read_env_file_value "${compose_env_file}" "TESTING_API_KEY")"
+    if [[ -n "${file_api_key}" ]]; then
+      export TESTING_API_KEY="${file_api_key}"
+    fi
+  fi
+
+  if [[ "${caller_admin_emails_set}" -eq 1 ]]; then
+    export ADMIN_EMAILS="${caller_admin_emails}"
+  elif [[ -n "${ADMIN_EMAILS+set}" && -z "${ADMIN_EMAILS}" ]]; then
+    # A blank ADMIN_EMAILS= in home/extra env must not erase a real value from
+    # AGR_DEV_ENV_FILE when the caller did not explicitly set ADMIN_EMAILS.
+    unset ADMIN_EMAILS
+  fi
+}
+
 main() {
   cd "${REPO_ROOT}"
   mkdir -p "${OUT_DIR}"
@@ -570,9 +697,7 @@ main() {
   DERIVED_ITEMS=()
   PROVIDERS=(bedrock_cohere local_transformers none)
 
-  # shellcheck disable=SC1091
-  . "${SCRIPT_DIR}/load-home-test-env.sh"
-  source_smoke_extra_env_file
+  load_smoke_environment
   apply_smoke_port_overrides
   ensure_python_bin
   ensure_smoke_compose_override_file

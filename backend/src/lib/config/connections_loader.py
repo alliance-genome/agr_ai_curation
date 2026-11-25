@@ -372,6 +372,7 @@ class ConnectionDefinition:
 
     service_id: str
     description: str = ""
+    public_label: Optional[str] = None
     url: str = ""
     health_check: HealthCheck = field(default_factory=HealthCheck)
     required: bool = False
@@ -404,9 +405,18 @@ class ConnectionDefinition:
         # Substitute environment variables in URL
         url = _substitute_env_vars(data.get("url", ""))
 
+        raw_public_label = data.get("public_label")
+        public_label: Optional[str] = None
+        if raw_public_label is not None:
+            if not isinstance(raw_public_label, str):
+                raise ValueError("public_label must be a string")
+            stripped_label = raw_public_label.strip()
+            public_label = stripped_label or None
+
         return cls(
             service_id=service_id,
             description=data.get("description", "").strip(),
+            public_label=public_label,
             url=url,
             health_check=HealthCheck.from_yaml(data.get("health_check")),
             required=_resolve_required_flag(data),
@@ -909,10 +919,11 @@ async def probe_monitoring_connection(conn: ConnectionDefinition) -> Dict[str, A
 
 
 def connection_status(conn: ConnectionDefinition) -> Dict[str, Any]:
-    """Copy the public, sanitized fields of one observed definition."""
+    """Copy the sanitized fields of one observed definition."""
     return {
         "service_id": conn.service_id,
         "description": conn.description,
+        "public_label": conn.public_label,
         "url": get_connection_display_url(conn),
         "required": conn.required,
         "is_healthy": conn.is_healthy,

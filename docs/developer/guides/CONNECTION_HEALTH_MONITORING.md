@@ -1,18 +1,31 @@
 # Connection health observations
 
-The public `GET /api/admin/health/connections` endpoint shares a demand-triggered
-sweep among dashboard viewers within one application worker. The public
-`GET /api/admin/health/connections/{service_id}` endpoint returns one service's
-entry from the same observation and never probes on its own.
+The public `GET /api/health/connections` endpoint shares a demand-triggered
+sweep among dashboard viewers within one application worker and returns only
+the minimal non-sensitive status fields needed by the curator banner:
+`status` (`healthy`, `degraded`, or `unhealthy`) and `unhealthy_services`
+(a list of explicit benign `public_label` strings configured on unhealthy
+services — never free-form diagnostic `description` strings, URLs, hostnames,
+ports, raw errors, internal `service_id`s, or sweep timestamps). Unhealthy
+services without an explicit `public_label` still affect overall `status`
+without being named publicly.
+
+The detailed diagnostic routes `GET /api/admin/health/connections` and
+`GET /api/admin/health/connections/{service_id}` require admin authorization
+(`ADMIN_EMAILS` allowlist via `require_admin`, returning `401` when
+unauthenticated and `403` for non-admin authenticated users). Both admin routes
+answer from the same cached observation as `GET /api/health/connections` and
+never probe on their own.
 `GET /api/admin/health/llm-providers` and `GET /api/admin/health/packages`
 require login. There is no
 cross-worker coordination or background polling scheduler. Frontend polling
 defaults are unchanged.
 
 `CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS` defaults to 45 seconds, longer than the
-slowest configured probe timeout (weaviate, 30 seconds), so the public summary
-can be up to 45 seconds old. The monotonic expiry and the
-UTC `observed_at` response field both refer to **sweep start**, not response time.
+slowest configured probe timeout (weaviate, 30 seconds), so the cached
+observation can be up to 45 seconds old. The monotonic expiry and the
+UTC `observed_at` field returned on the admin response both refer to **sweep start**,
+not response time.
 Cache hits retain that timestamp. A sweep that consumes the whole freshness
 window may return its completed observation to its waiting callers but is
 already expired for the next request. Its age remains explicit. Each probe's
