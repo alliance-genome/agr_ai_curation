@@ -560,6 +560,14 @@ propagate to the existing request failure owner without explicit capture here.
 Reporting failures cannot escape the completion callback; its fixed warning
 skips Sentry log promotion.
 
+While an import runs, a failed heartbeat write for its queued PDF jobs reports
+`queued_job_heartbeat_failed` under component `pdf_jobs`. The event contains a
+fixed, chain-free error and the bounded exception class. It omits request data,
+SQL, parameters, and job IDs. The keeper retries at the configured poll interval
+even if reporting fails. It reports once per outage, and a successful write
+enables a new report on the next failure. Companion warnings skip log promotion.
+Ordinary keeper cancellation is quiet.
+
 The per-file PDF viewer reports missing artifacts after it verifies ownership,
 display mode, and ready status. Under component `pdf_viewer`, a missing PDF
 produces `pdf_viewer_ready_file_bytes_missing`. An absent processed-elements

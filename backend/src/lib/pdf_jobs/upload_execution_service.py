@@ -435,19 +435,33 @@ class UploadExecutionService:
             await asyncio.gather(keeper, return_exceptions=True)
 
     async def _touch_queued_jobs(self, job_ids: tuple[str, ...]) -> None:
+        from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
+
         interval_seconds = get_document_source_poll_interval_seconds()
+        outage_reported = False
         while True:
             try:
                 await asyncio.to_thread(pdf_job_service.touch_pending_jobs, job_ids=job_ids)
             except Exception as exc:
-                # The running import is unaffected; the queued jobs may then be
-                # failed by the stale sweep, with its own message.
-                logger.warning(
-                    "Could not record activity on queued PDF jobs: %s",
-                    type(exc).__name__,
-                    extra={"sentry_skip_event": True},
-                )
-                return
+                if not outage_reported:
+                    outage_reported = True
+                    message = "Could not record activity on queued PDF jobs"
+                    logger.warning(message, extra={"sentry_skip_event": True})
+                    try:
+                        report_runtime_exception(
+                            sanitized_runtime_error(message),
+                            component="pdf_jobs",
+                            operation="queued_job_heartbeat_failed",
+                            context={"exception_type": type(exc).__name__},
+                            include_request=False,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Could not report queued PDF job heartbeat failure",
+                            extra={"sentry_skip_event": True},
+                        )
+            else:
+                outage_reported = False
             await asyncio.sleep(interval_seconds)
 
     async def dispatch_upload_execution(

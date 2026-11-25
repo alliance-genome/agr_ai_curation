@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import inspect
 import logging
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,7 +33,7 @@ from src.lib.document_sources.models import (
     SourceConversionStatus,
 )
 from src.lib.exceptions import PDFCancellationError
-from src.lib.observability import sentry
+from src.lib.observability import runtime, sentry
 from src.lib.pdf_jobs import upload_execution_service as service_module
 from src.lib.pdf_jobs.upload_execution_service import (
     JobAwarePipelineTracker,
@@ -61,6 +62,25 @@ def _conversion_requests_recorded(monkeypatch):
         lambda **kwargs: recorded.append(kwargs),
     )
     return recorded
+
+
+@contextmanager
+def _capture_upload_events(monkeypatch):
+    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "false")
+    events = []
+
+    class MemoryTransport(Transport):
+        def capture_envelope(self, envelope):
+            events.extend(item.get_event() for item in envelope.items if item.headers["type"] == "event")
+
+    with sentry_sdk.Client(
+        dsn="http://public@example.invalid/1", transport=MemoryTransport,
+        before_send=sentry.before_send, include_local_variables=False, default_integrations=False,
+        integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+    ) as client, sentry_sdk.isolation_scope() as scope:
+        scope.set_client(client)
+        yield events
+        client.flush()
 
 
 class _Tracker:
@@ -1187,21 +1207,8 @@ async def test_conversion_selection_failure_aborts_ingestion(conversion_selectio
     if failure == "reporter":
         reporter.side_effect = RuntimeError("private-reporter-error")
     monkeypatch.setattr(service, "_report_execution_failure", reporter)
-    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "false")
-    events = []
-
-    class MemoryTransport(Transport):
-        def capture_envelope(self, envelope):
-            events.extend(item.get_event() for item in envelope.items if item.headers["type"] == "event")
-
-    with sentry_sdk.Client(
-        dsn="http://public@example.invalid/1", transport=MemoryTransport,
-        before_send=sentry.before_send, include_local_variables=False, default_integrations=False,
-        integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
-    ) as client, sentry_sdk.isolation_scope() as scope:
-        scope.set_client(client)
+    with _capture_upload_events(monkeypatch) as events:
         await service._execute_provider_conversion_unbounded(request)
-        client.flush()
 
     service._execute_provider_markdown_unbounded.assert_not_awaited()
     assert provider.downloads == []
@@ -3492,6 +3499,104 @@ async def test_jobs_queued_behind_a_running_import_of_the_same_request_are_kept_
     # at most job 3; the last job keeps nothing alive.
     assert touched.count(("job-2", "job-3")) >= 2
     assert set(touched) <= {("job-2", "job-3"), ("job-3",)}
+
+
+@pytest.mark.asyncio
+async def test_queued_heartbeat_reports_once_per_outage_and_retries_at_each_interval(monkeypatch, caplog):
+    job_ids = ("private-queued-job-2", "private-queued-job-3")
+    sql = "UPDATE private_heartbeat_table"
+    db_error = OperationalError(sql, ("private-parameter",), Exception("private-db-error"))
+    touch = Mock(side_effect=[db_error, db_error, 2, db_error, db_error])
+    monkeypatch.setattr(service_module.pdf_job_service, "touch_pending_jobs", touch)
+    monkeypatch.setattr(service_module, "get_document_source_poll_interval_seconds", lambda: 17)
+    monkeypatch.setenv("RUNTIME_OBSERVABILITY_CONTEXT_VALUE_MAX_CHARS", "11")
+    reporter = Mock(wraps=runtime.report_runtime_exception)
+    monkeypatch.setattr(runtime, "report_runtime_exception", reporter)
+    service = UploadExecutionService(pipeline_tracker=_Tracker())
+    ticks = []
+
+    with _capture_upload_events(monkeypatch) as events:
+        sentry_sdk.get_isolation_scope().add_event_processor(
+            lambda event, hint: {**event, "request": {"url": f"/jobs/{job_ids[0]}"}}
+        )
+
+        async def sleep(interval):
+            ticks.append((touch.call_count, interval, len(events)))
+            if len(ticks) == 5:
+                raise asyncio.CancelledError
+
+        monkeypatch.setattr(service_module.asyncio, "sleep", sleep)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(service._touch_queued_jobs(job_ids), timeout=3)
+
+    assert ticks == [(1, 17, 1), (2, 17, 1), (3, 17, 1), (4, 17, 2), (5, 17, 2)]
+    assert all(call.kwargs == {"job_ids": job_ids} for call in touch.call_args_list)
+    assert reporter.call_count == 2
+    for call in reporter.call_args_list:
+        error, = call.args
+        assert error.__cause__ is None and error.__context__ is None
+    assert len(events) == 2
+    for event in events:
+        assert "request" not in event
+        assert event["tags"]["operation"] == "queued_job_heartbeat_failed"
+        assert event["contexts"]["runtime_exception"] == {
+            "component": "pdf_jobs", "operation": "queued_job_heartbeat_failed", "exception_type": "Operational",
+        }
+        value, = event["exception"]["values"]
+        assert value["type"] == "RuntimeError"
+        assert value["value"] == "Could not record activity on queued PDF jobs"
+    warnings = [r for r in caplog.records if r.name == service_module.__name__]
+    assert len(warnings) == 2
+    assert all(r.levelno == logging.WARNING and r.sentry_skip_event and r.exc_info is None for r in warnings)
+    for private in (*job_ids, sql, "private-parameter", "private-db-error"):
+        assert private not in repr(events)
+        assert private not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reporter_fails", [False, True], ids=["quiet-cancellation", "reporter-raises"])
+async def test_queued_heartbeat_allows_import_to_finish(monkeypatch, caplog, reporter_fails):
+    monkeypatch.setattr("src.lib.observability.cost_context.execution_context", lambda **fields: fields)
+    recovered = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    attempts = []
+
+    def touch(*, job_ids):
+        attempts.append(job_ids)
+        if reporter_fails and len(attempts) <= 2:
+            raise RuntimeError("private-write-detail")
+        loop.call_soon_threadsafe(recovered.set)
+        return len(job_ids)
+
+    reporter = Mock(side_effect=RuntimeError("private-reporter-detail"))
+    monkeypatch.setattr(runtime, "report_runtime_exception", reporter)
+    monkeypatch.setattr(service_module.pdf_job_service, "touch_pending_jobs", touch)
+    monkeypatch.setattr(service_module, "get_document_source_poll_interval_seconds", lambda: 0.01)
+    finished = []
+
+    async def run_import(request):
+        if request.job_id == "running":
+            await asyncio.wait_for(recovered.wait(), timeout=3)
+        finished.append(request.job_id)
+
+    service = UploadExecutionService(pipeline_tracker=_Tracker())
+    monkeypatch.setattr(service, "_execute_provider_conversion_unbounded", run_import)
+    tasks = BackgroundTasks()
+    for job_id in ("running", "queued"):
+        await service.dispatch_provider_conversion_execution(background_tasks=tasks, request=_queued_request(job_id))
+
+    with _capture_upload_events(monkeypatch) as events:
+        await tasks()
+
+    assert finished == ["running", "queued"]
+    assert events == []
+    if reporter_fails:
+        reporter.assert_called_once()
+        assert "private-write-detail" not in caplog.text
+        assert "private-reporter-detail" not in caplog.text
+    else:
+        reporter.assert_not_called()
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
 @pytest.mark.asyncio
