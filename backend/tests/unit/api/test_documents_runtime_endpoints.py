@@ -908,6 +908,39 @@ async def test_delete_document_endpoint_returns_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reporter_raises", [False, True])
+async def test_delete_pool_exhaustion_returns_503_with_one_redacted_report(monkeypatch, caplog, reporter_raises):
+    from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+    from src.lib.observability.sentry import hash_sentry_identifier
+
+    doc_id = str(uuid4())
+    private = "private-test-pool-detail"
+    monkeypatch.setattr(documents, "SessionLocal", MagicMock(side_effect=PoolTimeoutError(f"{private} {doc_id}")))
+    report = MagicMock(side_effect=RuntimeError(private) if reporter_raises else None)
+    monkeypatch.setattr(documents, "report_runtime_exception", report)
+
+    with pytest.raises(HTTPException) as raised:
+        await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
+
+    assert raised.value.status_code == 503
+    assert raised.value.detail == "The server is busy right now; try deleting the paper again in a moment."
+    report.assert_called_once()
+    (error,) = report.call_args.args
+    assert error.__cause__ is None and error.__context__ is None
+    assert report.call_args.kwargs == {
+        "component": "documents",
+        "operation": "paper_delete_db_pool_exhausted",
+        "context": {"document_id_hash": hash_sentry_identifier(doc_id), "exception_type": "TimeoutError"},
+        "fingerprint": ["paper_delete_db_pool_exhausted", "TimeoutError"],
+        "include_request": False,
+    }
+    assert caplog.records and all(record.sentry_skip_event for record in caplog.records)
+    for sensitive in (doc_id, private):
+        assert sensitive not in repr(report.call_args)
+        assert sensitive not in repr([vars(record) for record in caplog.records])
+
+
+@pytest.mark.asyncio
 async def test_delete_document_endpoint_blocks_processing_documents(monkeypatch):
     doc_id = str(uuid4())
     verify_session = _FakeSession()
@@ -1389,7 +1422,7 @@ async def test_delete_document_endpoint_raises_when_cleanup_fails(monkeypatch, t
         await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
 
     assert exc.value.status_code == 500
-    assert exc.value.detail == "Failed to delete document"
+    assert exc.value.detail == "The paper could not be deleted. Please try again."
     assert file_session.executed_statements[0]._for_update_arg is not None
     assert file_session.rollbacks == 1
     assert file_session.commits == 0
@@ -1424,7 +1457,7 @@ async def test_delete_document_endpoint_retains_sql_row_when_parent_object_delet
         await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
 
     assert exc.value.status_code == 500
-    assert exc.value.detail == "weaviate parent failed"
+    assert exc.value.detail == "The paper could not be deleted. Please try again."
     assert file_session.commits == 0
     assert file_session.deleted == []
 
@@ -1478,7 +1511,7 @@ async def test_delete_document_endpoint_raises_500_when_delete_fails(monkeypatch
     with pytest.raises(HTTPException) as exc:
         await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
     assert exc.value.status_code == 500
-    assert exc.value.detail == "nope"
+    assert exc.value.detail == "The paper could not be deleted. Please try again."
 
 
 @pytest.mark.asyncio
@@ -2036,7 +2069,7 @@ async def test_delete_document_endpoint_cancel_during_real_chunk_wipe_checkpoint
 
     connection = MagicMock()
     connection.session.side_effect = _unexpected_session
-    monkeypatch.setattr(weaviate_docs, "get_connection", lambda: connection)
+    monkeypatch.setattr(weaviate_docs, "get_connection", lambda *, caller_reports_failure: connection)
     monkeypatch.setattr(weaviate_docs, "get_user_collections", lambda *_: (chunks, papers))
 
     request_task: asyncio.Task[Any] | None = None
@@ -2099,7 +2132,7 @@ async def test_delete_document_endpoint_cancel_at_chunk_wipe_yield_before_submit
 
     connection = MagicMock()
     connection.session.side_effect = _unexpected_session
-    monkeypatch.setattr(weaviate_docs, "get_connection", lambda: connection)
+    monkeypatch.setattr(weaviate_docs, "get_connection", lambda *, caller_reports_failure: connection)
     monkeypatch.setattr(weaviate_docs, "get_user_collections", lambda *_: (chunks, papers))
 
     request_task: asyncio.Task[Any] | None = None
@@ -2328,7 +2361,7 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
 
         chunks.data.delete_many.side_effect = _delete_many
         papers.data.delete_by_id.side_effect = _delete_by_id
-        weaviate_docs.get_connection = lambda: conn
+        weaviate_docs.get_connection = lambda *, caller_reports_failure: conn
         weaviate_docs.get_user_collections = lambda *_a: (chunks, papers)
 
         async def _exercise():
@@ -2421,17 +2454,18 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
                 "stored_files_cancel_before_on_cancel": "stored_files",
                 "sql_cleanup_cancel_before_on_cancel": "sql_cleanup",
             }}
+            index_failure = step_by_mode[{failure_mode!r}] in {{"chunk_wipe", "parent_object"}}
             exc_by_mode = {{
-                "chunk_error": "HTTPException",
-                "parent_error": "HTTPException",
+                "chunk_error": "RuntimeError",
+                "parent_error": "RuntimeError",
                 "parent_reconnect_error": "ConnectionRefusedError",
                 "parent_reconnect_cancel_at_yield": "ConnectionRefusedError",
                 "stored_files_cancel_before_on_cancel": "RuntimeError",
                 "sql_cleanup_cancel_before_on_cancel": "RuntimeError",
             }}
             assert runtime_ctx == {{
-                "component": "documents",
-                "operation": "paper_delete_cancelled_drain_failed",
+                "component": "weaviate_client" if index_failure else "documents",
+                "operation": "paper_delete_index_failed" if index_failure else "paper_delete_cancelled_drain_failed",
                 "document_id_hash": hash_sentry_identifier(doc_id),
                 "step": step_by_mode[{failure_mode!r}],
                 "exception_type": exc_by_mode[{failure_mode!r}],
@@ -2441,11 +2475,11 @@ def test_cancelled_delete_worker_failures_emit_one_sanitized_sentry_event_withou
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("failure_step", ["stored_files", "sql_cleanup"])
+@pytest.mark.parametrize("failure_step", ["chunk_wipe", "parent_object", "stored_files", "sql_cleanup", "unexpected"])
 def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_without_request_url(
     failure_step,
 ):
-    """Non-cancelled HTTP stored_files/sql_cleanup failures emit 1 sanitized Sentry event, no request.url, and HTTP 500."""
+    """Handled delete failures produce one redacted Sentry event and the fixed HTTP 500 detail."""
     import subprocess
     import sys
     import textwrap
@@ -2567,7 +2601,13 @@ def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_withou
         chunks, papers = MagicMock(), MagicMock()
         chunks.data.delete_many.return_value = SimpleNamespace(successful=2, matches=2, failed=0)
         papers.data.delete_by_id.return_value = True
-        weaviate_docs.get_connection = lambda: conn
+        index_failure = {failure_step!r} in {{"chunk_wipe", "parent_object"}}
+        if index_failure:
+            target = chunks.data.delete_many if {failure_step!r} == "chunk_wipe" else papers.data.delete_by_id
+            target.side_effect = RuntimeError(f"{{secret_detail}} {{doc_id}}")
+        if {failure_step!r} == "unexpected":
+            documents.get_document = MagicMock(side_effect=RuntimeError(f"{{secret_detail}} {{doc_id}}"))
+        weaviate_docs.get_connection = lambda *, caller_reports_failure: conn
         weaviate_docs.get_user_collections = lambda *_a: (chunks, papers)
 
         async def _exercise():
@@ -2577,7 +2617,7 @@ def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_withou
                     await documents.delete_document_endpoint(doc_id, {{"sub": "user-1"}})
                 except HTTPException as exc:
                     assert exc.status_code == 500
-                    assert exc.detail == "Failed to delete document"
+                    assert exc.detail == "The paper could not be deleted. Please try again."
                 else:
                     raise AssertionError("expected HTTPException 500")
 
@@ -2588,16 +2628,19 @@ def test_ordinary_delete_cleanup_failures_emit_one_sanitized_sentry_event_withou
         assert "request" not in event, f"request leaked: {{event.get('request')!r}}"
         assert doc_id not in repr(event), f"raw doc_id leaked: {{event!r}}"
         assert secret_detail not in repr(event), f"secret leaked: {{event!r}}"
-        assert event["contexts"]["runtime_exception"] == {{
-            "component": "documents",
-            "operation": "paper_delete_cleanup_failed",
+        expected_context = {{
+            "component": "weaviate_client" if index_failure else "documents",
+            "operation": "paper_delete_index_failed" if index_failure else "paper_delete_cleanup_failed",
             "document_id_hash": hash_sentry_identifier(doc_id),
-            "step": {failure_step!r},
             "exception_type": "RuntimeError",
         }}
+        if {failure_step!r} == "unexpected":
+            expected_context["operation"] = "paper_delete_failed"
+        else:
+            expected_context["step"] = {failure_step!r}
+        assert event["contexts"]["runtime_exception"] == expected_context
         log_output = log_buffer.getvalue()
-        assert "Paper delete cleanup failed" in log_output
-        assert f"step={failure_step}" in log_output
+        assert "exception_type=RuntimeError" in log_output
         assert doc_id not in log_output, f"raw doc_id leaked into logs: {{log_output!r}}"
         assert secret_detail not in log_output, f"secret leaked into logs: {{log_output!r}}"
     """)

@@ -119,7 +119,7 @@ async def test_owner_can_retry_after_unlink_fails(
 ):
     paper, paths = _paper(storage, provisioned_owner)
     claims = {"sub": TEST_USER_ID}
-    monkeypatch.setattr("src.lib.weaviate_client.documents.get_connection", lambda: weaviate_connection)
+    monkeypatch.setattr("src.lib.weaviate_client.documents.get_connection", lambda *, caller_reports_failure=False: weaviate_connection)
     wipe_chunks = AsyncMock(wraps=documents_api.delete_paper_chunks)
     delete_parent = AsyncMock(wraps=documents_api.delete_paper_object)
     monkeypatch.setattr(documents_api, "delete_paper_chunks", wipe_chunks)
@@ -142,7 +142,7 @@ async def test_owner_can_retry_after_unlink_fails(
         with pytest.raises(HTTPException) as failure:
             await documents_api.delete_document_endpoint(str(paper), claims)
 
-    assert (failure.value.status_code, failure.value.detail) == (500, "Failed to delete document")
+    assert (failure.value.status_code, failure.value.detail) == (500, "The paper could not be deleted. Please try again.")
     assert _stored(storage) == {markdown}
     # Chunks are wiped before file cleanup, but the Weaviate parent object stays present
     # until every file is removed so duplicate checks do not treat the retained SQL row
@@ -183,7 +183,7 @@ async def test_retry_wipes_stray_chunks_when_weaviate_parent_object_is_already_a
 ):
     paper, _ = _paper(storage, provisioned_owner)
     claims = {"sub": TEST_USER_ID}
-    monkeypatch.setattr("src.lib.weaviate_client.documents.get_connection", lambda: weaviate_connection)
+    monkeypatch.setattr("src.lib.weaviate_client.documents.get_connection", lambda *, caller_reports_failure=False: weaviate_connection)
     wipe_chunks = AsyncMock(wraps=documents_api.delete_paper_chunks)
     delete_parent = AsyncMock(wraps=documents_api.delete_paper_object)
     monkeypatch.setattr(documents_api, "delete_paper_chunks", wipe_chunks)

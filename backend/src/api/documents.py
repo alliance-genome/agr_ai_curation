@@ -71,6 +71,7 @@ from ..lib.weaviate_client.documents import (
     async_list_documents as list_documents,
 )
 from ..lib.weaviate_client.documents import (
+    PAPER_DELETE_FAILURE_DETAIL,
     delete_paper_chunks,
     delete_paper_object,
     get_document,
@@ -1559,6 +1560,31 @@ async def delete_document_endpoint(
     )
 
     canonical_document_id = document_id
+
+    def report_delete_failure(operation: str, message: str, exc: Exception, *, step: str | None = None) -> None:
+        exc_type = type(exc).__name__
+        document_id_hash = hash_sentry_identifier(canonical_document_id)
+        context = {"document_id_hash": document_id_hash, "exception_type": exc_type}
+        fingerprint = [operation]
+        if step is not None:
+            context["step"] = step
+            fingerprint.append(step)
+        logger.warning(
+            "%s step=%s document_id_hash=%s exception_type=%s",
+            message, step, document_id_hash, exc_type, extra={"sentry_skip_event": True},
+        )
+        try:
+            report_runtime_exception(
+                sanitized_runtime_error(message),
+                component="documents",
+                operation=operation,
+                context=context,
+                fingerprint=[*fingerprint, exc_type],
+                include_request=False,
+            )
+        except Exception:
+            logger.warning("Failed to report paper delete failure", extra={"sentry_skip_event": True})
+
     try:
         # T031: Verify ownership from PostgreSQL FIRST (FR-014)
         # Returns 404 if not found, 403 if not owned by user
@@ -1774,38 +1800,6 @@ async def delete_document_endpoint(
                         finally:
                             cleanup_session.close()
 
-                    def _report_ordinary_delete_cleanup_failure(step: str, exc: Exception) -> None:
-                        nonlocal failure_already_reported
-                        exc_type = type(exc).__name__
-                        document_id_hash = hash_sentry_identifier(canonical_document_id)
-                        failure_already_reported = True
-                        sanitized = sanitized_runtime_error("Paper delete cleanup failed")
-                        try:
-                            report_runtime_exception(
-                                sanitized,
-                                component="documents",
-                                operation="paper_delete_cleanup_failed",
-                                context={
-                                    "document_id_hash": document_id_hash,
-                                    "step": step,
-                                    "exception_type": exc_type,
-                                },
-                                fingerprint=["paper_delete_cleanup_failed", step, exc_type],
-                                include_request=False,
-                            )
-                        except Exception:
-                            logger.warning(
-                                "Failed to report paper delete cleanup failure",
-                                extra={"sentry_skip_event": True},
-                            )
-                        logger.warning(
-                            "Paper delete cleanup failed step=%s document_id_hash=%s exception_type=%s",
-                            step,
-                            document_id_hash,
-                            exc_type,
-                            extra={"sentry_skip_event": True},
-                        )
-
                     async def complete_delete() -> OperationResult:
                         nonlocal failure_step, failure_already_reported
                         # Always run the tenant-scoped chunk wipe, even when the parent index object
@@ -1818,13 +1812,11 @@ async def delete_document_endpoint(
                         failure_step = "chunk_wipe"
                         chunk_result = await delete_paper_chunks(user["sub"], canonical_document_id)
                         if not chunk_result.get("success"):
-                            if "chunks_failed" in chunk_result:
-                                # ``_build_chunk_wipe_result`` already emitted
-                                # ``paper_delete_chunk_wipe_incomplete``; avoid double capture.
-                                failure_already_reported = True
+                            # The index helper owns both rejected and incomplete wipes.
+                            failure_already_reported = True
                             raise HTTPException(
                                 status_code=500,
-                                detail=chunk_result.get("message", "Failed to delete document"),
+                                detail=PAPER_DELETE_FAILURE_DETAIL,
                             )
 
                         failure_step = "stored_files"
@@ -1838,10 +1830,13 @@ async def delete_document_endpoint(
                         except Exception as file_error:
                             if is_cancelled_delete_drain():
                                 raise
-                            _report_ordinary_delete_cleanup_failure("stored_files", file_error)
+                            failure_already_reported = True
+                            report_delete_failure(
+                                "paper_delete_cleanup_failed", "Paper delete cleanup failed", file_error, step="stored_files",
+                            )
                             raise HTTPException(
                                 status_code=500,
-                                detail="Failed to delete document",
+                                detail=PAPER_DELETE_FAILURE_DETAIL,
                             ) from None
 
                         if not document_missing_in_weaviate:
@@ -1850,9 +1845,10 @@ async def delete_document_endpoint(
                                 user["sub"], canonical_document_id, allow_missing=True,
                             )
                             if not parent_result.get("success"):
+                                failure_already_reported = True
                                 raise HTTPException(
                                     status_code=500,
-                                    detail=parent_result.get("message", "Failed to delete document"),
+                                    detail=PAPER_DELETE_FAILURE_DETAIL,
                                 )
 
                         failure_step = "sql_cleanup"
@@ -1866,10 +1862,13 @@ async def delete_document_endpoint(
                         except Exception as db_error:
                             if is_cancelled_delete_drain():
                                 raise
-                            _report_ordinary_delete_cleanup_failure("sql_cleanup", db_error)
+                            failure_already_reported = True
+                            report_delete_failure(
+                                "paper_delete_cleanup_failed", "Paper delete cleanup failed", db_error, step="sql_cleanup",
+                            )
                             raise HTTPException(
                                 status_code=500,
-                                detail="Failed to delete document",
+                                detail=PAPER_DELETE_FAILURE_DETAIL,
                             ) from None
 
                         return OperationResult(
@@ -1920,20 +1919,17 @@ async def delete_document_endpoint(
             except (HTTPException, PoolTimeoutError):
                 raise
             except Exception as e:
-                raise_sanitized_http_exception(
-                    logger,
-                    status_code=500,
-                    detail="Failed to delete document",
-                    log_message=f"Error deleting document {canonical_document_id}",
-                    exc=e,
-                )
+                report_delete_failure("paper_delete_failed", "Paper delete failed", e)
+                raise HTTPException(status_code=500, detail=PAPER_DELETE_FAILURE_DETAIL) from None
     except PaperOperationInProgress:
         raise HTTPException(
             status_code=409,
             detail="Another operation on this paper is in progress; try again in a moment.",
         ) from None
-    except PoolTimeoutError:
-        logger.warning("Paper delete refused: no database connection free", extra={"document_id": canonical_document_id})
+    except PoolTimeoutError as exc:
+        report_delete_failure(
+            "paper_delete_db_pool_exhausted", "Paper delete refused: no database connection free", exc,
+        )
         raise HTTPException(
             status_code=503,
             detail="The server is busy right now; try deleting the paper again in a moment.",

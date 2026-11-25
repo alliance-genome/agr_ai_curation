@@ -1771,7 +1771,7 @@ async def test_post_commit_import_compensation_cancelled_during_chunk_wipe_clean
     events: list[str] = []
 
     @contextmanager
-    def _session():
+    def _session(*, caller_reports_failure):
         yield MagicMock()
 
     connection = MagicMock()
@@ -1790,7 +1790,7 @@ async def test_post_commit_import_compensation_cancelled_during_chunk_wipe_clean
 
     chunks.data.delete_many.side_effect = _delete_many
     papers.data.delete_by_id.side_effect = _delete_by_id
-    monkeypatch.setattr(weaviate_docs, "get_connection", lambda: connection)
+    monkeypatch.setattr(weaviate_docs, "get_connection", lambda *, caller_reports_failure: connection)
     monkeypatch.setattr(weaviate_docs, "get_user_collections", lambda *_: (chunks, papers))
 
     sql_owner_deleted = False
@@ -1948,7 +1948,7 @@ async def test_post_commit_import_compensation_retains_owner_on_incomplete_wipe(
     resume_wipe = threading.Event()
 
     @contextmanager
-    def _session():
+    def _session(*, caller_reports_failure):
         yield MagicMock()
 
     connection = MagicMock()
@@ -1962,7 +1962,7 @@ async def test_post_commit_import_compensation_retains_owner_on_incomplete_wipe(
         return SimpleNamespace(successful=0, matches=1, failed=1)
 
     chunks.data.delete_many.side_effect = _delete_many
-    monkeypatch.setattr(weaviate_docs, "get_connection", lambda: connection)
+    monkeypatch.setattr(weaviate_docs, "get_connection", lambda *, caller_reports_failure: connection)
     monkeypatch.setattr(weaviate_docs, "get_user_collections", lambda *_: (chunks, papers))
     delete_sql_row = MagicMock()
     monkeypatch.setattr(weaviate_docs, "_delete_sql_row", delete_sql_row)
@@ -2492,7 +2492,7 @@ async def test_post_commit_import_compensation_reports_one_sanitized_sentry_even
     from src.lib.weaviate_client import documents as weaviate_docs
 
     @contextmanager
-    def _session():
+    def _session(*, caller_reports_failure):
         yield MagicMock()
 
     w_conn = MagicMock()
@@ -2500,7 +2500,7 @@ async def test_post_commit_import_compensation_reports_one_sanitized_sentry_even
     chunks, papers = MagicMock(), MagicMock()
     chunks.data.delete_many.return_value = SimpleNamespace(successful=0, matches=0, failed=0)
     papers.data.delete_by_id.return_value = True
-    monkeypatch.setattr(weaviate_docs, "get_connection", lambda: w_conn)
+    monkeypatch.setattr(weaviate_docs, "get_connection", lambda *, caller_reports_failure: w_conn)
     monkeypatch.setattr(weaviate_docs, "get_user_collections", lambda *_: (chunks, papers))
 
     secret_detail = "private-import-sql-failure-detail"

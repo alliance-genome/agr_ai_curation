@@ -14,7 +14,7 @@ import threading
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -748,7 +748,7 @@ async def test_after_the_stale_sweep_a_run_is_no_longer_told_files_are_being_add
 # --- a delete and an add cannot interleave (paper_lock.py) ------------------------------------
 
 
-def _wire_delete(monkeypatch, owner_id, *, in_wipe=None, wipe_seconds: float = 0.0, wipe_error=None):
+def _wire_delete(monkeypatch, owner_id, *, in_wipe=None, wipe_seconds: float = 0.0):
     """The real delete endpoint, with an index wipe that yields the loop like the real one.
 
     The real helper's wipe runs in an executor; this one awaits for ``wipe_seconds``
@@ -769,8 +769,6 @@ def _wire_delete(monkeypatch, owner_id, *, in_wipe=None, wipe_seconds: float = 0
         if in_wipe is not None:
             in_wipe.set()
         await asyncio.sleep(wipe_seconds)
-        if wipe_error is not None:
-            raise wipe_error
         deleted = await asyncio.to_thread(chunk_reads.delete_pieces_of_deleted_paper, document_id, user_sub)
         return {"success": True, "chunks_deleted": deleted}
 
@@ -853,7 +851,7 @@ async def test_an_add_requested_while_the_paper_is_being_deleted_is_refused_at_o
 
 
 @pytest.mark.asyncio
-async def test_a_delete_requested_while_an_add_creates_its_job_is_refused_at_once(owner_id, index, monkeypatch):
+async def test_a_delete_requested_while_an_add_creates_its_job_is_refused_at_once(owner_id, index, monkeypatch, caplog):
     import time
 
     from src.lib.document_files.paper_lock import try_lock_paper_for_add
@@ -861,6 +859,8 @@ async def test_a_delete_requested_while_an_add_creates_its_job_is_refused_at_onc
 
     paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
     _wire_delete(monkeypatch, owner_id)
+    reporter = MagicMock()
+    monkeypatch.setattr(documents_api, "report_runtime_exception", reporter)
     locked = threading.Event()
     release = threading.Event()
 
@@ -874,6 +874,7 @@ async def test_a_delete_requested_while_an_add_creates_its_job_is_refused_at_onc
     adder = threading.Thread(target=add_creating_its_job)
     adder.start()
     await asyncio.to_thread(locked.wait, 30)
+    caplog.clear()
     started = time.monotonic()
     with pytest.raises(HTTPException) as raised:
         await _delete(paper)
@@ -881,17 +882,31 @@ async def test_a_delete_requested_while_an_add_creates_its_job_is_refused_at_onc
     release.set()
     adder.join(timeout=30)
 
+    reporter.assert_not_called()
+    assert not caplog.records
     assert raised.value.status_code == 409 and elapsed < 0.5
     assert [row.role for row in _rows(paper)] == ["main"] and _indexes(index, str(paper)) == [0, 1, 2]
 
 
 @pytest.mark.asyncio
 async def test_the_lock_is_released_when_the_delete_fails(owner_id, index, monkeypatch):
+    from src.lib.weaviate_client import documents as index_documents
+
     paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
-    _wire_delete(monkeypatch, owner_id, wipe_error=RuntimeError("made-up index failure"))
+
+    _wire_delete(monkeypatch, owner_id)
+    monkeypatch.setattr(documents_api, "delete_paper_chunks", index_documents.delete_paper_chunks)
+    private_detail = "fake-sensitive-index-response"
+    reporter = MagicMock(side_effect=RuntimeError("fake-sensitive-reporter-failure"))
+    monkeypatch.setattr(index_documents.runtime, "report_runtime_exception", reporter)
+    monkeypatch.setattr(index_documents, "_submit_chunk_wipe", MagicMock(side_effect=RuntimeError(private_detail)))
     with pytest.raises(HTTPException) as raised:
         await _delete(paper)
     assert raised.value.status_code == 500
+    assert raised.value.detail == "The paper could not be deleted. Please try again."
+    reporter.assert_called_once()
+    assert reporter.call_args.kwargs["operation"] == "paper_delete_index_failed"
+    assert private_detail not in repr(reporter.call_args)
 
     _wire_delete(monkeypatch, owner_id)
     assert (await _delete(paper)).success is True
@@ -1280,6 +1295,8 @@ async def test_with_a_pool_of_two_deletes_never_block_the_loop_and_a_pool_timeou
     monkeypatch.setattr(documents_api, "SessionLocal", sessionmaker(bind=small))
     papers = [await asyncio.to_thread(_paper, owner_id, index, main_end=1) for _ in range(3)]
     _wire_delete(monkeypatch, owner_id, wipe_seconds=2.0)
+    reporter = MagicMock()
+    monkeypatch.setattr(documents_api, "report_runtime_exception", reporter)
     ticks = 0
 
     async def unrelated_work():
@@ -1300,6 +1317,8 @@ async def test_with_a_pool_of_two_deletes_never_block_the_loop_and_a_pool_timeou
     busy = [item for item in results if isinstance(item, HTTPException)]
     assert all(isinstance(item, HTTPException) or item.success for item in results), results
     assert busy and all(item.status_code == 503 for item in busy)  # the pool ran out, answered clearly
+    assert reporter.call_count == len(busy)
+    assert all(call.kwargs["operation"] == "paper_delete_db_pool_exhausted" for call in reporter.call_args_list)
     assert ticks == 60  # the loop kept serving while deletes waited for connections
 
 
