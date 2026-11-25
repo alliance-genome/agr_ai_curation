@@ -484,7 +484,10 @@ completed import job then carries one `left_out` entry per chosen file with
     retried check downloads): 2 initial + 179 poll reads + 19 check downloads +
     38 add downloads (19 converted text + 19 original PDF) = **238 requests**
     for 19 PDF supplements (**219** for 19 Office supplements; 236 PDF / 217
-    Office after the stage's initial 2-request listing). These are the tested
+    Office after the stage's initial 2-request listing) for group-restricted
+    references. Open-access references with queued files after polling send one
+    additional pre-add `GET /reference` check (plus one `show_all` only if the
+    reference's metadata changed during the wait). These are the tested
     successful scenarios rather than a hard worst-case bound when a reference
     also carries extra unchecked, unchosen converted texts downloaded during
     listing.

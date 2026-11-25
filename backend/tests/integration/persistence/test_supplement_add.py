@@ -603,3 +603,146 @@ async def test_prebuilt_add_enforces_paper_file_limit_under_insert_lock(paper, m
     assert [path.name for path in storage.rglob("*.md")] == [f"{outcomes['20'].file_id}.md"]
     assert [path.name for path in storage.rglob("*.json")] == [f"{outcomes['20'].file_id}.json"]
     assert len(index.stored) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("when", ["before_start", "before_insert"])
+@pytest.mark.parametrize("concurrent_status", ["ready", "removed"])
+async def test_prebuilt_add_matches_duplicate_copy_against_live_and_removed_rows(
+    paper, monkeypatch, when, concurrent_status,
+):
+    """ALL-1751 review: when a listing collapses duplicate copies (40, 50) onto representative 40,
+    a concurrent ready row for copy 50 rejects representative 40 as already_in_paper (never adding
+    both copies), and a retained removed row for copy 50 raises FileRemovalUnfinished."""
+    from src.lib.document_sources.file_reasons import FileReason
+    from src.lib.document_sources.models import SourceReference
+
+    document_id, owner_id, subject, storage = paper
+    index = _Index().install(monkeypatch)
+    monkeypatch.setattr(file_listing_service, "current_file_check_limits", supplement_add.current_file_check_limits)
+
+    class _ListingProvider(_AbcBoundProvider):
+        def is_reference_source_artifact(self, artifact: SourceArtifact) -> bool:
+            return artifact.artifact_id == "10"
+
+        def is_main_text_artifact(self, artifact: SourceArtifact) -> bool:
+            return artifact.artifact_id == "11"
+
+        def main_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
+            return (0,)
+
+        def supplement_file_category(self, artifact: SourceArtifact) -> SupplementFileCategory | None:
+            return SupplementFileCategory.CONVERTIBLE if artifact.role is SourceArtifactRole.SOURCE_SUPPLEMENT else None
+
+        def converted_text_has_single_title(self, original: SourceArtifact) -> bool:
+            return True
+
+        def is_listed_converted_supplement_text(self, artifact: SourceArtifact) -> bool:
+            return artifact.role is SourceArtifactRole.CONVERTED_TEXT and artifact.parent_artifact_id != "10"
+
+        def supplement_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
+            return (0,)
+
+    main_pdf = SourceArtifact(
+        provider="abc_literature", artifact_id="10",
+        role=SourceArtifactRole.SOURCE_PDF, artifact_format=SourceArtifactFormat.PDF,
+        status=SourceArtifactStatus.AVAILABLE, reference_id="101", reference_curie="AGRKB:101",
+        display_name="Made_up_main", md5sum="md5-10",
+        access_policy=SourceAccessPolicy(scope=SourceAccessScope.RESTRICTED, group_ids=("group-a",)),
+    )
+    main_text = SourceArtifact(
+        provider="abc_literature", artifact_id="11",
+        role=SourceArtifactRole.CONVERTED_TEXT, artifact_format=SourceArtifactFormat.MARKDOWN,
+        status=SourceArtifactStatus.AVAILABLE, reference_id="101", reference_curie="AGRKB:101",
+        parent_artifact_id="10", display_name="Made_up_main_md", md5sum="md5-11",
+        access_policy=SourceAccessPolicy(scope=SourceAccessScope.RESTRICTED, group_ids=("group-a",)),
+    )
+    copy_40_entry = _bound_listing(40).files[0]
+    assert copy_40_entry.converted_artifact is not None
+    # Copy 50 has the exact same original MD5 as representative 40 so listing collapses them.
+    copy_50_original = SourceArtifact(
+        provider="abc_literature", artifact_id="50",
+        role=SourceArtifactRole.SOURCE_SUPPLEMENT, artifact_format=SourceArtifactFormat.UNKNOWN,
+        status=SourceArtifactStatus.AVAILABLE, reference_id="101", reference_curie="AGRKB:101",
+        display_name="Made_up_S50", md5sum=copy_40_entry.source_artifact.md5sum,
+        access_policy=SourceAccessPolicy(scope=SourceAccessScope.RESTRICTED, group_ids=("group-a",)),
+        metadata={"file_class": "supplement", "file_extension": "xlsx"},
+    )
+    copy_50_converted = SourceArtifact(
+        provider="abc_literature", artifact_id="51",
+        role=SourceArtifactRole.CONVERTED_TEXT, artifact_format=SourceArtifactFormat.MARKDOWN,
+        status=SourceArtifactStatus.AVAILABLE, reference_id="101", reference_curie="AGRKB:101",
+        parent_artifact_id="50", display_name="Made_up_S50_xlsx",
+        md5sum=copy_40_entry.converted_artifact.md5sum,
+        access_policy=SourceAccessPolicy(scope=SourceAccessScope.RESTRICTED, group_ids=("group-a",)),
+        metadata={"file_class": "converted_merged_supplement", "file_extension": "md"},
+    )
+    reference = SourceReference(provider="abc_literature", reference_id="101", reference_curie="AGRKB:101")
+    provider = _ListingProvider({**WORKBOOKS, "51": WORKBOOK_2})
+
+    reused_listing = await file_listing_service.list_files_for_paper_from_artifacts(
+        document_id, owner_user_id=owner_id, provider=provider, context=CONTEXT,
+        reference=reference,
+        artifacts=(
+            main_pdf, main_text,
+            copy_40_entry.source_artifact, copy_40_entry.converted_artifact,
+            copy_50_original, copy_50_converted,
+        ),
+    )
+    by_id = {item.provider_file_id: item for item in reused_listing.files}
+    assert by_id["40"].copy_provider_file_ids == ("40", "50")
+    assert "50" not in by_id
+
+    def _insert_copy_50() -> None:
+        concurrent_id = uuid4()
+        with SessionLocal.begin() as db:
+            db.add(PDFDocumentFile(
+                id=concurrent_id, document_id=document_id, role="supplement",
+                display_name="Made_up_S50.xlsx", status=concurrent_status, tab_order=1,
+                display_mode="text", file_path=f"{subject}/source_markdown/{concurrent_id}.md",
+                file_hash=concurrent_id.hex * 2, file_size=10,
+                source_provider_source_file_id="50",
+                source_markdown_path=f"{subject}/source_markdown/{concurrent_id}.md",
+                chunk_index_start=30 if concurrent_status == "ready" else None,
+                chunk_index_end=31 if concurrent_status == "ready" else None,
+                chunk_count=2 if concurrent_status == "ready" else None,
+                text_bytes=10 if concurrent_status == "ready" else None,
+                added_at=datetime.now(timezone.utc),
+            ))
+            if concurrent_status == "ready":
+                db.get(PDFDocument, document_id).next_chunk_index = 32
+
+    if when == "before_start":
+        _insert_copy_50()
+
+    raced = False
+
+    async def _checkpoint(stage: str) -> None:
+        nonlocal raced
+        if when == "before_insert" and stage == "saving_files" and not raced:
+            raced = True
+            _insert_copy_50()
+
+    if concurrent_status == "removed":
+        with pytest.raises(supplement_add.FileRemovalUnfinished):
+            await supplement_add.add_files_to_paper_with_listing(
+                document_id, owner_id, CONTEXT, [_chosen(40)],
+                listing=reused_listing, job_id=uuid4(), provider=provider,
+                weaviate_client=object(), stage_checkpoint=_checkpoint,
+            )
+    else:
+        result = await supplement_add.add_files_to_paper_with_listing(
+            document_id, owner_id, CONTEXT, [_chosen(40)],
+            listing=reused_listing, job_id=uuid4(), provider=provider,
+            weaviate_client=object(), stage_checkpoint=_checkpoint,
+        )
+        (outcome,) = result.files
+        assert outcome.provider_file_id == "40"
+        assert outcome.outcome == "left_out"
+        assert outcome.reason_code is FileReason.ALREADY_IN_PAPER
+
+    assert [(row.source_provider_source_file_id, row.status) for row in _files(document_id)] == [
+        ("10", "ready"), ("50", concurrent_status),
+    ]
+    assert not list(storage.rglob("*.md")) and not list(storage.rglob("*.json"))
+    assert index.stored == []

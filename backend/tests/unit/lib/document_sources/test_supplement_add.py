@@ -102,7 +102,11 @@ def storage(monkeypatch):
 
     monkeypatch.setattr(ingestion, "_save_source_markdown", save_markdown)
     monkeypatch.setattr(ingestion, "_save_processed_json", save_json)
-    monkeypatch.setattr(supplement_add, "_insert_rows", lambda _doc, rows: record.inserted.extend(rows))
+    def _fake_insert(_doc, rows, _copy_ids=None):
+        record.inserted.extend(rows)
+        return {}
+
+    monkeypatch.setattr(supplement_add, "_insert_rows", _fake_insert)
 
     def reserve(_document_id, file_id, count):
         start = record.next_index
@@ -946,9 +950,9 @@ async def test_rows_naming_the_files_are_written_before_the_files(monkeypatch, s
 
     original_insert = supplement_add._insert_rows
 
-    def insert(document_id, rows):
+    def insert(document_id, rows, copy_ids_by_file=None):
         order.append("rows")
-        original_insert(document_id, rows)
+        return original_insert(document_id, rows, copy_ids_by_file)
 
     async def save_markdown(*, markdown, file_id, user_id):
         order.append("markdown")
@@ -1263,8 +1267,14 @@ async def test_manual_add_job_catches_login_expired_and_records_per_file_outcome
     from src.lib.document_sources.file_listing_service import provider_observations_from_jobs
     from tests.unit.lib.document_sources.test_file_listing import _http_error
 
-    client, provider = _provider(ROWS, {"21": _http_error(401), "41": GOOD["41"]})
     _paper_lookup(monkeypatch)
+    # Warm stored checks (as the curator's listing already did) so the 401 fires during add download.
+    _, warm_provider = _provider(ROWS, GOOD)
+    await file_listing_service.list_files_for_paper(
+        DOCUMENT_ID, owner_user_id=7, provider=warm_provider, context=CONTEXT,
+    )
+
+    client, provider = _provider(ROWS, {"21": _http_error(401), "31": GOOD["31"], "41": GOOD["41"]})
     monkeypatch.setattr(
         "src.lib.document_sources.registry.get_configured_document_source_provider",
         lambda: provider,
@@ -1295,3 +1305,58 @@ async def test_manual_add_job_catches_login_expired_and_records_per_file_outcome
     ]
     assert provider_observations_from_jobs([meta]) == {}
     assert [kwargs["artifact_id"] for name, kwargs in client.calls if name == "download_referencefile"] == ["21"]
+
+
+@pytest.mark.asyncio
+async def test_manual_add_job_preserves_settled_refusal_and_display_name_when_later_file_hits_401(
+    monkeypatch, storage,
+):
+    """ALL-1751 review: when file A settles as file_changed_since_listed before file B's
+    download returns 401, run_supplement_add_job preserves A's refusal and display_name and
+    marks only unfinished file B as login_expired."""
+    from src.lib.document_sources.file_listing_service import provider_observations_from_jobs
+    from tests.unit.lib.document_sources.test_file_listing import _http_error
+
+    _paper_lookup(monkeypatch)
+    # Warm stored checks (as the curator's listing already did) so list_files_for_paper succeeds
+    # and the 401 occurs on file 40's add download after file 20 has already settled.
+    _, warm_provider = _provider(ROWS, GOOD)
+    await file_listing_service.list_files_for_paper(
+        DOCUMENT_ID, owner_user_id=7, provider=warm_provider, context=CONTEXT,
+    )
+
+    client, provider = _provider(ROWS, {"21": GOOD["21"], "31": GOOD["31"], "41": _http_error(401)})
+    monkeypatch.setattr(
+        "src.lib.document_sources.registry.get_configured_document_source_provider",
+        lambda: provider,
+    )
+    monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda: object())
+    monkeypatch.setattr("src.lib.pdf_jobs.service.is_cancel_requested", lambda **_kwargs: False)
+    monkeypatch.setattr("src.lib.pdf_jobs.service.update_progress", lambda **_kwargs: None)
+    reports = []
+    monkeypatch.setattr(
+        "src.lib.observability.runtime.report_runtime_exception",
+        lambda exc, **kwargs: reports.append(kwargs),
+    )
+    failed = []
+    monkeypatch.setattr("src.lib.pdf_jobs.service.mark_failed", lambda **kwargs: failed.append(kwargs))
+
+    stale_file_20 = ChosenFile("20", md5="md5-20", converted_md5="0" * 32)
+    await supplement_add.run_supplement_add_job(supplement_add.SupplementAddJobRequest(
+        job_id=JOB_ID, document_id=DOCUMENT_ID, user_id="owner-subject", owner_user_id=7,
+        context=CONTEXT, files=(stale_file_20, _chosen(40)),
+    ))
+
+    assert reports == []
+    assert len(failed) == 1
+    meta = failed[0]["metadata"]
+    assert meta["error_code"] == FileReason.LOGIN_EXPIRED.value
+    assert [
+        (entry["provider_file_id"], entry["display_name"], entry["state"], entry["reason_code"])
+        for entry in meta["supplements"]
+    ] == [
+        ("20", "Made_up_S20.xlsx", "left_out", FileReason.FILE_CHANGED_SINCE_LISTED.value),
+        ("40", "Made_up_S40.xlsx", "left_out", FileReason.LOGIN_EXPIRED.value),
+    ]
+    assert provider_observations_from_jobs([meta]) == {}
+    assert [kwargs["artifact_id"] for name, kwargs in client.calls if name == "download_referencefile"] == ["41"]

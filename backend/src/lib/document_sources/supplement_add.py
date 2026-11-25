@@ -40,7 +40,7 @@ import io
 import logging
 import tempfile
 import uuid
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, TypeVar
@@ -270,6 +270,8 @@ async def add_files_to_paper(
     weaviate_client: Any,
     stage_checkpoint: Checkpoint,
     commit_state: SupplementAddCommit | None = None,
+    settled_outcomes: dict[str, FileOutcome] | None = None,
+    display_names: dict[str, str | None] | None = None,
 ) -> AddResult:
     """Add the chosen converted text supplements to one of the curator's papers.
 
@@ -298,7 +300,19 @@ async def add_files_to_paper(
         weaviate_client=weaviate_client,
         stage_checkpoint=stage_checkpoint,
         commit_state=commit_state,
+        settled_outcomes=settled_outcomes,
+        display_names=display_names,
     )
+
+
+def _listed_copy_ids(listed: ListedFile) -> tuple[str, ...]:
+    """All readable provider file ids collapsed onto ``listed`` (representative first)."""
+
+    if listed.copy_provider_file_ids:
+        if listed.provider_file_id in listed.copy_provider_file_ids:
+            return listed.copy_provider_file_ids
+        return (listed.provider_file_id, *listed.copy_provider_file_ids)
+    return (listed.provider_file_id,)
 
 
 def _validate_and_filter_prebuilt_listing(
@@ -331,6 +345,11 @@ def _validate_and_filter_prebuilt_listing(
     authorized: list[ListedFile] = []
     for item in listing.files:
         if not isinstance(item, ListedFile):
+            raise SupplementAddError("listing_invalid")
+        if (
+            not isinstance(item.copy_provider_file_ids, tuple)
+            or any(not isinstance(cid, str) or not cid.strip() for cid in item.copy_provider_file_ids)
+        ):
             raise SupplementAddError("listing_invalid")
         if not _artifact_bound(item.source_artifact) or item.source_artifact.artifact_id != item.provider_file_id:
             raise SupplementAddError("listing_invalid")
@@ -402,6 +421,14 @@ async def add_files_to_paper_with_listing(
         paper=paper,
         authorized_group_ids=tuple(request_context.authorized_group_ids),
     )
+    chosen_ids = {chosen.provider_file_id for chosen in files}
+    if any(
+        cid in paper.removed_provider_file_ids
+        for item in authorized_files
+        if item.provider_file_id in chosen_ids
+        for cid in _listed_copy_ids(item)
+    ):
+        raise FileRemovalUnfinished(document_id)
     return await _add_files_using_listing(
         document_id,
         owner_user_id,
@@ -428,6 +455,8 @@ async def _add_files_using_listing(
     weaviate_client: Any,
     stage_checkpoint: Checkpoint,
     commit_state: SupplementAddCommit | None = None,
+    settled_outcomes: dict[str, FileOutcome] | None = None,
+    display_names: dict[str, str | None] | None = None,
 ) -> AddResult:
     from src.lib.openai_agents.config import (
         get_document_file_max_converted_text_bytes,
@@ -436,6 +465,9 @@ async def _add_files_using_listing(
     )
 
     listed_by_id = {item.provider_file_id: item for item in listed_files}
+    if display_names is not None:
+        for item in listed_files:
+            display_names[item.provider_file_id] = _public_display_name(item)
     listing_order = {item.provider_file_id: index for index, item in enumerate(listed_files)}
     # In listing order (the tab order the new files take); files no longer listed go last.
     ordered = sorted(files, key=lambda chosen: listing_order.get(chosen.provider_file_id, len(listing_order)))
@@ -446,7 +478,7 @@ async def _add_files_using_listing(
     limits = current_file_check_limits()
     token = (request_context.curator_token or "").strip()
 
-    outcomes: dict[str, FileOutcome] = {}
+    outcomes: dict[str, FileOutcome] = settled_outcomes if settled_outcomes is not None else {}
     accepted: list[_Accepted] = []
     try:
         await _check_and_write(
@@ -503,7 +535,7 @@ async def _check_and_write(
                 display_name=public_display_name,
             )
 
-        if listed.in_this_paper or file_id in paper.live_provider_file_ids:
+        if listed.in_this_paper or any(cid in paper.live_provider_file_ids for cid in _listed_copy_ids(listed)):
             outcomes[file_id] = left_out(FileReason.ALREADY_IN_PAPER)
             continue
         if listed.status is not ListedFileStatus.READY or listed.converted_artifact is None or listed.file_role is None:
@@ -886,7 +918,12 @@ async def _write(
                      pdf_path=pdf_paths.get(item.file_id))
             for tab_order, (item, markdown_path, processed_path) in enumerate(planned, start=paper.next_tab_order)
         ]
-        skipped = await _finish_mutation(asyncio.to_thread(_insert_rows, document_id, rows)) or {}
+        copy_ids_by_file = {item.listed.provider_file_id: _listed_copy_ids(item.listed) for item in written}
+        skipped = await _finish_mutation(
+            asyncio.to_thread(_insert_rows, document_id, rows, copy_ids_by_file)
+        )
+        if not isinstance(skipped, Mapping):
+            raise TypeError("_insert_rows must return a mapping of skipped provider file ids")
         if skipped:
             written = [item for item in written if item.listed.provider_file_id not in skipped]
             planned = [entry for entry in planned if entry[0].listed.provider_file_id not in skipped]
@@ -1085,8 +1122,22 @@ def _paper_state(document_id: UUID, owner_user_id: int) -> _PaperState:
         )
 
 
+def _row_copy_ids(
+    source_id: str | None,
+    copy_ids_by_file: Mapping[str, tuple[str, ...]] | None,
+) -> tuple[str, ...]:
+    if not source_id:
+        return ()
+    if copy_ids_by_file is not None and source_id in copy_ids_by_file:
+        known = copy_ids_by_file[source_id]
+        return known if source_id in known else (source_id, *known)
+    return (source_id,)
+
+
 def _insert_rows(
-    document_id: UUID, rows: list[PDFDocumentFile],
+    document_id: UUID,
+    rows: list[PDFDocumentFile],
+    copy_ids_by_file: Mapping[str, tuple[str, ...]] | None = None,
 ) -> dict[str, tuple[FileReason, int | None, int | None]]:
     from src.lib.openai_agents.config import get_document_max_files_per_paper
     from src.models.sql.database import SessionLocal
@@ -1118,7 +1169,8 @@ def _insert_rows(
             if identifier
         }
         for row in rows:
-            if row.source_provider_source_file_id and row.source_provider_source_file_id in removed_ids:
+            row_copy_ids = _row_copy_ids(row.source_provider_source_file_id, copy_ids_by_file)
+            if any(cid in removed_ids for cid in row_copy_ids):
                 raise FileRemovalUnfinished(document_id)
         skipped: dict[str, tuple[FileReason, int | None, int | None]] = {}
         to_insert: list[PDFDocumentFile] = []
@@ -1126,7 +1178,8 @@ def _insert_rows(
         next_tab_order = max((tab_order for _, _, _, tab_order in existing), default=-1) + 1
         for row in rows:
             source_id = row.source_provider_source_file_id
-            if source_id and source_id in active_ids:
+            row_copy_ids = _row_copy_ids(source_id, copy_ids_by_file)
+            if source_id and any(cid in active_ids for cid in row_copy_ids):
                 skipped[source_id] = (FileReason.ALREADY_IN_PAPER, None, None)
                 continue
             if live_count + 1 > max_files:
@@ -1136,6 +1189,7 @@ def _insert_rows(
             row.tab_order = next_tab_order
             next_tab_order += 1
             live_count += 1
+            active_ids.update(row_copy_ids)
             to_insert.append(row)
         if to_insert:
             session.add_all(to_insert)
@@ -1375,22 +1429,23 @@ def start_supplement_add(document_id: UUID, owner_user_id: int, files: Sequence[
         )
 
 
+def _supplement_entry(item: FileOutcome) -> dict[str, Any]:
+    return {
+        "provider_file_id": item.provider_file_id,
+        "display_name": item.display_name,
+        "state": (SupplementState.ADDED if item.outcome == "added" else SupplementState.LEFT_OUT).value,
+        "reason_code": item.reason_code.value if item.reason_code else None,
+        "observed_at": None,
+        "file_id": str(item.file_id) if item.file_id else None,
+        "measured_value": item.measured_value,
+        "limit_value": item.limit_value,
+    }
+
+
 def _supplement_entries(result: AddResult) -> list[dict[str, Any]]:
     """The job's ``metadata.supplements`` entries (interface I1)."""
 
-    return [
-        {
-            "provider_file_id": item.provider_file_id,
-            "display_name": item.display_name,
-            "state": (SupplementState.ADDED if item.outcome == "added" else SupplementState.LEFT_OUT).value,
-            "reason_code": item.reason_code.value if item.reason_code else None,
-            "observed_at": None,
-            "file_id": str(item.file_id) if item.file_id else None,
-            "measured_value": item.measured_value,
-            "limit_value": item.limit_value,
-        }
-        for item in result.files
-    ]
+    return [_supplement_entry(item) for item in result.files]
 
 
 def _report_nothing_added(result: AddResult, document_id: UUID) -> None:
@@ -1437,22 +1492,37 @@ def _cancel_checkpoint(job_id: UUID) -> Checkpoint:
     return checkpoint
 
 
-def _login_expired_entries(files: Sequence[ChosenFile]) -> list[dict[str, Any]]:
-    """Per-file ``metadata.supplements`` entries (interface I1) when the login expired during an add."""
+def _login_expired_entries(
+    files: Sequence[ChosenFile],
+    *,
+    settled_outcomes: Mapping[str, FileOutcome] | None = None,
+    display_names: Mapping[str, str | None] | None = None,
+) -> list[dict[str, Any]]:
+    """Per-file ``metadata.supplements`` entries (interface I1) when the login expired during an add.
 
-    return [
-        {
-            "provider_file_id": chosen.provider_file_id,
-            "display_name": None,
-            "state": SupplementState.LEFT_OUT.value,
-            "reason_code": FileReason.LOGIN_EXPIRED.value,
-            "observed_at": None,
-            "file_id": None,
-            "measured_value": None,
-            "limit_value": None,
-        }
-        for chosen in files
-    ]
+    Preserves earlier settled per-file refusals (with their display names and limit/measured
+    values) and marks only unfinished files ``login_expired``.
+    """
+
+    settled = settled_outcomes or {}
+    names = display_names or {}
+    entries: list[dict[str, Any]] = []
+    for chosen in files:
+        prior = settled.get(chosen.provider_file_id)
+        if prior is not None:
+            entries.append(_supplement_entry(prior))
+        else:
+            entries.append({
+                "provider_file_id": chosen.provider_file_id,
+                "display_name": names.get(chosen.provider_file_id),
+                "state": SupplementState.LEFT_OUT.value,
+                "reason_code": FileReason.LOGIN_EXPIRED.value,
+                "observed_at": None,
+                "file_id": None,
+                "measured_value": None,
+                "limit_value": None,
+            })
+    return entries
 
 
 @costed_document_processing
@@ -1468,12 +1538,16 @@ async def run_supplement_add_job(request: SupplementAddJobRequest) -> None:
 
     job_id = request.job_id
     provider = get_configured_document_source_provider()
+    settled_outcomes: dict[str, FileOutcome] = {}
+    display_names: dict[str, str | None] = {}
     try:
         result = await asyncio.wait_for(
             add_files_to_paper(
                 request.document_id, request.owner_user_id, request.context, request.files,
                 job_id=job_id, provider=provider, weaviate_client=get_connection(),
                 stage_checkpoint=_cancel_checkpoint(job_id),
+                settled_outcomes=settled_outcomes,
+                display_names=display_names,
             ),
             timeout=get_document_source_import_timeout_seconds(),
         )
@@ -1492,7 +1566,11 @@ async def run_supplement_add_job(request: SupplementAddJobRequest) -> None:
             stage="failed",
             metadata={
                 "error_code": FileReason.LOGIN_EXPIRED.value,
-                "supplements": _login_expired_entries(request.files),
+                "supplements": _login_expired_entries(
+                    request.files,
+                    settled_outcomes=settled_outcomes,
+                    display_names=display_names,
+                ),
             },
         )
         return

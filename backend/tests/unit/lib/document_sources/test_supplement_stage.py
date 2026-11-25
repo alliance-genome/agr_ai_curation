@@ -75,10 +75,20 @@ class _AbcClient(FakeABCLiteratureClient):
         self.answers = answers or [_answer_payload("converted", [])]
         self.requests = 0
         self.reads = 0
+        self.reference_reads = 0
         self.paper = paper
         self.on_read = on_read or {}
         self.read_error = read_error
         self.failing_reads = failing_reads  # None: every read fails when read_error is set
+
+    async def show_reference(self, reference, *, request_bearer_token=None):
+        self.reference_reads += 1
+        if self.paper is not None:
+            return _abc_reference_record(
+                copyright_license_open_access=self.paper.licence_open,
+                copyright_license_name=self.paper.licence_name,
+            )
+        return _abc_reference_record()
 
     async def request_referencefile_conversion(self, reference, *, wait=False, request_bearer_token=None):
         self.requests += 1
@@ -1108,7 +1118,11 @@ def _install_fake_add_storage(monkeypatch, store, tmp_path):
 
     monkeypatch.setattr(ingestion, "_save_source_markdown", _save_md)
     monkeypatch.setattr(ingestion, "_save_processed_json", _save_json)
-    monkeypatch.setattr(supplement_add, "_insert_rows", lambda _doc, rows: inserted.extend(rows))
+    def _fake_insert(_doc, rows, _copy_ids=None):
+        inserted.extend(rows)
+        return {}
+
+    monkeypatch.setattr(supplement_add, "_insert_rows", _fake_insert)
 
     def _reserve(_document_id, file_id, count):
         start = next_index[0]
@@ -1685,7 +1699,7 @@ async def test_poll_reads_use_the_resolved_reference_so_licence_rules_stay_intac
         on_read={1: _abc_stores_30}, context=no_group_context,
     )
 
-    assert (client.reads, paper.listings, paper.reused_listings) == (1, 1, 1)
+    assert (client.reads, client.reference_reads, paper.listings, paper.reused_listings) == (1, 1, 1, 1)
     assert [file.provider_file_id for file in add.calls[0]] == ["30"]
     assert _final_entries(job) == {"30": ("added", None)}
     assert outcomes.ended == ["completed"]
@@ -1924,7 +1938,7 @@ async def test_stage_catches_file_removal_unfinished_cleanly_without_stage_failu
             ),
         )
     else:
-        def _race_removed(doc_id, _rows):
+        def _race_removed(doc_id, _rows, _copy_ids=None):
             raise supplement_add.FileRemovalUnfinished(doc_id)
 
         monkeypatch.setattr(supplement_add, "_insert_rows", _race_removed)
@@ -1953,3 +1967,115 @@ async def test_stage_catches_file_removal_unfinished_cleanly_without_stage_failu
     assert final_meta["error_code"] == "file_removal_unfinished"
     assert _final_entries(job) == {"20": ("left_out", FileReason.PAPER_BUSY_WHEN_READY.value)}
     assert file_listing_service.provider_observations_from_jobs([final_meta]) == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("licence_outcome", ["restricted", "unchanged", "resolve_error"])
+async def test_open_access_reference_revalidated_once_before_add_after_polls(
+    job, monkeypatch, tmp_path, licence_outcome,
+):
+    """ALL-1751 review: an open-access (GLOBAL) reference revalidates GET /reference once
+    before adding after polls run. If the licence became restricted, show_all is refreshed
+    once with the new reference so a queued Office supplement that lost access is NOT added
+    (0 add downloads). If unchanged, 0 extra show_all calls are made and the file joins."""
+    from agr_ai_curation_alliance.document_sources.abc_literature import _map_conversion_result
+    from src.lib.document_sources import file_listing_service, supplement_add
+    from tests.unit.lib.document_sources.test_file_listing import _Store
+
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", "120")
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", "60")
+    clock = _Clock()
+    store = _Store()
+    _install_fake_add_storage(monkeypatch, store, tmp_path)
+
+    class _OpenAccessHttpAbc(_HttpAbc):
+        def _rows(self):
+            # Both main and supplements belong to FB only; the WB curator can read them
+            # ONLY while the reference's open copyright licence grants GLOBAL access.
+            return [
+                _abc_show_all_main_pdf(10, "FB"),
+                *_pair(20, "FB", content=GOOD_TABLE),
+                _unconverted(30, "xlsx"),
+            ]
+
+        def handle(self, request):
+            if self.polls >= 1 and licence_outcome == "restricted":
+                self.show_reference_payload = _abc_reference_record(
+                    copyright_license_open_access=False,
+                    copyright_license_name="Restricted License",
+                )
+            return super().handle(request)
+
+    client = _OpenAccessHttpAbc(
+        ids=[30],
+        extension="xlsx",
+        converts_at=lambda _n: None,
+        fails=lambda kind, n, _in_listing: 500 if (
+            licence_outcome == "resolve_error" and kind == "reference" and n == 2
+        ) else False,
+    )
+    client.show_reference_payload = _abc_reference_record(
+        copyright_license_open_access=True,
+        copyright_license_name="CC BY 4.0",
+    )
+    provider = client.provider()
+
+    async def _list_files(document_id, *, owner_user_id, provider, context):
+        client.in_listing = True
+        try:
+            return await file_listing_service.list_files_for_paper(
+                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
+            )
+        finally:
+            client.in_listing = False
+
+    async def _list_files_from_artifacts(
+        document_id, *, owner_user_id, provider, context, reference, artifacts, check_unchecked=True,
+    ):
+        client.in_listing = True
+        try:
+            return await file_listing_service.list_files_for_paper_from_artifacts(
+                document_id, owner_user_id=owner_user_id, provider=provider, context=context,
+                reference=reference, artifacts=artifacts, check_unchecked=check_unchecked,
+            )
+        finally:
+            client.in_listing = False
+
+    try:
+        await stage.run_supplement_stage(
+            job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7,
+            plan=SupplementPlan(
+                chosen=(_chosen("20", converted_md5=GOOD_TABLE_MD5), _chosen("30")),
+                request_context=_context(), login_expires_at=clock() + 86400, owner_user_id=7,
+            ),
+            conversion_requested=True, last_answer=_map_conversion_result(RUNNING, provider="abc_literature"),
+            main_ready_at=clock(), provider=provider, weaviate_client=object(), outcomes=_Outcomes(),
+            list_files=_list_files, list_files_from_artifacts=_list_files_from_artifacts,
+            add_files=supplement_add.add_files_to_paper_with_listing, clock=clock, sleep=clock.sleep,
+        )
+    finally:
+        await provider.aclose()
+
+    kinds = [kind for kind, _ in client.calls]
+    assert kinds.count("reference") == 2  # 1 initial + 1 pre-add open-licence check
+    if licence_outcome == "restricted":
+        # 1 initial + 1 poll + 1 refresh after licence changed = 3 show_all; 0 add downloads (only 1 initial check)
+        assert kinds.count("show_all") == 3
+        assert kinds.count("download") == 1
+        assert _final_entries(job) == {
+            "20": ("left_out", FileReason.FILE_NOT_IN_REFERENCE.value),
+            "30": ("left_out", IN_TIME),
+        }
+    elif licence_outcome == "unchanged":
+        # 1 initial + 1 poll; ZERO extra show_all when reference metadata is unchanged
+        assert kinds.count("show_all") == 2
+        assert kinds.count("download") == 2  # 1 initial check + 1 add download
+        assert _final_entries(job) == {"20": ("added", None), "30": ("left_out", IN_TIME)}
+    else:
+        # Fail closed on pre-add resolve_reference error: 0 extra show_all, 0 add downloads
+        assert kinds.count("show_all") == 2
+        assert kinds.count("download") == 1
+        assert _final_entries(job) == {
+            "20": ("left_out", FileReason.SOURCE_UNAVAILABLE.value),
+            "30": ("left_out", IN_TIME),
+        }

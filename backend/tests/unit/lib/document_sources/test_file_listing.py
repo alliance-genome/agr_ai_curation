@@ -1030,3 +1030,85 @@ async def test_401_during_check_downloads_stops_queued_downloads_immediately(mon
         )
 
     assert [kwargs["artifact_id"] for name, kwargs in client.calls if name == "download_referencefile"] == ["21"]
+
+
+@pytest.mark.asyncio
+async def test_401_during_check_downloads_reports_drained_sibling_failure_once_and_reraises_401(monkeypatch):
+    """ALL-1751 review: an unexpected sibling check failure drained alongside a 401 is reported
+    once (sanitized, without blocking re-raise) before DocumentSourceLoginExpired propagates."""
+    import asyncio
+    import weakref
+
+    from src.lib.document_sources import file_listing
+    from src.lib.document_sources.models import DocumentSourceLoginExpired
+
+    monkeypatch.setenv("DOCUMENT_FILE_DOWNLOAD_CONCURRENCY", "2")
+    monkeypatch.setattr(file_listing, "_download_limiters", weakref.WeakKeyDictionary())
+
+    both_started = asyncio.Event()
+    started = 0
+
+    class _ConcurrentClient(_Client):
+        async def download_referencefile(self, artifact_id, *, request_bearer_token=None, max_bytes=None):
+            nonlocal started
+            started += 1
+            if started >= 2:
+                both_started.set()
+            await asyncio.wait_for(both_started.wait(), timeout=5)
+            return await super().download_referencefile(
+                artifact_id, request_bearer_token=request_bearer_token, max_bytes=max_bytes,
+            )
+
+    rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), *_pair(30, "WB")]
+    client = _ConcurrentClient({"21": _http_error(401), "31": GOOD_TABLE})
+    client.show_reference_payload = _abc_reference_record()
+    client.show_referencefiles_payload = rows  # type: ignore[assignment]
+    provider = provider_from_fake(client)
+    reference = await provider.resolve_reference("AGRKB:101", request_bearer_token="curator-token")
+    artifacts = await provider.list_artifacts(reference, request_bearer_token="curator-token")
+    client.calls.clear()
+
+    secret = "secret-db-token-xyz999"
+
+    def _failing_save(*_args):
+        raise RuntimeError(f"assessment store broke: {secret}")
+
+    reported = []
+    monkeypatch.setattr(
+        "src.lib.observability.runtime.report_runtime_exception",
+        lambda exc, **kwargs: reported.append((exc, kwargs)),
+    )
+
+    with pytest.raises(DocumentSourceLoginExpired):
+        await list_reference_files(
+            provider=provider, reference=reference, authorized_group_ids=("WB",),
+            bearer_kind=ProviderBearerKind.CURATOR, request_bearer_token="curator-token",
+            files_in_paper=("10",), limits=_limits(), check_limit=20,
+            load_stored=lambda *_: None, save_assessment=_failing_save,
+            route=ListingRoute.PAPER, provider_observations={}, find_paper_in_library=None,
+            artifacts=artifacts,
+        )
+
+    assert len(reported) == 1
+    exc, kwargs = reported[0]
+    assert kwargs["operation"] == "file_listing_drained_check_failed"
+    assert kwargs["include_request"] is False
+    assert kwargs["context"] == {"exception_type": "RuntimeError"}
+    assert secret not in repr((str(exc), kwargs))
+
+    # Reporter failure itself must never block re-raising DocumentSourceLoginExpired.
+    started = 0
+    both_started = asyncio.Event()
+    monkeypatch.setattr(
+        "src.lib.observability.runtime.report_runtime_exception",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("sentry down")),
+    )
+    with pytest.raises(DocumentSourceLoginExpired):
+        await list_reference_files(
+            provider=provider, reference=reference, authorized_group_ids=("WB",),
+            bearer_kind=ProviderBearerKind.CURATOR, request_bearer_token="curator-token",
+            files_in_paper=("10",), limits=_limits(), check_limit=20,
+            load_stored=lambda *_: None, save_assessment=_failing_save,
+            route=ListingRoute.PAPER, provider_observations={}, find_paper_in_library=None,
+            artifacts=artifacts,
+        )

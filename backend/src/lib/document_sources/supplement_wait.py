@@ -34,6 +34,7 @@ from src.lib.document_sources.models import (
     DocumentSourceError,
     DocumentSourceLoginExpired,
     DocumentSourceProvider,
+    SourceAccessScope,
     SourceArtifact,
     SourceConversionFileStatus,
     SourceConversionResult,
@@ -531,6 +532,7 @@ async def _poll_until_done(
     poll_seconds = get_document_supplement_listing_poll_seconds()
     max_failed_reads = get_document_source_listing_max_failed_reads()
     failed_reads = 0
+    polls_ran = False
     latest_artifacts: list[SourceArtifact] | None = None
     token = stage.plan.request_context.curator_token
     stage.apply(_converted_in(listing, stage.ids_in(SupplementState.WAITING)), listing)
@@ -560,6 +562,7 @@ async def _poll_until_done(
             if failed_reads >= max_failed_reads:
                 break
             continue
+        polls_ran = True
         latest_artifacts = artifacts
         waiting = set(stage.ids_in(SupplementState.WAITING))
         new_texts = {
@@ -597,22 +600,60 @@ async def _poll_until_done(
         stage.apply(_converted_in(listing, stage.ids_in(SupplementState.WAITING)), listing)
     for provider_file_id in stage.ids_in(SupplementState.WAITING):
         stage.leave_out(provider_file_id, FileReason.NOT_CONVERTED_IN_TIME)
-    if latest_artifacts is not None and stage.ids_in(SupplementState.QUEUED) and not stage.login_gone():
-        await stage.checkpoint()
-        try:
-            listing = await list_files_from_artifacts(
-                UUID(document_id),
-                owner_user_id=owner_user_id,
-                provider=provider,
-                context=stage.plan.request_context,
-                reference=resolved_reference,
-                artifacts=latest_artifacts,
-                check_unchecked=False,
+    queued_ids = set(stage.ids_in(SupplementState.QUEUED))
+    if queued_ids and not stage.login_gone():
+        # A globally-scoped queued file may depend on reference-level licence
+        # metadata that per-poll artifact reads do not re-fetch; revalidate the
+        # reference once before adding when polls ran after the initial listing.
+        needs_global_ref_check = polls_ran and (
+            any(
+                item.provider_file_id in queued_ids
+                and item.source_artifact.access_policy.scope is SourceAccessScope.GLOBAL
+                for item in listing.files
             )
-        except DocumentSourceLoginExpired:
-            return False, listing
-        except DocumentSourceError:
-            return True, None
+            or any(
+                artifact.artifact_id in queued_ids
+                and artifact.access_policy.scope is SourceAccessScope.GLOBAL
+                for artifact in (latest_artifacts or ())
+            )
+        )
+        if latest_artifacts is not None or needs_global_ref_check:
+            await stage.checkpoint()
+            if needs_global_ref_check:
+                lookup = (resolved_reference.reference_curie or resolved_reference.reference_id or "").strip()
+                if not lookup:
+                    return True, None
+                try:
+                    fresh_ref = await provider.resolve_reference(lookup, request_bearer_token=token)
+                except DocumentSourceLoginExpired:
+                    return False, listing
+                except DocumentSourceError:
+                    return True, None
+                if fresh_ref != resolved_reference:
+                    resolved_reference = fresh_ref
+                    try:
+                        latest_artifacts = await provider.list_artifacts(
+                            resolved_reference, request_bearer_token=token,
+                        )
+                    except DocumentSourceLoginExpired:
+                        return False, listing
+                    except DocumentSourceError:
+                        return True, None
+            if latest_artifacts is not None:
+                try:
+                    listing = await list_files_from_artifacts(
+                        UUID(document_id),
+                        owner_user_id=owner_user_id,
+                        provider=provider,
+                        context=stage.plan.request_context,
+                        reference=resolved_reference,
+                        artifacts=latest_artifacts,
+                        check_unchecked=False,
+                    )
+                except DocumentSourceLoginExpired:
+                    return False, listing
+                except DocumentSourceError:
+                    return True, None
     return True, listing
 
 

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import weakref
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
@@ -164,6 +165,9 @@ class ListedFile:
     # The provider's own records, for an import or add of this entry; never sent to the browser.
     source_artifact: SourceArtifact
     converted_artifact: SourceArtifact | None
+    # All readable provider file ids that collapsed onto this entry (representative first);
+    # used by the add to match duplicate copies against live paper rows; never sent to the browser.
+    copy_provider_file_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +246,34 @@ class DownloadOutcome(Generic[R]):
     result: R | None = None
     failure: ProviderFileDownloadFailure | None = None
     limit_value: int | None = None
+
+
+logger = logging.getLogger(__name__)
+
+
+def _report_drained_check_failure(exc: Exception) -> None:
+    """Report one unexpected sibling check failure drained alongside a 401 without blocking re-raise."""
+    from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
+
+    logger.warning(
+        "Drained listing check failed while stopping for expired login (%s)",
+        type(exc).__name__,
+        extra={"sentry_skip_event": True},
+    )
+    try:
+        report_runtime_exception(
+            sanitized_runtime_error("File listing check failed while stopping for expired login"),
+            component="document_sources",
+            operation="file_listing_drained_check_failed",
+            context={"exception_type": type(exc).__name__},
+            fingerprint=["file_listing_drained_check_failed", type(exc).__name__],
+            include_request=False,
+        )
+    except Exception:
+        logger.warning(
+            "File listing drained-check failure reporting unavailable",
+            extra={"sentry_skip_event": True},
+        )
 
 
 # One limiter per event loop, so every listing and import in the process shares one bound.
@@ -525,6 +557,7 @@ async def list_reference_files(
             last_provider_observation=None,
             source_artifact=source,
             converted_artifact=converted,
+            copy_provider_file_ids=(source.artifact_id,),
         ))
 
     openable, not_shown = visible_supplement_candidates(
@@ -626,6 +659,9 @@ async def list_reference_files(
             *(check_candidate(candidate) for candidate in to_check), return_exceptions=True,
         )
         if login_expired is not None:
+            for item in raw_results:
+                if isinstance(item, Exception) and not isinstance(item, DocumentSourceLoginExpired):
+                    _report_drained_check_failure(item)
             raise login_expired
         results: list[ListedFileCheck] = []
         for item in raw_results:
@@ -675,6 +711,7 @@ async def list_reference_files(
             ),
             source_artifact=original,
             converted_artifact=candidate.converted,
+            copy_provider_file_ids=copy_ids,
         ))
 
     return FileListing(
