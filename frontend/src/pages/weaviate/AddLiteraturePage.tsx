@@ -281,6 +281,30 @@ const canChooseSupplementsForResult = (result: LiteratureImportResult): boolean 
   result.status === 'resolved' || result.errorCode === 'file_not_tickable'
 );
 
+const mergeImportResults = (
+  previousResults: LiteratureImportResult[],
+  incomingResults: LiteratureImportResult[],
+): LiteratureImportResult[] => {
+  const incomingByIdentifier = new Map(
+    incomingResults.map((item) => [item.identifier, item]),
+  );
+  const seen = new Set<string>();
+  const merged = previousResults.map((existing) => {
+    const replacement = incomingByIdentifier.get(existing.identifier);
+    if (replacement) {
+      seen.add(existing.identifier);
+      return replacement;
+    }
+    return existing;
+  });
+  for (const item of incomingResults) {
+    if (!seen.has(item.identifier)) {
+      merged.push(item);
+    }
+  }
+  return merged;
+};
+
 const isAbortError = (error: unknown): boolean => (
   typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError'
 );
@@ -523,6 +547,7 @@ const AddLiteraturePage: React.FC = () => {
   const [selectedSupplementsByIdentifier, setSelectedSupplementsByIdentifier] = React.useState<
     Record<string, Record<string, ChosenSupplementInput>>
   >({});
+  const [retryIdentifiers, setRetryIdentifiers] = React.useState<string[]>([]);
   const intakeGenerationRef = React.useRef(0);
   const supplementSessionRef = React.useRef(0);
   const listingAbortControllersRef = React.useRef<Map<string, AbortController>>(new Map());
@@ -554,6 +579,7 @@ const AddLiteraturePage: React.FC = () => {
     setExpandedIdentifiers({});
     setPaperListings({});
     setSelectedSupplementsByIdentifier({});
+    setRetryIdentifiers([]);
   }, []);
 
   const retainSupplementStateForIdentifiers = React.useCallback((keep: ReadonlySet<string>) => {
@@ -973,26 +999,37 @@ const AddLiteraturePage: React.FC = () => {
   const handleResolveAndImport = React.useCallback(() => {
     const requestVersion = intakeGenerationRef.current + 1;
     intakeGenerationRef.current = requestVersion;
+    const isRecoveryImport = retryIdentifiers.length > 0;
+    const requestIdentifiers = isRecoveryImport ? retryIdentifiers.join('\n') : identifiers;
+    const retryIdentifierSet = isRecoveryImport ? new Set(retryIdentifiers) : null;
+    const requestSupplements = retryIdentifierSet
+      ? selectedSupplements.filter((choice) => retryIdentifierSet.has(choice.identifier))
+      : selectedSupplements;
     setPendingAction('import');
     setIdentifierFeedback({ severity: 'info', message: 'Resolving identifiers and starting import jobs…' });
-    importSourceIdentifiers(identifiers, selectedSupplements)
+    importSourceIdentifiers(requestIdentifiers, requestSupplements)
       .then((payload) => {
         if (intakeGenerationRef.current !== requestVersion) {
           return;
         }
-        const nextResults = payload.results;
+        const mergedResults = isRecoveryImport
+          ? mergeImportResults(results, payload.results)
+          : payload.results;
         const importedCount = payload.importedCount;
-        const refusedTickableIdentifiers = new Set(
-          nextResults
-            .filter((result) => result.errorCode === 'file_not_tickable')
-            .map((result) => result.identifier),
+        const refusedTickableIdentifiers = Array.from(
+          new Set(
+            mergedResults
+              .filter((result) => result.errorCode === 'file_not_tickable')
+              .map((result) => result.identifier),
+          ),
         );
-        if (refusedTickableIdentifiers.size === 0) {
+        if (refusedTickableIdentifiers.length === 0) {
           clearSupplementState();
         } else {
-          retainSupplementStateForIdentifiers(refusedTickableIdentifiers);
+          retainSupplementStateForIdentifiers(new Set(refusedTickableIdentifiers));
+          setRetryIdentifiers(refusedTickableIdentifiers);
         }
-        setResults(nextResults);
+        setResults(mergedResults);
         setIdentifierFeedback({
           severity: importedCount > 0 ? 'success' : 'warning',
           message: importedCount > 0
@@ -1048,7 +1085,9 @@ const AddLiteraturePage: React.FC = () => {
     displayProvider,
     identifiers,
     refreshJobs,
+    results,
     retainSupplementStateForIdentifiers,
+    retryIdentifiers,
     selectedSupplements,
     shortProvider,
   ]);
@@ -1523,7 +1562,7 @@ const AddLiteraturePage: React.FC = () => {
                                   ? `Job ${result.jobId}`
                                   : isDuplicateRow
                                     ? 'Existing document'
-                                    : result.status === 'resolved'
+                                    : result.status === 'resolved' && !listingImportDisabled
                                       ? 'Ready to import'
                                       : result.status === 'imported'
                                         ? result.source?.provider === 'manual_upload'

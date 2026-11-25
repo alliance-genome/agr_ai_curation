@@ -1285,14 +1285,6 @@ describe('AddLiteraturePage', () => {
             imported_count: 1,
             results: [
               {
-                identifier: 'PMID:101',
-                normalized_identifier: 'PMID:101',
-                status: 'duplicate',
-                message: 'Already imported.',
-                existing_document_id: 'doc-101',
-                filename: 'paper-101.pdf',
-              },
-              {
                 identifier: 'PMID:202',
                 normalized_identifier: 'PMID:202',
                 status: 'imported',
@@ -1337,10 +1329,16 @@ describe('AddLiteraturePage', () => {
       expect(within(preservedList202).getByRole('checkbox', { name: 'Made_up_S40' })).toBeChecked();
       expect(screen.getByRole('button', { name: 'Import with 2 supplements' })).toBeInTheDocument();
 
-      // Untick the unconverted file on PMID:202 and re-import with only PMID:202's remaining supplement
+      // Untick the unconverted file on PMID:202 and re-import ONLY PMID:202 with its remaining supplement
       await user.click(within(preservedList202).getByRole('checkbox', { name: 'Made_up_S40' }));
       await user.click(screen.getByRole('button', { name: 'Import with 1 supplement' }));
       await screen.findByText('Job job-202');
+
+      // PMID:101 keeps its original imported status/job untouched while PMID:202 is merged in as imported
+      expect(screen.getByText('Job job-101')).toBeInTheDocument();
+      expect(screen.getByText('paper-101.pdf')).toBeInTheDocument();
+      expect(screen.getAllByText('Imported')).toHaveLength(2);
+      expect(screen.queryByText('Duplicate')).not.toBeInTheDocument();
 
       const importCalls = vi.mocked(fetch).mock.calls.filter(
         ([input]) => String(input) === '/api/weaviate/documents/import/source-identifiers',
@@ -1351,7 +1349,7 @@ describe('AddLiteraturePage', () => {
         supplements: Array<Record<string, unknown>>;
       };
       expect(retryBody).toEqual({
-        identifiers: 'PMID:101\nPMID:202',
+        identifiers: 'PMID:202',
         supplements: [
           {
             identifier: 'PMID:202',
