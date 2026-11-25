@@ -1,13 +1,17 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import {
   Alert,
   Box,
   Button,
+  Checkbox,
   Chip,
+  CircularProgress,
   Divider,
+  FormControlLabel,
   IconButton,
   LinearProgress,
+  Link,
   Paper,
   Stack,
   Tab,
@@ -30,6 +34,8 @@ import {
   CloudUpload as CloudUploadIcon,
   ContentCopy as ContentCopyIcon,
   ErrorOutlined as ErrorOutlineIcon,
+  ExpandLess as ExpandLessIcon,
+  ExpandMore as ExpandMoreIcon,
   FileOpen as FileOpenIcon,
   HourglassTop as HourglassTopIcon,
   PlayArrow as PlayArrowIcon,
@@ -37,10 +43,17 @@ import {
   Search as SearchIcon,
   WarningAmber as WarningAmberIcon,
 } from '@mui/icons-material';
+import { UNNAMED_FILE_LABEL } from '@/components/pdfViewer/viewerFiles';
 import {
   uploadPdfDocument,
   validatePdfSelection,
 } from '@/features/documents/pdfUploadFlow';
+import type {
+  IdentifierSourceListing,
+  ListingRefusalCode,
+  PaperSourceFile,
+  PaperSourceListedFile,
+} from '@/features/documents/paperSourceFiles';
 import {
   PDF_JOB_FALLBACK_POLL_INTERVAL_MS,
   PDF_JOB_LIMIT,
@@ -50,12 +63,32 @@ import { buildPdfTerminalNotification } from '@/features/documents/pdfTerminalNo
 import { emitGlobalToast } from '@/lib/globalNotifications';
 import PdfJobsPanel from '../../components/weaviate/PdfJobsPanel';
 import {
+  ADDABLE_TEXT,
+  ADD_LITERATURE_TEXT,
+  DEFAULT_PROVIDER_LABEL,
+  NOT_TICKABLE_REASON_TEXT,
+  OBSERVATION_TEXT,
+  TRY_AGAIN_BUTTON_TEXT,
+  addFilesRefusalText,
+  duplicateCopiesText,
+  fewCharactersNote,
+  importWithSupplementsButtonText,
+  listingRefusalText,
+  notShownText,
+  resolveProviderShortLabel,
+  sourceFileStatusText,
+  unconvertedTickableSupplementText,
+} from '../../components/weaviate/paperFileReasonText';
+import {
   cancelPdfJob,
+  fetchDocumentSourceFiles,
   fetchDocumentSourceProviderConfiguration,
   fetchPdfJobs,
   importSourceIdentifiers,
   resolveSourceIdentifiers,
+  SourceIdentifierImportError,
   type DocumentSourceProviderMetadata,
+  type ImportSourceSupplementChoice,
   type LiteratureImportResult,
   type LiteratureImportStatus,
   type PdfProcessingJob,
@@ -68,6 +101,11 @@ type IdentifierFeedback = {
   severity: 'info' | 'success' | 'warning' | 'error';
   message: string;
 };
+type PaperFileListingEntry =
+  | { status: 'loading' }
+  | { status: 'loaded'; listing: IdentifierSourceListing }
+  | { status: 'refused'; code: ListingRefusalCode; httpStatus: number }
+  | { status: 'error' };
 
 const statusTone: Record<
   LiteratureImportStatus,
@@ -218,6 +256,248 @@ const convertedSourceLabel = (result: LiteratureImportResult): string => {
   return result.source.provider === 'manual_upload' ? 'MD pending' : 'MD not available';
 };
 
+const libraryDocumentPath = (documentId: string): string => (
+  `/weaviate/documents/${encodeURIComponent(documentId)}`
+);
+
+const formatObservedDate = (value: string): string => {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+};
+
+const isListingAlreadyInLibrary = (listing: IdentifierSourceListing): boolean => (
+  listing.existing_document_id !== null
+  || listing.files.some((file) => file.recognized && file.not_tickable_reason === 'paper_already_in_library')
+);
+
+const isListingPaperNotImportable = (listing: IdentifierSourceListing): boolean => (
+  listing.files.length > 0
+  && listing.files.every((file) => file.recognized && file.not_tickable_reason === 'paper_not_importable')
+);
+
+const isAbortError = (error: unknown): boolean => (
+  typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError'
+);
+
+interface PaperSupplementsPanelProps {
+  identifier: string;
+  entry: PaperFileListingEntry | undefined;
+  displayProvider: string;
+  selectedByFileId: Record<string, ImportSourceSupplementChoice> | undefined;
+  disabled: boolean;
+  onToggleFile: (identifier: string, file: PaperSourceFile) => void;
+  onRetry: (identifier: string) => void;
+}
+
+const PaperSupplementsPanel: React.FC<PaperSupplementsPanelProps> = ({
+  identifier,
+  entry,
+  displayProvider,
+  selectedByFileId,
+  disabled,
+  onToggleFile,
+  onRetry,
+}) => {
+  if (!entry || entry.status === 'loading') {
+    return (
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', py: 0.5 }}>
+        <CircularProgress size={16} />
+        <Typography variant="body2">Loading this paper&apos;s files...</Typography>
+      </Stack>
+    );
+  }
+
+  if (entry.status === 'error') {
+    return (
+      <Alert
+        severity="warning"
+        action={(
+          <Button
+            color="inherit"
+            size="small"
+            onClick={() => onRetry(identifier)}
+            disabled={disabled}
+          >
+            {TRY_AGAIN_BUTTON_TEXT}
+          </Button>
+        )}
+      >
+        {ADD_LITERATURE_TEXT.listingFailedImportMainOnly}
+      </Alert>
+    );
+  }
+
+  if (entry.status === 'refused') {
+    const refusalText = listingRefusalText(entry.code, entry.httpStatus, displayProvider);
+    return (
+      <Alert
+        severity="warning"
+        action={entry.code !== 'document_source_import_disabled' ? (
+          <Button
+            color="inherit"
+            size="small"
+            onClick={() => onRetry(identifier)}
+            disabled={disabled}
+          >
+            {TRY_AGAIN_BUTTON_TEXT}
+          </Button>
+        ) : undefined}
+      >
+        {refusalText ?? ADD_LITERATURE_TEXT.listingFailedImportMainOnly}
+      </Alert>
+    );
+  }
+
+  const { listing } = entry;
+  if (isListingAlreadyInLibrary(listing)) {
+    return (
+      <Alert severity="info">
+        <Stack spacing={0.5}>
+          <Typography variant="body2">
+            {NOT_TICKABLE_REASON_TEXT.paper_already_in_library(displayProvider)}
+          </Typography>
+          {listing.existing_document_id ? (
+            <Link
+              component={RouterLink}
+              to={libraryDocumentPath(listing.existing_document_id)}
+              variant="body2"
+              underline="hover"
+              sx={{ alignSelf: 'flex-start' }}
+            >
+              {ADD_LITERATURE_TEXT.openInLibraryToAddFiles}
+            </Link>
+          ) : null}
+        </Stack>
+      </Alert>
+    );
+  }
+
+  if (isListingPaperNotImportable(listing)) {
+    return (
+      <Alert severity="warning">
+        {NOT_TICKABLE_REASON_TEXT.paper_not_importable(displayProvider)}
+      </Alert>
+    );
+  }
+
+  const hasNonMainFiles = listing.files.some((file) => !(file.recognized && file.file_role === 'main'));
+
+  const renderListedFileRow = (file: PaperSourceListedFile) => {
+    const fileName = file.display_name || UNNAMED_FILE_LABEL;
+    const isMainFile = file.recognized && file.file_role === 'main';
+
+    if (isMainFile) {
+      return (
+        <Box component="li" key={file.provider_file_id} sx={{ py: 0.5, listStyle: 'none' }}>
+          <FormControlLabel
+            control={<Checkbox size="small" checked disabled />}
+            label={(
+              <Typography variant="body2" sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>
+                {fileName}
+              </Typography>
+            )}
+            sx={{ m: 0, alignItems: 'center' }}
+          />
+          <Typography variant="body2" color="text.secondary" sx={{ pl: 4 }}>
+            {ADD_LITERATURE_TEXT.mainPaperAlwaysImported}
+          </Typography>
+        </Box>
+      );
+    }
+
+    const observation = file.recognized ? file.last_provider_observation : null;
+    const fewCharacters = file.recognized ? file.check.few_characters_count : null;
+
+    if (file.recognized && file.tickable) {
+      const isSelected = Boolean(selectedByFileId?.[file.provider_file_id]);
+      const description = file.status === 'no_converted_text'
+        ? unconvertedTickableSupplementText(displayProvider)
+        : ADDABLE_TEXT(displayProvider);
+
+      return (
+        <Box component="li" key={file.provider_file_id} sx={{ py: 0.5, listStyle: 'none' }}>
+          <FormControlLabel
+            control={(
+              <Checkbox
+                size="small"
+                checked={isSelected}
+                disabled={disabled}
+                onChange={() => onToggleFile(identifier, file)}
+              />
+            )}
+            label={(
+              <Typography variant="body2" sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>
+                {fileName}
+              </Typography>
+            )}
+            sx={{ m: 0, alignItems: 'center' }}
+          />
+          <Typography variant="body2" color="text.secondary" sx={{ pl: 4 }}>
+            {description}
+          </Typography>
+          {fewCharacters !== null ? (
+            <Typography variant="body2" color="text.secondary" sx={{ pl: 4 }}>
+              {fewCharactersNote(fewCharacters)}
+            </Typography>
+          ) : null}
+          {observation ? (
+            <Typography variant="body2" color="text.secondary" sx={{ pl: 4 }}>
+              {OBSERVATION_TEXT[observation.code](displayProvider, formatObservedDate(observation.observed_at))}
+            </Typography>
+          ) : null}
+        </Box>
+      );
+    }
+
+    return (
+      <Box component="li" key={file.provider_file_id} sx={{ py: 0.5, pl: 4, listStyle: 'none' }}>
+        <Typography variant="body2" sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>
+          {fileName}
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          {sourceFileStatusText(file, displayProvider)}
+        </Typography>
+        {fewCharacters !== null ? (
+          <Typography variant="body2" color="text.secondary">
+            {fewCharactersNote(fewCharacters)}
+          </Typography>
+        ) : null}
+        {observation ? (
+          <Typography variant="body2" color="text.secondary">
+            {OBSERVATION_TEXT[observation.code](displayProvider, formatObservedDate(observation.observed_at))}
+          </Typography>
+        ) : null}
+      </Box>
+    );
+  };
+
+  return (
+    <Stack spacing={0.75} aria-label={`Supplements for ${identifier}`}>
+      <Box component="ul" aria-label={`Files for ${identifier}`} sx={{ m: 0, p: 0 }}>
+        {listing.files.map(renderListedFileRow)}
+      </Box>
+      {!hasNonMainFiles ? (
+        <Typography variant="body2" color="text.secondary" sx={{ pl: 4 }}>
+          {`${displayProvider} has no other files for this paper.`}
+        </Typography>
+      ) : null}
+      {listing.not_shown_count > 0 ? (
+        <Typography variant="body2" color="text.secondary">
+          {notShownText(listing.not_shown_count, displayProvider)}
+        </Typography>
+      ) : null}
+      {listing.duplicate_copies_count > 0 ? (
+        <Typography variant="body2" color="text.secondary">
+          {duplicateCopiesText(listing.duplicate_copies_count)}
+        </Typography>
+      ) : null}
+    </Stack>
+  );
+};
+
 const AddLiteraturePage: React.FC = () => {
   const theme = useTheme();
   const navigate = useNavigate();
@@ -234,18 +514,188 @@ const AddLiteraturePage: React.FC = () => {
     React.useState<DocumentSourceProviderMetadata | null>(null);
   const [providerPresentationError, setProviderPresentationError] =
     React.useState<string | null>(null);
+  const [expandedIdentifiers, setExpandedIdentifiers] = React.useState<Record<string, boolean>>({});
+  const [paperListings, setPaperListings] = React.useState<Record<string, PaperFileListingEntry>>({});
+  const [selectedSupplementsByIdentifier, setSelectedSupplementsByIdentifier] = React.useState<
+    Record<string, Record<string, ImportSourceSupplementChoice>>
+  >({});
   const intakeGenerationRef = React.useRef(0);
+  const listingAbortControllersRef = React.useRef<Map<string, AbortController>>(new Map());
+  const listingRequestVersionRef = React.useRef<Record<string, number>>({});
   const jobsEventSourceRef = React.useRef<EventSource | null>(null);
   const jobsPollingRef = React.useRef<number | null>(null);
   const seenTerminalNotificationsRef = React.useRef<Set<string>>(new Set());
   const seededTerminalNotificationsRef = React.useRef(false);
   const isWorking = pendingAction !== null;
   const isUploading = uploadStatus === 'uploading';
+  const displayProvider = providerPresentation?.displayLabel?.trim() || DEFAULT_PROVIDER_LABEL;
+  const shortProvider = resolveProviderShortLabel({
+    providerShortLabel: providerPresentation?.shortLabel,
+    providerLabel: providerPresentation?.displayLabel,
+  });
   const identifierPlaceholder = providerPresentation?.identifierExamples?.join('\n');
   const identifierHelp = providerPresentationError
     ? undefined
     : providerPresentation?.identifierHelpLabel
       ?? 'Identifier guidance is not configured for the current document source; use commas or new lines to separate values.';
+
+  const clearSupplementState = React.useCallback(() => {
+    for (const controller of listingAbortControllersRef.current.values()) {
+      controller.abort();
+    }
+    listingAbortControllersRef.current.clear();
+    listingRequestVersionRef.current = {};
+    setExpandedIdentifiers({});
+    setPaperListings({});
+    setSelectedSupplementsByIdentifier({});
+  }, []);
+
+  React.useEffect(() => () => {
+    for (const controller of listingAbortControllersRef.current.values()) {
+      controller.abort();
+    }
+    listingAbortControllersRef.current.clear();
+  }, []);
+
+  const loadPaperSourceFiles = React.useCallback(async (identifier: string) => {
+    const intakeGeneration = intakeGenerationRef.current;
+    listingAbortControllersRef.current.get(identifier)?.abort();
+    const controller = new AbortController();
+    listingAbortControllersRef.current.set(identifier, controller);
+    const requestVersion = (listingRequestVersionRef.current[identifier] ?? 0) + 1;
+    listingRequestVersionRef.current[identifier] = requestVersion;
+
+    setPaperListings((previous) => ({
+      ...previous,
+      [identifier]: { status: 'loading' },
+    }));
+
+    try {
+      const result = await fetchDocumentSourceFiles(identifier, controller.signal);
+      if (
+        controller.signal.aborted
+        || intakeGenerationRef.current !== intakeGeneration
+        || listingRequestVersionRef.current[identifier] !== requestVersion
+      ) {
+        return;
+      }
+
+      if (result.kind === 'refused') {
+        setPaperListings((previous) => ({
+          ...previous,
+          [identifier]: { status: 'refused', code: result.code, httpStatus: result.httpStatus },
+        }));
+        return;
+      }
+
+      setPaperListings((previous) => ({
+        ...previous,
+        [identifier]: { status: 'loaded', listing: result.listing },
+      }));
+
+      if (isListingAlreadyInLibrary(result.listing) || isListingPaperNotImportable(result.listing)) {
+        setSelectedSupplementsByIdentifier((previous) => {
+          if (!previous[identifier]) {
+            return previous;
+          }
+          const next = { ...previous };
+          delete next[identifier];
+          return next;
+        });
+      }
+    } catch (error) {
+      if (
+        isAbortError(error)
+        || controller.signal.aborted
+        || intakeGenerationRef.current !== intakeGeneration
+        || listingRequestVersionRef.current[identifier] !== requestVersion
+      ) {
+        return;
+      }
+      setPaperListings((previous) => ({
+        ...previous,
+        [identifier]: { status: 'error' },
+      }));
+    } finally {
+      if (listingAbortControllersRef.current.get(identifier) === controller) {
+        listingAbortControllersRef.current.delete(identifier);
+      }
+    }
+  }, []);
+
+  const handleToggleChooseSupplements = React.useCallback(
+    (identifier: string) => {
+      const nextExpanded = !expandedIdentifiers[identifier];
+      setExpandedIdentifiers((previous) => ({
+        ...previous,
+        [identifier]: nextExpanded,
+      }));
+      if (nextExpanded && !paperListings[identifier]) {
+        void loadPaperSourceFiles(identifier);
+      }
+    },
+    [expandedIdentifiers, loadPaperSourceFiles, paperListings],
+  );
+
+  const handleToggleSupplementSelection = React.useCallback(
+    (identifier: string, file: PaperSourceFile) => {
+      if (!file.tickable || file.file_role === 'main') {
+        return;
+      }
+      setSelectedSupplementsByIdentifier((previous) => {
+        const existingForIdentifier = previous[identifier] ?? {};
+        if (existingForIdentifier[file.provider_file_id]) {
+          const nextForIdentifier = { ...existingForIdentifier };
+          delete nextForIdentifier[file.provider_file_id];
+          const next = { ...previous };
+          if (Object.keys(nextForIdentifier).length === 0) {
+            delete next[identifier];
+          } else {
+            next[identifier] = nextForIdentifier;
+          }
+          return next;
+        }
+        return {
+          ...previous,
+          [identifier]: {
+            ...existingForIdentifier,
+            [file.provider_file_id]: {
+              identifier,
+              provider_file_id: file.provider_file_id,
+              md5: file.md5,
+              converted_md5: file.converted_md5,
+            },
+          },
+        };
+      });
+    },
+    [],
+  );
+
+  const selectedSupplements = React.useMemo<ImportSourceSupplementChoice[]>(() => {
+    const resolvedIdentifiers = new Set(
+      results
+        .filter((result) => result.status === 'resolved')
+        .map((result) => result.identifier),
+    );
+    const chosen: ImportSourceSupplementChoice[] = [];
+    for (const [identifier, byFileId] of Object.entries(selectedSupplementsByIdentifier)) {
+      if (!resolvedIdentifiers.has(identifier)) {
+        continue;
+      }
+      const listingEntry = paperListings[identifier];
+      if (
+        listingEntry?.status === 'loaded'
+        && (isListingAlreadyInLibrary(listingEntry.listing) || isListingPaperNotImportable(listingEntry.listing))
+      ) {
+        continue;
+      }
+      chosen.push(...Object.values(byFileId));
+    }
+    return chosen;
+  }, [paperListings, results, selectedSupplementsByIdentifier]);
+
+  const selectedSupplementCount = selectedSupplements.length;
 
   React.useEffect(() => {
     let active = true;
@@ -400,6 +850,7 @@ const AddLiteraturePage: React.FC = () => {
   const handleResolve = React.useCallback(() => {
     const requestVersion = intakeGenerationRef.current + 1;
     intakeGenerationRef.current = requestVersion;
+    clearSupplementState();
     setPendingAction('resolve');
     setIdentifierFeedback({ severity: 'info', message: 'Resolving identifiers…' });
     resolveSourceIdentifiers(identifiers)
@@ -436,20 +887,21 @@ const AddLiteraturePage: React.FC = () => {
         }
         setPendingAction(null);
       });
-  }, [identifiers]);
+  }, [clearSupplementState, identifiers]);
 
   const handleResolveAndImport = React.useCallback(() => {
     const requestVersion = intakeGenerationRef.current + 1;
     intakeGenerationRef.current = requestVersion;
     setPendingAction('import');
     setIdentifierFeedback({ severity: 'info', message: 'Resolving identifiers and starting import jobs…' });
-    importSourceIdentifiers(identifiers)
+    importSourceIdentifiers(identifiers, selectedSupplements)
       .then((payload) => {
         if (intakeGenerationRef.current !== requestVersion) {
           return;
         }
         const nextResults = payload.results;
         const importedCount = payload.importedCount;
+        clearSupplementState();
         setResults(nextResults);
         setIdentifierFeedback({
           severity: importedCount > 0 ? 'success' : 'warning',
@@ -463,6 +915,19 @@ const AddLiteraturePage: React.FC = () => {
       })
       .catch((error) => {
         if (intakeGenerationRef.current !== requestVersion) {
+          return;
+        }
+        if (error instanceof SourceIdentifierImportError && error.code) {
+          const refusalMessage = addFilesRefusalText(error.code, {
+            provider: displayProvider,
+            providerShortLabel: shortProvider,
+            httpStatus: error.status,
+            limitValue: error.limitValue,
+          });
+          setIdentifierFeedback({
+            severity: 'error',
+            message: refusalMessage ?? error.message,
+          });
           return;
         }
         const message = error instanceof Error ? error.message : 'Failed to import source identifiers.';
@@ -480,31 +945,44 @@ const AddLiteraturePage: React.FC = () => {
         }
         setPendingAction(null);
       });
-  }, [identifiers, refreshJobs]);
+  }, [
+    clearSupplementState,
+    displayProvider,
+    identifiers,
+    refreshJobs,
+    selectedSupplements,
+    shortProvider,
+  ]);
 
   const handleReset = React.useCallback(() => {
     setIdentifiers('');
     setResults([]);
+    clearSupplementState();
     setPendingAction(null);
     setIdentifierFeedback(null);
     intakeGenerationRef.current += 1;
     setUploadStatus('idle');
     setUploadMessage(null);
-  }, []);
+  }, [clearSupplementState]);
 
   const handleModeChange = React.useCallback((_event: React.SyntheticEvent, nextMode: ImportMode) => {
     setMode(nextMode);
     intakeGenerationRef.current += 1;
+    clearSupplementState();
     setPendingAction(null);
     setIdentifierFeedback(null);
     setResults([]);
     setUploadStatus('idle');
     setUploadMessage(null);
-  }, []);
+  }, [clearSupplementState]);
 
   const handleViewDocument = React.useCallback(
     (result: LiteratureImportResult) => {
       if (!result.documentId) {
+        return;
+      }
+      if (result.status === 'duplicate') {
+        navigate(libraryDocumentPath(result.documentId));
         return;
       }
       navigate('/weaviate/documents');
@@ -516,11 +994,12 @@ const AddLiteraturePage: React.FC = () => {
     (event: React.ChangeEvent<HTMLInputElement>) => {
       setIdentifiers(event.target.value);
       setResults([]);
+      clearSupplementState();
       setIdentifierFeedback(null);
       intakeGenerationRef.current += 1;
       setPendingAction(null);
     },
-    [],
+    [clearSupplementState],
   );
 
   const handlePdfFiles = React.useCallback(async (selectedFiles: File[]) => {
@@ -720,7 +1199,9 @@ const AddLiteraturePage: React.FC = () => {
                     disabled={isWorking || !identifiers.trim()}
                     sx={{ minWidth: 160 }}
                   >
-                    Resolve and Import
+                    {selectedSupplementCount > 0
+                      ? importWithSupplementsButtonText(selectedSupplementCount)
+                      : 'Resolve and Import'}
                   </Button>
                   <Button variant="outlined" startIcon={<RefreshIcon />} onClick={handleReset} disabled={isWorking}>
                     Reset
@@ -859,106 +1340,189 @@ const AddLiteraturePage: React.FC = () => {
                 ) : results.map((result) => {
                   const tone = statusTone[result.status];
                   const canOpen = canOpenInDocuments(result);
+                  const rowKey = `${result.identifier}-${result.status}-${result.documentId ?? result.jobId ?? result.message}`;
+                  const listingEntry = paperListings[result.identifier];
+                  const listingDuplicate = listingEntry?.status === 'loaded'
+                    && isListingAlreadyInLibrary(listingEntry.listing);
+                  const isExpanded = result.status === 'resolved' && Boolean(expandedIdentifiers[result.identifier]);
+                  const selectedForPaper = selectedSupplementsByIdentifier[result.identifier];
+                  const selectedForPaperCount = selectedForPaper ? Object.keys(selectedForPaper).length : 0;
+                  const statusMessage = result.errorCode === 'file_not_tickable'
+                    ? (
+                      addFilesRefusalText('file_not_tickable', {
+                        provider: displayProvider,
+                        providerShortLabel: shortProvider,
+                      }) ?? result.message
+                    )
+                    : result.message;
 
                   return (
-                    <TableRow key={`${result.identifier}-${result.status}-${result.documentId ?? result.jobId ?? result.message}`} hover>
-                      <TableCell>
-                        <Stack spacing={0.25}>
-                          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700 }}>
-                            {result.identifier}
-                          </Typography>
-                          <Typography variant="caption" sx={{
-                            color: "text.secondary"
-                          }}>
-                            {result.normalizedIdentifier ?? 'No normalized identifier'}
-                          </Typography>
-                        </Stack>
-                      </TableCell>
-                      <TableCell>
-                        <Stack spacing={0.75}>
-                          <Chip
-                            icon={tone.icon}
-                            label={tone.label}
-                            color={tone.chipColor}
-                            size="small"
-                            variant={result.status === 'imported' || result.status === 'resolved' ? 'filled' : 'outlined'}
-                            sx={{ alignSelf: 'flex-start', borderRadius: 1 }}
-                          />
-                          <Typography variant="caption" sx={{
-                            color: "text.secondary"
-                          }}>
-                            {result.message}
-                          </Typography>
-                        </Stack>
-                      </TableCell>
-                      <TableCell>
-                        {result.filename ? (
+                    <React.Fragment key={rowKey}>
+                      <TableRow hover>
+                        <TableCell>
                           <Stack spacing={0.25}>
-                            <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                              {result.filename}
+                            <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 700 }}>
+                              {result.identifier}
                             </Typography>
                             <Typography variant="caption" sx={{
                               color: "text.secondary"
                             }}>
-                              {result.jobId
-                                ? `Job ${result.jobId}`
-                                : result.status === 'duplicate' && result.documentId
-                                  ? 'Existing document'
-                                  : result.status === 'resolved'
-                                    ? 'Ready to import'
-                                    : result.status === 'imported'
-                                      ? result.source?.provider === 'manual_upload'
-                                        ? 'Queued upload'
-                                        : 'Queued document'
-                                      : result.documentId
-                                        ? 'Document available'
-                                        : 'Document pending'}
+                              {result.normalizedIdentifier ?? 'No normalized identifier'}
                             </Typography>
                           </Stack>
-                        ) : (
-                          <Typography variant="body2" sx={{
-                            color: "text.secondary"
-                          }}>
-                            Not queued
-                          </Typography>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {result.source ? (
-                          <Stack spacing={0.25}>
-                            <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
-                              PDF {result.source.pdfArtifactId} / {convertedSourceLabel(result)}
-                            </Typography>
-                            <Typography variant="caption" sx={{
-                              color: "text.secondary"
-                            }}>
-                              {result.source.viewerMode}
-                            </Typography>
-                          </Stack>
-                        ) : (
-                          <Typography variant="body2" sx={{
-                            color: "text.secondary"
-                          }}>
-                            No local PDF
-                          </Typography>
-                        )}
-                      </TableCell>
-                      <TableCell align="right">
-                        <Tooltip title={canOpen ? 'View in Library' : result.status === 'resolved' ? 'Ready to import' : 'No PDF-backed document available'}>
-                          <span>
-                            <IconButton
+                        </TableCell>
+                        <TableCell>
+                          <Stack spacing={0.75}>
+                            <Chip
+                              icon={tone.icon}
+                              label={tone.label}
+                              color={tone.chipColor}
                               size="small"
-                              color="success"
-                              disabled={!canOpen}
-                              onClick={() => handleViewDocument(result)}
-                              aria-label={`View ${result.filename ?? result.identifier} in Library`}
-                            >
-                              <FileOpenIcon fontSize="small" />
-                            </IconButton>
-                          </span>
-                        </Tooltip>
-                      </TableCell>
-                    </TableRow>
+                              variant={result.status === 'imported' || result.status === 'resolved' ? 'filled' : 'outlined'}
+                              sx={{ alignSelf: 'flex-start', borderRadius: 1 }}
+                            />
+                            {result.status === 'duplicate' ? (
+                              <Stack spacing={0.25}>
+                                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                                  {NOT_TICKABLE_REASON_TEXT.paper_already_in_library(displayProvider)}
+                                </Typography>
+                                {result.documentId ? (
+                                  <Link
+                                    component={RouterLink}
+                                    to={libraryDocumentPath(result.documentId)}
+                                    variant="caption"
+                                    underline="hover"
+                                    sx={{ alignSelf: 'flex-start' }}
+                                  >
+                                    {ADD_LITERATURE_TEXT.openInLibraryToAddFiles}
+                                  </Link>
+                                ) : null}
+                              </Stack>
+                            ) : (
+                              <Typography variant="caption" sx={{
+                                color: "text.secondary"
+                              }}>
+                                {statusMessage}
+                              </Typography>
+                            )}
+                          </Stack>
+                        </TableCell>
+                        <TableCell>
+                          {result.filename ? (
+                            <Stack spacing={0.25}>
+                              <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                                {result.filename}
+                              </Typography>
+                              <Typography variant="caption" sx={{
+                                color: "text.secondary"
+                              }}>
+                                {result.jobId
+                                  ? `Job ${result.jobId}`
+                                  : result.status === 'duplicate' && result.documentId
+                                    ? 'Existing document'
+                                    : result.status === 'resolved'
+                                      ? 'Ready to import'
+                                      : result.status === 'imported'
+                                        ? result.source?.provider === 'manual_upload'
+                                          ? 'Queued upload'
+                                          : 'Queued document'
+                                        : result.documentId
+                                          ? 'Document available'
+                                          : 'Document pending'}
+                              </Typography>
+                            </Stack>
+                          ) : (
+                            <Typography variant="body2" sx={{
+                              color: "text.secondary"
+                            }}>
+                              Not queued
+                            </Typography>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {result.source ? (
+                            <Stack spacing={0.25}>
+                              <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
+                                PDF {result.source.pdfArtifactId} / {convertedSourceLabel(result)}
+                              </Typography>
+                              <Typography variant="caption" sx={{
+                                color: "text.secondary"
+                              }}>
+                                {result.source.viewerMode}
+                              </Typography>
+                            </Stack>
+                          ) : (
+                            <Typography variant="body2" sx={{
+                              color: "text.secondary"
+                            }}>
+                              No local PDF
+                            </Typography>
+                          )}
+                        </TableCell>
+                        <TableCell align="right">
+                          {result.status === 'resolved' && !listingDuplicate ? (
+                            <Stack direction="row" spacing={1} sx={{ justifyContent: 'flex-end', alignItems: 'center' }}>
+                              {selectedForPaperCount > 0 ? (
+                                <Chip
+                                  size="small"
+                                  color="primary"
+                                  variant="outlined"
+                                  label={`${selectedForPaperCount} selected`}
+                                />
+                              ) : null}
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                endIcon={isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                                aria-expanded={isExpanded}
+                                onClick={() => handleToggleChooseSupplements(result.identifier)}
+                                disabled={isWorking}
+                              >
+                                {ADD_LITERATURE_TEXT.chooseSupplements}
+                              </Button>
+                            </Stack>
+                          ) : (
+                            <Tooltip title={canOpen ? 'View in Library' : result.status === 'resolved' ? 'Ready to import' : 'No PDF-backed document available'}>
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  color="success"
+                                  disabled={!canOpen}
+                                  onClick={() => handleViewDocument(result)}
+                                  aria-label={`View ${result.filename ?? result.identifier} in Library`}
+                                >
+                                  <FileOpenIcon fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                      {isExpanded ? (
+                        <TableRow>
+                          <TableCell
+                            colSpan={5}
+                            sx={{
+                              bgcolor: alpha(theme.palette.primary.main, 0.02),
+                              py: 1.5,
+                              px: 2,
+                            }}
+                          >
+                            <PaperSupplementsPanel
+                              identifier={result.identifier}
+                              entry={listingEntry}
+                              displayProvider={displayProvider}
+                              selectedByFileId={selectedForPaper}
+                              disabled={isWorking}
+                              onToggleFile={handleToggleSupplementSelection}
+                              onRetry={(targetIdentifier) => {
+                                void loadPaperSourceFiles(targetIdentifier);
+                              }}
+                            />
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                    </React.Fragment>
                   );
                 })}
               </TableBody>

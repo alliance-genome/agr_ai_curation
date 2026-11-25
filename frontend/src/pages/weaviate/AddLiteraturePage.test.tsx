@@ -1,7 +1,8 @@
 import { act } from 'react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, screen } from '../../test/test-utils';
+import { fireEvent, screen, within } from '../../test/test-utils';
 import { render, userEvent } from '../../test/test-utils';
+import fileListingFixture from '@/test/fixtures/supplements/file_listing.json';
 import { uploadPdfDocument } from '@/features/documents/pdfUploadFlow';
 import { WAITING_FOR_SUPPLEMENTS_STAGE } from '@/features/documents/supplementProgress';
 import { emitGlobalToast } from '@/lib/globalNotifications';
@@ -93,6 +94,7 @@ const stubRoutedFetch = (
   identifierResponses: Array<unknown | Response | Promise<Response>> = [defaultImportResponse],
   providerConfiguration: unknown = defaultProviderConfiguration,
   pdfJobsResponse: unknown = emptyPdfJobsResponse,
+  fileListingHandler?: (identifier: string) => unknown | Response | Promise<Response>,
 ) => {
   const responses = [...identifierResponses];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -105,6 +107,18 @@ const stubRoutedFetch = (
     }
     if (url.includes('/api/weaviate/pdf-jobs')) {
       return okJson(pdfJobsResponse);
+    }
+    if (url.startsWith('/api/weaviate/document-sources/files')) {
+      if (!fileListingHandler) {
+        throw new Error(`Unexpected file listing request: ${url}`);
+      }
+      const parsed = new URL(url, 'http://localhost');
+      const requestedIdentifier = parsed.searchParams.get('identifier') ?? '';
+      const listingResponse = await fileListingHandler(requestedIdentifier);
+      if (listingResponse instanceof Response) {
+        return listingResponse;
+      }
+      return okJson(listingResponse);
     }
 
     const nextResponse = responses.length > 0 ? responses.shift() : defaultImportResponse;
@@ -725,5 +739,476 @@ describe('AddLiteraturePage', () => {
     });
 
     expect(screen.getByText('Added')).toBeInTheDocument();
+  });
+
+  describe('per-paper supplement selection (ALL-1746)', () => {
+    const allianceProviderConfig = {
+      provider: 'abc_literature',
+      import_enabled: true,
+      presentation: {
+        display_label: 'ABC Literature',
+        short_label: 'ABC',
+        identifier_help_label: 'Use configured literature identifiers.',
+        identifier_examples: ['SOURCE:123', 'SOURCE:456'],
+      },
+    };
+
+    const nonAbcProviderConfig = {
+      provider: 'genome_archive',
+      import_enabled: true,
+      presentation: {
+        display_label: 'Genome Archive',
+        short_label: 'GA',
+        identifier_help_label: 'Use Genome Archive identifiers.',
+        identifier_examples: ['GA:123'],
+      },
+    };
+
+    const buildIdentifierListingFromFixture = () => ({
+      ...fileListingFixture,
+      files: [
+        {
+          ...fileListingFixture.files[0],
+          in_this_paper: false,
+          converted_text_id: null,
+          converted_md5: null,
+          tickable: true,
+          not_tickable_reason: null,
+          check: { ...fileListingFixture.files[0]!.check, status: 'not_checked' },
+        },
+        fileListingFixture.files[1],
+        fileListingFixture.files[2],
+        {
+          ...fileListingFixture.files[3],
+          tickable: true,
+          not_tickable_reason: null,
+          last_provider_observation: null,
+        },
+        fileListingFixture.files[4],
+        fileListingFixture.files[5],
+      ],
+    });
+
+    const resolvedRow = (identifier: string, filename: string) => ({
+      identifier,
+      normalized_identifier: identifier,
+      status: 'resolved',
+      message: 'Ready to import.',
+      filename,
+      source_provenance: {
+        provider: 'abc_literature',
+        viewer_mode: 'local_pdf',
+        pdf_artifact_id: '4040596',
+        converted_artifact_id: '4672234',
+        source_md5: SOURCE_MD5,
+      },
+    });
+
+    it('keeps file listing strictly lazy on Resolve and lists only the clicked paper with caching', async () => {
+      const user = userEvent.setup();
+      const listedIdentifiers: string[] = [];
+      stubRoutedFetch(
+        [{
+          imported_count: 0,
+          results: [
+            resolvedRow('PMID:101', 'paper-101.pdf'),
+            resolvedRow('PMID:202', 'paper-202.pdf'),
+          ],
+        }],
+        allianceProviderConfig,
+        emptyPdfJobsResponse,
+        (identifier) => {
+          listedIdentifiers.push(identifier);
+          return buildIdentifierListingFromFixture();
+        },
+      );
+      render(<AddLiteraturePage />);
+
+      fireEvent.change(screen.getByLabelText('Source identifiers'), {
+        target: { value: 'PMID:101\nPMID:202' },
+      });
+      await user.click(screen.getByRole('button', { name: 'Resolve' }));
+
+      await screen.findByText('paper-101.pdf');
+      expect(listedIdentifiers).toEqual([]);
+      expect(screen.queryByRole('button', { name: /list all/i })).not.toBeInTheDocument();
+
+      const chooseButtons = screen.getAllByRole('button', { name: 'Choose supplements' });
+      expect(chooseButtons).toHaveLength(2);
+
+      await user.click(chooseButtons[0]!);
+
+      const fileList = await screen.findByRole('list', { name: 'Files for PMID:101' });
+      expect(listedIdentifiers).toEqual(['PMID:101']);
+
+      // Main paper is checked and disabled with N2
+      const mainCheckbox = within(fileList).getByRole('checkbox', { name: 'Made_up_main' });
+      expect(mainCheckbox).toBeChecked();
+      expect(mainCheckbox).toBeDisabled();
+      expect(within(fileList).getByText('Main paper (always imported)')).toBeInTheDocument();
+
+      // Converted tickable supplement (Card 8 + few-characters note)
+      const convertedCheckbox = within(fileList).getByRole('checkbox', { name: 'Made_up_S20' });
+      expect(convertedCheckbox).not.toBeChecked();
+      expect(convertedCheckbox).toBeEnabled();
+      expect(within(fileList).getByText('Converted by ABC Literature; not added to this paper')).toBeInTheDocument();
+      expect(within(fileList).getByText('Little text: about 120 characters')).toBeInTheDocument();
+
+      // Unconverted tickable supplement (N3)
+      const unconvertedCheckbox = within(fileList).getByRole('checkbox', { name: 'Made_up_S40' });
+      expect(unconvertedCheckbox).not.toBeChecked();
+      expect(unconvertedCheckbox).toBeEnabled();
+      expect(within(fileList).getByText(
+        'Not converted by ABC Literature yet. If you choose it, the import asks ABC Literature to convert it; the main paper does not wait for it.',
+      )).toBeInTheDocument();
+
+      // Non-tickable supplements have no checkboxes and show Card 8 reason texts
+      expect(within(fileList).getAllByRole('checkbox')).toHaveLength(3);
+      expect(within(fileList).getByText('Made_up_S30')).toBeInTheDocument();
+      expect(within(fileList).getByText('A table in its converted text has rows that do not match its header')).toBeInTheDocument();
+      expect(within(fileList).getByText('Made_up_S50')).toBeInTheDocument();
+      expect(within(fileList).getByText('Large data file. Files like this are not read.')).toBeInTheDocument();
+      expect(within(fileList).getByText('Made_up_S60')).toBeInTheDocument();
+      expect(within(fileList).getByText('File type not supported')).toBeInTheDocument();
+
+      // Counts (Card 8)
+      expect(screen.getByText('2 more files in ABC Literature are not listed because you cannot open them.')).toBeInTheDocument();
+      expect(screen.getByText('1 further copy of a listed file is not listed again.')).toBeInTheDocument();
+
+      // Collapsing and re-expanding uses cached listing without re-fetching
+      await user.click(chooseButtons[0]!);
+      expect(screen.queryByRole('list', { name: 'Files for PMID:101' })).not.toBeInTheDocument();
+      await user.click(chooseButtons[0]!);
+      expect(screen.getByRole('list', { name: 'Files for PMID:101' })).toBeInTheDocument();
+      expect(listedIdentifiers).toEqual(['PMID:101']);
+    });
+
+    it('updates the Import button with N4 counts and posts exact I6 supplement fields without extra keys', async () => {
+      const user = userEvent.setup();
+      stubRoutedFetch(
+        [
+          {
+            imported_count: 0,
+            results: [resolvedRow('PMID:101', 'paper-101.pdf')],
+          },
+          defaultImportResponse,
+        ],
+        allianceProviderConfig,
+        emptyPdfJobsResponse,
+        () => buildIdentifierListingFromFixture(),
+      );
+      render(<AddLiteraturePage />);
+
+      fireEvent.change(screen.getByLabelText('Source identifiers'), { target: { value: 'PMID:101' } });
+      await user.click(screen.getByRole('button', { name: 'Resolve' }));
+      await user.click(await screen.findByRole('button', { name: 'Choose supplements' }));
+
+      const convertedCheckbox = await screen.findByRole('checkbox', { name: 'Made_up_S20' });
+      const unconvertedCheckbox = screen.getByRole('checkbox', { name: 'Made_up_S40' });
+
+      expect(screen.getByRole('button', { name: 'Resolve and Import' })).toBeInTheDocument();
+
+      await user.click(convertedCheckbox);
+      expect(screen.getByRole('button', { name: 'Import with 1 supplement' })).toBeInTheDocument();
+
+      await user.click(unconvertedCheckbox);
+      const importTwoButton = screen.getByRole('button', { name: 'Import with 2 supplements' });
+      expect(importTwoButton).toBeInTheDocument();
+
+      await user.click(importTwoButton);
+      await screen.findByText('paper-from-api.pdf');
+
+      const importCall = vi.mocked(fetch).mock.calls.find(
+        ([input]) => String(input) === '/api/weaviate/documents/import/source-identifiers',
+      );
+      expect(importCall).toBeDefined();
+      const body = JSON.parse((importCall?.[1] as { body: string }).body) as {
+        identifiers: string;
+        supplements: Array<Record<string, unknown>>;
+      };
+      expect(body).toEqual({
+        identifiers: 'PMID:101',
+        supplements: [
+          {
+            identifier: 'PMID:101',
+            provider_file_id: '20',
+            md5: 'original-md5-20',
+            converted_md5: 'converted-md5-20',
+          },
+          {
+            identifier: 'PMID:101',
+            provider_file_id: '40',
+            md5: 'original-md5-40',
+            converted_md5: null,
+          },
+        ],
+      });
+      for (const item of body.supplements) {
+        expect(Object.keys(item).sort()).toEqual(['converted_md5', 'identifier', 'md5', 'provider_file_id']);
+        expect('display_name' in item).toBe(false);
+      }
+    });
+
+    it('renders Card 8 and N5 Library link for duplicate rows and paper_already_in_library listings without tickboxes', async () => {
+      const user = userEvent.setup();
+      stubRoutedFetch(
+        [{
+          imported_count: 0,
+          results: [
+            {
+              identifier: 'PMID:dup',
+              normalized_identifier: 'PMID:dup',
+              status: 'duplicate',
+              message: 'This provider document has already been imported.',
+              existing_document_id: 'doc-existing-1',
+              filename: 'already-here.pdf',
+            },
+            resolvedRow('PMID:raced', 'raced-paper.pdf'),
+          ],
+        }],
+        allianceProviderConfig,
+        emptyPdfJobsResponse,
+        () => ({
+          ...fileListingFixture,
+          existing_document_id: 'doc-existing-2',
+          files: fileListingFixture.files.map((file) => ({
+            ...file,
+            tickable: false,
+            not_tickable_reason: 'paper_already_in_library',
+          })),
+        }),
+      );
+      render(<AddLiteraturePage />);
+
+      fireEvent.change(screen.getByLabelText('Source identifiers'), {
+        target: { value: 'PMID:dup\nPMID:raced' },
+      });
+      await user.click(screen.getByRole('button', { name: 'Resolve' }));
+
+      expect(await screen.findByText('You already have this paper in the Library')).toBeInTheDocument();
+      const duplicateLink = screen.getByRole('link', { name: 'Open it in the Library to add its files.' });
+      expect(duplicateLink).toHaveAttribute('href', '/weaviate/documents/doc-existing-1');
+
+      // Only the resolved row gets "Choose supplements", never the duplicate row
+      const chooseButtons = screen.getAllByRole('button', { name: 'Choose supplements' });
+      expect(chooseButtons).toHaveLength(1);
+
+      // Listing returning paper_already_in_library also switches to Card 8 + N5 with no checkboxes
+      await user.click(chooseButtons[0]!);
+      await screen.findAllByRole('link', { name: 'Open it in the Library to add its files.' });
+      const allLibraryLinks = screen.getAllByRole('link', { name: 'Open it in the Library to add its files.' });
+      expect(allLibraryLinks.map((link) => link.getAttribute('href'))).toEqual([
+        '/weaviate/documents/doc-existing-1',
+        '/weaviate/documents/doc-existing-2',
+      ]);
+      expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Choose supplements' })).not.toBeInTheDocument();
+    });
+
+    it('renders N6 and Card 38 Try again on listing failure while keeping main-paper import enabled', async () => {
+      const user = userEvent.setup();
+      let listingAttempts = 0;
+      stubRoutedFetch(
+        [
+          {
+            imported_count: 0,
+            results: [resolvedRow('PMID:101', 'paper-101.pdf')],
+          },
+          defaultImportResponse,
+        ],
+        allianceProviderConfig,
+        emptyPdfJobsResponse,
+        () => {
+          listingAttempts += 1;
+          if (listingAttempts === 1) {
+            return new Response(JSON.stringify({ detail: { error: 'file_listing_failed' } }), {
+              status: 500,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+          if (listingAttempts === 2) {
+            return new Response(
+              JSON.stringify({ detail: { error: 'document_source_curator_token_unavailable' } }),
+              {
+                status: 409,
+                headers: { 'Content-Type': 'application/json' },
+              },
+            );
+          }
+          return buildIdentifierListingFromFixture();
+        },
+      );
+      render(<AddLiteraturePage />);
+
+      fireEvent.change(screen.getByLabelText('Source identifiers'), { target: { value: 'PMID:101' } });
+      await user.click(screen.getByRole('button', { name: 'Resolve' }));
+      await user.click(await screen.findByRole('button', { name: 'Choose supplements' }));
+
+      expect(await screen.findByText(
+        'Could not list this paper\'s files. You can import the main paper now and add supplements later from the Library.',
+      )).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Resolve and Import' })).toBeEnabled();
+
+      // Clicking Try again surfaces Card 9 sign-in refusal cleanly when the backend answers 409
+      await user.click(screen.getByRole('button', { name: 'Try again' }));
+      expect(await screen.findByText(
+        'Sign in again to see this paper\'s files in ABC Literature.',
+      )).toBeInTheDocument();
+      expect(listingAttempts).toBe(2);
+
+      // Clicking Try again once more refetches and succeeds
+      await user.click(screen.getByRole('button', { name: 'Try again' }));
+      expect(await screen.findByRole('checkbox', { name: 'Made_up_S20' })).toBeInTheDocument();
+      expect(listingAttempts).toBe(3);
+
+      // Main-only import still works with 0 supplements ticked
+      await user.click(screen.getByRole('button', { name: 'Resolve and Import' }));
+      await screen.findByText('paper-from-api.pdf');
+    });
+
+    it('renders Card 41 texts for 422 file_not_tickable and paper_file_limit with Alliance and non-ABC provider labels', async () => {
+      const user = userEvent.setup();
+      stubRoutedFetch(
+        [
+          {
+            imported_count: 0,
+            results: [resolvedRow('GA:101', 'ga-paper.pdf')],
+          },
+          new Response(JSON.stringify({ detail: { code: 'file_not_tickable' } }), {
+            status: 422,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+          new Response(JSON.stringify({ detail: { code: 'paper_file_limit', limit_value: 20 } }), {
+            status: 422,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+          new Response(JSON.stringify({ detail: { code: 'paper_file_limit' } }), {
+            status: 422,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+          {
+            imported_count: 0,
+            results: [
+              {
+                identifier: 'GA:101',
+                normalized_identifier: 'GA:101',
+                status: 'error',
+                error_code: 'file_not_tickable',
+                message: 'Backend fallback text.',
+              },
+            ],
+          },
+        ],
+        nonAbcProviderConfig,
+        emptyPdfJobsResponse,
+        () => buildIdentifierListingFromFixture(),
+      );
+      render(<AddLiteraturePage />);
+
+      await screen.findByText('Use Genome Archive identifiers.');
+      fireEvent.change(screen.getByLabelText('Source identifiers'), { target: { value: 'GA:101' } });
+      await user.click(screen.getByRole('button', { name: 'Resolve' }));
+      await user.click(await screen.findByRole('button', { name: 'Choose supplements' }));
+
+      // Non-ABC provider label appears in N3 (never hardcoded ABC Literature)
+      expect(await screen.findByText(
+        'Not converted by Genome Archive yet. If you choose it, the import asks Genome Archive to convert it; the main paper does not wait for it.',
+      )).toBeInTheDocument();
+      expect(screen.queryByText(/ABC Literature/)).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('checkbox', { name: 'Made_up_S40' }));
+      const importButton = screen.getByRole('button', { name: 'Import with 1 supplement' });
+
+      // 422 file_not_tickable uses configured short_label ('GA') and preserves the table/selection
+      await user.click(importButton);
+      expect(await screen.findByText(
+        'This file can no longer be chosen: GA has not converted it and this import will not ask GA to.',
+      )).toBeInTheDocument();
+      expect(screen.getByRole('checkbox', { name: 'Made_up_S40' })).toBeChecked();
+
+      // 422 paper_file_limit with limit_value: 20
+      await user.click(screen.getByRole('button', { name: 'Import with 1 supplement' }));
+      expect(await screen.findByText(
+        'Too many files for one paper: at most 20, including the main paper.',
+      )).toBeInTheDocument();
+
+      // 422 paper_file_limit without limit_value falls back cleanly to N29
+      await user.click(screen.getByRole('button', { name: 'Import with 1 supplement' }));
+      expect(await screen.findByText('This screen cannot describe this file yet.')).toBeInTheDocument();
+
+      // Per-row 200 OK file_not_tickable also renders Card 41 with configured short_label ('GA')
+      await user.click(screen.getByRole('button', { name: 'Import with 1 supplement' }));
+      expect(await screen.findByText(
+        'This file can no longer be chosen: GA has not converted it and this import will not ask GA to.',
+      )).toBeInTheDocument();
+    });
+
+    it('renders Card 41 422 file_not_tickable with Alliance short_label ABC', async () => {
+      const user = userEvent.setup();
+      stubRoutedFetch(
+        [
+          {
+            imported_count: 0,
+            results: [resolvedRow('PMID:101', 'paper-101.pdf')],
+          },
+          new Response(JSON.stringify({ detail: { code: 'file_not_tickable' } }), {
+            status: 422,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        ],
+        allianceProviderConfig,
+        emptyPdfJobsResponse,
+        () => buildIdentifierListingFromFixture(),
+      );
+      render(<AddLiteraturePage />);
+
+      await screen.findByText('Use configured literature identifiers.');
+      fireEvent.change(screen.getByLabelText('Source identifiers'), { target: { value: 'PMID:101' } });
+      await user.click(screen.getByRole('button', { name: 'Resolve' }));
+      await user.click(await screen.findByRole('button', { name: 'Choose supplements' }));
+      await user.click(await screen.findByRole('checkbox', { name: 'Made_up_S40' }));
+      await user.click(screen.getByRole('button', { name: 'Import with 1 supplement' }));
+
+      expect(await screen.findByText(
+        'This file can no longer be chosen: ABC has not converted it and this import will not ask ABC to.',
+      )).toBeInTheDocument();
+    });
+
+    it('clears stale supplement selections when identifiers are edited', async () => {
+      const user = userEvent.setup();
+      stubRoutedFetch(
+        [
+          {
+            imported_count: 0,
+            results: [resolvedRow('PMID:101', 'paper-101.pdf')],
+          },
+          defaultImportResponse,
+        ],
+        allianceProviderConfig,
+        emptyPdfJobsResponse,
+        () => buildIdentifierListingFromFixture(),
+      );
+      render(<AddLiteraturePage />);
+
+      fireEvent.change(screen.getByLabelText('Source identifiers'), { target: { value: 'PMID:101' } });
+      await user.click(screen.getByRole('button', { name: 'Resolve' }));
+      await user.click(await screen.findByRole('button', { name: 'Choose supplements' }));
+      await user.click(await screen.findByRole('checkbox', { name: 'Made_up_S20' }));
+      expect(screen.getByRole('button', { name: 'Import with 1 supplement' })).toBeInTheDocument();
+
+      // Edit identifiers box: stale selection clears and button reverts
+      fireEvent.change(screen.getByLabelText('Source identifiers'), { target: { value: 'PMID:999' } });
+      const importButton = screen.getByRole('button', { name: 'Resolve and Import' });
+      expect(importButton).toBeInTheDocument();
+
+      await user.click(importButton);
+      await screen.findByText('paper-from-api.pdf');
+      expect(fetch).toHaveBeenCalledWith(
+        '/api/weaviate/documents/import/source-identifiers',
+        expect.objectContaining({
+          body: JSON.stringify({ identifiers: 'PMID:999' }),
+        }),
+      );
+    });
   });
 });

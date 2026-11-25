@@ -5,17 +5,18 @@ import fileListingFixture from '@/test/fixtures/supplements/file_listing.json'
 import {
   PaperSourceFilesContractError,
   fetchPaperSourceFiles,
+  parseIdentifierSourceListing,
   parsePaperSourceListing,
-  type PaperSourceFile,
-  type PaperSourceListedFile,
 } from './paperSourceFiles'
 import { PAPER_LISTING } from './paperSourceFilesFixtures'
 
-function recognized(file: PaperSourceListedFile | undefined): PaperSourceFile {
+function recognized<T extends { recognized: boolean }>(
+  file: T | undefined,
+): Extract<T, { recognized: true }> {
   if (!file?.recognized) {
     throw new Error('expected a recognised file')
   }
-  return file
+  return file as Extract<T, { recognized: true }>
 }
 
 function jsonResponse(payload: unknown, status = 200): Response {
@@ -96,5 +97,62 @@ describe('paperSourceFiles', () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ detail: { error: 'file_listing_failed' } }, 500)))
 
     await expect(fetchPaperSourceFiles('doc-1')).rejects.toThrow('Failed to list the paper\'s files in the provider (500)')
+  })
+
+  it('parses identifier-route listings with tickable main files, tickable unconverted supplements, md5, and existing_document_id', () => {
+    const identifierPayload = {
+      ...fileListingFixture,
+      files: [
+        {
+          ...fileListingFixture.files[0],
+          in_this_paper: false,
+          converted_text_id: null,
+          converted_md5: null,
+          tickable: true,
+          not_tickable_reason: null,
+          check: { ...fileListingFixture.files[0]!.check, status: 'not_checked' },
+        },
+        fileListingFixture.files[1],
+        {
+          ...fileListingFixture.files[3],
+          tickable: true,
+          not_tickable_reason: null,
+          last_provider_observation: null,
+        },
+      ],
+    }
+
+    const parsed = parseIdentifierSourceListing(identifierPayload)
+    expect(parsed.main_status).toBe('ready')
+    expect(parsed.existing_document_id).toBeNull()
+    expect(parsed.not_shown_count).toBe(2)
+    expect(parsed.duplicate_copies_count).toBe(1)
+    expect(parsed.files.map(recognized).map((file) => ({
+      id: file.provider_file_id,
+      role: file.file_role,
+      md5: file.md5,
+      converted_md5: file.converted_md5,
+      tickable: file.tickable,
+      status: file.status,
+    }))).toEqual([
+      { id: '10', role: 'main', md5: 'main-md5', converted_md5: null, tickable: true, status: 'ready' },
+      { id: '20', role: 'supplement', md5: 'original-md5-20', converted_md5: 'converted-md5-20', tickable: true, status: 'ready' },
+      { id: '40', role: null, md5: 'original-md5-40', converted_md5: null, tickable: true, status: 'no_converted_text' },
+    ])
+  })
+
+  it('rejects invalid tickable supplements on identifier-route listings', () => {
+    expect(() => parseIdentifierSourceListing({
+      ...fileListingFixture,
+      files: [{ ...fileListingFixture.files[1], converted_md5: null }],
+    })).toThrow(PaperSourceFilesContractError)
+    expect(() => parseIdentifierSourceListing({
+      ...fileListingFixture,
+      files: [{ ...fileListingFixture.files[4], tickable: true, not_tickable_reason: null }],
+    })).toThrow(PaperSourceFilesContractError)
+    expect(() => parseIdentifierSourceListing({
+      ...fileListingFixture,
+      main_status: '',
+    })).toThrow(PaperSourceFilesContractError)
   })
 })
