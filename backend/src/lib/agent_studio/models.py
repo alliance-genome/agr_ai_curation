@@ -161,7 +161,7 @@ class PromptInfo(BaseModel):
     model: Optional[str] = Field(None, description="Model used by this agent (if known)")
     subcategory: Optional[str] = Field(None, description="Subcategory for palette grouping (e.g., 'PDF Extraction', 'Data Validation', 'Output')")
     show_in_palette: bool = Field(True, description="Whether this agent should appear in the Flow Builder palette")
-    template_eligible: bool = Field(True, description="Whether this system agent is eligible as an Agent Workshop template")
+    template_eligible: bool = Field(..., description="Whether this system agent is eligible as an Agent Workshop template")
 
     # Curator-friendly documentation
     documentation: Optional[AgentDocumentation] = Field(

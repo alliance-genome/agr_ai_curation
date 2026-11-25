@@ -135,15 +135,8 @@ function AgentBrowser({
     return allAgents.find((a) => a.agent_id === selectedAgentId) || null
   }, [allAgents, selectedAgentId])
 
-  const isTemplateEligible = useMemo(() => {
-    return (agent: PromptInfo): boolean => {
-      if (agent.agent_id === 'task_input' || agent.agent_id.startsWith('ca_')) return false
-      if (agent.template_eligible !== undefined) return agent.template_eligible
-      const metadataShow = agentMetadata[agent.agent_id]?.show_in_palette
-      if (metadataShow !== undefined) return metadataShow !== false
-      return true
-    }
-  }, [agentMetadata])
+  const isTemplateEligible = (agent: PromptInfo): boolean =>
+    agent.agent_id !== 'task_input' && !agent.agent_id.startsWith('ca_') && agent.template_eligible === true
 
   const filterCounts = useMemo(() => {
     const shared = allAgents.filter((agent) => agent.subcategory === 'Shared Agents').length
@@ -153,7 +146,7 @@ function AgentBrowser({
       shared,
       templates,
     }
-  }, [allAgents, isTemplateEligible])
+  }, [allAgents])
 
   const tabFilteredAgents = useMemo(() => {
     if (browserFilter === 'shared') {
@@ -163,7 +156,7 @@ function AgentBrowser({
       return allAgents.filter(isTemplateEligible)
     }
     return allAgents
-  }, [allAgents, browserFilter, isTemplateEligible])
+  }, [allAgents, browserFilter])
 
   // Filter agents based on tab + search query
   const filteredAgents = useMemo(() => {

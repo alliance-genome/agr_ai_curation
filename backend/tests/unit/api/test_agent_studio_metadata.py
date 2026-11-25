@@ -416,6 +416,7 @@ class TestGetRegistryMetadata:
                             },
                             tools=[],
                             subcategory="Data Validation",
+                            template_eligible=True,
                         )
                     ],
                 )
@@ -488,6 +489,7 @@ class TestGetRegistryMetadata:
                             group_rules={},
                             tools=[],
                             subcategory="Data Validation",
+                            template_eligible=True,
                         )
                     ],
                 )
@@ -550,6 +552,7 @@ class TestGetRegistryMetadata:
                             has_group_rules=False,
                             group_rules={},
                             tools=[],
+                            template_eligible=True,
                         )
                     ],
                 )
@@ -669,6 +672,7 @@ class TestGetRegistryMetadata:
                             has_group_rules=False,
                             group_rules={},
                             tools=[],
+                            template_eligible=True,
                         )
                     ],
                 )
@@ -1072,6 +1076,7 @@ class TestGetRegistryMetadata:
                 )
             },
             tools=[],
+            template_eligible=True,
         )
 
         assert prompt.has_group_rules is True

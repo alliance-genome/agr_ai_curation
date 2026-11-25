@@ -35,6 +35,7 @@ const buildAgent = (agentId: string, name: string, overrides: Partial<PromptInfo
   group_rules: {},
   tools: [],
   subcategory: 'Data Validation',
+  template_eligible: !agentId.startsWith('ca_'),
   ...overrides,
 })
 

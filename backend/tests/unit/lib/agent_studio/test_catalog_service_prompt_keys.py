@@ -63,6 +63,7 @@ def test_prompt_catalog_get_agent_accepts_validator_agent_id_from_validation_pla
         base_prompt="Gene validator prompt",
         source_file="database",
         tools=["agr_curation_query"],
+        template_eligible=True,
     )
     service._catalog = PromptCatalog(
         categories=[AgentPrompts(category="Validation", agents=[gene_prompt])],

@@ -47,6 +47,7 @@ describe('SuggestionDialog', () => {
             has_group_rules: false,
             group_rules: {},
             tools: [],
+            template_eligible: true,
           }}
         />
       </>

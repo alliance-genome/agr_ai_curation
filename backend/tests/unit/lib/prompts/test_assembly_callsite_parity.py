@@ -80,6 +80,7 @@ def prompt_parity_service(monkeypatch):
                         source_file="database",
                         has_group_rules=True,
                         group_rules={},
+                        template_eligible=True,
                     )
                 ],
             )

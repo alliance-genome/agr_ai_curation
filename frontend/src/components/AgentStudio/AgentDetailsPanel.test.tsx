@@ -67,6 +67,7 @@ function buildFlaggedAgent(): PromptInfo {
     custom_prompt_removed_layer_kinds: ['core_static'],
     custom_prompt_warning: 'Custom-agent prompt still contains locked/core prompt markers after safe cleanup.',
     tools: [],
+    template_eligible: false,
   }
 }
 
@@ -104,6 +105,7 @@ function buildDocumentedAgent(): PromptInfo {
     has_group_rules: false,
     group_rules: {},
     tools: ['lookup_term', 'search_synonyms', 'get_id', 'search_db', 'record_evidence'],
+    template_eligible: true,
     documentation: {
       summary: 'Confirms names against the ontology.',
       capabilities: [{ name: 'Name lookup', description: 'Find identifiers for names.' }],
@@ -284,7 +286,7 @@ describe('AgentDetailsPanel', () => {
   })
 
   it('presents package-owned group restrictions as read-only', () => {
-    const systemAgent = { ...buildCleanCustomAgent(), agent_id: 'gene', agent_name: 'Gene Specialist' }
+    const systemAgent = { ...buildCleanCustomAgent(), agent_id: 'gene', agent_name: 'Gene Specialist', template_eligible: true }
     metadataMocks.agents = {
       gene: { allowed_group_ids: ['group_a'] },
     }

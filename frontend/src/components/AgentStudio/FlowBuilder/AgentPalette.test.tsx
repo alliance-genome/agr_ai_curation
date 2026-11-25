@@ -46,6 +46,7 @@ describe('AgentPalette access-aware choices', () => {
           group_rules: {},
           tools: [],
           subcategory: 'Data Validation',
+          template_eligible: true,
         }],
       }],
       total_agents: 1,
