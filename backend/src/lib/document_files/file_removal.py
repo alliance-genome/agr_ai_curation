@@ -367,14 +367,33 @@ async def remove_paper_file(
     except Exception as exc:
         removed.cleanup_failures.append("stored_files")
         _report_cleanup_failure(exc, document_id, "stored_files")
-    try:
-        await update_document_piece_count(
+    # Drain any in-flight Weaviate piece-count write before unwinding out of
+    # ``paper_operation_lock`` so a cancelled removal cannot finish writing an
+    # older count after a subsequent add publishes a newer one.
+    count_task = asyncio.create_task(
+        update_document_piece_count(
             str(document_id),
             removed.ready_piece_total,
             weaviate_client,
             subject,
             caller_reports_failure=True,
         )
+    )
+    try:
+        await asyncio.shield(count_task)
+    except asyncio.CancelledError:
+        while not count_task.done():
+            try:
+                await asyncio.shield(count_task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not count_task.cancelled():
+            count_exc = count_task.exception()
+            if isinstance(count_exc, Exception):
+                _report_cleanup_failure(count_exc, document_id, "piece_count")
+        raise
     except Exception as exc:
         removed.cleanup_failures.append("piece_count")
         _report_cleanup_failure(exc, document_id, "piece_count")

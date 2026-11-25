@@ -695,14 +695,91 @@ def _build_supplement_add_metadata_fixture() -> dict[str, Any]:
         )
     )
 
-    captured: dict[str, Any] = {JOB_KIND_KEY: SUPPLEMENT_ADD_JOB_KIND}
+    started_at = datetime(2026, 11, 24, 15, 0, 0, tzinfo=timezone.utc)
+    job = SimpleNamespace(
+        id=JOB_UUID,
+        document_id=DOC_UUID,
+        user_id=1,
+        filename="Made_up_main.pdf",
+        status="running",
+        current_stage="finishing",
+        progress_percentage=90,
+        message="Adding files",
+        process_id=None,
+        cancel_requested=False,
+        error_message=None,
+        metadata_json={JOB_KIND_KEY: SUPPLEMENT_ADD_JOB_KIND},
+        created_at=started_at,
+        started_at=started_at,
+        updated_at=started_at,
+        completed_at=None,
+    )
+    job_session = _FakeJobRowSession(job)
 
-    async def fake_add_files_to_paper(*_args: Any, **_kwargs: Any) -> AddResult:
+    async def fake_add_files_to_paper(
+        document_id: UUID,
+        owner_user_id: int,
+        _request_context: Any,
+        _files: Any,
+        *,
+        job_id: UUID,
+        weaviate_client: Any,
+        stage_checkpoint: Any,
+        commit_state: Any,
+        complete_job_on_commit: bool = False,
+        **_kwargs: Any,
+    ) -> AddResult:
+        assert complete_job_on_commit is True
+        assert job_id == JOB_UUID
+        assert commit_state is not None
+        accepted_stub: Any = SimpleNamespace(
+            file_id=ADDED_FILE_UUID,
+            listed=SimpleNamespace(provider_file_id="100", copy_provider_file_ids=("100",)),
+            public_display_name="Table_S1.xlsx",
+            markdown="# Table S1\n",
+            prepared=SimpleNamespace(elements=[], text_bytes=128),
+            pdf=None,
+        )
+        paper_stub: Any = SimpleNamespace(owner_subject="curator-subject-1", next_tab_order=1)
+        ordered = tuple(
+            ChosenFile(
+                provider_file_id=item.provider_file_id,
+                md5=f"md5-{item.provider_file_id}",
+                converted_md5=f"conv-md5-{item.provider_file_id}",
+            )
+            for item in result.files
+        )
+        outcomes = {
+            item.provider_file_id: item
+            for item in result.files
+            if item.outcome == "left_out"
+        }
+        await supplement_add._write(
+            [accepted_stub],
+            document_id=document_id,
+            owner_user_id=owner_user_id,
+            paper=paper_stub,
+            weaviate_client=weaviate_client,
+            stage_checkpoint=stage_checkpoint,
+            commit_state=commit_state,
+            ordered=ordered,
+            outcomes=outcomes,
+            complete_job_id=job_id,
+        )
         return result
 
-    def fake_mark_completed(*, metadata: dict[str, Any] | None = None, **_kwargs: Any) -> None:
-        if metadata:
-            captured.update(metadata)
+    def fake_mark_files_ready(_sizes: dict[UUID, int], *, on_ready_in_session: Any = None) -> None:
+        assert on_ready_in_session is not None
+        on_ready_in_session(job_session)
+
+    async def fake_save_markdown(*, file_id: UUID, user_id: str, **_kwargs: Any) -> str:
+        return f"{user_id}/source_markdown/{file_id}.md"
+
+    async def fake_save_processed_json(*, file_id: UUID, user_id: str, **_kwargs: Any) -> str:
+        return f"{user_id}/processed_json/{file_id}.json"
+
+    async def fake_noop_async(*_args: Any, **_kwargs: Any) -> None:
+        return None
 
     request = SupplementAddJobRequest(
         job_id=JOB_UUID,
@@ -731,14 +808,56 @@ def _build_supplement_add_metadata_fixture() -> dict[str, Any]:
             patch.object(weaviate_connection, "get_connection", return_value=None)
         )
         stack.enter_context(
+            patch.object(pdf_job_service, "is_cancel_requested", return_value=False)
+        )
+        stack.enter_context(
+            patch.object(pdf_job_service, "update_progress", return_value=None)
+        )
+        stack.enter_context(
+            patch.object(pdf_job_service, "datetime", _FixedDatetime)
+        )
+        stack.enter_context(
             patch.object(supplement_add, "add_files_to_paper", side_effect=fake_add_files_to_paper)
         )
         stack.enter_context(
-            patch.object(pdf_job_service, "mark_completed", side_effect=fake_mark_completed)
+            patch.object(supplement_add, "_new_row", return_value=None)
+        )
+        stack.enter_context(
+            patch.object(supplement_add, "_insert_rows", return_value={})
+        )
+        stack.enter_context(
+            patch(
+                "src.lib.document_sources.ingestion._save_source_markdown",
+                side_effect=fake_save_markdown,
+            )
+        )
+        stack.enter_context(
+            patch(
+                "src.lib.document_sources.ingestion._save_processed_json",
+                side_effect=fake_save_processed_json,
+            )
+        )
+        stack.enter_context(
+            patch.object(supplement_add, "_store_supplement_pieces", side_effect=fake_noop_async)
+        )
+        stack.enter_context(
+            patch.object(supplement_add, "_after_add", side_effect=fake_noop_async)
+        )
+        stack.enter_context(
+            patch("src.lib.document_files.service.mark_files_ready", side_effect=fake_mark_files_ready)
         )
         asyncio.run(supplement_add.run_supplement_add_job(request))
 
-    return captured
+    assert job.status == "completed"
+    assert job.message == "Added 1 of 10 files."
+    assert pdf_job_service.PDF_PROCESSING_RECEIPT_KEY in job.metadata_json
+    # Checked-in supplement_add_metadata.json tracks the job_kind + supplements contract
+    # written by supplement_add._write -> pdf_job_service.mark_completed_in_session.
+    return {
+        key: value
+        for key, value in job.metadata_json.items()
+        if key != pdf_job_service.PDF_PROCESSING_RECEIPT_KEY
+    }
 
 
 class _FakeRemovalSession:

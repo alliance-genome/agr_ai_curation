@@ -2369,6 +2369,20 @@ def test_supplement_pdf_byte_cap_default_and_override(monkeypatch):
     assert get_document_file_max_pdf_bytes() == 12_000_000
 
 
+def test_document_file_piece_count_lock_wait_seconds_default_override_and_bounds(monkeypatch):
+    from src.lib.openai_agents.config import get_document_file_piece_count_lock_wait_seconds
+
+    monkeypatch.delenv("DOCUMENT_FILE_PIECE_COUNT_LOCK_WAIT_SECONDS", raising=False)
+    assert get_document_file_piece_count_lock_wait_seconds() == 10.0
+    monkeypatch.setenv("DOCUMENT_FILE_PIECE_COUNT_LOCK_WAIT_SECONDS", "25.5")
+    assert get_document_file_piece_count_lock_wait_seconds() == 25.5
+    monkeypatch.setenv("DOCUMENT_FILE_PIECE_COUNT_LOCK_WAIT_SECONDS", "0.01")
+    assert get_document_file_piece_count_lock_wait_seconds() == 0.1
+    for invalid in ("nan", "inf", "-inf", "not-a-float"):
+        monkeypatch.setenv("DOCUMENT_FILE_PIECE_COUNT_LOCK_WAIT_SECONDS", invalid)
+        assert get_document_file_piece_count_lock_wait_seconds() == 10.0
+
+
 def test_inspect_results_object_pages_are_env_configured(monkeypatch):
     from src.lib.openai_agents.config import (
         get_inspect_results_object_max_page_size,

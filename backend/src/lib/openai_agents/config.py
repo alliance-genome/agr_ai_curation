@@ -2658,6 +2658,14 @@ def get_document_file_few_characters_note_below() -> int:
     return max(0, _get_env_int_with_fallback("DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW", 200))
 
 
+def get_document_file_piece_count_lock_wait_seconds() -> float:
+    """Seconds a committed supplement add waits for the paper lock to refresh piece counts."""
+    value = _get_env_float_with_fallback("DOCUMENT_FILE_PIECE_COUNT_LOCK_WAIT_SECONDS", 10.0)
+    if not math.isfinite(value):
+        return 10.0
+    return max(0.1, value)
+
+
 def get_document_table_header_max_rows() -> int:
     """Most rows the table header rule may take as a table's header (at least 1).
 

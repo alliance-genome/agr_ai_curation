@@ -9,7 +9,7 @@ numbers are never reused.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 from uuid import UUID
 
@@ -155,18 +155,32 @@ def mark_file_ready(file_id: UUID, *, text_bytes: int) -> None:
         file_row.text_bytes = text_bytes
 
 
-def mark_files_ready(text_bytes_by_file: Mapping[UUID, int]) -> None:
-    """Record several stored files as readable together, in one transaction (an add's files)."""
+def mark_files_ready(
+    text_bytes_by_file: Mapping[UUID, int],
+    *,
+    on_ready_in_session: Callable[[Session], None] | None = None,
+) -> None:
+    """Record several stored files as readable together, in one transaction (an add's files).
+
+    When ``on_ready_in_session`` is given, it runs inside the same transaction before
+    locking the file rows (matching ``pdf_jobs.service``'s job-before-files lock order)
+    so dependent rows such as the owning job commit or roll back atomically with the files.
+    """
 
     from src.models.sql.database import SessionLocal
 
     if not text_bytes_by_file:
         raise DocumentFileError("No files to mark ready")
+    ordered_ids = sorted(text_bytes_by_file, key=str)
+    for file_id in ordered_ids:
+        text_bytes = text_bytes_by_file[file_id]
+        if type(text_bytes) is not int or text_bytes < 0:
+            raise DocumentFileError("A ready file needs a measured text size")
     with SessionLocal() as session, session.begin():
-        for file_id in sorted(text_bytes_by_file, key=str):
+        if on_ready_in_session is not None:
+            on_ready_in_session(session)
+        for file_id in ordered_ids:
             text_bytes = text_bytes_by_file[file_id]
-            if type(text_bytes) is not int or text_bytes < 0:
-                raise DocumentFileError("A ready file needs a measured text size")
             file_row = session.get(PDFDocumentFile, file_id, with_for_update=True)
             if file_row is None:
                 raise DocumentFileError(f"File {file_id} does not exist")

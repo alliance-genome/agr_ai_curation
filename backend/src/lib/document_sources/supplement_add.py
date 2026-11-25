@@ -43,7 +43,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO, TypeVar
+from typing import Any, BinaryIO, Literal, TypeVar
 from uuid import UUID
 
 from sqlalchemy import and_, select
@@ -147,6 +147,7 @@ class SupplementAddCommit:
     """One add's ready transaction outcome, observable by its owner after cancellation."""
 
     committed: bool = False
+    result: AddResult | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,7 +256,13 @@ async def _prepare_paper_for_add(document_id: UUID, owner_user_id: int) -> _Pape
     if paper.status != PAPER_STATUS_COMPLETED:
         raise SupplementAddError("paper_not_completed")
     if paper.leftovers:
-        await _remove_leftovers(document_id, paper.owner_subject, paper.leftovers)
+        await _finish_mutation(
+            _remove_leftovers(
+                document_id, paper.owner_subject, paper.leftovers, caller_reports_failure=True,
+            ),
+            operation="supplement_add_cancelled_leftover_cleanup_failed",
+            message="Supplement leftover cleanup failed during cancellation",
+        )
     return paper
 
 
@@ -270,6 +277,7 @@ async def add_files_to_paper(
     weaviate_client: Any,
     stage_checkpoint: Checkpoint,
     commit_state: SupplementAddCommit | None = None,
+    complete_job_on_commit: bool = False,
     settled_outcomes: dict[str, FileOutcome] | None = None,
     display_names: dict[str, str | None] | None = None,
 ) -> AddResult:
@@ -279,7 +287,9 @@ async def add_files_to_paper(
     files freshly with the curator's login; use ``add_files_to_paper_with_listing``
     when the caller already holds a fresh listing. ``stage_checkpoint`` raises when
     the job is cancelled; it is called between files and stages. Pass a fresh
-    ``commit_state`` to observe whether this add became ready.
+    ``commit_state`` to observe whether this add became ready. Set
+    ``complete_job_on_commit=True`` when ``job_id`` is a standalone supplement-add
+    job that must commit ``completed`` in the same Postgres transaction as its ready files.
     """
 
     from src.lib.document_sources.file_listing_service import list_files_for_paper
@@ -300,6 +310,7 @@ async def add_files_to_paper(
         weaviate_client=weaviate_client,
         stage_checkpoint=stage_checkpoint,
         commit_state=commit_state,
+        complete_job_id=job_id if complete_job_on_commit else None,
         settled_outcomes=settled_outcomes,
         display_names=display_names,
     )
@@ -449,6 +460,7 @@ async def _add_files_using_listing(
     weaviate_client: Any,
     stage_checkpoint: Checkpoint,
     commit_state: SupplementAddCommit | None = None,
+    complete_job_id: UUID | None = None,
     settled_outcomes: dict[str, FileOutcome] | None = None,
     display_names: dict[str, str | None] | None = None,
 ) -> AddResult:
@@ -483,19 +495,23 @@ async def _add_files_using_listing(
 
     outcomes: dict[str, FileOutcome] = settled_outcomes if settled_outcomes is not None else {}
     accepted: list[_Accepted] = []
+    commit = commit_state if commit_state is not None else SupplementAddCommit()
     try:
         await _check_and_write(
             ordered, listed_by_id, outcomes, accepted,
             document_id=document_id, owner_user_id=owner_user_id, paper=paper, provider=provider,
             token=token, limits=limits, max_files=max_files, max_text_bytes=max_text_bytes,
             download_cap=download_cap, weaviate_client=weaviate_client, stage_checkpoint=stage_checkpoint,
-            commit_state=commit_state if commit_state is not None else SupplementAddCommit(),
+            commit_state=commit,
+            complete_job_id=complete_job_id,
         )
     finally:
         for item in accepted:
             if item.pdf is not None:
                 item.pdf.file.close()
-    return AddResult(files=tuple(outcomes[chosen.provider_file_id] for chosen in ordered))
+    return commit.result if commit.result is not None else AddResult(
+        files=tuple(outcomes[chosen.provider_file_id] for chosen in ordered)
+    )
 
 
 async def _check_and_write(
@@ -516,6 +532,7 @@ async def _check_and_write(
     weaviate_client: Any,
     stage_checkpoint: Checkpoint,
     commit_state: SupplementAddCommit,
+    complete_job_id: UUID | None = None,
 ) -> None:
     from src.lib.openai_agents.config import get_document_file_max_pdf_bytes
 
@@ -596,9 +613,16 @@ async def _check_and_write(
 
     if accepted:
         skipped = await _write(
-            accepted, document_id=document_id, owner_user_id=owner_user_id, paper=paper,
-            weaviate_client=weaviate_client, stage_checkpoint=stage_checkpoint,
+            accepted,
+            document_id=document_id,
+            owner_user_id=owner_user_id,
+            paper=paper,
+            weaviate_client=weaviate_client,
+            stage_checkpoint=stage_checkpoint,
             commit_state=commit_state,
+            ordered=ordered,
+            outcomes=outcomes,
+            complete_job_id=complete_job_id,
         )
         for item in accepted:
             provider_file_id = item.listed.provider_file_id
@@ -789,15 +813,37 @@ async def _prepare(listed: ListedFile, markdown: str, *, document_id: UUID, disp
     )
 
 
-def _report_supplement_failure(exc: BaseException, *, operation: str, message: str) -> None:
+def _report_supplement_failure(
+    exc: BaseException,
+    *,
+    operation: str,
+    message: str,
+    level: Literal["fatal", "error", "warning", "info", "debug"] = "error",
+    extra_context: Mapping[str, Any] | None = None,
+) -> None:
     from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
+    from src.lib.observability.sentry import exception_chain_already_captured
 
+    if exception_chain_already_captured(exc):
+        return
+    log_level = logging.WARNING if level == "warning" else logging.ERROR
+    logger.log(
+        log_level,
+        "%s (%s)",
+        message,
+        type(exc).__name__,
+        extra={"sentry_skip_event": True},
+    )
+    context: dict[str, Any] = {"exception_type": type(exc).__name__}
+    if extra_context:
+        context.update(extra_context)
     try:
         report_runtime_exception(
             sanitized_runtime_error(message),
             component="document_files",
             operation=operation,
-            context={"exception_type": type(exc).__name__},
+            level=level,
+            context=context,
             fingerprint=[operation],
             include_request=False,
         )
@@ -812,11 +858,14 @@ async def _drain_after_cancel(
     message: str = "Supplement mutation failed during cancellation",
 ) -> None:
     """Finish outstanding work and report a discarded failure before the caller re-raises cancellation."""
+    from src.lib.exceptions import PDFCancellationError
+
     async def drain() -> None:
         try:
             await work
-        except asyncio.CancelledError:
-            # A chunk writer can finish its own cancellation and failure reporting.
+        except (asyncio.CancelledError, PDFCancellationError, FileRemovalUnfinished):
+            # A chunk writer can finish its own cancellation and failure reporting;
+            # curator cancellation and a concurrent unfinished removal are expected.
             pass
         except Exception as exc:
             _report_supplement_failure(exc, operation=operation, message=message)
@@ -882,18 +931,60 @@ async def _write(
     weaviate_client: Any,
     stage_checkpoint: Checkpoint,
     commit_state: SupplementAddCommit,
+    ordered: Sequence[ChosenFile],
+    outcomes: Mapping[str, FileOutcome],
+    complete_job_id: UUID | None = None,
 ) -> dict[str, tuple[FileReason, int | None, int | None]]:
-    from src.lib.document_files.service import mark_files_ready
+    from src.lib.document_files.service import DocumentFileError, mark_files_ready
     from src.lib.document_sources.ingestion import _save_processed_json, _save_source_markdown
     from src.lib.exceptions import PDFCancellationError
 
     subject = paper.owner_subject
     written: list[_Accepted] = list(accepted)
+    committed_result: AddResult | None = None
 
     async def commit() -> None:
+        assert committed_result is not None
         sizes = {item.file_id: item.prepared.text_bytes for item in written}
-        await asyncio.to_thread(mark_files_ready, sizes)
+        if complete_job_id is not None:
+            from src.lib.pdf_jobs.service import mark_completed_in_session
+            from src.models.sql.pdf_processing_job import PdfJobStatus
+
+            target_job_id = complete_job_id
+            message = _MESSAGE_ADDED.format(
+                added=len(committed_result.added),
+                chosen=len(committed_result.files),
+            )
+            metadata = {"supplements": _supplement_entries(committed_result)}
+
+            def complete_job_in_session(session: Any) -> None:
+                job, updated = mark_completed_in_session(
+                    session,
+                    job_id=target_job_id,
+                    document_id=document_id,
+                    reject_if_cancelled=True,
+                    message=message,
+                    metadata=metadata,
+                )
+                if (
+                    job is not None
+                    and job.document_id == document_id
+                    and job.cancel_requested
+                    and job.status != PdfJobStatus.COMPLETED.value
+                ):
+                    raise PDFCancellationError("Processing cancelled by user request")
+                if job is None or job.document_id != document_id or not updated:
+                    raise DocumentFileError("Supplement add job is not active")
+
+            await asyncio.to_thread(
+                mark_files_ready,
+                sizes,
+                on_ready_in_session=complete_job_in_session,
+            )
+        else:
+            await asyncio.to_thread(mark_files_ready, sizes)
         commit_state.committed = True
+        commit_state.result = committed_result
         try:
             await _after_add(document_id, subject, weaviate_client)
         except Exception as exc:
@@ -940,6 +1031,29 @@ async def _write(
             ] + list(pdf_paths.values())
             if not written:
                 return skipped
+        committed_outcomes = dict(outcomes)
+        for item in accepted:
+            provider_file_id = item.listed.provider_file_id
+            if provider_file_id in skipped:
+                reason, measured, limit = skipped[provider_file_id]
+                committed_outcomes[provider_file_id] = FileOutcome(
+                    provider_file_id,
+                    "left_out",
+                    reason,
+                    measured_value=measured,
+                    limit_value=limit,
+                    display_name=item.public_display_name,
+                )
+            else:
+                committed_outcomes[provider_file_id] = FileOutcome(
+                    provider_file_id,
+                    "added",
+                    file_id=item.file_id,
+                    display_name=item.public_display_name,
+                )
+        committed_result = AddResult(
+            files=tuple(committed_outcomes[chosen.provider_file_id] for chosen in ordered)
+        )
         for item, markdown_path, processed_path in planned:
             saved_markdown = await _finish_mutation(
                 _save_source_markdown(markdown=item.markdown, file_id=item.file_id, user_id=subject)
@@ -1006,19 +1120,22 @@ def _save_supplement_pdf(spooled: BinaryIO, relative_path: str) -> None:
 
 
 def _report_after_add_failure(exc: Exception, document_id: UUID) -> None:
-    from src.lib.observability.runtime import report_runtime_exception
+    from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 
-    class SupplementAddFinishFailed(RuntimeError):
-        pass
-
-    report_runtime_exception(
-        SupplementAddFinishFailed(f"Updating the paper after an add failed ({type(exc).__name__})"),
-        component="document_files",
-        operation="supplement_add_finish_failed",
-        level="warning",
-        context={"document_id": str(document_id)},
-        fingerprint=["supplement_add_finish_failed"],
-    )
+    message = f"Updating the paper after an add failed ({type(exc).__name__})"
+    logger.warning(message, extra={"sentry_skip_event": True})
+    try:
+        report_runtime_exception(
+            sanitized_runtime_error(message),
+            component="document_files",
+            operation="supplement_add_finish_failed",
+            level="warning",
+            context={"document_id": str(document_id)},
+            fingerprint=["supplement_add_finish_failed"],
+            include_request=False,
+        )
+    except Exception:
+        logger.warning("Supplement failure reporting unavailable", extra={"sentry_skip_event": True})
 
 
 def _new_row(
@@ -1254,6 +1371,31 @@ def _delete_rows(document_id: UUID, file_ids: Sequence[UUID]) -> None:
         ))
 
 
+def _mark_pending_rows_failed(document_id: UUID, file_ids: Sequence[UUID]) -> None:
+    """Demote only this add's surviving pending rows to failed so a retry can clear them."""
+    if not file_ids:
+        return
+    from sqlalchemy import update
+
+    from src.models.sql.database import SessionLocal
+
+    with SessionLocal() as session, session.begin():
+        session.execute(
+            update(PDFDocumentFile)
+            .where(
+                PDFDocumentFile.document_id == document_id,
+                PDFDocumentFile.id.in_(file_ids),
+                PDFDocumentFile.role == FILE_ROLE_SUPPLEMENT,
+                PDFDocumentFile.status == FILE_STATUS_PENDING,
+            )
+            .values(
+                status=FILE_STATUS_FAILED,
+                source_import_status="failed",
+                error_message=_MESSAGE_FAILED,
+            )
+        )
+
+
 def _rollback_files(document_id: UUID, file_ids: Sequence[UUID]) -> list[_Leftover] | None:
     """Read both sides of a possible paper deletion in one snapshot. None means the parent is gone."""
     from src.models.sql.database import SessionLocal
@@ -1308,18 +1450,34 @@ async def _undo(
     When the paper itself was deleted while the add ran, its rows (and so the ranges)
     are gone with it: every piece still filed under the paper's id is deleted instead,
     since no other file can own them.
+
+    If rollback fails before deleting this add's rows, demote only this add's surviving
+    ``pending`` rows to ``failed`` so a later retry clears them via ``leftovers`` without
+    disturbing any concurrent writer's ``pending`` rows.
     """
 
-    leftovers = await asyncio.to_thread(_rollback_files, document_id, file_ids)
-    if leftovers is not None:
-        await _remove_leftovers(
-            document_id, subject, leftovers, caller_reports_failure=caller_reports_failure,
+    try:
+        leftovers = await asyncio.to_thread(_rollback_files, document_id, file_ids)
+        if leftovers is not None:
+            await _remove_leftovers(
+                document_id, subject, leftovers, caller_reports_failure=caller_reports_failure,
+            )
+            return
+        await _delete_pieces_of_deleted_paper(
+            document_id, subject, caller_reports_failure=caller_reports_failure,
         )
-        return
-    await _delete_pieces_of_deleted_paper(
-        document_id, subject, caller_reports_failure=caller_reports_failure,
-    )
-    await asyncio.to_thread(_remove_stored_files, planned_paths, subject)
+        await asyncio.to_thread(_remove_stored_files, planned_paths, subject)
+    except Exception:
+        if file_ids:
+            try:
+                await asyncio.to_thread(_mark_pending_rows_failed, document_id, file_ids)
+            except Exception as mark_exc:
+                _report_supplement_failure(
+                    mark_exc,
+                    operation="supplement_add_rollback_row_fail_failed",
+                    message="Supplement add rollback could not mark surviving rows failed",
+                )
+        raise
 
 
 async def _delete_pieces_of_deleted_paper(
@@ -1360,22 +1518,46 @@ async def _remove_leftovers(
 async def _after_add(document_id: UUID, subject: str, weaviate_client: Any) -> None:
     """The paper's piece count on its search-index object, and the document cache.
 
-    Only the two counts are written (the Library's chunk column and vector-count filter
-    read them); the object's processing and embedding status are never touched by an add.
+    Serialized per paper with ``paper_operation_lock`` so concurrent refreshes or
+    file removals cannot publish an older SQL count over a newer one. Reads SQL on
+    the advisory-lock connection so a one-connection pool never exhausts while
+    holding the lock. Only the two counts are written (the Library's chunk column
+    and vector-count filter read them); the object's processing and embedding
+    status are never touched by an add.
     """
 
-    from src.lib.document_cache import invalidate_cache
-    from src.lib.document_files.service import ready_piece_total
-    from src.lib.pipeline.store import update_document_piece_count
-    from src.models.sql.database import SessionLocal
+    from sqlalchemy.orm import Session
 
-    def total() -> int:
-        with SessionLocal() as session:
+    from src.lib.document_cache import invalidate_cache
+    from src.lib.document_files.paper_lock import PaperOperationInProgress, paper_operation_lock
+    from src.lib.document_files.service import ready_piece_total
+    from src.lib.openai_agents.config import get_document_file_piece_count_lock_wait_seconds
+    from src.lib.pipeline.store import update_document_piece_count
+
+    def total_if_present(lock_connection: Any) -> int | None:
+        with Session(bind=lock_connection) as session:
+            if session.get(PDFDocument, document_id) is None:
+                return None
             return ready_piece_total(session, document_id)
 
-    stored = await asyncio.to_thread(total)
-    await update_document_piece_count(str(document_id), stored, weaviate_client, subject)
-    invalidate_cache(subject, str(document_id))
+    deadline = asyncio.get_running_loop().time() + get_document_file_piece_count_lock_wait_seconds()
+    while True:
+        try:
+            async with paper_operation_lock(document_id) as lock_connection:
+                stored = await asyncio.to_thread(total_if_present, lock_connection)
+                if stored is None:
+                    return
+                await update_document_piece_count(
+                    str(document_id), stored, weaviate_client, subject, caller_reports_failure=True,
+                )
+                invalidate_cache(subject, str(document_id))
+                return
+        except PaperOperationInProgress:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise
+            # Short internal-plumbing poll wait (exempt from operational-limit config per AGENTS.md §7).
+            await asyncio.sleep(min(0.05, remaining))
 
 
 # ---------------------------------------------------------------------------
@@ -1487,48 +1669,157 @@ def _supplement_entries(result: AddResult) -> list[dict[str, Any]]:
     return [_supplement_entry(item) for item in result.files]
 
 
+_INTERNAL_INVARIANT_ERROR_CODES = frozenset({
+    "stored_file_path_mismatch",
+    "owner_without_subject",
+})
+
+
 def _report_nothing_added(result: AddResult, document_id: UUID) -> None:
     """One warning when every chosen file was left out: codes and numbers, never names or text."""
 
-    from src.lib.observability.runtime import report_runtime_exception
+    from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
     from src.lib.observability.sentry import hash_sentry_identifier
 
-    class SupplementAddNothingAdded(RuntimeError):
-        pass
+    message = "Every chosen file was left out of the add"
+    logger.warning(message, extra={"sentry_skip_event": True})
+    try:
+        report_runtime_exception(
+            sanitized_runtime_error(message),
+            component="document_files",
+            operation="supplement_add_nothing_added",
+            level="warning",
+            context={
+                "document_id": str(document_id),
+                "refusals": [
+                    {
+                        "reason_code": item.reason_code.value if item.reason_code else None,
+                        "measured_value": item.measured_value,
+                        "limit_value": item.limit_value,
+                        "artifact_id_hash": hash_sentry_identifier(item.provider_file_id),
+                    }
+                    for item in result.files
+                ],
+            },
+            fingerprint=["supplement_add_nothing_added"],
+            include_request=False,
+        )
+    except Exception:
+        logger.warning("Supplement failure reporting unavailable", extra={"sentry_skip_event": True})
 
-    report_runtime_exception(
-        SupplementAddNothingAdded("Every chosen file was left out of the add"),
-        component="document_files",
-        operation="supplement_add_nothing_added",
-        level="warning",
-        context={
-            "document_id": str(document_id),
-            "refusals": [
-                {
-                    "reason_code": item.reason_code.value if item.reason_code else None,
-                    "measured_value": item.measured_value,
-                    "limit_value": item.limit_value,
-                    "artifact_id_hash": hash_sentry_identifier(item.provider_file_id),
-                }
-                for item in result.files
-            ],
-        },
-        fingerprint=["supplement_add_nothing_added"],
+
+def _cancel_checkpoint(job_id: UUID, *, document_id: UUID | None = None) -> Checkpoint:
+    from src.lib.document_files.service import DocumentFileError
+    from src.lib.exceptions import PDFCancellationError
+    from src.lib.pdf_jobs import service as pdf_job_service
+    from src.services.processing_status_policy import TERMINAL_PDF_JOB_STATUSES
+
+    async def checkpoint(stage: str) -> None:
+        if await asyncio.to_thread(
+            pdf_job_service.is_cancel_requested, job_id=job_id, document_id=document_id,
+        ):
+            raise PDFCancellationError("Processing cancelled by user request")
+        updated = await asyncio.to_thread(
+            pdf_job_service.update_progress,
+            job_id=job_id,
+            document_id=document_id,
+            stage=stage,
+            status="running",
+        )
+        if updated is not None:
+            if updated.cancel_requested or updated.status == "cancelled":
+                raise PDFCancellationError("Processing cancelled by user request")
+            if updated.status in TERMINAL_PDF_JOB_STATUSES:
+                raise DocumentFileError("Supplement add job is not active")
+
+    return checkpoint
+
+
+async def _close_provider(provider: DocumentSourceProvider | None) -> None:
+    """Close a constructed provider without altering or masking the job's durable outcome."""
+
+    if provider is None:
+        return
+    try:
+        await provider.aclose()
+    except Exception as exc:
+        _report_supplement_failure(
+            exc,
+            operation="supplement_add_provider_cleanup_failed",
+            message="Supplement add provider cleanup failed",
+            level="warning",
+        )
+
+
+def _write_job_terminal_state(write: Callable[[], Any]) -> None:
+    """Persist a terminal job status without leaking raw DB errors or masking other outcomes."""
+
+    try:
+        write()
+    except Exception as exc:
+        _report_supplement_failure(
+            exc,
+            operation="supplement_add_job_status_write_failed",
+            message="Supplement add job status write failed",
+        )
+
+
+def _report_drained_task_exception(
+    task_exc: BaseException | None,
+    *,
+    committed: bool,
+    during: str,
+) -> None:
+    from src.lib.document_sources.file_listing_service import FileListingUnavailable
+    from src.lib.exceptions import PDFCancellationError
+
+    if not isinstance(task_exc, Exception) or isinstance(
+        task_exc,
+        (PDFCancellationError, FileListingUnavailable, DocumentSourceLoginExpired, FileRemovalUnfinished),
+    ):
+        return
+    if isinstance(task_exc, SupplementAddError):
+        if task_exc.code in _INTERNAL_INVARIANT_ERROR_CODES:
+            _report_supplement_failure(
+                task_exc,
+                operation="supplement_add_internal_invariant_failed",
+                message="Supplement add internal invariant failed",
+                extra_context={"error_code": task_exc.code},
+            )
+        return
+    message = (
+        "Supplement add job failed after commit"
+        if committed
+        else f"Supplement add job failed during {during}"
+    )
+    _report_supplement_failure(
+        task_exc,
+        operation="supplement_add_failed",
+        message=message,
     )
 
 
-def _cancel_checkpoint(job_id: UUID) -> Checkpoint:
-    from src.lib.exceptions import PDFCancellationError
-    from src.lib.pdf_jobs import service as pdf_job_service
+async def _drain_add_task(task: asyncio.Task[AddResult]) -> asyncio.CancelledError | None:
+    """Wait until a cancelled add task finishes its shielded commit or rollback."""
 
-    async def checkpoint(stage: str) -> None:
-        if await asyncio.to_thread(pdf_job_service.is_cancel_requested, job_id=job_id):
-            raise PDFCancellationError("Processing cancelled by user request")
-        await asyncio.to_thread(
-            pdf_job_service.update_progress, job_id=job_id, stage=stage, status="running",
-        )
-
-    return checkpoint
+    outer = asyncio.current_task()
+    external_cancel: asyncio.CancelledError | None = None
+    while not task.done():
+        cancelling_before = outer.cancelling() if outer is not None else 0
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as cancel_exc:
+            if outer is not None and outer.cancelling() > cancelling_before:
+                if external_cancel is None:
+                    external_cancel = cancel_exc
+                continue
+            # The child task itself completed as cancelled; nothing cancelled the caller.
+            break
+        except BaseException:
+            if not task.done():
+                raise
+            break
+    return external_cancel
 
 
 def _login_expired_entries(
@@ -1576,66 +1867,181 @@ async def run_supplement_add_job(request: SupplementAddJobRequest) -> None:
     from src.lib.weaviate_client.connection import get_connection
 
     job_id = request.job_id
-    provider = get_configured_document_source_provider()
+    document_id = request.document_id
+    provider: DocumentSourceProvider | None = None
+    commit_state = SupplementAddCommit()
     settled_outcomes: dict[str, FileOutcome] = {}
     display_names: dict[str, str | None] = {}
+    deferred_cancel: asyncio.CancelledError | None = None
     try:
-        result = await asyncio.wait_for(
-            add_files_to_paper(
-                request.document_id, request.owner_user_id, request.context, request.files,
-                job_id=job_id, provider=provider, weaviate_client=get_connection(),
-                stage_checkpoint=_cancel_checkpoint(job_id),
-                settled_outcomes=settled_outcomes,
-                display_names=display_names,
-            ),
-            timeout=get_document_source_import_timeout_seconds(),
-        )
-    except PDFCancellationError:
-        pdf_job_service.mark_cancelled(job_id=job_id)
-        return
-    except TimeoutError:
-        pdf_job_service.mark_failed(
-            job_id=job_id, message=_MESSAGE_TIMED_OUT, stage="timed_out", metadata={"error_code": "add_timed_out"},
-        )
-        return
-    except DocumentSourceLoginExpired:
-        pdf_job_service.mark_failed(
-            job_id=job_id,
-            message=_MESSAGE_NONE_ADDED,
-            stage="failed",
-            metadata={
-                "error_code": FileReason.LOGIN_EXPIRED.value,
-                "supplements": _login_expired_entries(
-                    request.files,
+        try:
+            provider = get_configured_document_source_provider()
+            weaviate_client = get_connection(caller_reports_failure=True)
+            timeout_seconds = get_document_source_import_timeout_seconds()
+            task: asyncio.Task[AddResult] = asyncio.create_task(
+                add_files_to_paper(
+                    document_id, request.owner_user_id, request.context, request.files,
+                    job_id=job_id, provider=provider, weaviate_client=weaviate_client,
+                    stage_checkpoint=_cancel_checkpoint(job_id, document_id=document_id),
+                    commit_state=commit_state,
+                    complete_job_on_commit=True,
                     settled_outcomes=settled_outcomes,
                     display_names=display_names,
-                ),
-            },
-        )
-        return
-    except (SupplementAddError, FileListingUnavailable, FileRemovalUnfinished) as stopped:
-        pdf_job_service.mark_failed(
-            job_id=job_id, message=_MESSAGE_FAILED, stage="failed", metadata={"error_code": stopped.code},
-        )
-        return
-    except Exception:
-        # Reported once, by the background task's own failure reporting.
-        pdf_job_service.mark_failed(
-            job_id=job_id, message=_MESSAGE_FAILED, stage="failed", metadata={"error_code": "add_failed"},
-        )
-        raise
-    finally:
-        await provider.aclose()
+                )
+            )
+            deadline = asyncio.timeout(timeout_seconds)
+            try:
+                async with deadline:
+                    result = await asyncio.shield(task)
+            except TimeoutError as exc:
+                if not deadline.expired():
+                    raise
+                task.cancel("deadline")
+                external_cancel = await _drain_add_task(task)
+                task_exc = None if task.cancelled() else task.exception()
+                if commit_state.committed:
+                    _report_drained_task_exception(task_exc, committed=True, during="timeout cleanup")
+                    if external_cancel is not None:
+                        raise external_cancel from None
+                    return
+                if not task.cancelled() and task_exc is None:
+                    deferred_cancel = external_cancel
+                    result = task.result()
+                else:
+                    _write_job_terminal_state(
+                        lambda: pdf_job_service.mark_failed(
+                            job_id=job_id,
+                            document_id=document_id,
+                            message=_MESSAGE_TIMED_OUT,
+                            stage="timed_out",
+                            metadata={"error_code": "add_timed_out"},
+                            reconcile_document=False,
+                        )
+                    )
+                    _report_supplement_failure(
+                        exc,
+                        operation="supplement_add_timed_out",
+                        message="Supplement add job timed out",
+                    )
+                    _report_drained_task_exception(task_exc, committed=False, during="timeout cleanup")
+                    if external_cancel is not None:
+                        raise external_cancel from None
+                    return
+            except asyncio.CancelledError as cancel_exc:
+                task.cancel(cancel_exc.args[0] if len(cancel_exc.args) == 1 else None)
+                await _drain_add_task(task)
+                task_exc = None if task.cancelled() else task.exception()
+                if commit_state.committed:
+                    _report_drained_task_exception(task_exc, committed=True, during="cancellation")
+                else:
+                    _write_job_terminal_state(
+                        lambda: pdf_job_service.mark_cancelled(
+                            job_id=job_id, document_id=document_id, reconcile_document=False,
+                        )
+                    )
+                    _report_drained_task_exception(task_exc, committed=False, during="cancellation")
+                raise
+        except PDFCancellationError:
+            if not commit_state.committed:
+                _write_job_terminal_state(
+                    lambda: pdf_job_service.mark_cancelled(
+                        job_id=job_id, document_id=document_id, reconcile_document=False,
+                    )
+                )
+            return
+        except DocumentSourceLoginExpired:
+            if not commit_state.committed:
+                _write_job_terminal_state(
+                    lambda: pdf_job_service.mark_failed(
+                        job_id=job_id,
+                        document_id=document_id,
+                        message=_MESSAGE_NONE_ADDED,
+                        stage="failed",
+                        metadata={
+                            "error_code": FileReason.LOGIN_EXPIRED.value,
+                            "supplements": _login_expired_entries(
+                                request.files,
+                                settled_outcomes=settled_outcomes,
+                                display_names=display_names,
+                            ),
+                        },
+                        reconcile_document=False,
+                    )
+                )
+            return
+        except (SupplementAddError, FileListingUnavailable, FileRemovalUnfinished) as stopped:
+            error_code = stopped.code
+            if not commit_state.committed:
+                _write_job_terminal_state(
+                    lambda: pdf_job_service.mark_failed(
+                        job_id=job_id,
+                        document_id=document_id,
+                        message=_MESSAGE_FAILED,
+                        stage="failed",
+                        metadata={"error_code": error_code},
+                        reconcile_document=False,
+                    )
+                )
+            if isinstance(stopped, SupplementAddError) and error_code in _INTERNAL_INVARIANT_ERROR_CODES:
+                _report_supplement_failure(
+                    stopped,
+                    operation="supplement_add_internal_invariant_failed",
+                    message="Supplement add internal invariant failed",
+                    extra_context={"error_code": error_code},
+                )
+            return
+        except Exception as exc:
+            if commit_state.committed:
+                _report_supplement_failure(
+                    exc,
+                    operation="supplement_add_failed",
+                    message="Supplement add job failed after commit",
+                )
+                return
+            _write_job_terminal_state(
+                lambda: pdf_job_service.mark_failed(
+                    job_id=job_id,
+                    document_id=document_id,
+                    message=_MESSAGE_FAILED,
+                    stage="failed",
+                    metadata={"error_code": "add_failed"},
+                    reconcile_document=False,
+                )
+            )
+            _report_supplement_failure(
+                exc,
+                operation="supplement_add_failed",
+                message="Supplement add job failed",
+            )
+            return
 
-    metadata = {"supplements": _supplement_entries(result)}
-    if not result.added:
-        # Choosing files that are all in the paper already (a repeated click) is not worth a warning.
-        if any(item.reason_code is not FileReason.ALREADY_IN_PAPER for item in result.files):
-            _report_nothing_added(result, request.document_id)
-        pdf_job_service.mark_failed(job_id=job_id, message=_MESSAGE_NONE_ADDED, stage="failed", metadata=metadata)
-        return
-    pdf_job_service.mark_completed(
-        job_id=job_id,
-        message=_MESSAGE_ADDED.format(added=len(result.added), chosen=len(result.files)),
-        metadata=metadata,
-    )
+        if not result.added:
+            metadata = {"supplements": _supplement_entries(result)}
+            terminal_job: list[Any] = []
+            _write_job_terminal_state(
+                lambda: terminal_job.append(
+                    pdf_job_service.mark_failed(
+                        job_id=job_id,
+                        document_id=document_id,
+                        message=_MESSAGE_NONE_ADDED,
+                        stage="failed",
+                        metadata=metadata,
+                        reconcile_document=False,
+                        respect_cancel_requested=True,
+                    )
+                )
+            )
+            job_was_cancelled = bool(
+                terminal_job
+                and terminal_job[0] is not None
+                and getattr(terminal_job[0], "status", None) == "cancelled"
+            )
+            # Choosing files that are all in the paper already (a repeated click) is not worth a warning.
+            if not job_was_cancelled and any(
+                item.reason_code is not FileReason.ALREADY_IN_PAPER for item in result.files
+            ):
+                _report_nothing_added(result, request.document_id)
+        if deferred_cancel is not None:
+            raise deferred_cancel from None
+    finally:
+        await _close_provider(provider)

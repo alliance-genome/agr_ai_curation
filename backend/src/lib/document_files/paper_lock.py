@@ -98,8 +98,13 @@ def _release(connection: Any, key: int) -> None:
 
 
 @asynccontextmanager
-async def paper_operation_lock(document_id: UUID | str) -> AsyncIterator[None]:
-    """Hold the paper's lock while it is deleted or a file is removed; ``PaperOperationInProgress`` when held."""
+async def paper_operation_lock(document_id: UUID | str) -> AsyncIterator[Any]:
+    """Hold the paper's lock while it is deleted, updated, or a file is removed; ``PaperOperationInProgress`` when held.
+
+    Yields the dedicated SQLAlchemy connection holding the session-level advisory
+    lock so callers performing short read-only checks do not need a second pool
+    connection while the lock is held.
+    """
 
     key = paper_lock_key(document_id)
     acquiring = asyncio.ensure_future(asyncio.to_thread(_acquire, key))
@@ -129,7 +134,7 @@ async def paper_operation_lock(document_id: UUID | str) -> AsyncIterator[None]:
     if connection is None:
         raise PaperOperationInProgress(str(document_id))
     try:
-        yield
+        yield connection
     finally:
         # Shielded so a cancelled request still finishes releasing in its thread.
         try:
@@ -167,7 +172,12 @@ def _report_lock_failure(error: RuntimeError, operation: str, log_message: str) 
     logger.warning(log_message, extra={"sentry_skip_event": True})
     try:
         runtime.report_runtime_exception(
-            error, component="document_files", operation=operation, level="warning", fingerprint=[operation],
+            error,
+            component="document_files",
+            operation=operation,
+            level="warning",
+            fingerprint=[operation],
+            include_request=False,
         )
     except Exception:
         logger.warning("Failed to report paper lock failure", extra={"sentry_skip_event": True})
