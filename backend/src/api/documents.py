@@ -1984,7 +1984,23 @@ async def _file_listing_response(list_call) -> dict[str, Any]:
             exc=exc,
         )
     finally:
-        await provider.aclose()
+        try:
+            await provider.aclose()
+        except Exception as cleanup_error:
+            message = "Document-source file listing provider cleanup failed"
+            logger.warning(message, extra={"sentry_skip_event": True})
+            try:
+                report_runtime_exception(
+                    sanitized_runtime_error(message),
+                    component="document_file_listing",
+                    operation="provider_cleanup_failed",
+                    level="warning",
+                    context={"exception_type": type(cleanup_error).__name__},
+                    include_request=False,
+                )
+            except Exception:
+                # Reporting must preserve the listing response or mapped HTTP error.
+                pass
 
 
 @router.get("/document-sources/files")
