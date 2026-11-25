@@ -215,7 +215,7 @@ def test_get_connection_initializes_from_env_and_connects(monkeypatch):
             created["api_key"] = api_key
             self.connected = False
 
-        def connect(self):
+        def connect(self, *, caller_reports_failure):
             self.connected = True
             return SimpleNamespace(get_meta=lambda: {"version": "1.31.18"})
 
@@ -395,7 +395,7 @@ def test_failed_initialization_is_not_published(monkeypatch):
         def __init__(self, **kwargs):
             pass
 
-        def connect(self):
+        def connect(self, *, caller_reports_failure):
             raise RuntimeError("connect failed")
 
     monkeypatch.setattr(wc, "WeaviateConnection", Broken)
@@ -418,7 +418,7 @@ async def test_concurrent_cold_connection_initialization_is_shared(monkeypatch):
         def __init__(self, **kwargs):
             created.append(self)
 
-        def connect(self):
+        def connect(self, *, caller_reports_failure):
             loop.call_soon_threadsafe(entered.set)
             assert release.wait(5)
             return SimpleNamespace(get_meta=lambda: {"version": "1.31.18"})

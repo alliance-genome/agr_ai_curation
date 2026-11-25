@@ -356,7 +356,8 @@ async def test_update_document_status_detailed_rejected_write(caller_reports_fai
     connection = MagicMock()
     collection = MagicMock()
     collection.data.update.side_effect = OSError("PRIVATE_INDEX_ERROR")
-    monkeypatch.setattr(documents, "get_connection", lambda: connection)
+    get_connection = MagicMock(return_value=connection)
+    monkeypatch.setattr(documents, "get_connection", get_connection)
     monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", lambda *_: (None, collection))
 
     result = await documents.update_document_status_detailed(
@@ -364,6 +365,7 @@ async def test_update_document_status_detailed_rejected_write(caller_reports_fai
         caller_reports_failure=caller_reports_failure,
     )
 
+    get_connection.assert_called_once_with(caller_reports_failure=caller_reports_failure)
     connection.session.assert_called_once_with(caller_reports_failure=caller_reports_failure)
     assert result == {
         "success": False,

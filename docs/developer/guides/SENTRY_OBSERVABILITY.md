@@ -583,8 +583,9 @@ under component `pdf_jobs`. Each failed operation emits a separate event.
 Each event uses a fixed, chain-free error and omits the HTTP request, raw
 identifiers, exception text, and write-result details. A raised error contributes
 only its bounded exception class. A rejected Weaviate write contributes the
-fixed context value `failure_kind=write_rejected`. The caller owns index-write
-reporting, and companion warnings skip Sentry log promotion. A cleanup or
+fixed context value `failure_kind=write_rejected`. The caller owns reporting
+from the first Weaviate connection attempt through the status write. Companion
+warnings skip Sentry log promotion. A cleanup or
 reporting failure preserves the original job or stage outcome, including cancellation.
 
 The per-file PDF viewer reports missing artifacts after it verifies ownership,

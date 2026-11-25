@@ -4767,6 +4767,37 @@ async def test_supplement_provider_close_preserves_stage_outcome(monkeypatch, ca
 
 
 @pytest.mark.asyncio
+async def test_cancelled_markdown_import_reports_lazy_index_connection_failure_once(monkeypatch):
+    from src.lib.weaviate_client import connection
+
+    request = _markdown_request()
+    reason = "Cancelled before processing started"
+    mark_cancelled = Mock(return_value=SimpleNamespace(status=PdfJobStatus.CANCELLED.value, message=reason))
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **kwargs: True)
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", mark_cancelled)
+    monkeypatch.setattr(connection, "_connection", None)
+    monkeypatch.setattr(connection.WeaviateConnection, "_instance", None)
+    monkeypatch.setenv("WEAVIATE_HOST", "localhost")
+    monkeypatch.setenv("WEAVIATE_PORT", "8080")
+    connect = Mock(side_effect=ConnectionError("fake-private-index-credential"))
+    monkeypatch.setattr(connection.weaviate, "connect_to_local", connect)
+    service = UploadExecutionService(pipeline_tracker=_Tracker())
+
+    with _capture_upload_events(monkeypatch) as events:
+        await service._execute_provider_markdown_unbounded(request)
+
+    mark_cancelled.assert_called_once_with(job_id=request.job_id, reason=reason)
+    connect.assert_called_once()
+    event, = events
+    assert event["tags"]["operation"] == "upload_index_status_reconciliation_failed"
+    assert event["contexts"]["runtime_exception"]["exception_type"] == "ConnectionError"
+    error, = event["exception"]["values"]
+    assert error["value"] == "Failed to reconcile document index status"
+    for private in ("fake-private-index-credential", request.document_id, request.user_id):
+        assert private not in repr(event)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("flow", ["markdown", "conversion"])
 @pytest.mark.parametrize("reporter_fails", [False, True])
 async def test_provider_secondary_failures_preserve_job_failure(monkeypatch, caplog, flow, reporter_fails):
