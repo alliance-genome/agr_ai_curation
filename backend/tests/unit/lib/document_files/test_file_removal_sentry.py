@@ -547,3 +547,253 @@ async def test_remove_paper_file_cancel_drains_piece_count_update_before_lock_re
         await asyncio.wait_for(task, timeout=5)
 
     assert events == ["piece_count_finished", "lock_released"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failing_step", ["pieces", "stored_files", "piece_count", "file_row"])
+async def test_remove_paper_file_cancel_reports_discarded_worker_error_before_lock_release(
+    monkeypatch, caplog, failing_step,
+):
+    """A worker error discarded during cancellation still emits one sanitized report before lock release."""
+    import asyncio
+    from contextlib import contextmanager
+    import threading
+    from unittest.mock import MagicMock
+    import src.models.sql.database as sql_db
+    from src.lib.document_files.paper_lock import paper_operation_lock
+
+    document_id = uuid4()
+    file_id = uuid4()
+    fake_subject = "curator.cancel@example.org"
+    fake_secret = f"private-worker-detail-{document_id}-{file_id}"
+    events: list[str] = []
+    worker_entered = threading.Event()
+    resume_worker = threading.Event()
+
+    class _LockConn:
+        def execute(self, statement, _params=None):
+            if "pg_advisory_unlock" in str(statement):
+                events.append("lock_released")
+            return SimpleNamespace(scalar_one=lambda: True)
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+        def invalidate(self):
+            pass
+
+    monkeypatch.setattr(sql_db, "engine", SimpleNamespace(connect=lambda: _LockConn()))
+
+    removed = _make_removed(
+        document_id,
+        file_id,
+        owner_subject=fake_subject,
+        stored_path=f"{fake_subject}/{document_id}/Secret_Supplement.pdf",
+    )
+    monkeypatch.setattr(file_removal, "_mark_removed_or_busy", lambda *_a, **_kw: removed)
+
+    def _maybe_block_and_raise(step_name: str):
+        if failing_step == step_name:
+            worker_entered.set()
+            assert resume_worker.wait(timeout=5)
+            events.append(f"{step_name}_failed")
+            raise OSError(f"boom {fake_secret} {fake_subject}")
+
+    monkeypatch.setattr(
+        "src.lib.weaviate_client.chunks.delete_chunk_range",
+        lambda *_a, **_kw: _maybe_block_and_raise("pieces"),
+    )
+    monkeypatch.setattr(
+        "src.lib.document_files.service.remove_stored_files",
+        lambda *_a, **_kw: _maybe_block_and_raise("stored_files"),
+    )
+    monkeypatch.setattr(
+        file_removal,
+        "_delete_removed_row",
+        lambda *_a, **_kw: _maybe_block_and_raise("file_row"),
+    )
+    monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_a, **_kw: None)
+
+    pdf_collection = MagicMock()
+    pdf_collection.data.update.side_effect = lambda **_kw: _maybe_block_and_raise("piece_count")
+    monkeypatch.setattr(
+        "src.lib.weaviate_helpers.get_user_collections",
+        lambda *_a, **_kw: (MagicMock(), pdf_collection),
+    )
+
+    @contextmanager
+    def _weaviate_session(*_a, **_kw):
+        yield MagicMock()
+
+    weaviate_client = MagicMock()
+    weaviate_client.session.side_effect = _weaviate_session
+
+    captured_events: list[dict] = []
+
+    def _record_transport(event: dict) -> None:
+        events.append("reported")
+        captured_events.append(event)
+
+    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "false")
+    sentry_sdk.init(
+        dsn="https://public@example.invalid/1",
+        transport=_record_transport,
+        before_send=before_send,
+        send_default_pii=False,
+        include_local_variables=False,
+        default_integrations=False,
+        integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+    )
+
+    caplog.set_level(logging.WARNING, logger=file_removal.__name__)
+    try:
+        with sentry_sdk.isolation_scope() as scope:
+            def _attach_request(event, _hint):
+                event.setdefault(
+                    "request",
+                    {
+                        "method": "DELETE",
+                        "url": f"https://app.example.org/api/weaviate/documents/{document_id}/files/{file_id}",
+                    },
+                )
+                return event
+
+            scope.add_event_processor(_attach_request)
+
+            async def _run():
+                async with paper_operation_lock(document_id) as lock_conn:
+                    await remove_paper_file(
+                        document_id,
+                        42,
+                        file_id,
+                        weaviate_client=weaviate_client,
+                        lock_connection=lock_conn,
+                    )
+
+            task = asyncio.create_task(_run())
+            try:
+                assert await asyncio.to_thread(worker_entered.wait, 5)
+                task.cancel("client disconnected during cleanup step")
+                await asyncio.sleep(0.05)
+                assert "lock_released" not in events
+            finally:
+                resume_worker.set()
+
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=5)
+        sentry_sdk.flush(timeout=2.0)
+    finally:
+        sentry_sdk.init()
+
+    assert events == [f"{failing_step}_failed", "reported", "lock_released"]
+    assert len(captured_events) == 1
+    event = captured_events[0]
+    assert event["tags"]["runtime_component"] == "document_files"
+    assert event["tags"]["operation"] == "file_removal_cleanup_failed"
+    assert event["fingerprint"] == ["file_removal_cleanup_failed", failing_step]
+    assert "request" not in event
+    assert event["contexts"]["runtime_exception"]["document_id"] == hash_sentry_identifier(str(document_id))
+    assert event["contexts"]["runtime_exception"]["step"] == failing_step
+
+    serialized = json.dumps(event)
+    for sensitive in (str(document_id), str(file_id), fake_subject, fake_secret, "Secret_Supplement.pdf"):
+        assert sensitive not in serialized
+        assert sensitive not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_remove_paper_file_cancel_preserves_cancellation_and_unlock_when_reporter_raises(monkeypatch):
+    """If reporting a discarded worker error itself raises, CancelledError and lock unlock still complete cleanly."""
+    import asyncio
+    from contextlib import contextmanager
+    import threading
+    from unittest.mock import MagicMock
+    import src.models.sql.database as sql_db
+    from src.lib.document_files.paper_lock import paper_operation_lock
+
+    document_id = uuid4()
+    file_id = uuid4()
+    events: list[str] = []
+    update_entered = threading.Event()
+    resume_update = threading.Event()
+
+    class _LockConn:
+        def execute(self, statement, _params=None):
+            if "pg_advisory_unlock" in str(statement):
+                events.append("lock_released")
+            return SimpleNamespace(scalar_one=lambda: True)
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+        def invalidate(self):
+            pass
+
+    monkeypatch.setattr(sql_db, "engine", SimpleNamespace(connect=lambda: _LockConn()))
+
+    removed = _make_removed(
+        document_id,
+        file_id,
+        owner_subject="user-1",
+        stored_path=f"user-1/{document_id}/supp.pdf",
+    )
+    monkeypatch.setattr(file_removal, "_mark_removed_or_busy", lambda *_a, **_kw: removed)
+    monkeypatch.setattr("src.lib.weaviate_client.chunks.delete_chunk_range", lambda *_a, **_kw: None)
+    monkeypatch.setattr("src.lib.document_files.service.remove_stored_files", lambda *_a, **_kw: None)
+
+    def _failing_reporter(*_a, **_kw):
+        events.append("reporter_raised")
+        raise RuntimeError("reporter offline")
+
+    monkeypatch.setattr(file_removal, "_report_cleanup_failure", _failing_reporter)
+
+    pdf_collection = MagicMock()
+
+    def _blocking_failing_update(**_kwargs):
+        update_entered.set()
+        assert resume_update.wait(timeout=5)
+        events.append("piece_count_failed")
+        raise OSError("weaviate timeout")
+
+    pdf_collection.data.update.side_effect = _blocking_failing_update
+    monkeypatch.setattr(
+        "src.lib.weaviate_helpers.get_user_collections",
+        lambda *_a, **_kw: (MagicMock(), pdf_collection),
+    )
+
+    @contextmanager
+    def _weaviate_session(*_a, **_kw):
+        yield MagicMock()
+
+    weaviate_client = MagicMock()
+    weaviate_client.session.side_effect = _weaviate_session
+
+    async def _run():
+        async with paper_operation_lock(document_id) as lock_conn:
+            await remove_paper_file(
+                document_id,
+                42,
+                file_id,
+                weaviate_client=weaviate_client,
+                lock_connection=lock_conn,
+            )
+
+    task = asyncio.create_task(_run())
+    try:
+        assert await asyncio.to_thread(update_entered.wait, 5)
+        task.cancel("client disconnected")
+        await asyncio.sleep(0.05)
+        assert "lock_released" not in events
+    finally:
+        resume_update.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=5)
+
+    assert events == ["piece_count_failed", "reporter_raised", "lock_released"]

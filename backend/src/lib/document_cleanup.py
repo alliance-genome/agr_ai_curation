@@ -185,6 +185,7 @@ async def run_thread_drained(
     *args: Any,
     cancellable_before_start: bool = True,
     on_submit: Callable[[], None] | None = None,
+    on_cancelled_error: Callable[[Exception], None] | None = None,
     **kwargs: Any,
 ) -> _T:
     """Submit ``func`` to the default executor and always drain it before returning on cancellation.
@@ -193,7 +194,9 @@ async def run_thread_drained(
     connection concurrently with ``_release`` closing that connection. When
     ``cancellable_before_start`` is True, delivers any already-pending cancellation before
     submitting the worker. When ``on_submit`` is provided, invokes it synchronously
-    immediately after submitting the worker with no intervening ``await``.
+    immediately after submitting the worker with no intervening ``await``. When
+    ``on_cancelled_error`` is provided, invokes it with any worker ``Exception`` discarded
+    during cancellation before re-raising ``CancelledError``.
     """
     if cancellable_before_start:
         await asyncio.sleep(0)
@@ -210,7 +213,10 @@ async def run_thread_drained(
     async def _await_worker() -> _T:
         return await worker_future
 
-    return await drain_shielded(_await_worker())
+    return await drain_shielded(
+        _await_worker(),
+        on_cancelled_error=on_cancelled_error,
+    )
 
 
 async def drain_shielded(

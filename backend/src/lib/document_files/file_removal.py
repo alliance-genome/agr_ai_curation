@@ -419,6 +419,7 @@ async def remove_paper_file(
                 end=end,
                 caller_reports_failure=True,
                 cancellable_before_start=True,
+                on_cancelled_error=lambda exc: _report_cleanup_failure(exc, document_id, "pieces"),
             )
         except Exception as exc:
             removed.cleanup_failures.append("pieces")
@@ -429,6 +430,7 @@ async def remove_paper_file(
             removed.stored_paths,
             owner_subject=subject,
             cancellable_before_start=True,
+            on_cancelled_error=lambda exc: _report_cleanup_failure(exc, document_id, "stored_files"),
         )
     except Exception as exc:
         removed.cleanup_failures.append("stored_files")
@@ -443,6 +445,7 @@ async def remove_paper_file(
             weaviate_client,
             subject,
             caller_reports_failure=True,
+            on_cancelled_error=lambda exc: _report_cleanup_failure(exc, document_id, "piece_count"),
         )
     )
     try:
@@ -473,6 +476,7 @@ async def remove_paper_file(
                     file_id,
                     lock_connection=lock_connection,
                     cancellable_before_start=True,
+                    on_cancelled_error=lambda exc: _report_cleanup_failure(exc, document_id, "file_row"),
                 )
             else:
                 await run_thread_drained(
@@ -480,6 +484,7 @@ async def remove_paper_file(
                     document_id,
                     file_id,
                     cancellable_before_start=True,
+                    on_cancelled_error=lambda exc: _report_cleanup_failure(exc, document_id, "file_row"),
                 )
         except Exception as exc:
             removed.cleanup_failures.append("file_row")
