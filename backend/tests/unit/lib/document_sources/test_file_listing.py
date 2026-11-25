@@ -758,3 +758,275 @@ async def test_an_imported_paper_is_listed_by_its_curie_never_by_its_numeric_id(
     assert _by_id(listing)["20"].in_this_paper is True
     assert not [name for name, _ in client.calls if name == "lookup_external_curie"]
     assert [kwargs["reference"] for name, kwargs in client.calls if name == "show_reference"] == ["AGRKB:101"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("groups", "licence_open", "licence_name", "bearer_kind"),
+    [
+        (("WB",), None, None, ProviderBearerKind.CURATOR),
+        (("FB",), None, None, ProviderBearerKind.CURATOR),
+        ((), True, "CC BY 4.0", ProviderBearerKind.CURATOR),
+        (("WB",), None, "Restricted License", ProviderBearerKind.CURATOR),
+        (("WB",), False, "Proprietary", ProviderBearerKind.SERVICE),
+    ],
+    ids=["authorized_group", "other_group", "open_access_licence", "refused_licence", "service_bearer"],
+)
+async def test_listing_from_prefetched_artifacts_matches_fresh_listing_without_provider_reads(
+    groups, licence_open, licence_name, bearer_kind,
+):
+    """ALL-1751: reusing already-fetched artifacts and resolved reference gives identical
+    filtering (groups, licence, bearer kind, MD5, stored-check reuse) with zero extra reads."""
+    upper_md5 = hashlib.md5(GOOD_TABLE).hexdigest().upper()
+    wb_pair = _pair(20, "WB", md5="  ORIG-20  ", content=GOOD_TABLE)
+    wb_pair[1]["md5sum"] = f" {upper_md5} "
+    mixed_access_pair = _pair(30, "WB", converted_mods=("FB",), content=GOOD_TABLE)
+    fb_pair = _pair(40, "FB", content=GOOD_TABLE)
+    rows = [_abc_show_all_main_pdf(10, "WB"), *wb_pair, *mixed_access_pair, *fb_pair]
+    payloads = {"21": GOOD_TABLE, "31": GOOD_TABLE, "41": GOOD_TABLE}
+
+    fresh_client = _Client(payloads)
+    fresh_client.show_reference_payload = _abc_reference_record(
+        copyright_license_open_access=licence_open, copyright_license_name=licence_name,
+    )
+    fresh_client.show_referencefiles_payload = rows  # type: ignore[assignment]
+    fresh_provider = provider_from_fake(fresh_client)
+    reference = await fresh_provider.resolve_reference("AGRKB:101", request_bearer_token="curator-token")
+    fresh_store = _Store()
+    fresh = await list_reference_files(
+        provider=fresh_provider, reference=reference, authorized_group_ids=groups,
+        bearer_kind=bearer_kind, request_bearer_token="curator-token", files_in_paper=("10",),
+        limits=_limits(), check_limit=20, load_stored=fresh_store.load, save_assessment=fresh_store.save,
+        route=ListingRoute.PAPER, provider_observations={}, find_paper_in_library=None,
+    )
+    assert fresh.reference == reference
+    assert "reference" not in listing_to_payload(fresh)
+
+    # Fetch artifacts once with the resolved reference (as the wait's cheap read does),
+    # then build the listing from those rows with zero resolve_reference / list_artifacts calls.
+    reused_client = _Client(payloads)
+    reused_client.show_referencefiles_payload = rows  # type: ignore[assignment]
+    reused_provider = provider_from_fake(reused_client)
+    artifacts = await reused_provider.list_artifacts(reference, request_bearer_token="curator-token")
+    reused_client.calls.clear()
+
+    reused_store = _Store()
+    reused = await list_reference_files(
+        provider=reused_provider, reference=reference, authorized_group_ids=groups,
+        bearer_kind=bearer_kind, request_bearer_token="curator-token", files_in_paper=("10",),
+        limits=_limits(), check_limit=20, load_stored=reused_store.load, save_assessment=reused_store.save,
+        route=ListingRoute.PAPER, provider_observations={}, find_paper_in_library=None,
+        artifacts=artifacts,
+    )
+
+    assert reused == fresh
+    assert listing_to_payload(reused) == listing_to_payload(fresh)
+    assert not [name for name, _ in reused_client.calls if name in ("show_reference", "show_referencefiles")]
+
+    # A second reused-rows listing reuses stored checks and downloads nothing.
+    reused_client.calls.clear()
+    reused_cached = await list_reference_files(
+        provider=reused_provider, reference=reference, authorized_group_ids=groups,
+        bearer_kind=bearer_kind, request_bearer_token="curator-token", files_in_paper=("10",),
+        limits=_limits(), check_limit=20, load_stored=reused_store.load, save_assessment=reused_store.save,
+        route=ListingRoute.PAPER, provider_observations={}, find_paper_in_library=None,
+        artifacts=artifacts,
+    )
+    assert reused_cached == fresh
+    assert reused_client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_reused_listing_rejects_changed_bytes_and_bad_artifacts_without_falling_back():
+    from src.lib.document_sources.models import SourceArtifact, SourceReference
+
+    rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB")]
+    client = _Client({"21": GOOD_TABLE + b"changed"})
+    client.show_reference_payload = _abc_reference_record()
+    client.show_referencefiles_payload = rows  # type: ignore[assignment]
+    provider = provider_from_fake(client)
+    reference = await provider.resolve_reference("AGRKB:101", request_bearer_token="curator-token")
+    artifacts = await provider.list_artifacts(reference, request_bearer_token="curator-token")
+    client.calls.clear()
+    store = _Store()
+
+    listing = await list_reference_files(
+        provider=provider, reference=reference, authorized_group_ids=("WB",),
+        bearer_kind=ProviderBearerKind.CURATOR, request_bearer_token="curator-token",
+        files_in_paper=("10",), limits=_limits(), check_limit=20,
+        load_stored=store.load, save_assessment=store.save,
+        route=ListingRoute.PAPER, provider_observations={}, find_paper_in_library=None,
+        artifacts=artifacts,
+    )
+    assert _by_id(listing)["20"].check.status is ListedFileCheckStatus.NOT_CHECKED
+    assert store.saved == {}
+    assert [name for name, _ in client.calls] == ["download_referencefile"]
+
+    client.calls.clear()
+    for bad_artifacts in (
+        [SourceArtifact(provider="other_provider", artifact_id="20", reference_id="101")],
+        [SourceArtifact(provider="abc_literature", artifact_id="20", reference_id="999")],
+        [SourceArtifact(provider="abc_literature", artifact_id="20", reference_curie="AGRKB:999")],
+        [SourceArtifact(provider="abc_literature", artifact_id="20", reference_id=None, reference_curie=None)],
+        [SourceArtifact(provider="abc_literature", artifact_id="20", reference_id="   ", reference_curie="  ")],
+        ["not-an-artifact"],
+        bytearray(b"not-artifacts"),
+    ):
+        with pytest.raises(FileListingError):
+            await list_reference_files(
+                provider=provider, reference=reference, authorized_group_ids=("WB",),
+                bearer_kind=ProviderBearerKind.CURATOR, request_bearer_token="curator-token",
+                files_in_paper=("10",), limits=_limits(), check_limit=20,
+                load_stored=store.load, save_assessment=store.save,
+                route=ListingRoute.PAPER, provider_observations={}, find_paper_in_library=None,
+                artifacts=bad_artifacts,  # type: ignore[arg-type]
+            )
+    assert client.calls == []
+
+    wrong_provider_ref = SourceReference(provider="other_provider", reference_id="101", reference_curie="AGRKB:101")
+    with pytest.raises(FileListingError):
+        await list_reference_files(
+            provider=provider, reference=wrong_provider_ref, authorized_group_ids=("WB",),
+            bearer_kind=ProviderBearerKind.CURATOR, request_bearer_token="curator-token",
+            files_in_paper=("10",), limits=_limits(), check_limit=20,
+            load_stored=store.load, save_assessment=store.save,
+            route=ListingRoute.PAPER, provider_observations={}, find_paper_in_library=None,
+            artifacts=artifacts,
+        )
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_list_files_for_paper_from_artifacts_reuses_reference_and_rows_without_fallback(monkeypatch):
+    from src.lib.document_sources import file_listing_service
+    from src.lib.document_sources.access import DocumentSourceRequestContext
+    from src.lib.document_sources.file_listing_service import FileListingUnavailable
+    from src.lib.document_sources.models import SourceReference
+
+    rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB")]
+    client = _Client({"21": GOOD_TABLE})
+    client.show_reference_payload = _abc_reference_record()
+    client.show_referencefiles_payload = rows  # type: ignore[assignment]
+    provider = provider_from_fake(client)
+    store = _Store()
+    monkeypatch.setattr(file_listing_service, "_stores", lambda _provider: (store.load, store.save))
+    monkeypatch.setattr(file_listing_service, "current_file_check_limits", _limits)
+    monkeypatch.setattr(
+        file_listing_service, "_paper_lookup",
+        lambda *_: file_listing_service._PaperSource(
+            provider=provider.provider_id, reference_id="101", reference_curie="AGRKB:101", file_ids=("10",),
+            provider_observations={},
+        ),
+    )
+    context = DocumentSourceRequestContext(
+        provider_groups=("WB",), authorized_group_ids=("WB",), bearer_kind=ProviderBearerKind.CURATOR,
+        curator_token="curator-token",
+    )
+
+    reference = await provider.resolve_reference("AGRKB:101", request_bearer_token="curator-token")
+    artifacts = await provider.list_artifacts(reference, request_bearer_token="curator-token")
+    client.calls.clear()
+
+    reused = await file_listing_service.list_files_for_paper_from_artifacts(
+        uuid4(), owner_user_id=7, provider=provider, context=context,
+        reference=reference, artifacts=artifacts,
+    )
+    assert _by_id(reused)["20"].check.status is ListedFileCheckStatus.PASSED
+    assert reused.reference == reference
+    assert [name for name, _ in client.calls] == ["download_referencefile"]
+
+    # Stored check is reused on a subsequent call: zero ABC requests at all.
+    client.calls.clear()
+    cached = await file_listing_service.list_files_for_paper_from_artifacts(
+        uuid4(), owner_user_id=7, provider=provider, context=context,
+        reference=reference, artifacts=artifacts,
+    )
+    assert cached == reused
+    assert client.calls == []
+
+    # Mismatched reference id or missing artifacts fail with named errors and zero ABC calls.
+    wrong_ref = SourceReference(provider=provider.provider_id, reference_id="999", reference_curie="AGRKB:999")
+    with pytest.raises(FileListingUnavailable) as raised:
+        await file_listing_service.list_files_for_paper_from_artifacts(
+            uuid4(), owner_user_id=7, provider=provider, context=context,
+            reference=wrong_ref, artifacts=artifacts,
+        )
+    assert raised.value.code == "paper_reference_mismatch"
+
+    with pytest.raises(FileListingError):
+        await file_listing_service.list_files_for_paper_from_artifacts(
+            uuid4(), owner_user_id=7, provider=provider, context=context,
+            reference=reference, artifacts=None,  # type: ignore[arg-type]
+        )
+
+    other_provider_ref = SourceReference(provider="other_provider", reference_id="101", reference_curie="AGRKB:101")
+    with pytest.raises(FileListingError):
+        await file_listing_service.list_files_for_paper_from_artifacts(
+            uuid4(), owner_user_id=7, provider=provider, context=context,
+            reference=other_provider_ref, artifacts=artifacts,
+        )
+
+    no_token_context = DocumentSourceRequestContext(
+        provider_groups=("WB",), authorized_group_ids=("WB",), bearer_kind=ProviderBearerKind.CURATOR,
+        curator_token=None,
+    )
+    with pytest.raises(FileListingUnavailable) as no_token:
+        await file_listing_service.list_files_for_paper_from_artifacts(
+            uuid4(), owner_user_id=7, provider=provider, context=no_token_context,
+            reference=reference, artifacts=artifacts,
+        )
+    assert no_token.value.code == "document_source_curator_token_unavailable"
+
+    monkeypatch.setattr(
+        file_listing_service, "_paper_lookup",
+        lambda *_: file_listing_service._PaperSource(
+            provider=None, reference_id=None, reference_curie=None, file_ids=(), provider_observations={},
+        ),
+    )
+    with pytest.raises(FileListingUnavailable) as uploaded:
+        await file_listing_service.list_files_for_paper_from_artifacts(
+            uuid4(), owner_user_id=7, provider=provider, context=context,
+            reference=reference, artifacts=artifacts,
+        )
+    assert uploaded.value.code == "not_imported_from_provider"
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_401_during_check_downloads_stops_queued_downloads_immediately(monkeypatch):
+    """ALL-1751 review: with download concurrency=1 and 3 unchecked files, a 401 on the first
+    check download aborts queued checks immediately (strictly 1 download call, not 3)."""
+    import weakref
+
+    from src.lib.document_sources import file_listing
+    from src.lib.document_sources.models import DocumentSourceLoginExpired
+
+    monkeypatch.setenv("DOCUMENT_FILE_DOWNLOAD_CONCURRENCY", "1")
+    monkeypatch.setattr(file_listing, "_download_limiters", weakref.WeakKeyDictionary())
+
+    rows = [
+        _abc_show_all_main_pdf(10, "WB"),
+        *_pair(20, "WB"),
+        *_pair(30, "WB"),
+        *_pair(40, "WB"),
+    ]
+    client = _Client({"21": _http_error(401), "31": GOOD_TABLE, "41": GOOD_TABLE})
+    client.show_reference_payload = _abc_reference_record()
+    client.show_referencefiles_payload = rows  # type: ignore[assignment]
+    provider = provider_from_fake(client)
+    store = _Store()
+    reference = await provider.resolve_reference("AGRKB:101", request_bearer_token="curator-token")
+    artifacts = await provider.list_artifacts(reference, request_bearer_token="curator-token")
+    client.calls.clear()
+
+    with pytest.raises(DocumentSourceLoginExpired):
+        await list_reference_files(
+            provider=provider, reference=reference, authorized_group_ids=("WB",),
+            bearer_kind=ProviderBearerKind.CURATOR, request_bearer_token="curator-token",
+            files_in_paper=("10",), limits=_limits(), check_limit=20,
+            load_stored=store.load, save_assessment=store.save,
+            route=ListingRoute.PAPER, provider_observations={}, find_paper_in_library=None,
+            artifacts=artifacts,
+        )
+
+    assert [kwargs["artifact_id"] for name, kwargs in client.calls if name == "download_referencefile"] == ["21"]

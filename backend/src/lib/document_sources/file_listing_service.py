@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -28,9 +28,13 @@ from src.lib.document_sources.file_reasons import (
     FileReasonGroupError,
     SupplementState,
 )
-from src.lib.document_sources.models import DocumentSourceProvider
+from src.lib.document_sources.models import (
+    DocumentSourceProvider,
+    SourceArtifact,
+    SourceReference,
+)
 from src.models.sql.database import SessionLocal
-from src.models.sql.pdf_document import FILE_STATUS_REMOVED, PDFDocument
+from src.models.sql.pdf_document import FILE_STATUS_FAILED, FILE_STATUS_REMOVED, PDFDocument
 from src.models.sql.pdf_processing_job import PdfProcessingJob
 
 
@@ -130,9 +134,9 @@ def _stores(provider_id: str) -> tuple[Callable[..., FileAssessment | None], Cal
     return load, save
 
 
-async def _list(
+async def _list_resolved(
     provider: DocumentSourceProvider,
-    lookup: str,
+    reference: SourceReference,
     context: DocumentSourceRequestContext,
     files_in_paper: tuple[str, ...],
     *,
@@ -140,14 +144,16 @@ async def _list(
     provider_observations: Mapping[str, ProviderObservation],
     owner_user_id: int,
     expected_reference_id: str | None = None,
+    artifacts: Sequence[SourceArtifact] | None = None,
+    check_unchecked: bool = True,
 ) -> FileListing:
     from src.lib.openai_agents.config import get_document_file_listing_check_limit
 
     token = (context.curator_token or "").strip()
     if not token:
         raise FileListingUnavailable("document_source_curator_token_unavailable")
-    # Always the provider's resolved reference: licence rules apply only to one.
-    reference = await provider.resolve_reference(lookup, request_bearer_token=token)
+    if not isinstance(reference, SourceReference):
+        raise FileListingError("Files are listed only for a resolved provider reference")
     if expected_reference_id is not None and reference.reference_id != expected_reference_id:
         # The stored reference no longer resolves to the paper's own reference: never
         # list (or let an import take) another reference's files.
@@ -169,6 +175,36 @@ async def _list(
         find_paper_in_library=(
             _library_lookup(provider.provider_id, owner_user_id) if route is ListingRoute.IDENTIFIER else None
         ),
+        artifacts=artifacts,
+        check_unchecked=check_unchecked,
+    )
+
+
+async def _list(
+    provider: DocumentSourceProvider,
+    lookup: str,
+    context: DocumentSourceRequestContext,
+    files_in_paper: tuple[str, ...],
+    *,
+    route: ListingRoute,
+    provider_observations: Mapping[str, ProviderObservation],
+    owner_user_id: int,
+    expected_reference_id: str | None = None,
+) -> FileListing:
+    token = (context.curator_token or "").strip()
+    if not token:
+        raise FileListingUnavailable("document_source_curator_token_unavailable")
+    # Always the provider's resolved reference: licence rules apply only to one.
+    reference = await provider.resolve_reference(lookup, request_bearer_token=token)
+    return await _list_resolved(
+        provider,
+        reference,
+        context,
+        files_in_paper,
+        route=route,
+        provider_observations=provider_observations,
+        owner_user_id=owner_user_id,
+        expected_reference_id=expected_reference_id,
     )
 
 
@@ -229,12 +265,13 @@ def _paper_lookup(document_id: UUID, owner_user_id: int) -> _PaperSource:
 
     with SessionLocal() as session:
         paper: PDFDocument = require_owned_document(session, document_id, owner_user_id)
-        # A file being removed is no longer in the paper; adding it again answers
-        # ``file_removal_unfinished`` until its row is gone (``start_supplement_add``).
+        # Files being removed and failed leftovers from a dead add are not live in the
+        # paper: a removed file answers ``file_removal_unfinished`` until its row is gone
+        # (``start_supplement_add``), and a failed leftover is cleared before the next add.
         file_ids = tuple(
             identifier
             for file_row in paper.files
-            if file_row.status != FILE_STATUS_REMOVED
+            if file_row.status not in (FILE_STATUS_REMOVED, FILE_STATUS_FAILED)
             for identifier in (file_row.source_provider_source_file_id, file_row.source_provider_pdf_artifact_id)
             if identifier
         )
@@ -279,4 +316,51 @@ async def list_files_for_paper(
         provider, paper.reference_curie, context, paper.file_ids,
         route=ListingRoute.PAPER, provider_observations=paper.provider_observations,
         owner_user_id=owner_user_id, expected_reference_id=paper.reference_id,
+    )
+
+
+async def list_files_for_paper_from_artifacts(
+    document_id: UUID,
+    *,
+    owner_user_id: int,
+    provider: DocumentSourceProvider,
+    context: DocumentSourceRequestContext,
+    reference: SourceReference,
+    artifacts: Sequence[SourceArtifact],
+    check_unchecked: bool = True,
+) -> FileListing:
+    """List an imported paper's files from a resolved reference and already-fetched artifacts.
+
+    ``artifacts`` must have been fetched with ``provider.list_artifacts(reference, ...)``
+    using the resolved ``SourceReference`` (never a bare identifier string) so the
+    provider's copyright-licence access rules are applied identically to
+    ``list_files_for_paper``. Sends no reference lookup and no artifact-list request to
+    the provider; only check downloads of unchecked converted texts remain (stored checks
+    reused by MD5, or skipped when ``check_unchecked=False``). Enforces the same paper
+    ownership, provider, and reference-id checks as ``list_files_for_paper`` and never
+    falls back to a fresh provider listing.
+    """
+
+    paper = await asyncio.to_thread(_paper_lookup, document_id, owner_user_id)
+    if paper.provider != provider.provider_id:
+        raise FileListingUnavailable("not_imported_from_provider")
+    if not paper.reference_id or not paper.reference_curie:
+        raise FileListingUnavailable("paper_reference_incomplete")
+    if not isinstance(reference, SourceReference):
+        raise FileListingError("Files are listed only for a resolved provider reference")
+    if reference.provider != provider.provider_id:
+        raise FileListingError("Resolved reference belongs to another provider")
+    if artifacts is None:
+        raise FileListingError("Pre-fetched artifacts are required")
+    return await _list_resolved(
+        provider,
+        reference,
+        context,
+        paper.file_ids,
+        route=ListingRoute.PAPER,
+        provider_observations=paper.provider_observations,
+        owner_user_id=owner_user_id,
+        expected_reference_id=paper.reference_id,
+        artifacts=artifacts,
+        check_unchecked=check_unchecked,
     )

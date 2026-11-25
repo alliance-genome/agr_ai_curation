@@ -328,3 +328,278 @@ def test_an_add_racing_the_stale_sweep_never_fails_the_paper(paper):
         old_job = db.get(PdfProcessingJob, UUID(old.job_id))
         pdf_job_service._reconcile_terminal_document(db, old_job)
     assert _paper_row(document_id).status == "completed"
+
+
+def _bound_listing(*original_ids: int) -> FileListing:
+    """A prebuilt FileListing bound to the real Postgres paper's provider and reference."""
+    entries = []
+    for original_id in original_ids:
+        original = SourceArtifact(
+            provider="abc_literature", artifact_id=str(original_id),
+            role=SourceArtifactRole.SOURCE_SUPPLEMENT, artifact_format=SourceArtifactFormat.UNKNOWN,
+            status=SourceArtifactStatus.AVAILABLE, reference_id="101", reference_curie="AGRKB:101",
+            display_name=f"Made_up_S{original_id}", md5sum=f"md5-{original_id}",
+            access_policy=SourceAccessPolicy(scope=SourceAccessScope.RESTRICTED, group_ids=("group-a",)),
+            metadata={"file_class": "supplement", "file_extension": "xlsx"},
+        )
+        converted = SourceArtifact(
+            provider="abc_literature", artifact_id=str(original_id + 1),
+            role=SourceArtifactRole.CONVERTED_TEXT, artifact_format=SourceArtifactFormat.MARKDOWN,
+            status=SourceArtifactStatus.AVAILABLE, reference_id="101", reference_curie="AGRKB:101",
+            parent_artifact_id=str(original_id), display_name=f"Made_up_S{original_id}_xlsx",
+            md5sum=hashlib.md5(WORKBOOKS[str(original_id + 1)]).hexdigest(),
+            access_policy=SourceAccessPolicy(scope=SourceAccessScope.RESTRICTED, group_ids=("group-a",)),
+            metadata={"file_class": "converted_merged_supplement", "file_extension": "md"},
+        )
+        entries.append(ListedFile(
+            provider_file_id=original.artifact_id, converted_text_id=converted.artifact_id,
+            display_name=original.display_name, file_role="supplement", status=ListedFileStatus.READY,
+            check=ListedFileCheck(ListedFileCheckStatus.PASSED), in_this_paper=False,
+            md5=original.md5sum, converted_md5=converted.md5sum, artifact_format="unknown",
+            category=SupplementFileCategory.CONVERTIBLE, single_title_required=True, tickable=True,
+            not_tickable_reason=None, last_provider_observation=None, source_artifact=original,
+            converted_artifact=converted,
+        ))
+    return FileListing(
+        provider="abc_literature", reference_id="101", reference_curie="AGRKB:101", main_status="ready",
+        files=tuple(entries), not_shown_count=0, duplicate_copies_count=0, check_version="made-up",
+        existing_document_id=None,
+    )
+
+
+class _AbcBoundProvider(_Provider):
+    provider_id = "abc_literature"
+
+
+@pytest.mark.asyncio
+async def test_prebuilt_add_handles_concurrent_duplicate_insert_without_failing_the_batch(paper, monkeypatch):
+    """ALL-1751 review: a concurrent active row inserted before _insert_rows yields
+    already_in_paper for that file while the rest of the batch still writes cleanly."""
+    from src.lib.document_sources.file_reasons import FileReason
+
+    document_id, owner_id, subject, _ = paper
+    _Index().install(monkeypatch)
+    raced = False
+
+    async def _race_before_insert(stage: str) -> None:
+        nonlocal raced
+        if stage == "saving_files" and not raced:
+            raced = True
+            concurrent_id = uuid4()
+            with SessionLocal.begin() as db:
+                db.add(PDFDocumentFile(
+                    id=concurrent_id, document_id=document_id, role="supplement",
+                    display_name="Made_up_S20.xlsx", status="ready", tab_order=1,
+                    display_mode="text", file_path=f"{subject}/source_markdown/{concurrent_id}.md",
+                    file_hash=concurrent_id.hex * 2, file_size=10,
+                    source_provider_source_file_id="20",
+                    source_markdown_path=f"{subject}/source_markdown/{concurrent_id}.md",
+                    chunk_index_start=30, chunk_index_end=31, chunk_count=2, text_bytes=10,
+                    added_at=datetime.now(timezone.utc),
+                ))
+                db.get(PDFDocument, document_id).next_chunk_index = 32
+
+    result = await supplement_add.add_files_to_paper_with_listing(
+        document_id, owner_id, CONTEXT, [_chosen(20), _chosen(40)],
+        listing=_bound_listing(20, 40), job_id=uuid4(), provider=_AbcBoundProvider(WORKBOOKS),
+        weaviate_client=object(), stage_checkpoint=_race_before_insert,
+    )
+
+    outcomes = {item.provider_file_id: item for item in result.files}
+    assert outcomes["20"].outcome == "left_out" and outcomes["20"].reason_code is FileReason.ALREADY_IN_PAPER
+    assert outcomes["40"].outcome == "added"
+    rows = _files(document_id)
+    assert [(row.source_provider_source_file_id, row.status, row.tab_order) for row in rows] == [
+        ("10", "ready", 0), ("20", "ready", 1), ("40", "ready", 2),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("when", ["before_start", "before_insert"])
+async def test_prebuilt_add_refuses_retained_removed_row_with_named_error(paper, monkeypatch, when):
+    """ALL-1751 review: a retained removed row raises FileRemovalUnfinished instead of an
+    unhandled Postgres unique-constraint error, whether present upfront or raced before insert."""
+    document_id, owner_id, subject, storage = paper
+    _Index().install(monkeypatch)
+
+    def _insert_removed_row() -> None:
+        removed_id = uuid4()
+        with SessionLocal.begin() as db:
+            db.add(PDFDocumentFile(
+                id=removed_id, document_id=document_id, role="supplement",
+                display_name="Made_up_S20.xlsx", status="removed", tab_order=1,
+                display_mode="text", file_path=f"{subject}/source_markdown/{removed_id}.md",
+                file_hash=removed_id.hex * 2, file_size=10,
+                source_provider_source_file_id="20",
+                source_markdown_path=f"{subject}/source_markdown/{removed_id}.md",
+                added_at=datetime.now(timezone.utc),
+            ))
+
+    if when == "before_start":
+        _insert_removed_row()
+
+    raced = False
+
+    async def _checkpoint(stage: str) -> None:
+        nonlocal raced
+        if when == "before_insert" and stage == "saving_files" and not raced:
+            raced = True
+            _insert_removed_row()
+
+    with pytest.raises(supplement_add.FileRemovalUnfinished) as raised:
+        await supplement_add.add_files_to_paper_with_listing(
+            document_id, owner_id, CONTEXT, [_chosen(20), _chosen(40)],
+            listing=_bound_listing(20, 40), job_id=uuid4(), provider=_AbcBoundProvider(WORKBOOKS),
+            weaviate_client=object(), stage_checkpoint=_checkpoint,
+        )
+
+    assert raised.value.code == "file_removal_unfinished"
+    assert [(row.source_provider_source_file_id, row.status) for row in _files(document_id)] == [
+        ("10", "ready"), ("20", "removed"),
+    ]
+    assert not list(storage.rglob("*.md")) and not list(storage.rglob("*.json"))
+
+
+@pytest.mark.asyncio
+async def test_failed_leftover_is_excluded_from_listing_membership_and_replaced_on_add(paper, monkeypatch):
+    """ALL-1751 review: a failed supplement leftover row is excluded from in_this_paper by
+    _paper_lookup so reusing the listing cleans up the leftover and adds the file cleanly
+    instead of falsely rejecting it as already_in_paper."""
+    from src.lib.document_sources.models import SourceReference
+
+    document_id, owner_id, subject, storage = paper
+    index = _Index().install(monkeypatch)
+    monkeypatch.setattr(file_listing_service, "current_file_check_limits", supplement_add.current_file_check_limits)
+
+    failed_id = uuid4()
+    leftover_rel = f"{subject}/source_markdown/{failed_id}.md"
+    leftover_path = storage / leftover_rel
+    leftover_path.parent.mkdir(parents=True, exist_ok=True)
+    leftover_path.write_text("# stale failed attempt\n", encoding="utf-8")
+    with SessionLocal.begin() as db:
+        db.add(PDFDocumentFile(
+            id=failed_id, document_id=document_id, role="supplement",
+            display_name="Made_up_S20.xlsx", status="failed", tab_order=1,
+            display_mode="text", file_path=leftover_rel,
+            file_hash=failed_id.hex * 2, file_size=22,
+            source_provider_source_file_id="20",
+            source_markdown_path=leftover_rel,
+            added_at=datetime.now(timezone.utc),
+        ))
+
+    class _ListingProvider(_AbcBoundProvider):
+        def is_reference_source_artifact(self, artifact: SourceArtifact) -> bool:
+            return artifact.artifact_id == "10"
+
+        def is_main_text_artifact(self, artifact: SourceArtifact) -> bool:
+            return artifact.artifact_id == "11"
+
+        def main_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
+            return (0,)
+
+        def supplement_file_category(self, artifact: SourceArtifact) -> SupplementFileCategory | None:
+            return SupplementFileCategory.CONVERTIBLE if artifact.role is SourceArtifactRole.SOURCE_SUPPLEMENT else None
+
+        def converted_text_has_single_title(self, original: SourceArtifact) -> bool:
+            return True
+
+        def is_listed_converted_supplement_text(self, artifact: SourceArtifact) -> bool:
+            return artifact.role is SourceArtifactRole.CONVERTED_TEXT and artifact.parent_artifact_id != "10"
+
+        def supplement_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
+            return (0,)
+
+    main_pdf = SourceArtifact(
+        provider="abc_literature", artifact_id="10",
+        role=SourceArtifactRole.SOURCE_PDF, artifact_format=SourceArtifactFormat.PDF,
+        status=SourceArtifactStatus.AVAILABLE, reference_id="101", reference_curie="AGRKB:101",
+        display_name="Made_up_main", md5sum="md5-10",
+        access_policy=SourceAccessPolicy(scope=SourceAccessScope.RESTRICTED, group_ids=("group-a",)),
+    )
+    main_text = SourceArtifact(
+        provider="abc_literature", artifact_id="11",
+        role=SourceArtifactRole.CONVERTED_TEXT, artifact_format=SourceArtifactFormat.MARKDOWN,
+        status=SourceArtifactStatus.AVAILABLE, reference_id="101", reference_curie="AGRKB:101",
+        parent_artifact_id="10", display_name="Made_up_main_md", md5sum="md5-11",
+        access_policy=SourceAccessPolicy(scope=SourceAccessScope.RESTRICTED, group_ids=("group-a",)),
+    )
+    listed_20 = _bound_listing(20).files[0]
+    assert listed_20.converted_artifact is not None
+    reference = SourceReference(provider="abc_literature", reference_id="101", reference_curie="AGRKB:101")
+    provider = _ListingProvider(WORKBOOKS)
+
+    reused_listing = await file_listing_service.list_files_for_paper_from_artifacts(
+        document_id, owner_user_id=owner_id, provider=provider, context=CONTEXT,
+        reference=reference,
+        artifacts=(main_pdf, main_text, listed_20.source_artifact, listed_20.converted_artifact),
+    )
+    by_id = {item.provider_file_id: item for item in reused_listing.files}
+    assert by_id["10"].in_this_paper is True
+    assert by_id["20"].in_this_paper is False
+    assert by_id["20"].tickable is True
+
+    result = await supplement_add.add_files_to_paper_with_listing(
+        document_id, owner_id, CONTEXT, [_chosen(20)],
+        listing=reused_listing, job_id=uuid4(), provider=provider,
+        weaviate_client=object(), stage_checkpoint=AsyncMock(),
+    )
+
+    (outcome,) = result.files
+    assert outcome.provider_file_id == "20"
+    assert outcome.outcome == "added"
+    assert outcome.file_id is not None and outcome.file_id != failed_id
+    assert not leftover_path.exists()
+    assert [(row.source_provider_source_file_id, row.status) for row in _files(document_id)] == [
+        ("10", "ready"), ("20", "ready"),
+    ]
+    assert len(index.stored) == 1
+
+
+@pytest.mark.asyncio
+async def test_prebuilt_add_enforces_paper_file_limit_under_insert_lock(paper, monkeypatch):
+    """ALL-1751 review: a concurrent distinct file insert reaching DOCUMENT_MAX_FILES_PER_PAPER
+    before _insert_rows locks the paper prevents over-limit files from being inserted, returning
+    paper_file_limit with zero persisted rows, disk files, or search chunks for the over-limit file."""
+    from src.lib.document_sources.file_reasons import FileReason
+
+    monkeypatch.setenv("DOCUMENT_MAX_FILES_PER_PAPER", "3")
+    document_id, owner_id, subject, storage = paper
+    index = _Index().install(monkeypatch)
+    raced = False
+
+    async def _race_distinct_file_before_insert(stage: str) -> None:
+        nonlocal raced
+        if stage == "saving_files" and not raced:
+            raced = True
+            concurrent_id = uuid4()
+            with SessionLocal.begin() as db:
+                db.add(PDFDocumentFile(
+                    id=concurrent_id, document_id=document_id, role="supplement",
+                    display_name="Made_up_S99.xlsx", status="ready", tab_order=1,
+                    display_mode="text", file_path=f"{subject}/source_markdown/{concurrent_id}.md",
+                    file_hash=concurrent_id.hex * 2, file_size=10,
+                    source_provider_source_file_id="99",
+                    source_markdown_path=f"{subject}/source_markdown/{concurrent_id}.md",
+                    chunk_index_start=30, chunk_index_end=31, chunk_count=2, text_bytes=10,
+                    added_at=datetime.now(timezone.utc),
+                ))
+                db.get(PDFDocument, document_id).next_chunk_index = 32
+
+    result = await supplement_add.add_files_to_paper_with_listing(
+        document_id, owner_id, CONTEXT, [_chosen(20), _chosen(40)],
+        listing=_bound_listing(20, 40), job_id=uuid4(), provider=_AbcBoundProvider(WORKBOOKS),
+        weaviate_client=object(), stage_checkpoint=_race_distinct_file_before_insert,
+    )
+
+    outcomes = {item.provider_file_id: item for item in result.files}
+    assert outcomes["20"].outcome == "added" and outcomes["20"].file_id is not None
+    assert outcomes["40"].outcome == "left_out"
+    assert outcomes["40"].reason_code is FileReason.PAPER_FILE_LIMIT
+    assert outcomes["40"].measured_value == 4
+    assert outcomes["40"].limit_value == 3
+    assert [(row.source_provider_source_file_id, row.status, row.tab_order) for row in _files(document_id)] == [
+        ("10", "ready", 0), ("99", "ready", 1), ("20", "ready", 2),
+    ]
+    assert [path.name for path in storage.rglob("*.md")] == [f"{outcomes['20'].file_id}.md"]
+    assert [path.name for path in storage.rglob("*.json")] == [f"{outcomes['20'].file_id}.json"]
+    assert len(index.stored) == 1

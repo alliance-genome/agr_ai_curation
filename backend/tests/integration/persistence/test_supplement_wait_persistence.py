@@ -236,7 +236,7 @@ async def test_a_failing_stage_ends_its_own_job_and_never_touches_the_paper(owne
             provider_groups=("made-up-staff",), authorized_group_ids=("made-up-group",),
             bearer_kind=ProviderBearerKind.CURATOR, curator_token="made-up-token",
         ),
-        login_expires_at=None, owner_user_id=owner_id, reference="MADEUP:1",
+        login_expires_at=None, owner_user_id=owner_id,
     )
     import_job = job_service.create_job(
         document_id=paper.id,

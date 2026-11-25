@@ -168,7 +168,7 @@ async def test_an_import_that_asks_abc_carries_the_chosen_supplements_and_the_lo
         ChosenSupplement(provider_file_id="30", md5="md5-30", converted_md5=None, display_name="Table_S1.xlsx"),
         ChosenSupplement(provider_file_id="40", md5="md5-40", converted_md5="md5-41", display_name="Figure_S2.pdf"),
     )
-    assert (plan.owner_user_id, plan.reference, plan.login_expires_at) == (42, "AGRKB:123", float(EXPIRES))
+    assert (plan.owner_user_id, plan.login_expires_at) == (42, float(EXPIRES))
     assert plan.request_context.authorized_group_ids == ("FB",)
     # G3: accepted import job records initial queued supplement entries with real display_name.
     metadata = created_jobs[0]["metadata"]

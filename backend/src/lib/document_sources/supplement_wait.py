@@ -27,16 +27,18 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 from uuid import UUID
 
-from src.lib.document_sources.file_listing import FileListing
+from src.lib.document_sources.file_listing import FileListing, FileListingError
 from src.lib.document_sources.file_reasons import FileReason, SupplementState
 from src.lib.document_sources.supplement_plan import SupplementPlan
 from src.lib.document_sources.models import (
     DocumentSourceError,
     DocumentSourceLoginExpired,
     DocumentSourceProvider,
+    SourceArtifact,
     SourceConversionFileStatus,
     SourceConversionResult,
     SourceConversionStatus,
+    SourceReference,
 )
 from src.lib.document_sources.registry import get_document_source_provider_metadata
 from src.lib.exceptions import PDFCancellationError
@@ -230,17 +232,20 @@ class _Stage:
         )
         return job is None or job.status in TERMINAL_PDF_JOB_STATUSES
 
-    async def record(self, stage: str, message: str) -> None:
+    async def record(self, stage: str, message: str, *, error_code: str | None = None) -> None:
+        metadata: dict[str, Any] = {
+            "supplements": [entry.as_metadata() for entry in self.entries.values()],
+            "supplement_wait_ends_at": _iso(self.wait_ends_at),
+        }
+        if error_code is not None:
+            metadata["error_code"] = error_code
         await asyncio.to_thread(
             pdf_job_service.update_progress,
             job_id=self.job_id,
             stage=stage,
             message=message,
             status="running",
-            metadata={
-                "supplements": [entry.as_metadata() for entry in self.entries.values()],
-                "supplement_wait_ends_at": _iso(self.wait_ends_at),
-            },
+            metadata=metadata,
         )
 
     def leave_out(self, provider_file_id: str, reason: FileReason | str, *,
@@ -277,7 +282,6 @@ async def run_supplement_stage(
     job_id: str,
     document_id: str,
     owner_user_id: int,
-    reference: str,
     plan: SupplementPlan,
     conversion_requested: bool,
     last_answer: SourceConversionResult | None,
@@ -286,6 +290,7 @@ async def run_supplement_stage(
     weaviate_client: Any,
     outcomes: StageOutcomes,
     list_files: Callable[..., Awaitable[FileListing]],
+    list_files_from_artifacts: Callable[..., Awaitable[FileListing]],
     add_files: Callable[..., Awaitable[Any]],
     clock: Callable[[], float] = time.time,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -391,23 +396,26 @@ async def run_supplement_stage(
                 else:
                     stage.apply(classified, listing)
             else:
-                add_allowed = await _poll_until_done(
-                    stage=stage, provider=provider, reference=reference,
+                add_allowed, listing = await _poll_until_done(
+                    stage=stage, provider=provider,
                     document_id=document_id, owner_user_id=owner_user_id,
                     listing=listing, sleep=sleep,
-                    list_files=list_files,
+                    list_files_from_artifacts=list_files_from_artifacts,
                 )
 
         to_add = [stage.entries[key] for key in stage.ids_in(SupplementState.QUEUED)]
         if to_add and (not add_allowed or stage.login_gone()):
             stage.end_unfinished(FileReason.LOGIN_EXPIRED)
             to_add = []
+        if to_add and listing is None:
+            stage.end_unfinished(FileReason.SOURCE_UNAVAILABLE)
+            to_add = []
         if to_add:
             await stage.checkpoint()
             for entry in to_add:
                 entry.state = SupplementState.ADDING
             await stage.record(pdf_job_service.ADDING_SUPPLEMENTS_STAGE, "Adding supplements")
-            from src.lib.document_sources.supplement_add import ChosenFile
+            from src.lib.document_sources.supplement_add import ChosenFile, FileRemovalUnfinished
 
             try:
                 result = await add_files(
@@ -422,11 +430,25 @@ async def run_supplement_stage(
                         )
                         for entry in to_add
                     ],
+                    listing=listing,
                     job_id=UUID(job_id),
                     provider=provider,
                     weaviate_client=weaviate_client,
                     stage_checkpoint=stage.checkpoint,
                 )
+            except FileRemovalUnfinished as refused:
+                # An earlier removal on this paper has not finished clearing its row;
+                # close the open files cleanly and preserve the named stop code on the
+                # job metadata without failing/reporting the stage as a crash.
+                stage.end_unfinished(FileReason.PAPER_BUSY_WHEN_READY)
+                await stage.checkpoint()
+                await stage.record(
+                    pdf_job_service.ADDING_SUPPLEMENTS_STAGE,
+                    "Supplements finished",
+                    error_code=refused.code,
+                )
+                await outcomes.completed()
+                return
             except DocumentSourceLoginExpired:
                 stage.end_unfinished(FileReason.LOGIN_EXPIRED)
             except DocumentSourceError:
@@ -474,31 +496,42 @@ async def _poll_until_done(
     *,
     stage: _Stage,
     provider: DocumentSourceProvider,
-    reference: str,
     document_id: str,
     owner_user_id: int,
     listing: FileListing,
     sleep: Callable[[float], Awaitable[None]],
-    list_files: Callable[..., Awaitable[FileListing]],
-) -> bool:
+    list_files_from_artifacts: Callable[..., Awaitable[FileListing]],
+) -> tuple[bool, FileListing | None]:
     """Watch the provider's read-only file listing until every chosen file is converted.
 
-    Never sends the conversion request. Each poll is one listing read; a chosen
-    file counts as converted once a listed converted supplement text names it
-    (structural, as the file listing decides it). Only when a new such text
-    appears does it run the full per-paper listing, for that text's id and
-    checks. A file the provider failed stays waiting and ends
-    ``not_converted_in_time`` when the wait ends. A failed read is tried again at
-    the next interval, up to ``DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS`` in a row
-    (a good read resets the count); a refused login ends the wait at once.
+    Never sends the conversion request. Each poll is one listing read using the
+    resolved reference from the stage's initial listing; a chosen file counts as
+    converted once a listed converted supplement text names it (structural, as
+    the file listing decides it). Only when a new such text appears does it
+    build the full per-paper listing from that poll's already-fetched rows and
+    resolved reference, for that text's id and checks (sending no second
+    reference lookup and no second artifact listing). Before returning with
+    queued files to add, if any successful poll ran after the last built
+    listing, the listing is rebuilt once from that latest poll's rows (no extra
+    ``list_artifacts`` request) so queued files reflect the latest access rules,
+    linkage, and checksums. A file the provider failed stays waiting and ends
+    ``not_converted_in_time`` when the wait ends. A failed read (or a failed
+    reused-listing build) is tried again at the next interval, up to
+    ``DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS`` in a row (only a fully
+    successful poll resets the count); a refused login ends the wait at once.
 
-    Returns whether the converted files may still be added (False once the
-    curator's login was refused).
+    Returns ``(add_allowed, listing)``: whether the converted files may still be
+    added (False once the curator's login was refused) and the stage's latest
+    full listing for the add to reuse (or ``None`` if final revalidation failed).
     """
 
+    resolved_reference = listing.reference
+    if not isinstance(resolved_reference, SourceReference):
+        raise FileListingError("Supplement wait requires a resolved provider reference from its initial listing")
     poll_seconds = get_document_supplement_listing_poll_seconds()
     max_failed_reads = get_document_source_listing_max_failed_reads()
     failed_reads = 0
+    latest_artifacts: list[SourceArtifact] | None = None
     token = stage.plan.request_context.curator_token
     stage.apply(_converted_in(listing, stage.ids_in(SupplementState.WAITING)), listing)
     seen_texts: set[str] = set()
@@ -515,11 +548,11 @@ async def _poll_until_done(
         if stage.clock() >= stage.wait_ends_at:
             break
         try:
-            artifacts = await provider.list_artifacts(reference, request_bearer_token=token)
+            artifacts = await provider.list_artifacts(resolved_reference, request_bearer_token=token)
         except DocumentSourceLoginExpired:
             for provider_file_id in stage.ids_in(SupplementState.WAITING):
                 stage.leave_out(provider_file_id, FileReason.LOGIN_EXPIRED)
-            return False
+            return False, listing
         except DocumentSourceError:
             # A pure read: tried again at the next interval, up to the tolerated
             # number in a row; then the wait ends and converted files still join.
@@ -527,7 +560,7 @@ async def _poll_until_done(
             if failed_reads >= max_failed_reads:
                 break
             continue
-        failed_reads = 0
+        latest_artifacts = artifacts
         waiting = set(stage.ids_in(SupplementState.WAITING))
         new_texts = {
             artifact.artifact_id
@@ -537,27 +570,50 @@ async def _poll_until_done(
             and artifact.artifact_id not in seen_texts
         }
         if not new_texts:
+            failed_reads = 0
             continue
         try:
-            listing = await list_files(
-                UUID(document_id), owner_user_id=owner_user_id, provider=provider,
+            listing = await list_files_from_artifacts(
+                UUID(document_id),
+                owner_user_id=owner_user_id,
+                provider=provider,
                 context=stage.plan.request_context,
+                reference=resolved_reference,
+                artifacts=artifacts,
             )
         except DocumentSourceLoginExpired:
             for provider_file_id in stage.ids_in(SupplementState.WAITING):
                 stage.leave_out(provider_file_id, FileReason.LOGIN_EXPIRED)
-            return False
+            return False, listing
         except DocumentSourceError:
             # Counted as a failed read; the new texts are looked at again next time.
             failed_reads += 1
             if failed_reads >= max_failed_reads:
                 break
             continue
+        failed_reads = 0
+        latest_artifacts = None
         seen_texts |= new_texts
         stage.apply(_converted_in(listing, stage.ids_in(SupplementState.WAITING)), listing)
     for provider_file_id in stage.ids_in(SupplementState.WAITING):
         stage.leave_out(provider_file_id, FileReason.NOT_CONVERTED_IN_TIME)
-    return True
+    if latest_artifacts is not None and stage.ids_in(SupplementState.QUEUED) and not stage.login_gone():
+        await stage.checkpoint()
+        try:
+            listing = await list_files_from_artifacts(
+                UUID(document_id),
+                owner_user_id=owner_user_id,
+                provider=provider,
+                context=stage.plan.request_context,
+                reference=resolved_reference,
+                artifacts=latest_artifacts,
+                check_unchecked=False,
+            )
+        except DocumentSourceLoginExpired:
+            return False, listing
+        except DocumentSourceError:
+            return True, None
+    return True, listing
 
 
 def _converted_in(listing: FileListing, provider_file_ids: Iterable[str]) -> dict[str, str]:

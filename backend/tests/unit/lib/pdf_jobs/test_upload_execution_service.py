@@ -3683,7 +3683,6 @@ def _plan(**overrides):
         ),
         login_expires_at=None,
         owner_user_id=42,
-        reference="AGRKB:101",
     )
     values.update(overrides)
     return SupplementPlan(**values)

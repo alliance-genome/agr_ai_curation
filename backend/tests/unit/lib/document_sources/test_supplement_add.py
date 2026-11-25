@@ -75,7 +75,8 @@ class _Storage:
 def _paper(**overrides) -> supplement_add._PaperState:
     values = dict(
         owner_subject="owner-subject", status="completed", file_count=1, ready_text_bytes=1_000,
-        next_tab_order=1, leftovers=(),
+        next_tab_order=1, leftovers=(), source_provider="abc_literature",
+        source_provider_reference_id="101", source_provider_reference_curie="AGRKB:101",
     )
     values.update(overrides)
     return supplement_add._PaperState(**values)
@@ -995,3 +996,302 @@ async def test_a_converted_office_file_stores_no_page(monkeypatch, storage):
         storage.saved_json[added.file_id])
     ((_, chunks),) = storage.stored
     assert chunks and [chunk.page_number for chunk in chunks] == [None] * len(chunks)
+
+
+@pytest.mark.asyncio
+async def test_add_with_prebuilt_listing_sends_only_downloads_and_reuses_stored_checks(monkeypatch, storage):
+    """ALL-1751: add_files_to_paper_with_listing sends no resolve/show_all and still checks
+    every file accurately (unlisted, already in paper, unconverted, changed, refused)."""
+    rows = [
+        *ROWS,
+        _abc_show_all_row(50, "WB", file_class="supplement", file_extension="xlsx", display_name="Made_up_S50"),
+    ]
+    store = _Store()
+    monkeypatch.setattr(file_listing_service, "_stores", lambda _provider: (store.load, store.save))
+    client, provider = _provider(rows, GOOD)
+    _paper_lookup(monkeypatch)
+    listing = await file_listing_service.list_files_for_paper(
+        DOCUMENT_ID, owner_user_id=7, provider=provider, context=CONTEXT,
+    )
+    client.calls.clear()
+
+    # The route's list_files_for_paper must never be called by add_files_to_paper_with_listing.
+    monkeypatch.setattr(
+        file_listing_service, "list_files_for_paper",
+        AsyncMock(side_effect=AssertionError("prebuilt listing must not fall back to list_files_for_paper")),
+    )
+    # Mark file 40 as already in the paper in live Postgres state even though the snapshot
+    # listing had in_this_paper=False, verifying the live DB guard too.
+    monkeypatch.setattr(
+        supplement_add, "_paper_state",
+        lambda *_: _paper(
+            source_provider="abc_literature",
+            source_provider_reference_id="101",
+            live_provider_file_ids=frozenset({"10", "40"}),
+        ),
+    )
+
+    result = await supplement_add.add_files_to_paper_with_listing(
+        DOCUMENT_ID, 7, CONTEXT,
+        [
+            _chosen(20),                         # ready & passed -> downloaded & added
+            _chosen(30),                         # refused in listing -> stored refusal reused, not downloaded
+            _chosen(40),                         # already in paper (live DB) -> left out, not downloaded
+            _chosen(50, content=b""),            # unconverted -> left out
+            _chosen(99, content=b""),            # unlisted -> left out
+            _chosen(10, content=b""),            # main file -> left out
+        ],
+        listing=listing, job_id=JOB_ID, provider=provider, weaviate_client=object(),
+        stage_checkpoint=AsyncMock(),
+    )
+
+    outcomes = _by_id(result)
+    assert outcomes["20"].outcome == "added"
+    assert outcomes["30"].reason_code is FileReason.TITLE_COUNT
+    assert outcomes["40"].reason_code is FileReason.ALREADY_IN_PAPER
+    assert outcomes["50"].reason_code is FileReason.FILE_NOT_TICKABLE
+    assert outcomes["99"].reason_code is FileReason.FILE_NOT_IN_REFERENCE
+    assert outcomes["10"].reason_code is FileReason.ALREADY_IN_PAPER
+    assert client.calls == [("download_referencefile", {"artifact_id": "21", "max_bytes": 1_000_000})]
+
+
+@pytest.mark.asyncio
+async def test_add_with_prebuilt_listing_rejects_changed_chosen_or_bytes_and_bad_listings(monkeypatch, storage):
+    from src.lib.document_sources.file_listing import FileListing
+    from src.lib.document_sources.file_listing_service import FileListingUnavailable
+
+    client, provider = _provider(ROWS, {"21": GOOD["21"] + b"changed"})
+    _paper_lookup(monkeypatch)
+    # Build listing against original bytes so listing's converted_md5 matches GOOD["21"],
+    # then the add's download returns mutated bytes.
+    listing_client, listing_provider = _provider(ROWS, GOOD)
+    listing = await file_listing_service.list_files_for_paper(
+        DOCUMENT_ID, owner_user_id=7, provider=listing_provider, context=CONTEXT,
+    )
+    monkeypatch.setattr(
+        file_listing_service, "list_files_for_paper",
+        AsyncMock(side_effect=AssertionError("must not fall back to list_files_for_paper")),
+    )
+    monkeypatch.setattr(
+        supplement_add, "_paper_state",
+        lambda *_: _paper(source_provider="abc_literature", source_provider_reference_id="101"),
+    )
+
+    result = await supplement_add.add_files_to_paper_with_listing(
+        DOCUMENT_ID, 7, CONTEXT,
+        [_chosen(20), _chosen(40, md5_suffix="-stale")],
+        listing=listing, job_id=JOB_ID, provider=provider, weaviate_client=object(),
+        stage_checkpoint=AsyncMock(),
+    )
+    assert _by_id(result)["20"].reason_code is FileReason.FILE_CHANGED_SINCE_LISTED
+    assert _by_id(result)["40"].reason_code is FileReason.FILE_CHANGED_SINCE_LISTED
+    assert storage.inserted == []
+    assert [name for name, _ in client.calls] == ["download_referencefile"]
+
+    # Invalid listing / provider mismatch / paper reference mismatch / uploaded paper fail cleanly.
+    with pytest.raises(SupplementAddError) as bad_type:
+        await supplement_add.add_files_to_paper_with_listing(
+            DOCUMENT_ID, 7, CONTEXT, [_chosen(20)], listing=None,  # type: ignore[arg-type]
+            job_id=JOB_ID, provider=provider, weaviate_client=object(), stage_checkpoint=AsyncMock(),
+        )
+    assert bad_type.value.code == "listing_invalid"
+
+    other_provider_listing = FileListing(
+        provider="other_provider", reference_id="101", reference_curie="OTHER:101", main_status="ready",
+        files=(), not_shown_count=0, duplicate_copies_count=0, check_version="v", existing_document_id=None,
+    )
+    with pytest.raises(SupplementAddError) as bad_provider:
+        await supplement_add.add_files_to_paper_with_listing(
+            DOCUMENT_ID, 7, CONTEXT, [_chosen(20)], listing=other_provider_listing,
+            job_id=JOB_ID, provider=provider, weaviate_client=object(), stage_checkpoint=AsyncMock(),
+        )
+    assert bad_provider.value.code == "listing_provider_mismatch"
+
+    other_ref_listing = FileListing(
+        provider="abc_literature", reference_id="999", reference_curie="AGRKB:999", main_status="ready",
+        files=(), not_shown_count=0, duplicate_copies_count=0, check_version="v", existing_document_id=None,
+    )
+    with pytest.raises(FileListingUnavailable) as bad_ref:
+        await supplement_add.add_files_to_paper_with_listing(
+            DOCUMENT_ID, 7, CONTEXT, [_chosen(20)], listing=other_ref_listing,
+            job_id=JOB_ID, provider=provider, weaviate_client=object(), stage_checkpoint=AsyncMock(),
+        )
+    assert bad_ref.value.code == "paper_reference_mismatch"
+
+    monkeypatch.setattr(
+        supplement_add, "_paper_state",
+        lambda *_: _paper(source_provider=None, source_provider_reference_id=None, source_provider_reference_curie=None),
+    )
+    with pytest.raises(FileListingUnavailable) as uploaded:
+        await supplement_add.add_files_to_paper_with_listing(
+            DOCUMENT_ID, 7, CONTEXT, [_chosen(20)], listing=listing,
+            job_id=JOB_ID, provider=provider, weaviate_client=object(), stage_checkpoint=AsyncMock(),
+        )
+    assert uploaded.value.code == "not_imported_from_provider"
+
+    monkeypatch.setattr(
+        supplement_add, "_paper_state",
+        lambda *_: _paper(source_provider="abc_literature", source_provider_reference_id="101", source_provider_reference_curie=None),
+    )
+    with pytest.raises(FileListingUnavailable) as missing_curie:
+        await supplement_add.add_files_to_paper_with_listing(
+            DOCUMENT_ID, 7, CONTEXT, [_chosen(20)], listing=listing,
+            job_id=JOB_ID, provider=provider, weaviate_client=object(), stage_checkpoint=AsyncMock(),
+        )
+    assert missing_curie.value.code == "paper_reference_incomplete"
+
+
+@pytest.mark.asyncio
+async def test_add_with_prebuilt_listing_enforces_caller_authorization_and_artifact_binding(monkeypatch, storage):
+    """ALL-1751 review: a prebuilt listing for FB must not grant access to a WB caller (even
+    under SERVICE bearer), and per-artifact provider/reference/parent mismatches fail closed."""
+    from dataclasses import replace
+
+    fb_rows = [_abc_show_all_main_pdf(10, "FB"), *_pair(20, "FB", content=GOOD["21"])]
+    fb_context = DocumentSourceRequestContext(
+        provider_groups=("FB",), authorized_group_ids=("FB",),
+        bearer_kind=ProviderBearerKind.CURATOR, curator_token="fb-token",
+    )
+    listing_client, listing_provider = _provider(fb_rows, GOOD)
+    _paper_lookup(monkeypatch)
+    fb_listing = await file_listing_service.list_files_for_paper(
+        DOCUMENT_ID, owner_user_id=7, provider=listing_provider, context=fb_context,
+    )
+
+    wb_service_context = DocumentSourceRequestContext(
+        provider_groups=("WB",), authorized_group_ids=("WB",),
+        bearer_kind=ProviderBearerKind.SERVICE, curator_token="service-token",
+    )
+    client, provider = _provider(fb_rows, GOOD)
+    result = await supplement_add.add_files_to_paper_with_listing(
+        DOCUMENT_ID, 7, wb_service_context, [_chosen(20)],
+        listing=fb_listing, job_id=JOB_ID, provider=provider, weaviate_client=object(),
+        stage_checkpoint=AsyncMock(),
+    )
+
+    outcome = _by_id(result)["20"]
+    assert outcome.outcome == "left_out"
+    assert outcome.reason_code is FileReason.FILE_NOT_IN_REFERENCE
+    assert outcome.display_name is None
+    assert client.calls == []
+    assert storage.inserted == []
+
+    # Per-artifact binding mismatch on source or converted artifact raises listing_invalid.
+    supplement_entry = next(item for item in fb_listing.files if item.provider_file_id == "20")
+    assert supplement_entry.converted_artifact is not None
+    bad_listings = [
+        replace(
+            fb_listing,
+            files=(replace(supplement_entry, source_artifact=replace(supplement_entry.source_artifact, reference_id="999")),),
+        ),
+        replace(
+            fb_listing,
+            files=(replace(supplement_entry, converted_artifact=replace(supplement_entry.converted_artifact, reference_id="999")),),
+        ),
+        replace(
+            fb_listing,
+            files=(replace(supplement_entry, converted_artifact=replace(supplement_entry.converted_artifact, parent_artifact_id="99")),),
+        ),
+    ]
+    for bad_listing in bad_listings:
+        with pytest.raises(SupplementAddError) as raised:
+            await supplement_add.add_files_to_paper_with_listing(
+                DOCUMENT_ID, 7, fb_context, [_chosen(20)],
+                listing=bad_listing, job_id=JOB_ID, provider=provider, weaviate_client=object(),
+                stage_checkpoint=AsyncMock(),
+            )
+        assert raised.value.code == "listing_invalid"
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_401_on_converted_text_or_pdf_download_propagates_login_expired_without_further_calls(
+    monkeypatch, storage, tmp_path,
+):
+    """ALL-1751 review: HTTP 401 during add downloads must propagate DocumentSourceLoginExpired
+    immediately instead of turning into source_download_failed and retrying subsequent files."""
+    from src.lib.document_sources.models import DocumentSourceLoginExpired
+    from tests.unit.lib.document_sources.test_file_listing import _http_error
+    from tests.unit.lib.document_sources.test_supplement_add_pdf import PDF, PDF_TEXT
+
+    # Case 1: 401 on converted text download of first file stops before downloading second file.
+    listing_client, listing_provider = _provider(ROWS, GOOD)
+    _paper_lookup(monkeypatch)
+    listing = await file_listing_service.list_files_for_paper(
+        DOCUMENT_ID, owner_user_id=7, provider=listing_provider, context=CONTEXT,
+    )
+    client, provider = _provider(ROWS, {"21": _http_error(401), "41": GOOD["41"]})
+    with pytest.raises(DocumentSourceLoginExpired):
+        await supplement_add.add_files_to_paper_with_listing(
+            DOCUMENT_ID, 7, CONTEXT, [_chosen(20), _chosen(40)],
+            listing=listing, job_id=JOB_ID, provider=provider, weaviate_client=object(),
+            stage_checkpoint=AsyncMock(),
+        )
+    assert [kwargs["artifact_id"] for name, kwargs in client.calls if name == "download_referencefile"] == ["21"]
+
+    # Case 2: 401 on original PDF download stops before downloading second file.
+    pdf_md5 = hashlib.md5(PDF).hexdigest()
+    pdf_rows = [
+        _abc_show_all_main_pdf(10, "WB"),
+        *_pair(20, "WB", extension="pdf", content=PDF_TEXT, md5=pdf_md5),
+        *_pair(40, "WB", content=GOOD["41"]),
+    ]
+    _, pdf_listing_provider = _provider(pdf_rows, {"20": PDF, "21": PDF_TEXT, "41": GOOD["41"]})
+    pdf_listing = await file_listing_service.list_files_for_paper(
+        DOCUMENT_ID, owner_user_id=7, provider=pdf_listing_provider, context=CONTEXT,
+    )
+    spool = tmp_path / ".add_spool"
+    spool.mkdir()
+    monkeypatch.setattr(supplement_add, "_spool_directory", lambda: spool)
+    pdf_client, pdf_provider = _provider(pdf_rows, {"20": _http_error(401), "21": PDF_TEXT, "41": GOOD["41"]})
+    chosen_pdf = ChosenFile("20", md5=pdf_md5, converted_md5=hashlib.md5(PDF_TEXT).hexdigest())
+    with pytest.raises(DocumentSourceLoginExpired):
+        await supplement_add.add_files_to_paper_with_listing(
+            DOCUMENT_ID, 7, CONTEXT, [chosen_pdf, _chosen(40)],
+            listing=pdf_listing, job_id=JOB_ID, provider=pdf_provider, weaviate_client=object(),
+            stage_checkpoint=AsyncMock(),
+        )
+    assert [kwargs["artifact_id"] for name, kwargs in pdf_client.calls if name == "download_referencefile"] == [
+        "21", "20",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_manual_add_job_catches_login_expired_and_records_per_file_outcomes(monkeypatch, storage):
+    """ALL-1751 review: a 401 during a manual run_supplement_add_job records login_expired
+    cleanly for every chosen file without generic add_failed or re-raising."""
+    from src.lib.document_sources.file_listing_service import provider_observations_from_jobs
+    from tests.unit.lib.document_sources.test_file_listing import _http_error
+
+    client, provider = _provider(ROWS, {"21": _http_error(401), "41": GOOD["41"]})
+    _paper_lookup(monkeypatch)
+    monkeypatch.setattr(
+        "src.lib.document_sources.registry.get_configured_document_source_provider",
+        lambda: provider,
+    )
+    monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda: object())
+    monkeypatch.setattr("src.lib.pdf_jobs.service.is_cancel_requested", lambda **_kwargs: False)
+    monkeypatch.setattr("src.lib.pdf_jobs.service.update_progress", lambda **_kwargs: None)
+    reports = []
+    monkeypatch.setattr(
+        "src.lib.observability.runtime.report_runtime_exception",
+        lambda exc, **kwargs: reports.append(kwargs),
+    )
+    failed = []
+    monkeypatch.setattr("src.lib.pdf_jobs.service.mark_failed", lambda **kwargs: failed.append(kwargs))
+
+    await supplement_add.run_supplement_add_job(supplement_add.SupplementAddJobRequest(
+        job_id=JOB_ID, document_id=DOCUMENT_ID, user_id="owner-subject", owner_user_id=7,
+        context=CONTEXT, files=(_chosen(20), _chosen(40)),
+    ))
+
+    assert reports == []
+    assert len(failed) == 1
+    meta = failed[0]["metadata"]
+    assert meta["error_code"] == FileReason.LOGIN_EXPIRED.value
+    assert [(entry["provider_file_id"], entry["state"], entry["reason_code"]) for entry in meta["supplements"]] == [
+        ("20", "left_out", "login_expired"),
+        ("40", "left_out", "login_expired"),
+    ]
+    assert provider_observations_from_jobs([meta]) == {}
+    assert [kwargs["artifact_id"] for name, kwargs in client.calls if name == "download_referencefile"] == ["21"]

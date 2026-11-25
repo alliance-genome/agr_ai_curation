@@ -1052,7 +1052,6 @@ class IdentifierImportService:
                     request_context=document_source_context,
                     login_expires_at=login_expires_at,
                     owner_user_id=db_user.id,
-                    reference=_reference_poll_value(decision),
                 )
 
             source_provenance = _build_reference_source_provenance(decision)
