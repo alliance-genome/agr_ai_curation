@@ -160,7 +160,7 @@ def quiet(monkeypatch):
     async def _nothing(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(service_module, "update_document_status", _nothing)
+    monkeypatch.setattr(service_module, "update_document_status_detailed", AsyncMock(return_value={"success": True}))
     monkeypatch.setattr(service_module, "get_connection", lambda: None)
     monkeypatch.setattr(UploadExecutionService, "_sync_provider_conversion_sql_failure", _nothing)
     monkeypatch.setattr(UploadExecutionService, "_sync_provider_conversion_sql_selection", _nothing)
