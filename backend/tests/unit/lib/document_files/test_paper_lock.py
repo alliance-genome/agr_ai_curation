@@ -165,3 +165,70 @@ async def test_paper_lock_release_failure_omits_request_url_with_real_sentry_sdk
     ):
         assert sensitive not in serialized
         assert sensitive not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body_cancelled", [False, True])
+@pytest.mark.parametrize("release_fails", [False, True])
+async def test_cancel_during_release_drains_and_preserves_cancellation(
+    monkeypatch, caplog, body_cancelled, release_fails,
+):
+    document_id = uuid4()
+    db_error = RuntimeError("private SQL release failure")
+    connection = Mock()
+    taken = Mock()
+    taken.scalar_one.return_value = True
+    connection.execute.side_effect = [taken, db_error if release_fails else None]
+    monkeypatch.setattr("src.models.sql.database.engine.connect", lambda: connection)
+    report = Mock()
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+
+    release_started = asyncio.Event()
+    resume_release = asyncio.Event()
+
+    async def run_worker(func, *args):
+        if func is paper_lock._release:
+            release_started.set()
+            await resume_release.wait()
+        return func(*args)
+
+    monkeypatch.setattr(paper_lock.asyncio, "to_thread", run_worker)
+
+    async def request():
+        async with paper_lock.paper_operation_lock(document_id):
+            if body_cancelled:
+                raise asyncio.CancelledError("body cancelled")
+
+    request_task = asyncio.create_task(request())
+    await asyncio.wait_for(release_started.wait(), timeout=2)
+    request_task.cancel("release cancelled")
+    await asyncio.sleep(0)
+    request_task.cancel("second release cancel")
+    await asyncio.sleep(0)
+    assert not request_task.done()
+
+    resume_release.set()
+    expected_match = "body cancelled" if body_cancelled else "release cancelled"
+    with pytest.raises(asyncio.CancelledError, match=expected_match):
+        await request_task
+
+    connection.close.assert_called_once_with()
+    if release_fails:
+        connection.invalidate.assert_called_once_with()
+        report.assert_called_once()
+        (error,) = report.call_args.args
+        assert report.call_args.kwargs == {
+            "component": "document_files",
+            "operation": "paper_lock_release_failed",
+            "level": "warning",
+            "fingerprint": ["paper_lock_release_failed"],
+            "include_request": False,
+        }
+        assert type(db_error).__name__ in str(error)
+        assert error.__traceback__ is not None
+        assert error.__cause__ is error.__context__ is None
+        assert str(db_error) not in repr(report.call_args)
+        assert str(db_error) not in caplog.text
+    else:
+        connection.invalidate.assert_not_called()
+        report.assert_not_called()

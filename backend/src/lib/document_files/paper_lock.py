@@ -133,17 +133,33 @@ async def paper_operation_lock(document_id: UUID | str) -> AsyncIterator[Any]:
         raise
     if connection is None:
         raise PaperOperationInProgress(str(document_id))
+    body_cancelled = False
     try:
         yield connection
+    except asyncio.CancelledError:
+        body_cancelled = True
+        raise
     finally:
-        # Shielded so a cancelled request still finishes releasing in its thread.
+        # Drain the release even across repeated cancellations so the advisory lock
+        # and DB connection are always closed before returning, and any release failure
+        # is observed and reported cleanly.
+        releasing = asyncio.create_task(asyncio.to_thread(_release, connection, key))
+        cancelled_during_release: asyncio.CancelledError | None = None
         try:
-            await asyncio.shield(asyncio.to_thread(_release, connection, key))
+            while not releasing.done():
+                try:
+                    await asyncio.shield(releasing)
+                except asyncio.CancelledError as exc:
+                    if cancelled_during_release is None:
+                        cancelled_during_release = exc
+            releasing.result()
         except Exception as exc:
             # ``_release`` invalidated the connection, which ends its database session
             # and so the lock. The delete's own outcome stands: a delete that finished
             # is answered as finished. Logged and reported, never raised.
             _report_release_failure(type(exc).__name__)
+        if cancelled_during_release is not None and not body_cancelled:
+            raise cancelled_during_release
 
 
 def _observe_detached_release(task: asyncio.Task[None]) -> None:

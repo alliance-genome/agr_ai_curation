@@ -893,18 +893,159 @@ async def test_the_lock_is_released_when_the_delete_fails(owner_id, index, monke
 
 @pytest.mark.asyncio
 async def test_the_lock_is_released_when_the_delete_request_is_cancelled(owner_id, index, monkeypatch):
+    """Cancelling before the first destructive write cancels promptly and releases the lock."""
     paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
-    in_wipe = asyncio.Event()
-    _wire_delete(monkeypatch, owner_id, in_wipe=in_wipe, wipe_seconds=5.0)
-    request = asyncio.ensure_future(_delete(paper))
-    await in_wipe.wait()
-    request.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await request
-    await asyncio.sleep(0.5)  # the release runs in its thread
+    _wire_delete(monkeypatch, owner_id)
+    in_read = asyncio.Event()
+    wipe_started = False
 
+    async def slow_get_document(_sub, _document_id):
+        in_read.set()
+        await asyncio.sleep(5.0)
+        return {"document": {"processingStatus": "completed"}}
+
+    async def unexpected_wipe(*_args, **_kwargs):
+        nonlocal wipe_started
+        wipe_started = True
+        return {"success": True, "chunks_deleted": 0}
+
+    monkeypatch.setattr(documents_api, "get_document", slow_get_document)
+    monkeypatch.setattr(documents_api, "delete_paper_chunks", unexpected_wipe)
+
+    request = asyncio.create_task(_delete(paper))
+    await asyncio.wait_for(in_read.wait(), timeout=5)
+    request.cancel("cancelled before destructive write")
+    with pytest.raises(asyncio.CancelledError, match="cancelled before destructive write"):
+        await asyncio.wait_for(request, timeout=2)
+
+    assert wipe_started is False
+    assert _indexes(index, str(paper)) == [0, 1, 2]
     job = await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20)])
     assert job.status == PdfJobStatus.PENDING.value
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_delete_during_chunk_wipe_keeps_the_lock_and_finishes_cleanup(
+    owner_id, index, monkeypatch, tmp_path,
+):
+    """Once the chunk wipe starts, cancellation drains under the paper lock before releasing it."""
+    from src.lib.document_files.paper_lock import try_lock_paper_for_add
+    from src.lib.weaviate_client import documents as weaviate_docs
+
+    paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    stored_pdf = tmp_path / TEST_USER_ID / str(paper) / "made-up.pdf"
+    stored_pdf.parent.mkdir(parents=True, exist_ok=True)
+    stored_pdf.write_bytes(b"%PDF-1.4 made-up")
+
+    async def provision(_principal):
+        return type("User", (), {"id": owner_id})()
+
+    monkeypatch.setattr(documents_api, "provision_user_async", provision)
+
+    wipe_entered = threading.Event()
+    allow_wipe_finish = threading.Event()
+    real_get_user_collections = weaviate_docs.get_user_collections
+    real_remove_empty = documents_api._remove_empty_paper_folders
+    real_delete_parent = documents_api.delete_paper_object
+    real_cleanup_deps = documents_api.cleanup_document_curation_dependencies
+    stages: list[tuple[str, bool]] = []
+
+    def _lock_is_held() -> bool:
+        with SessionLocal() as check_session:
+            acquired = try_lock_paper_for_add(check_session, paper)
+            check_session.rollback()
+            return not acquired
+
+    class _GatedData:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def delete_many(self, *args, **kwargs):
+            wipe_entered.set()
+            assert allow_wipe_finish.wait(timeout=10), "chunk wipe barrier timed out"
+            stages.append(("chunk_wipe", _lock_is_held()))
+            return self._inner.delete_many(*args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    class _GatedCollection:
+        def __init__(self, inner):
+            self._inner = inner
+            self.data = _GatedData(inner.data)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    def gated_collections(client, user_id):
+        chunk_collection, pdf_collection = real_get_user_collections(client, user_id)
+        return _GatedCollection(chunk_collection), pdf_collection
+
+    def observed_remove_empty(base_storage, user_sub, document_id):
+        stages.append(("file_cleanup", _lock_is_held()))
+        return real_remove_empty(base_storage, user_sub, document_id)
+
+    async def observed_delete_parent(user_sub, document_id, *, allow_missing=False):
+        stages.append(("parent_delete", await asyncio.to_thread(_lock_is_held)))
+        return await real_delete_parent(user_sub, document_id, allow_missing=allow_missing)
+
+    def observed_cleanup_deps(session, document_id):
+        stages.append(("sql_delete", _lock_is_held()))
+        return real_cleanup_deps(session, document_id)
+
+    monkeypatch.setattr(weaviate_docs, "get_user_collections", gated_collections)
+    monkeypatch.setattr(documents_api, "_remove_empty_paper_folders", observed_remove_empty)
+    monkeypatch.setattr(documents_api, "delete_paper_object", observed_delete_parent)
+    monkeypatch.setattr(documents_api, "cleanup_document_curation_dependencies", observed_cleanup_deps)
+
+    delete_task = asyncio.create_task(_delete(paper))
+    try:
+        assert await asyncio.to_thread(wipe_entered.wait, 10), "delete never reached chunk wipe"
+
+        # Cancel twice while paused inside the real chunk wipe worker.
+        delete_task.cancel("client disconnected")
+        await asyncio.sleep(0.05)
+        delete_task.cancel("second cancellation during drain")
+        await asyncio.sleep(0.05)
+
+        assert not delete_task.done(), "cancelled delete released its lock before the chunk wipe finished"
+        assert await asyncio.to_thread(_lock_is_held), "paper lock was released while chunk wipe was still running"
+
+        # A competing supplement add during the cancelled wipe cannot acquire the lock early.
+        with pytest.raises(ActiveJobExistsError):
+            await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20)])
+        with SessionLocal() as db:
+            assert db.scalar(select(PdfProcessingJob.id).where(PdfProcessingJob.document_id == paper)) is None
+    finally:
+        allow_wipe_finish.set()
+
+    with pytest.raises(asyncio.CancelledError, match="client disconnected"):
+        await asyncio.wait_for(delete_task, timeout=15)
+
+    # The lock remained held through every destructive step until SQL deletion completed.
+    assert stages == [
+        ("chunk_wipe", True),
+        ("file_cleanup", True),
+        ("parent_delete", True),
+        ("sql_delete", True),
+    ]
+    assert not await asyncio.to_thread(_lock_is_held), "paper lock was not released after drain"
+
+    # Competing supplement add after drain fails cleanly (404) and writes no orphan state.
+    with pytest.raises(HTTPException) as add_after_delete:
+        await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20)])
+    assert add_after_delete.value.status_code == 404
+
+    # Final paper state: SQL rows, stored files, Weaviate parent object, and search chunks are gone.
+    assert not stored_pdf.exists()
+    assert _indexes(index, str(paper)) == []
+    with index.session() as client:
+        papers = client.collections.get("PDFDocument").with_tenant(TEST_TENANT_NAME)
+        assert not papers.data.exists(paper)
+    with SessionLocal() as db:
+        assert db.get(PDFDocument, paper) is None
+        assert db.query(PDFDocumentFile).filter_by(document_id=paper).count() == 0
+        assert db.scalar(select(PdfProcessingJob.id).where(PdfProcessingJob.document_id == paper)) is None
 
 
 # --- a paper's status is never taken from an add -----------------------------------------------

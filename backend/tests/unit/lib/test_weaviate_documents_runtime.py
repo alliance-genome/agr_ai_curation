@@ -3,6 +3,7 @@
 import asyncio
 import importlib
 import json
+import threading
 from contextlib import contextmanager
 from datetime import datetime
 from types import SimpleNamespace
@@ -593,6 +594,218 @@ async def test_delete_document_failure_returns_error_payload():
 
     assert result["success"] is False
     assert result["error"]["code"] == "DELETE_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_delete_document_cancel_during_chunk_wipe_drains_index_and_sql(monkeypatch):
+    wipe_entered = threading.Event()
+    resume_wipe = threading.Event()
+    sql_entered = threading.Event()
+    resume_sql = threading.Event()
+    events: list[str] = []
+    session_open = False
+
+    @contextmanager
+    def _tracked_session():
+        nonlocal session_open
+        session_open = True
+        try:
+            yield MagicMock()
+        finally:
+            session_open = False
+            events.append("session_closed")
+
+    connection = MagicMock()
+    connection.session.side_effect = _tracked_session
+
+    def _delete_many(**_kwargs):
+        wipe_entered.set()
+        assert resume_wipe.wait(timeout=5)
+        assert session_open is True
+        events.append("chunks")
+        return SimpleNamespace(successful=2, matches=2, failed=0)
+
+    def _delete_by_id(_document_id):
+        assert session_open is True
+        events.append("parent")
+        return True
+
+    def _delete_sql(_user_id, _document_id):
+        sql_entered.set()
+        assert resume_sql.wait(timeout=5)
+        events.append("sql")
+        return True
+
+    chunks, papers = MagicMock(), MagicMock()
+    chunks.data.delete_many.side_effect = _delete_many
+    papers.data.delete_by_id.side_effect = _delete_by_id
+    monkeypatch.setattr(documents, "get_connection", lambda: connection)
+    monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
+    monkeypatch.setattr(documents, "_delete_sql_row", _delete_sql)
+
+    task = asyncio.create_task(documents.delete_document("user-1", "doc-1"))
+    try:
+        assert await asyncio.to_thread(wipe_entered.wait, 5)
+        task.cancel("first cancel")
+        await asyncio.sleep(0.02)
+        task.cancel("second cancel")
+        await asyncio.sleep(0.02)
+        assert not task.done()
+        assert session_open is True
+
+        resume_wipe.set()
+        assert await asyncio.to_thread(sql_entered.wait, 5)
+        task.cancel("third cancel during sql")
+        await asyncio.sleep(0.02)
+        assert not task.done()
+    finally:
+        resume_wipe.set()
+        resume_sql.set()
+
+    with pytest.raises(asyncio.CancelledError, match="first cancel"):
+        await asyncio.wait_for(task, timeout=5)
+
+    assert events == ["chunks", "parent", "session_closed", "sql"]
+
+
+@pytest.mark.asyncio
+async def test_delete_document_cancel_during_incomplete_chunk_wipe_retains_owners(monkeypatch):
+    wipe_entered = threading.Event()
+    resume_wipe = threading.Event()
+
+    def _delete_many(**_kwargs):
+        wipe_entered.set()
+        assert resume_wipe.wait(timeout=5)
+        return SimpleNamespace(successful=1, matches=2, failed=1)
+
+    chunks, papers = MagicMock(), MagicMock()
+    chunks.data.delete_many.side_effect = _delete_many
+    monkeypatch.setattr(documents, "get_connection", lambda: _connection_with_client(MagicMock()))
+    monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
+    delete_sql_row = MagicMock()
+    monkeypatch.setattr(documents, "_delete_sql_row", delete_sql_row)
+    report = MagicMock()
+    monkeypatch.setattr(documents.runtime, "report_runtime_exception", report)
+
+    task = asyncio.create_task(documents.delete_document("user-1", "doc-1"))
+    try:
+        assert await asyncio.to_thread(wipe_entered.wait, 5)
+        task.cancel("cancel during incomplete wipe")
+        await asyncio.sleep(0.02)
+        assert not task.done()
+    finally:
+        resume_wipe.set()
+
+    with pytest.raises(asyncio.CancelledError, match="cancel during incomplete wipe"):
+        await asyncio.wait_for(task, timeout=5)
+
+    report.assert_called_once()
+    papers.data.delete_by_id.assert_not_called()
+    delete_sql_row.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_paper_chunks_cancel_drains_worker_before_closing_session(monkeypatch):
+    wipe_entered = threading.Event()
+    resume_wipe = threading.Event()
+    session_open = False
+    wipe_finished_while_open = False
+
+    @contextmanager
+    def _tracked_session():
+        nonlocal session_open
+        session_open = True
+        try:
+            yield MagicMock()
+        finally:
+            session_open = False
+
+    connection = MagicMock()
+    connection.session.side_effect = _tracked_session
+
+    def _delete_many(**_kwargs):
+        nonlocal wipe_finished_while_open
+        wipe_entered.set()
+        assert resume_wipe.wait(timeout=5)
+        wipe_finished_while_open = session_open
+        return SimpleNamespace(successful=2, matches=2, failed=0)
+
+    chunks, papers = MagicMock(), MagicMock()
+    chunks.data.delete_many.side_effect = _delete_many
+    monkeypatch.setattr(documents, "get_connection", lambda: connection)
+    monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
+
+    task = asyncio.create_task(documents.delete_paper_chunks("user-1", "doc-1"))
+    try:
+        assert await asyncio.to_thread(wipe_entered.wait, 5)
+        task.cancel("stop wipe")
+        await asyncio.sleep(0.02)
+        task.cancel("stop wipe again")
+        await asyncio.sleep(0.02)
+        assert not task.done()
+        assert session_open is True
+    finally:
+        resume_wipe.set()
+
+    with pytest.raises(asyncio.CancelledError, match="stop wipe"):
+        await asyncio.wait_for(task, timeout=5)
+
+    assert wipe_finished_while_open is True
+    assert session_open is False
+    papers.data.delete_by_id.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_paper_search_entries_cancel_during_chunk_wipe_deletes_parent(monkeypatch):
+    wipe_entered = threading.Event()
+    resume_wipe = threading.Event()
+    session_open = False
+    events: list[str] = []
+
+    @contextmanager
+    def _tracked_session():
+        nonlocal session_open
+        session_open = True
+        try:
+            yield MagicMock()
+        finally:
+            session_open = False
+            events.append("session_closed")
+
+    connection = MagicMock()
+    connection.session.side_effect = _tracked_session
+
+    def _delete_many(**_kwargs):
+        wipe_entered.set()
+        assert resume_wipe.wait(timeout=5)
+        assert session_open is True
+        events.append("chunks")
+        return SimpleNamespace(successful=2, matches=2, failed=0)
+
+    def _delete_by_id(_document_id):
+        assert session_open is True
+        events.append("parent")
+        return True
+
+    chunks, papers = MagicMock(), MagicMock()
+    chunks.data.delete_many.side_effect = _delete_many
+    papers.data.delete_by_id.side_effect = _delete_by_id
+    monkeypatch.setattr(documents, "get_connection", lambda: connection)
+    monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
+
+    task = asyncio.create_task(documents.delete_paper_search_entries("user-1", "doc-1"))
+    try:
+        assert await asyncio.to_thread(wipe_entered.wait, 5)
+        task.cancel("stop search delete")
+        await asyncio.sleep(0.02)
+        assert not task.done()
+    finally:
+        resume_wipe.set()
+
+    with pytest.raises(asyncio.CancelledError, match="stop search delete"):
+        await asyncio.wait_for(task, timeout=5)
+
+    assert events == ["chunks", "parent", "session_closed"]
 
 
 @pytest.mark.asyncio

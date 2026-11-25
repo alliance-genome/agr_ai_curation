@@ -11,7 +11,7 @@ from weaviate.classes.query import Filter
 
 from .connection import get_connection
 from ..weaviate_helpers import get_user_collections
-from ..document_cleanup import cleanup_document_curation_dependencies
+from ..document_cleanup import cleanup_document_curation_dependencies, drain_shielded
 from ..document_sources.provenance import (
     build_document_source_provenance,
     sanitize_document_source_provenance,
@@ -678,22 +678,25 @@ async def delete_paper_chunks(user_id: str, document_id: str) -> Dict[str, Any]:
     if not connection:
         raise RuntimeError("No Weaviate connection established")
 
-    with connection.session() as client:
-        try:
-            chunk_collection, _ = get_user_collections(client, user_id)
-            return await _wipe_paper_chunks(chunk_collection, document_id)
-        except Exception as e:
-            logger.error("Failed to delete chunks for document %s: %s", document_id, e)
-            return {
-                "success": False,
-                "message": f"Failed to delete document: {e}",
-                "documentId": document_id,
-                "chunks_deleted": 0,
-                "error": {
-                    "code": "DELETE_FAILED",
-                    "details": str(e),
-                },
-            }
+    async def _run() -> Dict[str, Any]:
+        with connection.session() as client:
+            try:
+                chunk_collection, _ = get_user_collections(client, user_id)
+                return await _wipe_paper_chunks(chunk_collection, document_id)
+            except Exception as e:
+                logger.error("Failed to delete chunks for document %s: %s", document_id, e)
+                return {
+                    "success": False,
+                    "message": f"Failed to delete document: {e}",
+                    "documentId": document_id,
+                    "chunks_deleted": 0,
+                    "error": {
+                        "code": "DELETE_FAILED",
+                        "details": str(e),
+                    },
+                }
+
+    return await drain_shielded(_run())
 
 
 async def delete_paper_object(
@@ -710,41 +713,44 @@ async def delete_paper_object(
     if not connection:
         raise RuntimeError("No Weaviate connection established")
 
-    with connection.session() as client:
-        try:
-            _, pdf_collection = get_user_collections(client, user_id)
-            doc_deleted = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: pdf_collection.data.delete_by_id(document_id)
-            )
-            deleted = bool(doc_deleted)
-            success = deleted or allow_missing
-            return {
-                "success": success,
-                "deleted": deleted,
-                "message": (
-                    "Document object deleted successfully"
-                    if deleted
-                    else (
-                        "Document object already absent"
-                        if allow_missing
-                        else "Document deletion reported as unsuccessful"
-                    )
-                ),
-                "documentId": document_id,
-            }
-        except Exception as e:
-            logger.error("Failed to delete document object %s: %s", document_id, e)
-            return {
-                "success": False,
-                "deleted": False,
-                "message": f"Failed to delete document: {e}",
-                "documentId": document_id,
-                "error": {
-                    "code": "DELETE_FAILED",
-                    "details": str(e),
-                },
-            }
+    async def _run() -> Dict[str, Any]:
+        with connection.session() as client:
+            try:
+                _, pdf_collection = get_user_collections(client, user_id)
+                doc_deleted = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: pdf_collection.data.delete_by_id(document_id)
+                )
+                deleted = bool(doc_deleted)
+                success = deleted or allow_missing
+                return {
+                    "success": success,
+                    "deleted": deleted,
+                    "message": (
+                        "Document object deleted successfully"
+                        if deleted
+                        else (
+                            "Document object already absent"
+                            if allow_missing
+                            else "Document deletion reported as unsuccessful"
+                        )
+                    ),
+                    "documentId": document_id,
+                }
+            except Exception as e:
+                logger.error("Failed to delete document object %s: %s", document_id, e)
+                return {
+                    "success": False,
+                    "deleted": False,
+                    "message": f"Failed to delete document: {e}",
+                    "documentId": document_id,
+                    "error": {
+                        "code": "DELETE_FAILED",
+                        "details": str(e),
+                    },
+                }
+
+    return await drain_shielded(_run())
 
 
 async def delete_paper_search_entries(user_id: str, document_id: str) -> Dict[str, Any]:
@@ -757,40 +763,43 @@ async def delete_paper_search_entries(user_id: str, document_id: str) -> Dict[st
     if not connection:
         raise RuntimeError("No Weaviate connection established")
 
-    with connection.session() as client:
-        try:
-            # Get tenant-scoped collections (FR-011: user-specific data isolation)
-            chunk_collection, pdf_collection = get_user_collections(client, user_id)
-            chunk_result = await _wipe_paper_chunks(chunk_collection, document_id)
-            if not chunk_result.get("success"):
-                return chunk_result
+    async def _run() -> Dict[str, Any]:
+        with connection.session() as client:
+            try:
+                # Get tenant-scoped collections (FR-011: user-specific data isolation)
+                chunk_collection, pdf_collection = get_user_collections(client, user_id)
+                chunk_result = await _wipe_paper_chunks(chunk_collection, document_id)
+                if not chunk_result.get("success"):
+                    return chunk_result
 
-            # Then delete the document itself
-            doc_deleted = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: pdf_collection.data.delete_by_id(document_id)
-            )
+                # Then delete the document itself
+                doc_deleted = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: pdf_collection.data.delete_by_id(document_id)
+                )
 
-            return {
-                "success": bool(doc_deleted),
-                "message": "Document and chunks deleted successfully" if doc_deleted else "Document deletion reported as unsuccessful",
-                "documentId": document_id,
-                "chunks_deleted": chunk_result["chunks_deleted"],
-                "chunks_matched": chunk_result["chunks_matched"],
-            }
-
-        except Exception as e:
-            logger.error("Failed to delete document %s: %s", document_id, e)
-            return {
-                "success": False,
-                "message": f"Failed to delete document: {e}",
-                "documentId": document_id,
-                "chunks_deleted": 0,
-                "error": {
-                    "code": "DELETE_FAILED",
-                    "details": str(e)
+                return {
+                    "success": bool(doc_deleted),
+                    "message": "Document and chunks deleted successfully" if doc_deleted else "Document deletion reported as unsuccessful",
+                    "documentId": document_id,
+                    "chunks_deleted": chunk_result["chunks_deleted"],
+                    "chunks_matched": chunk_result["chunks_matched"],
                 }
-            }
+
+            except Exception as e:
+                logger.error("Failed to delete document %s: %s", document_id, e)
+                return {
+                    "success": False,
+                    "message": f"Failed to delete document: {e}",
+                    "documentId": document_id,
+                    "chunks_deleted": 0,
+                    "error": {
+                        "code": "DELETE_FAILED",
+                        "details": str(e)
+                    }
+                }
+
+    return await drain_shielded(_run())
 
 
 def _delete_sql_row(user_id: str, document_id: str) -> bool:
@@ -826,25 +835,31 @@ def _delete_sql_row(user_id: str, document_id: str) -> bool:
 
 async def delete_document(user_id: str, document_id: str) -> Dict[str, Any]:
     """Delete the search entries, then clean up SQL for import compensation and CLI deletes."""
-    result = await delete_paper_search_entries(user_id, document_id)
-    if "error" in result:
-        return result
-    if "chunks_failed" in result:
-        # The bulk wipe was incomplete. Keep both the paper and its owner for retry.
-        return {**result, "postgres_deleted": False}
+    if not user_id:
+        raise ValueError("user_id is required for tenant-scoped document deletion (FR-011, FR-014)")
 
-    # A complete chunk wipe allows SQL cleanup even when delete_by_id found no index object.
-    try:
-        postgres_deleted = await asyncio.to_thread(_delete_sql_row, user_id, document_id)
-    except Exception as e:
-        logger.warning("Failed to delete from PostgreSQL: %s", e)
-        postgres_deleted = False
+    async def _run() -> Dict[str, Any]:
+        result = await delete_paper_search_entries(user_id, document_id)
+        if "error" in result:
+            return result
+        if "chunks_failed" in result:
+            # The bulk wipe was incomplete. Keep both the paper and its owner for retry.
+            return {**result, "postgres_deleted": False}
 
-    logger.info(
-        "Deleted document %s and its chunks from Weaviate%s",
-        document_id, " and PostgreSQL" if postgres_deleted else "",
-    )
-    return {**result, "postgres_deleted": postgres_deleted}
+        # A complete chunk wipe allows SQL cleanup even when delete_by_id found no index object.
+        try:
+            postgres_deleted = await asyncio.to_thread(_delete_sql_row, user_id, document_id)
+        except Exception as e:
+            logger.warning("Failed to delete from PostgreSQL: %s", e)
+            postgres_deleted = False
+
+        logger.info(
+            "Deleted document %s and its chunks from Weaviate%s",
+            document_id, " and PostgreSQL" if postgres_deleted else "",
+        )
+        return {**result, "postgres_deleted": postgres_deleted}
+
+    return await drain_shielded(_run())
 
 
 async def re_embed_document(

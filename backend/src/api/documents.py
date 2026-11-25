@@ -35,7 +35,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import get_pdf_storage_path
-from ..lib.document_cleanup import cleanup_document_curation_dependencies
+from ..lib.document_cleanup import cleanup_document_curation_dependencies, drain_shielded
 from ..lib.document_sources.access import build_document_source_request_context
 from ..lib.packages.document_source_provider_models import DevelopmentReaderUnavailable
 from ..lib.document_sources.identifier_import import (
@@ -1658,15 +1658,6 @@ async def delete_document_endpoint(
                     _require_removable_paths, cleanup_snapshot, FilePath(get_pdf_storage_path()), str(user["sub"]),
                 )
 
-                # Always run the tenant-scoped chunk wipe, even when the parent index object
-                # is already absent, so a retry clears any stray chunks before files and SQL.
-                chunk_result = await delete_paper_chunks(user["sub"], document_id)
-                if not chunk_result.get("success"):
-                    raise HTTPException(
-                        status_code=500,
-                        detail=chunk_result.get("message", "Failed to delete document")
-                    )
-
                 # Remove physical files while holding a row lock so an in-flight rename
                 # cannot race with the final path snapshot. Keep the Weaviate parent object
                 # and SQL row intact until every stored file is gone so duplicate checks
@@ -1714,18 +1705,6 @@ async def delete_document_endpoint(
                     finally:
                         file_session.close()
 
-                await asyncio.to_thread(remove_paper_files)
-
-                if not document_missing_in_weaviate:
-                    parent_result = await delete_paper_object(
-                        user["sub"], document_id, allow_missing=True,
-                    )
-                    if not parent_result.get("success"):
-                        raise HTTPException(
-                            status_code=500,
-                            detail=parent_result.get("message", "Failed to delete document"),
-                        )
-
                 # Keep the owned SQL row available for retry until files and index entries are gone.
                 def finish_delete() -> None:
                     cleanup_session = SessionLocal()
@@ -1751,13 +1730,60 @@ async def delete_document_endpoint(
                     finally:
                         cleanup_session.close()
 
-                await asyncio.to_thread(finish_delete)
+                async def complete_delete() -> OperationResult:
+                    try:
+                        # Always run the tenant-scoped chunk wipe, even when the parent index object
+                        # is already absent, so a retry clears any stray chunks before files and SQL.
+                        chunk_result = await delete_paper_chunks(user["sub"], document_id)
+                        if not chunk_result.get("success"):
+                            raise HTTPException(
+                                status_code=500,
+                                detail=chunk_result.get("message", "Failed to delete document"),
+                            )
 
-                return OperationResult(
-                    success=True,
-                    message=f"Document {document_id} and {chunk_result['chunks_deleted']} chunks deleted successfully",
-                    operation="delete_document",
-                    document_id=document_id
+                        await asyncio.to_thread(remove_paper_files)
+
+                        if not document_missing_in_weaviate:
+                            parent_result = await delete_paper_object(
+                                user["sub"], document_id, allow_missing=True,
+                            )
+                            if not parent_result.get("success"):
+                                raise HTTPException(
+                                    status_code=500,
+                                    detail=parent_result.get("message", "Failed to delete document"),
+                                )
+
+                        await asyncio.to_thread(finish_delete)
+
+                        return OperationResult(
+                            success=True,
+                            message=f"Document {document_id} and {chunk_result['chunks_deleted']} chunks deleted successfully",
+                            operation="delete_document",
+                            document_id=document_id,
+                        )
+                    except (HTTPException, PoolTimeoutError):
+                        raise
+                    except Exception as exc:
+                        raise_sanitized_http_exception(
+                            logger,
+                            status_code=500,
+                            detail="Failed to delete document",
+                            log_message=f"Error deleting document {document_id}",
+                            exc=exc,
+                        )
+
+                def _log_cancelled_delete_failure(exc: Exception) -> None:
+                    logger.warning(
+                        "Paper delete stopped with %s while draining after cancellation",
+                        type(exc).__name__,
+                        extra={"document_id": document_id, "sentry_skip_event": True},
+                    )
+
+                # Once the first destructive write starts, keep ownership under the paper
+                # lock through completion or a recorded failure before delivering cancellation.
+                return await drain_shielded(
+                    complete_delete(),
+                    on_cancelled_error=_log_cancelled_delete_failure,
                 )
 
             except (HTTPException, PoolTimeoutError):

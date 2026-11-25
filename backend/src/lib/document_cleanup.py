@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+from collections.abc import Callable, Coroutine
+from typing import Any, TypeVar
 from uuid import UUID
 
 from sqlalchemy import delete, select, update
@@ -23,6 +25,37 @@ from src.lib.curation_workspace.models import (
     DomainEnvelopeProjectionIndex,
     DomainValidationFinding,
 )
+
+_T = TypeVar("_T")
+
+
+async def drain_shielded(
+    coro: Coroutine[Any, Any, _T],
+    *,
+    on_cancelled_error: Callable[[Exception], None] | None = None,
+) -> _T:
+    """Finish owned destructive cleanup across cancellations, then deliver cancellation."""
+    task = asyncio.create_task(coro)
+    cancelled: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            if cancelled is None:
+                cancelled = exc
+        except Exception:
+            if cancelled is None:
+                raise
+    if cancelled is None:
+        return task.result()
+    if not task.cancelled():
+        exc = task.exception()
+        if exc is not None:
+            if not isinstance(exc, Exception):
+                raise exc
+            if on_cancelled_error is not None:
+                on_cancelled_error(exc)
+    raise cancelled
 
 
 def _scalar_list(result) -> list[Any]:
