@@ -1976,13 +1976,19 @@ async def _file_listing_response(list_call) -> dict[str, Any]:
     except HTTPException:
         raise
     except Exception as exc:
-        raise_sanitized_http_exception(
-            logger,
-            status_code=500,
-            detail={"error": "file_listing_failed"},
-            log_message="Document-source file listing failed",
-            exc=exc,
-        )
+        message = "Document-source file listing failed"
+        logger.error(message, extra={"sentry_skip_event": True})
+        try:
+            report_runtime_exception(
+                sanitized_runtime_error(message),
+                component="document_file_listing",
+                operation="file_listing_failed",
+                context={"exception_type": type(exc).__name__},
+                include_request=False,
+            )
+        except Exception:
+            # A reporting failure must preserve the public HTTP error.
+            pass
     finally:
         try:
             await provider.aclose()
@@ -2001,6 +2007,9 @@ async def _file_listing_response(list_call) -> dict[str, Any]:
             except Exception:
                 # Reporting must preserve the listing response or mapped HTTP error.
                 pass
+
+    # Raise outside the handler so the provider error cannot become __context__.
+    raise HTTPException(status_code=500, detail={"error": "file_listing_failed"}) from None
 
 
 @router.get("/document-sources/files")

@@ -747,12 +747,13 @@ context. Companion warnings skip log-event promotion. Cleanup and reporting
 failures preserve the lookup result. Not-found and access-denied outcomes
 produce no lookup event.
 
-Both file-listing routes report provider close failures under component
-`document_file_listing` and operation `provider_cleanup_failed`. The warning
-event carries a fixed, chain-free exception and the bounded exception class.
-It omits the request because the URL can identify a document. The companion
-warning skips log-event promotion. The endpoint preserves the listing payload
-or mapped HTTP error even if reporting fails.
+Both file-listing routes report unexpected listing errors under component
+`document_file_listing` and operation `file_listing_failed`. They return the
+same HTTP 500 error code even if reporting fails. Provider close failures report
+as warnings under `provider_cleanup_failed` and preserve the listing payload or
+mapped HTTP error. Both operations send a fixed, chain-free exception and the
+bounded exception class. They omit the request because the URL can identify a
+document. Companion logs use fixed messages and skip log-event promotion.
 
 Upload intake reports checksum provider failures under component `upload_intake`
 and operation `checksum_lookup_failed`. The report carries a fixed, chain-free
