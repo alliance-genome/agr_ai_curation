@@ -1252,14 +1252,22 @@ def list_jobs(
         session.close()
 
 
-def is_cancel_requested(*, job_id: UUID | str) -> bool:
+def is_cancel_requested(
+    *,
+    job_id: UUID | str,
+    document_id: Optional[UUID | str] = None,
+) -> bool:
     """Check if cancellation has been requested for a job."""
     session = SessionLocal()
     try:
         job = session.execute(
             select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id))
         ).scalar_one_or_none()
-        return bool(job.cancel_requested) if job else False
+        if not job:
+            return False
+        if document_id is not None and job.document_id != _to_uuid(document_id):
+            return False
+        return bool(job.cancel_requested)
     finally:
         session.close()
 
@@ -1403,6 +1411,7 @@ def update_progress(
     message: Optional[str] = None,
     status: Optional[str] = None,
     metadata: Optional[dict] = None,
+    document_id: Optional[UUID | str] = None,
 ) -> Optional[PdfJobResponse]:
     """Update job progress details while it is active."""
     session = SessionLocal()
@@ -1411,6 +1420,8 @@ def update_progress(
             select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id)).with_for_update()
         ).scalar_one_or_none()
         if not job:
+            return None
+        if document_id is not None and job.document_id != _to_uuid(document_id):
             return None
 
         if job.status in _TERMINAL_STATUSES:
@@ -1451,6 +1462,52 @@ def update_progress(
         session.close()
 
 
+def mark_completed_in_session(
+    session,
+    *,
+    job_id: UUID | str,
+    message: Optional[str] = None,
+    metadata: Optional[dict] = None,
+    document_id: Optional[UUID | str] = None,
+    reject_if_cancelled: bool = False,
+) -> tuple[Optional[PdfProcessingJob], bool]:
+    """Mark a job terminal success state inside the caller's open transaction.
+
+    Returns ``(job, updated)`` where ``updated`` is True when an active job was
+    transitioned to completed. When ``document_id`` is provided, a job owned by
+    another document is left untouched. When ``reject_if_cancelled`` is True, an
+    active job with ``cancel_requested=True`` is left untouched.
+    """
+    job = session.execute(
+        select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id)).with_for_update()
+    ).scalar_one_or_none()
+    if not job:
+        return None, False
+    if document_id is not None and job.document_id != _to_uuid(document_id):
+        return job, False
+    if job.status in _TERMINAL_STATUSES:
+        return job, False
+    if reject_if_cancelled and job.cancel_requested:
+        return job, False
+
+    now = datetime.now(timezone.utc)
+    if job.started_at is None:
+        job.started_at = now
+    job.completed_at = now
+    job.status = PdfJobStatus.COMPLETED.value
+    job.current_stage = "completed"
+    job.progress_percentage = 100
+    job.message = message or "Processing completed"
+    job.error_message = None
+    _store_terminal_metadata(
+        job,
+        metadata=metadata,
+        outcome="completed",
+        completed_at=now,
+    )
+    return job, True
+
+
 def mark_completed(
     *,
     job_id: UUID | str,
@@ -1460,33 +1517,21 @@ def mark_completed(
     """Mark job terminal success state."""
     session = SessionLocal()
     try:
-        job = session.execute(
-            select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id)).with_for_update()
-        ).scalar_one_or_none()
+        job, updated = mark_completed_in_session(
+            session,
+            job_id=job_id,
+            message=message,
+            metadata=metadata,
+        )
         if not job:
             return None
-        if job.status in _TERMINAL_STATUSES:
-            return _to_response(job)
-
-        now = datetime.now(timezone.utc)
-        if job.started_at is None:
-            job.started_at = now
-        job.completed_at = now
-        job.status = PdfJobStatus.COMPLETED.value
-        job.current_stage = "completed"
-        job.progress_percentage = 100
-        job.message = message or "Processing completed"
-        job.error_message = None
-        _store_terminal_metadata(
-            job,
-            metadata=metadata,
-            outcome="completed",
-            completed_at=now,
-        )
-
-        session.commit()
-        session.refresh(job)
+        if updated:
+            session.commit()
+            session.refresh(job)
         return _to_response(job)
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
 
@@ -1498,6 +1543,7 @@ def mark_failed(
     stage: Optional[str] = None,
     metadata: Optional[dict] = None,
     supplement_failure_reason: str = FileReason.SUPPLEMENT_STAGE_FAILED.value,
+    document_id: Optional[UUID | str] = None,
 ) -> Optional[PdfJobResponse]:
     """Mark job terminal failure state."""
     session = SessionLocal()
@@ -1506,6 +1552,8 @@ def mark_failed(
             select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id)).with_for_update()
         ).scalar_one_or_none()
         if not job:
+            return None
+        if document_id is not None and job.document_id != _to_uuid(document_id):
             return None
         if job.status in _TERMINAL_STATUSES:
             if _reconcile_terminal_document(session, job):
@@ -1551,6 +1599,7 @@ def mark_cancelled(
     job_id: UUID | str,
     reason: Optional[str] = None,
     metadata: Optional[dict] = None,
+    document_id: Optional[UUID | str] = None,
 ) -> Optional[PdfJobResponse]:
     """Mark job terminal cancelled state."""
     session = SessionLocal()
@@ -1559,6 +1608,8 @@ def mark_cancelled(
             select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id)).with_for_update()
         ).scalar_one_or_none()
         if not job:
+            return None
+        if document_id is not None and job.document_id != _to_uuid(document_id):
             return None
         if job.status in _TERMINAL_STATUSES:
             if _reconcile_terminal_document(session, job):

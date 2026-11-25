@@ -1618,7 +1618,11 @@ def delete_chunk_range(
         raise ValueError("user_id is required for tenant-scoped chunk deletion")
     if type(start) is not int or type(end) is not int or start < 0 or end < start:
         raise ValueError("A piece range needs 0 <= start <= end")
-    connection = get_connection()
+    connection = (
+        get_connection(caller_reports_failure=True)
+        if caller_reports_failure
+        else get_connection()
+    )
     if not connection:
         raise RuntimeError("No Weaviate connection established")
     from weaviate.classes.query import Filter
@@ -1653,7 +1657,11 @@ def delete_pieces_of_deleted_paper(
 
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped chunk deletion")
-    connection = get_connection()
+    connection = (
+        get_connection(caller_reports_failure=True)
+        if caller_reports_failure
+        else get_connection()
+    )
     if not connection:
         raise RuntimeError("No Weaviate connection established")
     from weaviate.classes.query import Filter

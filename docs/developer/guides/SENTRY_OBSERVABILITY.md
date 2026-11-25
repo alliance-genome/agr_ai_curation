@@ -816,8 +816,9 @@ still listed.
 If a request is cancelled while acquiring a paper lock, acquisition and any
 necessary release finish in the background. Under `document_files`, a failed
 acquisition reports `paper_lock_acquire_failed_after_cancel` and a failed release
-uses the usual `paper_lock_release_failed` operation. Both warnings carry only
-the exception type as failure detail and preserve the request's cancellation.
+uses the usual `paper_lock_release_failed` operation. Both warnings omit HTTP
+request metadata (`include_request=False`), carry only the exception type as
+failure detail, and preserve the request's cancellation.
 
 Adding converted supplements to a paper (`supplement_add.py`) sends no event for
 a file it leaves out. When every chosen file is left out, it reports one warning
@@ -825,11 +826,53 @@ under component `document_files` and operation `supplement_add_nothing_added`,
 with a fixed fingerprint and context holding the hashed `document_id` and, per
 file, only the reason code, the measured value, the limit and the hashed
 `artifact_id_hash`. The exception is fixed and chain-free; file names, the
-reference, the curator and any text are omitted. A failure that stops the add is
-reported once by the background task's own failure capture.
+reference, the curator and any text are omitted.
+
+`run_supplement_add_job` and `add_files_to_paper` own sanitized runtime
+reporting under component `document_files` (omitting request metadata, grouping
+by operation, using fixed chain-free messages with only the exception
+class—plus fixed internal `error_code` for invariant checks—and marking
+companion logs with `sentry_skip_event=True` so promoted logs never duplicate
+events):
+
+- `supplement_add_finish_failed` (warning): post-commit index piece-count or
+  cache update failure after files are ready, carrying the hashed `document_id`
+  and exception class in a fixed chain-free message (`include_request=False`,
+  companion warning with `sentry_skip_event=True`). `update_document_piece_count`
+  passes `caller_reports_failure=True` so Weaviate reconnect failures emit only
+  this event; committed files and the completed job stay intact even if
+  reporting fails.
+- `supplement_add_provider_cleanup_failed` (warning): provider `aclose()`
+  failure, isolated so committed, failed, or cancelled durable job outcomes are
+  preserved.
+- `supplement_add_timed_out` (error): expiry of the supplement add job's own
+  deadline (`asyncio.timeout`) when uncommitted; upstream dependency
+  `TimeoutError` before the job deadline routes to `supplement_add_failed`, and
+  a deadline racing with an already-committed ready transaction preserves the
+  completed job without a timeout failure report.
+- `supplement_add_internal_invariant_failed` (error): internal invariant
+  `SupplementAddError` (`stored_file_path_mismatch`, `owner_without_subject`).
+- `supplement_add_failed` (error): unexpected job failures, including provider
+  acquisition/initialization failures, Weaviate connection failures (via
+  `caller_reports_failure=True`), upstream timeouts, post-commit errors, or
+  failures during cancellation, reported once without re-raising raw exceptions
+  into background-task auto-capture.
+- `supplement_add_job_status_write_failed` (error): failed durable `pdf_jobs`
+  terminal status write (`mark_failed` or `mark_cancelled`), sanitized so raw
+  SQLAlchemy parameters never escape to background-task auto-capture, primary
+  failure reports are not dropped, and `asyncio.CancelledError` is never
+  replaced.
+
+Expected curator cancellations (`PDFCancellationError`), ordinary business
+refusals (`paper_not_completed`, `FileListingUnavailable`), and
+all-files-already-in-paper outcomes stay quiet. Reporting failures themselves
+are caught and logged with `sentry_skip_event=True` so they never abort durable
+job status updates or corrupt file state.
 
 On cancellation (deadline `asyncio.CancelledError` or curator `PDFCancellationError`),
-a supplement add waits for the active write. A failed row or artifact write during
+a supplement add waits for the active write or leftover cleanup. A failed
+leftover cleanup during that wait reports
+`supplement_add_cancelled_leftover_cleanup_failed`. A failed row or artifact write during
 that wait reports `supplement_add_cancelled_mutation_failed`. The pipeline owns
 chunk write failures once range reservation finishes. If rollback of an uncommitted
 add fails while handling cancellation, it reports

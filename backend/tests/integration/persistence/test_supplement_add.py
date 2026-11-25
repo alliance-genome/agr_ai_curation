@@ -919,3 +919,381 @@ async def test_overlapping_pending_writers_cannot_exceed_paper_text_limit(paper,
     assert [path.name for path in storage.rglob("*.md")] == [f"{outcome_a.file_id}.md"]
     assert [path.name for path in storage.rglob("*.json")] == [f"{outcome_a.file_id}.json"]
     assert len(index.stored) == 1
+
+
+class _ClosableProvider(_Provider):
+    def __init__(self, payloads):
+        super().__init__(payloads)
+        self.closed = 0
+
+    async def aclose(self) -> None:
+        self.closed += 1
+
+
+def _fresh_job(job_id: str | UUID) -> PdfProcessingJob:
+    with SessionLocal() as db:
+        return db.get(PdfProcessingJob, UUID(str(job_id)))
+
+
+@pytest.mark.asyncio
+async def test_run_supplement_add_job_commits_ready_files_and_completed_job_atomically(paper, monkeypatch):
+    from unittest.mock import Mock
+
+    document_id, owner_id, subject, storage = paper
+    _Index().install(monkeypatch)
+    job = supplement_add.start_supplement_add(document_id, owner_id, [_chosen(20), _chosen(40)])
+    provider = _ClosableProvider({"21": WORKBOOK, "41": WORKBOOK_2})
+    monkeypatch.setattr("src.lib.document_sources.registry.get_configured_document_source_provider", lambda: provider)
+    monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda **_kwargs: object())
+    second_mark_completed = Mock(side_effect=AssertionError("mark_completed must not issue a second DB transaction"))
+    monkeypatch.setattr(pdf_job_service, "mark_completed", second_mark_completed)
+
+    await supplement_add.run_supplement_add_job(supplement_add.SupplementAddJobRequest(
+        job_id=UUID(job.job_id),
+        document_id=document_id,
+        user_id=subject,
+        owner_user_id=owner_id,
+        context=CONTEXT,
+        files=(_chosen(20), _chosen(40)),
+    ))
+
+    second_mark_completed.assert_not_called()
+    assert provider.closed == 1
+    fresh_job = _fresh_job(job.job_id)
+    assert fresh_job.status == PdfJobStatus.COMPLETED.value
+    assert fresh_job.current_stage == "completed"
+    assert fresh_job.progress_percentage == 100
+    assert fresh_job.message == "Added 2 of 2 files."
+    assert fresh_job.completed_at is not None
+    assert [entry["state"] for entry in fresh_job.metadata_json["supplements"]] == ["added", "added"]
+
+    main, first, second = _files(document_id)
+    assert main.role == "main" and main.status == "ready"
+    assert first.status == second.status == "ready"
+    assert first.source_import_status == second.source_import_status == "completed"
+    assert (storage / first.source_markdown_path).is_file() and (storage / second.processed_json_path).is_file()
+    assert [entry["file_id"] for entry in fresh_job.metadata_json["supplements"]] == [str(first.id), str(second.id)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    ["commit_error", "cancel_requested_before_ready", "already_failed", "already_cancelled"],
+)
+async def test_run_supplement_add_job_rolls_back_job_and_files_on_ready_failure_cancel_or_terminal_job(
+    paper, monkeypatch, case,
+):
+    from unittest.mock import Mock
+
+    from sqlalchemy import event
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Session
+
+    from src.lib.document_files import service as file_service
+
+    document_id, owner_id, subject, storage = paper
+    index = _Index().install(monkeypatch)
+    job = supplement_add.start_supplement_add(document_id, owner_id, [_chosen(20)])
+    provider = _ClosableProvider({"21": WORKBOOK})
+    monkeypatch.setattr("src.lib.document_sources.registry.get_configured_document_source_provider", lambda: provider)
+    monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda **_kwargs: object())
+    report = Mock(return_value=True)
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+
+    real_mark_files_ready = file_service.mark_files_ready
+    fired = False
+
+    def raced_mark_files_ready(sizes, *, on_ready_in_session=None):
+        nonlocal fired
+        if case == "cancel_requested_before_ready":
+            pdf_job_service.request_cancel(job_id=job.job_id, user_id=owner_id)
+            return real_mark_files_ready(sizes, on_ready_in_session=on_ready_in_session)
+        if case == "already_failed":
+            pdf_job_service.mark_failed(job_id=job.job_id, message="stale failure", stage="failed")
+            return real_mark_files_ready(sizes, on_ready_in_session=on_ready_in_session)
+        if case == "already_cancelled":
+            pdf_job_service.mark_cancelled(job_id=job.job_id, reason="already cancelled")
+            return real_mark_files_ready(sizes, on_ready_in_session=on_ready_in_session)
+
+        def fail_on_commit(_session):
+            nonlocal fired
+            if not fired:
+                fired = True
+                raise OperationalError(
+                    "COMMIT",
+                    {"filename": "Secret_Commit_Rollback.pdf"},
+                    RuntimeError("simulated commit failure"),
+                )
+
+        event.listen(Session, "before_commit", fail_on_commit)
+        try:
+            return real_mark_files_ready(sizes, on_ready_in_session=on_ready_in_session)
+        finally:
+            event.remove(Session, "before_commit", fail_on_commit)
+
+    monkeypatch.setattr(file_service, "mark_files_ready", raced_mark_files_ready)
+
+    await supplement_add.run_supplement_add_job(supplement_add.SupplementAddJobRequest(
+        job_id=UUID(job.job_id),
+        document_id=document_id,
+        user_id=subject,
+        owner_user_id=owner_id,
+        context=CONTEXT,
+        files=(_chosen(20),),
+    ))
+
+    assert provider.closed == 1
+    (main,) = _files(document_id)
+    assert main.role == "main" and main.status == "ready"
+    assert len(index.deleted) == 1 and index.deleted[0][0] >= 30
+    assert not list(storage.rglob("*.md")) and not list(storage.rglob("*.json"))
+    assert _paper_row(document_id).status == "completed"
+
+    fresh_job = _fresh_job(job.job_id)
+    if case == "commit_error":
+        assert fresh_job.status == PdfJobStatus.FAILED.value
+        assert fresh_job.metadata_json["error_code"] == "add_failed"
+        report.assert_called_once()
+        assert report.call_args.kwargs["operation"] == "supplement_add_failed"
+        assert "Secret_Commit_Rollback.pdf" not in str(report.call_args)
+    elif case == "cancel_requested_before_ready":
+        assert fresh_job.status == PdfJobStatus.CANCELLED.value
+        assert fresh_job.cancel_requested is True
+        report.assert_not_called()
+    elif case == "already_failed":
+        assert fresh_job.status == PdfJobStatus.FAILED.value
+        assert fresh_job.error_message == "stale failure"
+        report.assert_called_once()
+        assert report.call_args.kwargs["context"] == {"exception_type": "DocumentFileError"}
+    else:
+        assert fresh_job.status == PdfJobStatus.CANCELLED.value
+        report.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_supplement_add_job_deadline_during_blocked_ready_commit_preserves_ready_files_and_completed_job(
+    paper, monkeypatch,
+):
+    import asyncio
+    import threading
+    from unittest.mock import Mock
+
+    from src.lib.document_files import service as file_service
+
+    document_id, owner_id, subject, storage = paper
+    index = _Index().install(monkeypatch)
+    job = supplement_add.start_supplement_add(document_id, owner_id, [_chosen(20)])
+    provider = _ClosableProvider({"21": WORKBOOK})
+    monkeypatch.setattr("src.lib.document_sources.registry.get_configured_document_source_provider", lambda: provider)
+    monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda **_kwargs: object())
+    monkeypatch.setattr("src.lib.openai_agents.config.get_document_source_import_timeout_seconds", lambda: 60.0)
+    report = Mock(return_value=True)
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+
+    captured_timeouts: list[asyncio.Timeout] = []
+    real_timeout = asyncio.timeout
+
+    def spy_timeout(delay: float | None) -> asyncio.Timeout:
+        timeout_cm = real_timeout(delay)
+        captured_timeouts.append(timeout_cm)
+        return timeout_cm
+
+    monkeypatch.setattr(asyncio, "timeout", spy_timeout)
+
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    real_mark_files_ready = file_service.mark_files_ready
+
+    def blocked_mark_files_ready(sizes, *, on_ready_in_session=None):
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(10)
+        return real_mark_files_ready(sizes, on_ready_in_session=on_ready_in_session)
+
+    monkeypatch.setattr(file_service, "mark_files_ready", blocked_mark_files_ready)
+
+    task = asyncio.create_task(supplement_add.run_supplement_add_job(supplement_add.SupplementAddJobRequest(
+        job_id=UUID(job.job_id),
+        document_id=document_id,
+        user_id=subject,
+        owner_user_id=owner_id,
+        context=CONTEXT,
+        files=(_chosen(20),),
+    )))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=10)
+        assert len(captured_timeouts) == 1
+        # Fire the real job deadline deterministically while mark_files_ready is blocked in its worker thread.
+        captured_timeouts[0].reschedule(loop.time())
+        deadline_wait = loop.time() + 5.0
+        while not captured_timeouts[0].expired():
+            assert loop.time() < deadline_wait, "Job deadline did not expire while mark_files_ready was blocked"
+            await asyncio.sleep(0.01)
+        # Let the deadline handler issue task.cancel() and enter _drain_add_task before releasing the commit thread.
+        await asyncio.sleep(0.02)
+        assert not task.done()
+    finally:
+        release.set()
+    await task
+
+    assert provider.closed == 1
+    assert index.deleted == []
+    main, added = _files(document_id)
+    assert main.role == "main" and added.status == "ready" and added.source_import_status == "completed"
+    assert (storage / added.source_markdown_path).is_file()
+    fresh_job = _fresh_job(job.job_id)
+    assert fresh_job.status == PdfJobStatus.COMPLETED.value
+    assert fresh_job.current_stage == "completed"
+    assert fresh_job.metadata_json["supplements"][0]["state"] == "added"
+    report.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_after_add_serializes_concurrent_piece_count_publishes_with_real_paper_operation_lock(
+    paper, monkeypatch,
+):
+    import asyncio
+
+    document_id, owner_id, subject, _ = paper
+    first_publishing = asyncio.Event()
+    release_first = asyncio.Event()
+    published: list[int] = []
+
+    async def publish_count(_doc_id, piece_count, _client, _subject, *, caller_reports_failure=False):
+        assert caller_reports_failure is True
+        if piece_count == 30:
+            first_publishing.set()
+            await release_first.wait()
+        published.append(piece_count)
+
+    monkeypatch.setattr("src.lib.pipeline.store.update_document_piece_count", publish_count)
+    monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_: None)
+
+    first = asyncio.create_task(supplement_add._after_add(document_id, subject, object()))
+    await asyncio.wait_for(first_publishing.wait(), timeout=10)
+
+    # Commit a new ready supplement in Postgres (raising ready piece total from 30 -> 35)
+    # while refresh #1 still holds the real Postgres paper_operation_lock.
+    extra_id = uuid4()
+    with SessionLocal.begin() as db:
+        db.add(PDFDocumentFile(
+            id=extra_id,
+            document_id=document_id,
+            role="supplement",
+            display_name="Made_up_S99.xlsx",
+            status="ready",
+            tab_order=1,
+            display_mode="text",
+            file_path=f"{subject}/source_markdown/{extra_id}.md",
+            file_hash=extra_id.hex * 2,
+            file_size=10,
+            source_provider_source_file_id="99",
+            source_markdown_path=f"{subject}/source_markdown/{extra_id}.md",
+            chunk_index_start=30,
+            chunk_index_end=34,
+            chunk_count=5,
+            text_bytes=50,
+            added_at=datetime.now(timezone.utc),
+        ))
+    second = asyncio.create_task(supplement_add._after_add(document_id, subject, object()))
+    await asyncio.sleep(0.12)
+    assert published == []
+    release_first.set()
+    await asyncio.gather(first, second)
+
+    assert published == [30, 35]
+
+
+@pytest.mark.asyncio
+async def test_run_supplement_add_job_foreign_document_leaves_other_papers_job_untouched(paper, monkeypatch):
+    from unittest.mock import Mock
+
+    document_id, owner_id, subject, storage = paper
+    other_document_id = uuid4()
+    with SessionLocal.begin() as db:
+        db.add(new_paper(
+            id=other_document_id, user_id=owner_id, filename=f"{PREFIX}{other_document_id}.pdf", status="completed",
+            processing_completed_at=COMPLETED_AT, file_path=f"{subject}/{other_document_id}/made-up.pdf",
+            file_hash=other_document_id.hex * 2, file_size=100, page_count=2, next_chunk_index=30,
+            chunk_index_start=0, chunk_index_end=29, chunk_count=30, text_bytes=1_000,
+            source_provider="abc_literature", source_provider_reference_id="102",
+            source_provider_reference_curie="AGRKB:102", source_provider_source_file_id="10",
+        ))
+    other_job = supplement_add.start_supplement_add(other_document_id, owner_id, [_chosen(20)])
+    before_job = _fresh_job(other_job.job_id)
+
+    index = _Index().install(monkeypatch)
+    provider = _ClosableProvider({"21": WORKBOOK})
+    monkeypatch.setattr("src.lib.document_sources.registry.get_configured_document_source_provider", lambda: provider)
+    monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda **_kwargs: object())
+    report = Mock(return_value=True)
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+
+    await supplement_add.run_supplement_add_job(supplement_add.SupplementAddJobRequest(
+        job_id=UUID(other_job.job_id),
+        document_id=document_id,
+        user_id=subject,
+        owner_user_id=owner_id,
+        context=CONTEXT,
+        files=(_chosen(20),),
+    ))
+
+    # Target paper's uncommitted files are rolled back cleanly.
+    assert provider.closed == 1
+    (main,) = _files(document_id)
+    assert main.role == "main" and main.status == "ready"
+    assert len(index.deleted) == 1 and index.deleted[0][0] >= 30
+    assert not list(storage.rglob("*.md")) and not list(storage.rglob("*.json"))
+    report.assert_called_once()
+    assert report.call_args.kwargs["operation"] == "supplement_add_failed"
+    assert report.call_args.kwargs["context"] == {"exception_type": "DocumentFileError"}
+
+    # The foreign paper's job was neither progressed nor failed, and document-scoped cancel also leaves it untouched.
+    assert pdf_job_service.mark_cancelled(job_id=other_job.job_id, document_id=document_id) is None
+    after_job = _fresh_job(other_job.job_id)
+    assert after_job.document_id == other_document_id
+    assert after_job.status == before_job.status
+    assert after_job.current_stage == before_job.current_stage
+    assert after_job.error_message is None
+    assert after_job.completed_at is None
+    assert after_job.cancel_requested is False
+    assert after_job.metadata_json == before_job.metadata_json
+
+
+@pytest.mark.asyncio
+async def test_after_add_reuses_paper_lock_connection_under_one_connection_pool(paper, monkeypatch):
+    from unittest.mock import Mock
+
+    from sqlalchemy import create_engine
+
+    from src.lib.document_files import paper_lock
+    from src.models.sql import database
+
+    document_id, _owner_id, subject, _ = paper
+    small_engine = create_engine(database.engine.url, pool_size=1, max_overflow=0, pool_timeout=1)
+    published: list[int] = []
+
+    async def publish_count(_doc_id, piece_count, _client, _subject, *, caller_reports_failure=False):
+        assert caller_reports_failure is True
+        published.append(piece_count)
+
+    report = Mock(return_value=True)
+    monkeypatch.setattr(database, "engine", small_engine)
+    monkeypatch.setattr(
+        database,
+        "SessionLocal",
+        Mock(side_effect=AssertionError("_after_add must reuse the lock connection instead of opening SessionLocal")),
+    )
+    monkeypatch.setattr("src.lib.pipeline.store.update_document_piece_count", publish_count)
+    monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_: None)
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+
+    try:
+        await supplement_add._after_add(document_id, subject, object())
+        assert published == [30]
+        report.assert_not_called()
+        # The single pooled connection was cleanly unlocked and returned to the pool.
+        async with paper_lock.paper_operation_lock(document_id) as held_conn:
+            assert not held_conn.in_transaction()
+    finally:
+        small_engine.dispose()
