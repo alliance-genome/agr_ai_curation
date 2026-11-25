@@ -1767,6 +1767,106 @@ describe('DocumentFilesSection (Library Files + Add)', () => {
     }
   })
 
+  it('marks pending404Refresh before awaiting the post-404 active-jobs lookup so closing mid-refetch and reopening still refreshes /files and /source-files', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const viewerEvents: PDFViewerDocumentChangedDetail[] = []
+    const unsubscribeViewer = onPDFDocumentChanged((event) => viewerEvents.push(event.detail))
+    let activeJobCalls = 0
+    let listingCalls = 0
+    let paperFilesCalls = 0
+    let resolveInFlightPost404ActiveJobs!: (response: Response) => void
+
+    stubApi({
+      paperFiles: () => {
+        paperFilesCalls += 1
+        return jsonResponse(paperFilesCalls <= 2 ? FOUR_FILES_PAYLOAD : UPDATED_FIVE_FILES_PAYLOAD)
+      },
+      listing: () => {
+        listingCalls += 1
+        if (listingCalls === 1) {
+          return jsonResponse(
+            listingWith([fileListingFixture.files[0], fileListingFixture.files[1], SECOND_TICKABLE_FILE]),
+          )
+        }
+        return jsonResponse(
+          listingWith([
+            fileListingFixture.files[0],
+            { ...fileListingFixture.files[1], in_this_paper: true, tickable: false, not_tickable_reason: 'already_in_paper' },
+            SECOND_TICKABLE_FILE,
+          ]),
+        )
+      },
+      activeJobs: () => {
+        activeJobCalls += 1
+        if (activeJobCalls === 1) {
+          return jsonResponse({
+            jobs: [makeJob({ job_id: 'job-server-404-mid-refetch', status: 'running', current_stage: 'checking_files' })],
+            total: 1,
+            limit: 50,
+            offset: 0,
+          })
+        }
+        if (activeJobCalls === 2) {
+          // Keep the post-404 active-jobs refetch in flight while the dialog closes.
+          return new Promise<Response>((resolve) => {
+            resolveInFlightPost404ActiveJobs = resolve
+          })
+        }
+        return jsonResponse({ jobs: [], total: 0, limit: 50, offset: 0 })
+      },
+      onFetchJob: () => jsonResponse({ detail: 'Job not found' }, 404),
+    })
+
+    try {
+      const view = renderSection(
+        { providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT, pollIntervalMs: 20 },
+        client,
+      )
+
+      // Poll hits 404 and kicks off active-jobs call 2, which stays pending.
+      await waitFor(() => expect(activeJobCalls).toBe(2))
+      expect(listingCalls).toBe(1)
+
+      // Close the dialog while call 2 is STILL pending, then resolve call 2 and reopen.
+      view.rerender(
+        <QueryClientProvider client={client}>
+          <DocumentFilesSection
+            documentId={DOCUMENT_ID}
+            providerLabel={PROVIDER}
+            providerShortLabel={PROVIDER_SHORT}
+            processingStatus="completed"
+            open={false}
+            pollIntervalMs={20}
+          />
+        </QueryClientProvider>,
+      )
+      resolveInFlightPost404ActiveJobs(jsonResponse({ jobs: [], total: 0, limit: 50, offset: 0 }))
+
+      view.rerender(
+        <QueryClientProvider client={client}>
+          <DocumentFilesSection
+            documentId={DOCUMENT_ID}
+            providerLabel={PROVIDER}
+            providerShortLabel={PROVIDER_SHORT}
+            processingStatus="completed"
+            open
+            pollIntervalMs={20}
+          />
+        </QueryClientProvider>,
+      )
+
+      // Reopen sees empty active jobs and still triggers deferred refresh busting /source-files cache and refreshing viewer.
+      await waitFor(() => expect(listingCalls).toBe(2))
+      expect(await screen.findByRole('checkbox', { name: 'Made_up_S22' })).toBeInTheDocument()
+      expect(screen.queryByRole('checkbox', { name: 'Made_up_S20' })).not.toBeInTheDocument()
+      expect(await screen.findByText('Made_up_S20.xlsx')).toBeInTheDocument()
+      await waitFor(() => expect(viewerEvents).toHaveLength(1))
+      expect(viewerEvents[0]).toMatchObject({ documentId: DOCUMENT_ID, refreshOnlyIfOpen: true })
+    } finally {
+      unsubscribeViewer()
+    }
+  })
+
   it('shows Card 34 on an uploaded paper without asking the provider listing, using configured short label (Alliance & non-ABC) and hides when import disabled', async () => {
     const fetchMock = stubApi({
       sourceProvider: {

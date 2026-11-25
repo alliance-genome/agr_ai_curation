@@ -616,6 +616,9 @@ function ProviderFilesPart({
           return
         }
         if (error instanceof ApiHttpError && error.httpStatus === 404) {
+          // Persist before awaiting active-jobs refetch so closing the dialog mid-refetch
+          // still triggers a full refresh when reopening sees no active job.
+          markPending404Refresh(polledDocumentId)
           const refetched = await refetchActiveJobsRef.current({ throwOnError: false })
           if (cancelled || controller.signal.aborted) {
             return
@@ -623,7 +626,6 @@ function ProviderFilesPart({
           if (refetched.isError) {
             // Active-jobs refetch failed after 404: fail closed via activeJobsQuery.isError
             // and trigger a full refresh if a subsequent "Try again" or reopen confirms no active job remains.
-            markPending404Refresh(polledDocumentId)
             setPending404Refresh(true)
             setTrackedJobState(null)
             setPollError(null)
@@ -633,6 +635,8 @@ function ProviderFilesPart({
           const remainingActive =
             refetched.data?.find((job) => isActivePdfJobStatus(job.status)) ?? null
           if (remainingActive && remainingActive.job_id !== trackedJobId) {
+            clearPending404Refresh(polledDocumentId)
+            setPending404Refresh(false)
             setTrackedJobState({
               job: remainingActive,
               origin: isSupplementAddJob(remainingActive) ? 'user_add' : 'server_active',
