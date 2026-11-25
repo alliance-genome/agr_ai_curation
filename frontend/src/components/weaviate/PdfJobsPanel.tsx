@@ -21,13 +21,22 @@ import {
 import { ExpandLess, ExpandMore, FileOpen } from '@mui/icons-material';
 import PreparedReviewAndCurateButton from '@/features/curation/components/PreparedReviewAndCurateButton';
 import { PDF_JOB_WINDOW_DAYS } from '@/features/documents/documentIntakeConfig';
+import {
+  WAITING_FOR_SUPPLEMENTS_STAGE,
+  getJobSupplementProgress,
+} from '@/features/documents/supplementProgress';
 import { useLoadDocumentForChat } from '@/features/documents/useLoadDocumentForChat';
 import type { PdfProcessingJob } from '../../services/weaviate';
+import SupplementFilesList from './SupplementFilesList';
 
-interface PdfJobsPanelProps {
+export interface PdfJobsPanelProps {
   jobs: PdfProcessingJob[];
   loading?: boolean;
   onCancelJob?: (jobId: string) => Promise<void>;
+  /** Configured provider short label for job/supplement copy (e.g. from `providerMetadata.shortLabel`). */
+  providerShortLabel?: string | null;
+  /** Configured provider display label fallback (e.g. from `providerMetadata.displayLabel`). */
+  providerLabel?: string | null;
 }
 
 const statusColor = (status: PdfProcessingJob['status']): 'default' | 'primary' | 'success' | 'warning' | 'error' => {
@@ -64,6 +73,10 @@ const labelForStatus = (status: PdfProcessingJob['status']): string => {
   }
 };
 
+const isActiveJob = (job: PdfProcessingJob): boolean => {
+  return job.status === 'pending' || job.status === 'running' || job.status === 'cancel_requested';
+};
+
 const canCancel = (job: PdfProcessingJob): boolean => {
   return job.status === 'pending' || job.status === 'running';
 };
@@ -87,7 +100,10 @@ const sourceDisplayName = (value: unknown): string | null => {
   return typeof displayName === 'string' && displayName.trim() ? displayName : null;
 };
 
-const conversionSummary = (job: PdfProcessingJob): string | null => {
+const conversionSummary = (
+  job: PdfProcessingJob,
+  configuredProviderName?: string | null,
+): string | null => {
   const documentSource = job.metadata?.document_source;
   if (!documentSource || typeof documentSource !== 'object') {
     return null;
@@ -118,20 +134,32 @@ const conversionSummary = (job: PdfProcessingJob): string | null => {
     return `Converted text available: ${convertedClasses.join(', ')}`;
   }
   const conversionStatus = typeof payload.conversion_status === 'string' ? payload.conversion_status : null;
-  return conversionStatus ? `ABC conversion status: ${conversionStatus}` : null;
+  if (!conversionStatus) {
+    return null;
+  }
+  return configuredProviderName
+    ? `${configuredProviderName} conversion status: ${conversionStatus}`
+    : `Conversion status: ${conversionStatus}`;
 };
 
-const PdfJobsPanel: React.FC<PdfJobsPanelProps> = ({ jobs, loading = false, onCancelJob }) => {
+const PdfJobsPanel: React.FC<PdfJobsPanelProps> = ({
+  jobs,
+  loading = false,
+  onCancelJob,
+  providerShortLabel,
+  providerLabel,
+}) => {
   const loadDocumentForChat = useLoadDocumentForChat();
   const [dismissedJobIds, setDismissedJobIds] = React.useState<Set<string>>(new Set());
   const [page, setPage] = React.useState(1);
   const [rowsPerPage, setRowsPerPage] = React.useState(5);
+  const configuredProviderName = providerShortLabel?.trim() || providerLabel?.trim() || null;
   const visibleJobs = React.useMemo(
     () => jobs.filter((job) => !dismissedJobIds.has(job.job_id)),
     [dismissedJobIds, jobs]
   );
   const hasJobs = visibleJobs.length > 0;
-  const activeCount = visibleJobs.filter((job) => ['pending', 'running', 'cancel_requested'].includes(job.status)).length;
+  const activeCount = visibleJobs.filter(isActiveJob).length;
   const hiddenCount = jobs.length - visibleJobs.length;
   const [expanded, setExpanded] = React.useState(() => loading || activeCount > 0);
   const totalPages = Math.max(1, Math.ceil(visibleJobs.length / rowsPerPage));
@@ -258,7 +286,16 @@ const PdfJobsPanel: React.FC<PdfJobsPanelProps> = ({ jobs, loading = false, onCa
             const progress = Math.max(0, Math.min(100, job.progress_percentage ?? 0));
             const message = job.error_message || job.message || 'Processing...';
             const updatedLabel = job.updated_at ? new Date(job.updated_at).toLocaleString() : 'unknown';
-            const providerConversionSummary = conversionSummary(job);
+            const providerConversionSummary = conversionSummary(job, configuredProviderName);
+            const rawSupplementProgress = getJobSupplementProgress(job);
+            const isActivelyWaitingForSupplements =
+              canCancel(job)
+              && (!job.current_stage || job.current_stage === WAITING_FOR_SUPPLEMENTS_STAGE);
+            const supplementProgress = rawSupplementProgress
+              ? (isActivelyWaitingForSupplements
+                ? rawSupplementProgress
+                : { ...rawSupplementProgress, supplement_wait_ends_at: null })
+              : null;
 
             return (
               <Box key={job.job_id} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
@@ -350,8 +387,19 @@ const PdfJobsPanel: React.FC<PdfJobsPanelProps> = ({ jobs, loading = false, onCa
                     {providerConversionSummary}
                   </Typography>
                 )}
+                {supplementProgress && (
+                  <SupplementFilesList
+                    progress={supplementProgress}
+                    currentStage={job.current_stage}
+                    providerShortLabel={providerShortLabel}
+                    providerLabel={providerLabel}
+                    compact
+                  />
+                )}
                 <Typography variant="caption" noWrap sx={{
-                  color: "text.secondary"
+                  color: "text.secondary",
+                  display: 'block',
+                  mt: supplementProgress ? 0.5 : 0
                 }}>
                   Updated: {updatedLabel}
                 </Typography>

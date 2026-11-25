@@ -138,6 +138,19 @@ const canOpenInDocuments = (result: LiteratureImportResult) => (
   Boolean(result.documentId) && result.status !== 'conversion_running'
 );
 
+const areJobMetadataEquivalent = (
+  previous: PdfProcessingJob['metadata'],
+  next: PdfProcessingJob['metadata'],
+): boolean => {
+  if (previous === next) {
+    return true;
+  }
+  if (!previous || !next) {
+    return (previous ?? null) === (next ?? null);
+  }
+  return JSON.stringify(previous) === JSON.stringify(next);
+};
+
 const areJobsEquivalent = (previous: PdfProcessingJob[], next: PdfProcessingJob[]): boolean => {
   if (previous === next) {
     return true;
@@ -159,7 +172,8 @@ const areJobsEquivalent = (previous: PdfProcessingJob[], next: PdfProcessingJob[
       prevJob.error_message !== nextJob.error_message ||
       prevJob.cancel_requested !== nextJob.cancel_requested ||
       prevJob.updated_at !== nextJob.updated_at ||
-      prevJob.completed_at !== nextJob.completed_at
+      prevJob.completed_at !== nextJob.completed_at ||
+      !areJobMetadataEquivalent(prevJob.metadata, nextJob.metadata)
     ) {
       return false;
     }
@@ -926,7 +940,13 @@ const AddLiteraturePage: React.FC = () => {
           </TableContainer>
         </Paper>
 
-        <PdfJobsPanel jobs={jobs} loading={jobsLoading} onCancelJob={handleCancelJob} />
+        <PdfJobsPanel
+          jobs={jobs}
+          loading={jobsLoading}
+          onCancelJob={handleCancelJob}
+          providerShortLabel={providerPresentation?.shortLabel}
+          providerLabel={providerPresentation?.displayLabel}
+        />
       </Stack>
     </Box>
   );
