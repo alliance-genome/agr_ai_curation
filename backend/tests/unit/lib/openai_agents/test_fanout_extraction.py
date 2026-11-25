@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 from agents import Agent, FunctionTool, ModelSettings, RunConfig
@@ -1305,8 +1307,89 @@ def _writers_under_test(harness, monkeypatch, writer):
         emit_event=harness.events.append, record_live_evidence=lambda record: None,
         evidence_records=[],
     )
+    assert extraction is not None
     monkeypatch.setattr(extraction, "_run_writer", writer)
     return extraction
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reporter_fails", [False, True])
+async def test_distinct_terminal_rerun_failure(harness, monkeypatch, caplog, reporter_fails):
+    import sentry_sdk
+    from sentry_sdk.integrations.logging import LoggingIntegration
+    from sentry_sdk.transport import Transport
+    from src.lib.observability.sentry import before_send
+
+    first = RuntimeError("fake-private-first-error")
+    terminal = ValueError("fake-private-curator-prompt")
+    terminal.__cause__ = LookupError("fake-private-document-id")
+    extraction = _writers_under_test(harness, monkeypatch, mock.AsyncMock(side_effect=[first, terminal]))
+    events = []
+
+    class MemoryTransport(Transport):
+        def capture_envelope(self, envelope):
+            events.extend(item.get_event() for item in envelope.items if item.headers["type"] == "event")
+
+    reporter = mock.Mock(wraps=fanout.runtime.report_runtime_exception)
+    if reporter_fails:
+        reporter.side_effect = RuntimeError("fake-private-reporter-error")
+    monkeypatch.setattr(fanout.runtime, "report_runtime_exception", reporter)
+    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "false")
+    with sentry_sdk.Client(
+        dsn="http://public@example.invalid/1", transport=MemoryTransport, before_send=before_send,
+        default_integrations=False, integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+    ) as client, sentry_sdk.isolation_scope() as scope:
+        scope.set_client(client)
+        scope.add_event_processor(lambda event, hint: {
+            **event, "request": {"url": "https://example.invalid/documents/fake-private-request-document"},
+        })
+        with pytest.raises(RuntimeError) as raised:
+            await extraction._run_writers([(0,)])
+        client.flush()
+
+    assert raised.value is first
+    assert first.__context__ is first.__cause__ is None
+    assert [(event["attempt"], event["error_type"], event["rerun"])
+            for event in _fanout_trace(harness, "writer_failed")] == [
+        (1, "RuntimeError", True), (2, "ValueError", False)]
+    assert _fanout_trace(harness, "writer_rerun_finished") == [{"writer": 1, "attempt": 2, "outcome": "failed"}]
+    assert "fake-private" not in caplog.text
+    reporter.assert_called_once()
+    if reporter_fails:
+        assert events == []
+        warning, = [record for record in caplog.records if record.name == fanout.__name__]
+        assert warning.sentry_skip_event is True
+    else:
+        event, = events
+        assert event["tags"]["operation"] == "extraction_fanout_writer_rerun_failure"
+        assert event["contexts"]["runtime_exception"]["type"] == "ValueError"
+        assert [exc["value"] for exc in event["exception"]["values"]] == ["Fan-out writer rerun failed"]
+        assert "fake-private" not in json.dumps(event)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["same_exception", "already_captured", "succeeded", "reruns_disabled"])
+async def test_no_terminal_rerun_report_for_other_outcomes(harness, monkeypatch, outcome):
+    first = RuntimeError("writer failure")
+    owned = ValueError("previously reported")
+    setattr(owned, "_ai_curation_sentry_captured", True)
+    attempts = {
+        "same_exception": [first, first],
+        "already_captured": [first, owned],
+        "succeeded": [first, RuntimeError("intermediate failure"), object()],
+        "reruns_disabled": [first],
+    }[outcome]
+    extraction = _writers_under_test(harness, monkeypatch, mock.AsyncMock(side_effect=attempts))
+    extraction.writer_reruns = len(attempts) - 1
+    reporter = mock.Mock()
+    monkeypatch.setattr(fanout.runtime, "report_runtime_exception", reporter)
+    if outcome == "succeeded":
+        await extraction._run_writers([(0,)])
+    else:
+        with pytest.raises(RuntimeError) as raised:
+            await extraction._run_writers([(0,)])
+        assert raised.value is first
+    reporter.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1473,7 +1556,9 @@ def test_discarded_writer_sdk_capture_failure_is_private(monkeypatch, caplog):
 
     monkeypatch.setattr(sentry_sdk, "capture_exception", fail_capture)
     secondary = ValueError("fake-private-writer-detail")
-    fanout._report_discarded_writer_failure(secondary)
+    fanout._report_discarded_writer_failure(
+        secondary, message="Additional fan-out writer failed", operation="extraction_fanout_additional_writer_failure",
+    )
 
     assert not getattr(secondary, "_ai_curation_sentry_captured", False)
     assert "fake-private" not in caplog.text
