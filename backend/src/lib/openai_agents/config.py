@@ -2440,7 +2440,7 @@ def get_document_source_max_polls_per_wait() -> int:
     per-wait number can bound. Owner's ruling, 24 Nov 2026 (option b).
     """
     name = "DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"
-    value = _get_env_int_with_fallback(name, 400)
+    value = _get_nonnegative_env_int(name, 400)
     if value < 1:
         raise ValueError(f"{name} is {value}; it must be at least 1")
     return value
@@ -2472,10 +2472,10 @@ def supplement_wait_max_polls(*, wait_seconds: float, listing_poll_seconds: floa
     return math.ceil(wait_seconds / listing_poll_seconds) - 1
 
 
-def _smallest_interval(wait_seconds: float, most_intervals: int) -> float:
+def _smallest_interval(wait_seconds: float, most_intervals: int) -> float | None:
     """The smallest interval with ``ceil(wait / interval) <= most_intervals``, to 0.01 s."""
     if most_intervals < 1:
-        return wait_seconds
+        return None
     return math.ceil(wait_seconds / most_intervals * 100) / 100
 
 
@@ -2512,26 +2512,63 @@ def validate_document_source_wait_settings() -> None:
     # protection for the provider's workers (see get_document_source_max_polls_per_wait).
     main_polls = main_wait_max_polls(deadline_seconds=deadline_seconds, poll_seconds=poll_seconds)
     if main_polls > max_polls:
+        # Every valid main wait satisfies poll < deadline - request_timeout < deadline,
+        # so ceil(deadline / poll) >= 2 and main_wait_max_polls >= 7. Only suggest a
+        # poll interval when it also leaves room for the end request.
+        proposed_poll = _smallest_interval(deadline_seconds, max_polls - 5) if max_polls > 6 else None
+        if (
+            proposed_poll is not None
+            and proposed_poll >= DOCUMENT_SOURCE_MIN_POLL_INTERVAL_SECONDS
+            and request_timeout_seconds < deadline_seconds - proposed_poll
+            and main_wait_max_polls(deadline_seconds=deadline_seconds, poll_seconds=proposed_poll) <= max_polls
+        ):
+            remediation = (
+                f"set DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS to at least {proposed_poll:g}, "
+                "lower DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS, or raise DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"
+            )
+        elif max_polls <= 6:
+            remediation = (
+                "a valid main wait needs at least 7 polls; "
+                "raise DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT to at least 7"
+            )
+        else:
+            remediation = (
+                "raise DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT, or adjust "
+                "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS, DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS, "
+                "and DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS so the end request still fits"
+            )
         raise DocumentSourceWaitSettingsError(
             f"DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS / DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS "
             f"({deadline_seconds:g} / {poll_seconds:g}) lets one main paper's wait make up to "
             f"{main_polls} polls (listing reads and its two conversion requests), more than "
-            f"DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT ({max_polls}), our own polling cap; set "
-            f"DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS to at least "
-            f"{_smallest_interval(deadline_seconds, max_polls - 5):g}, lower "
-            f"DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS, or raise DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"
+            f"DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT ({max_polls}), our own polling cap; {remediation}"
         )
     supplement_polls = supplement_wait_max_polls(
         wait_seconds=supplement_wait_seconds, listing_poll_seconds=listing_poll_seconds,
     )
     if supplement_polls > max_polls:
+        proposed_listing_poll = _smallest_interval(supplement_wait_seconds, max_polls + 1)
+        if (
+            proposed_listing_poll is not None
+            and proposed_listing_poll >= DOCUMENT_SOURCE_MIN_POLL_INTERVAL_SECONDS
+            and supplement_wait_max_polls(
+                wait_seconds=supplement_wait_seconds, listing_poll_seconds=proposed_listing_poll,
+            )
+            <= max_polls
+        ):
+            remediation = (
+                f"set DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS to at least {proposed_listing_poll:g}, "
+                "lower DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS, or raise DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"
+            )
+        else:
+            remediation = (
+                "lower DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS or raise DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"
+            )
         raise DocumentSourceWaitSettingsError(
             f"DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS / DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS "
             f"({supplement_wait_seconds:g} / {listing_poll_seconds:g}) lets one supplement wait make "
             f"up to {supplement_polls} listing reads, more than DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT "
-            f"({max_polls}), our own polling cap; set DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS to at "
-            f"least {_smallest_interval(supplement_wait_seconds, max_polls + 1):g}, lower "
-            f"DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS, or raise DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"
+            f"({max_polls}), our own polling cap; {remediation}"
         )
     # A deadline pinned below the default (an old override) is not unsafe and is
     # not refused; stating the effective values makes it visible.

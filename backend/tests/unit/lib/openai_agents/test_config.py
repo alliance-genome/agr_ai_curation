@@ -2631,6 +2631,7 @@ def _clear_wait_settings(monkeypatch):
     for name in (
         "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS",
         "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS",
+        "DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS",
         "DOCUMENT_SOURCE_DEAD_WAIT_POLLS",
         "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS",
         "DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS",
@@ -2825,4 +2826,82 @@ def test_the_refusal_names_the_smallest_interval_that_fits(monkeypatch, env, sma
         validate_document_source_wait_settings()
     assert smallest in str(error.value)
     assert "our own polling cap" in str(error.value)  # never presented as the provider's protection
+
+
+@pytest.mark.parametrize("raw", ["10.0", "abc", "0", "-5", ""])
+def test_request_ceiling_rejects_malformed_and_nonpositive_values(monkeypatch, raw):
+    from src.lib.openai_agents.config import (
+        DocumentSourceWaitSettingsError,
+        get_document_source_max_polls_per_wait,
+        validate_document_source_wait_settings,
+    )
+
+    _clear_wait_settings(monkeypatch)
+    monkeypatch.setenv("DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT", raw)
+    with pytest.raises(ValueError, match="DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"):
+        get_document_source_max_polls_per_wait()
+    with pytest.raises(DocumentSourceWaitSettingsError, match="DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"):
+        validate_document_source_wait_settings()
+
+
+@pytest.mark.parametrize("cap", ["1", "5", "6"])
+def test_startup_refuses_small_request_ceilings_without_illegal_interval_advice(monkeypatch, cap):
+    """Every valid main wait requires poll < deadline - request_timeout, so ceil(deadline / poll) >= 2
+    and main_wait_max_polls >= 7; caps <= 6 must not recommend an illegal poll interval."""
+    from src.lib.openai_agents.config import (
+        DocumentSourceWaitSettingsError,
+        validate_document_source_wait_settings,
+    )
+
+    _clear_wait_settings(monkeypatch)
+    monkeypatch.setenv("DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT", cap)
+    with pytest.raises(DocumentSourceWaitSettingsError) as error:
+        validate_document_source_wait_settings()
+    message = str(error.value)
+    assert "DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT" in message
+    assert "at least 7" in message
+    assert "our own polling cap" in message
+    assert "set DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS to at least" not in message
+
+
+def test_startup_omits_poll_interval_advice_when_it_would_leave_no_room_for_end_request(monkeypatch):
+    """Even at cap=7, the smallest poll that fits main_wait_max_polls (50 s for a 100 s deadline)
+    cannot be recommended when request_timeout=60 s would immediately fail startup."""
+    from src.lib.openai_agents.config import (
+        DocumentSourceWaitSettingsError,
+        validate_document_source_wait_settings,
+    )
+
+    _clear_wait_settings(monkeypatch)
+    monkeypatch.setenv("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", "100")
+    monkeypatch.setenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", "60")
+    monkeypatch.setenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", "30")
+    monkeypatch.setenv("DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT", "7")
+    with pytest.raises(DocumentSourceWaitSettingsError) as error:
+        validate_document_source_wait_settings()
+    message = str(error.value)
+    assert "DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT" in message
+    assert "DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS" in message
+    assert "set DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS to at least" not in message
+
+
+def test_startup_poll_interval_advice_at_cap_seven_is_accepted_when_room_exists(monkeypatch):
+    from src.lib.openai_agents.config import (
+        DocumentSourceWaitSettingsError,
+        validate_document_source_wait_settings,
+    )
+
+    _clear_wait_settings(monkeypatch)
+    monkeypatch.setenv("DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS", "100")
+    monkeypatch.setenv("DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS", "10")
+    monkeypatch.setenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", "30")
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", "100")
+    monkeypatch.setenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", "15")
+    monkeypatch.setenv("DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT", "7")
+    with pytest.raises(DocumentSourceWaitSettingsError) as error:
+        validate_document_source_wait_settings()
+    assert "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS to at least 50" in str(error.value)
+
+    monkeypatch.setenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", "50")
+    validate_document_source_wait_settings()
 
