@@ -215,18 +215,7 @@ _connection_lock = RLock()
 
 
 def get_connection(*, caller_reports_failure: bool = False) -> WeaviateConnection:
-    """Get the singleton Weaviate connection instance.
-
-    Args:
-        caller_reports_failure: When True, delegate initial connection failure
-            logging/reporting to the caller so no duplicate ERROR log is emitted.
-
-    Returns:
-        The global WeaviateConnection instance
-
-    Raises:
-        RuntimeError: If connection not initialized
-    """
+    """Get the shared connection. The caller can report initial connection failures itself."""
     global _connection
     with _connection_lock:
         if _connection is None:
@@ -242,11 +231,7 @@ def get_connection(*, caller_reports_failure: bool = False) -> WeaviateConnectio
             # Actually connect to Weaviate, and refuse an engine other than the
             # pinned one (processes without the API startup, such as the benchmark
             # worker, connect here).
-            client = (
-                connection.connect(caller_reports_failure=True)
-                if caller_reports_failure
-                else connection.connect()
-            )
+            client = connection.connect(caller_reports_failure=caller_reports_failure)
             require_expected_engine_version(client)
             _connection = connection
         return _connection

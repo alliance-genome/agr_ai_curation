@@ -635,7 +635,7 @@ async def test_cold_connection_and_query_yield_and_worker_closes(monkeypatch, na
         def __init__(self, **kwargs):
             pass
 
-        def connect(self):
+        def connect(self, *, caller_reports_failure):
             assert get_ident() != main_thread
             assert owner.get() == "run-a"
             lifecycle.append("connect")

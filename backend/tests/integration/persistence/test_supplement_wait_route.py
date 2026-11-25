@@ -258,7 +258,7 @@ def _search_index(monkeypatch):
     monkeypatch.setattr("src.lib.pipeline.store.update_document_piece_count", AsyncMock())
     monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_: None)
     monkeypatch.setattr(execution, "get_connection", lambda: None)
-    monkeypatch.setattr(execution, "update_document_status", AsyncMock())
+    monkeypatch.setattr(execution, "update_document_status_detailed", AsyncMock(return_value={"success": True}))
     monkeypatch.setattr(
         supplement_add, "current_file_check_limits",
         lambda: FileCheckLimits(max_bytes=10_000, few_characters_below=10, row_token_limit=200,

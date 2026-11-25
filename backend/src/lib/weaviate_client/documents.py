@@ -956,7 +956,7 @@ async def update_document_status_detailed(
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped status updates (FR-011, FR-014)")
 
-    connection = get_connection()
+    connection = get_connection(caller_reports_failure=caller_reports_failure)
     if not connection:
         raise RuntimeError("No Weaviate connection established")
 

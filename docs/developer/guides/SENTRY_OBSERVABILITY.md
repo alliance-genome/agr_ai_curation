@@ -568,6 +568,26 @@ even if reporting fails. It reports once per outage, and a successful write
 enables a new report on the next failure. Companion warnings skip log promotion.
 Ordinary keeper cancellation is quiet.
 
+Upload execution reports secondary reconciliation and provider cleanup failures
+under component `pdf_jobs`. Each failed operation emits a separate event.
+
+| Operation | When it is reported |
+| --- | --- |
+| `provider_markdown_sql_reconciliation_failed` | Recording the failed main file or paper in SQL raises during a Markdown import. |
+| `provider_conversion_sql_reconciliation_failed` | Recording the failed main file or paper in SQL raises during a conversion import. |
+| `upload_index_status_reconciliation_failed` | Writing the failed processing status to Weaviate raises or returns an unsuccessful result during import, local upload, or cancellation. |
+| `provider_markdown_close_failed` | Closing the Markdown import's provider raises. |
+| `provider_conversion_close_failed` | Closing the conversion import's provider raises. |
+| `supplement_stage_provider_close_failed` | Closing the supplement worker's provider raises. |
+
+Each event uses a fixed, chain-free error and omits the HTTP request, raw
+identifiers, exception text, and write-result details. A raised error contributes
+only its bounded exception class. A rejected Weaviate write contributes the
+fixed context value `failure_kind=write_rejected`. The caller owns reporting
+from the first Weaviate connection attempt through the status write. Companion
+warnings skip Sentry log promotion. A cleanup or
+reporting failure preserves the original job or stage outcome, including cancellation.
+
 The per-file PDF viewer reports missing artifacts after it verifies ownership,
 display mode, and ready status. Under component `pdf_viewer`, a missing PDF
 produces `pdf_viewer_ready_file_bytes_missing`. An absent processed-elements
