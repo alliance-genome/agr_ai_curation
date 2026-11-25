@@ -10,10 +10,7 @@ import {
   isPdfFile,
   type ViewerFile,
 } from '@/components/pdfViewer/viewerFiles'
-import {
-  PDF_JOB_LIMIT,
-  PDF_PROGRESS_POLL_INTERVAL_MS,
-} from '@/features/documents/documentIntakeConfig'
+import { PDF_PROGRESS_POLL_INTERVAL_MS } from '@/features/documents/documentIntakeConfig'
 import {
   PaperSourceFilesContractError,
   fetchPaperSourceFiles,
@@ -22,12 +19,13 @@ import {
 } from '@/features/documents/paperSourceFiles'
 import { parseSupplementJobProgress } from '@/features/documents/supplementProgress'
 import {
-  ACTIVE_PDF_JOB_STATUSES,
   AddDocumentSourceFilesError,
+  ApiHttpError,
+  AuthenticationError,
   addDocumentSourceFiles,
+  fetchActivePdfJobsForDocument,
   fetchDocumentSourceProviderConfiguration,
   fetchPdfJob,
-  fetchPdfJobs,
   isActivePdfJobStatus,
   type DocumentSourceProvenance,
   type PdfProcessingJob,
@@ -75,6 +73,17 @@ export const documentSourceProviderConfigQueryKey = () =>
 export const PAPER_SOURCE_FILES_STALE_MS = 5 * 60 * 1000
 
 /**
+ * Retained in-flight add job ids keyed by document id so closing the dialog mid-add and
+ * reopening the same paper reconciles the completed job and busts the 5-minute listing cache.
+ */
+const pendingAddJobIdsByDocument = new Map<string, string>()
+
+/** Clear retained add job ids (used for test isolation). */
+export function clearPendingAddJobIds(): void {
+  pendingAddJobIdsByDocument.clear()
+}
+
+/**
  * The provider's label for the Files section: only its configured label. The label is
  * required when a provider is registered (the backend refuses to start without one), so
  * a paper whose provider has no label came from a provider this server does not have; the
@@ -114,6 +123,10 @@ function isAbortError(error: unknown): boolean {
   )
 }
 
+function isSupplementAddJob(job: PdfProcessingJob | null): boolean {
+  return job !== null && job.metadata?.job_kind === 'supplement_add'
+}
+
 type TickablePaperSourceFile = Extract<PaperSourceFile, { tickable: true }>
 
 function isTickableOtherFile(file: PaperSourceListedFile): file is TickablePaperSourceFile {
@@ -121,6 +134,7 @@ function isTickableOtherFile(file: PaperSourceListedFile): file is TickablePaper
 }
 
 interface AddRefusalBanner {
+  code: string | null
   text: string
   retryable: boolean
 }
@@ -138,6 +152,8 @@ export interface DocumentFilesSectionProps {
   providerShortLabel?: string | null
   /** Optional override for the server's configured provider short label on uploaded papers (Card 34). */
   configuredProviderShortLabel?: string | null
+  /** The paper's processing status; Library Add is enabled only when `completed`. */
+  processingStatus?: string | null
   open: boolean
   /** Called after an active or submitted supplement job finishes so parent document details can refresh. */
   onFilesChanged?: () => void
@@ -257,6 +273,7 @@ function ProviderFilesPart({
   documentId,
   provider,
   providerShortLabel,
+  processingStatus,
   open,
   onFilesChanged,
   pollIntervalMs,
@@ -264,18 +281,27 @@ function ProviderFilesPart({
   documentId: string
   provider: string
   providerShortLabel?: string | null
+  processingStatus?: string | null
   open: boolean
   onFilesChanged?: () => void
   pollIntervalMs: number
 }) {
   const queryClient = useQueryClient()
   const shortProvider = providerShortLabel?.trim() || provider
+  const isPaperCompleted =
+    processingStatus === undefined
+      ? true
+      : typeof processingStatus === 'string' && processingStatus.toLowerCase() === 'completed'
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const [submitting, setSubmitting] = useState(false)
   const [addRefusal, setAddRefusal] = useState<AddRefusalBanner | null>(null)
   const [importDisabled, setImportDisabled] = useState(false)
   const [trackedJobState, setTrackedJobState] = useState<TrackedJobState | null>(null)
+  const [reconcilingRetainedJob, setReconcilingRetainedJob] = useState(
+    () => open && pendingAddJobIdsByDocument.has(documentId),
+  )
+  const [retainedRetryCount, setRetainedRetryCount] = useState(0)
   const [pollError, setPollError] = useState<string | null>(null)
   const [pollRetryCount, setPollRetryCount] = useState(0)
 
@@ -319,43 +345,21 @@ function ProviderFilesPart({
 
   const activeJobsQuery = useQuery({
     queryKey: paperActiveJobsQueryKey(documentId),
-    queryFn: ({ signal }) =>
-      fetchPdfJobs(
-        {
-          status: [...ACTIVE_PDF_JOB_STATUSES],
-          documentId,
-          limit: PDF_JOB_LIMIT,
-        },
-        { signal },
-      ),
+    queryFn: ({ signal }) => fetchActivePdfJobsForDocument(documentId, { signal }),
     enabled: open,
     retry: false,
     refetchOnWindowFocus: false,
   })
 
+  const refetchActiveJobsRef = useRef(activeJobsQuery.refetch)
+  refetchActiveJobsRef.current = activeJobsQuery.refetch
+
   const serverActiveJob = useMemo(
-    () => activeJobsQuery.data?.jobs.find((job) => isActivePdfJobStatus(job.status)) ?? null,
+    () => activeJobsQuery.data?.find((job) => isActivePdfJobStatus(job.status)) ?? null,
     [activeJobsQuery.data],
   )
 
-  // Adopt an existing server-side active job (e.g. waiting_for_supplements or an add started earlier).
-  useEffect(() => {
-    if (!open || !serverActiveJob) {
-      return
-    }
-    setTrackedJobState((current) => {
-      if (current && current.job.job_id === serverActiveJob.job_id) {
-        return current
-      }
-      if (current && isActivePdfJobStatus(current.job.status)) {
-        return current
-      }
-      return { job: serverActiveJob, origin: 'server_active' }
-    })
-  }, [open, serverActiveJob])
-
-  const handleTrackedJobFinished = useCallback(async () => {
-    const targetDocumentId = documentId
+  const handleTrackedJobFinished = useCallback(async (targetDocumentId: string) => {
     const [viewerResult] = await Promise.allSettled([
       queryClient.fetchQuery({
         queryKey: paperFilesQueryKey(targetDocumentId),
@@ -368,14 +372,92 @@ function ProviderFilesPart({
     if (!mountedRef.current || activeDocumentIdRef.current !== targetDocumentId) {
       return
     }
+    setAddRefusal((prev) => (prev?.code === 'import_in_progress' ? null : prev))
     if (viewerResult.status === 'fulfilled') {
       showPaperFilesInViewer(targetDocumentId, viewerResult.value.files, { refreshOnlyIfOpen: true })
     }
     onFilesChangedRef.current?.()
-  }, [documentId, queryClient])
+  }, [queryClient])
 
   const handleTrackedJobFinishedRef = useRef(handleTrackedJobFinished)
   handleTrackedJobFinishedRef.current = handleTrackedJobFinished
+
+  // Reconcile a retained add job started before the dialog closed so reopening within the
+  // 5-minute listing cache window never re-offers files that already finished adding.
+  useEffect(() => {
+    if (!open) {
+      setReconcilingRetainedJob(false)
+      return
+    }
+    const retainedJobId = pendingAddJobIdsByDocument.get(documentId)
+    if (!retainedJobId) {
+      setReconcilingRetainedJob(false)
+      return
+    }
+    let cancelled = false
+    const controller = new AbortController()
+    const targetDocumentId = documentId
+    setReconcilingRetainedJob(true)
+
+    void (async () => {
+      try {
+        const latest = await fetchPdfJob(retainedJobId, { signal: controller.signal })
+        if (cancelled || controller.signal.aborted || latest.document_id !== targetDocumentId) {
+          return
+        }
+        setAddRefusal((prev) => (prev?.code === 'import_in_progress' ? null : prev))
+        setPollError(null)
+        setTrackedJobState({ job: latest, origin: 'user_add' })
+        if (!isActivePdfJobStatus(latest.status)) {
+          if (pendingAddJobIdsByDocument.get(targetDocumentId) === retainedJobId) {
+            pendingAddJobIdsByDocument.delete(targetDocumentId)
+          }
+          await handleTrackedJobFinishedRef.current(targetDocumentId)
+        }
+      } catch (error) {
+        if (cancelled || controller.signal.aborted || isAbortError(error)) {
+          return
+        }
+        if (error instanceof ApiHttpError && error.httpStatus === 404) {
+          if (pendingAddJobIdsByDocument.get(targetDocumentId) === retainedJobId) {
+            pendingAddJobIdsByDocument.delete(targetDocumentId)
+          }
+          await handleTrackedJobFinishedRef.current(targetDocumentId)
+        } else {
+          setPollError('Could not check progress for adding files.')
+        }
+      } finally {
+        if (!cancelled && !controller.signal.aborted) {
+          setReconcilingRetainedJob(false)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  }, [open, documentId, retainedRetryCount])
+
+  // Adopt an existing server-side active job (e.g. waiting_for_supplements or an add started earlier).
+  useEffect(() => {
+    if (!open || !serverActiveJob) {
+      return
+    }
+    setAddRefusal((prev) => (prev?.code === 'import_in_progress' ? null : prev))
+    setTrackedJobState((current) => {
+      if (current && current.job.job_id === serverActiveJob.job_id) {
+        return current
+      }
+      if (current && isActivePdfJobStatus(current.job.status)) {
+        return current
+      }
+      return {
+        job: serverActiveJob,
+        origin: isSupplementAddJob(serverActiveJob) ? 'user_add' : 'server_active',
+      }
+    })
+  }, [open, serverActiveJob])
 
   const trackedJob = trackedJobState?.job ?? null
   const trackedJobOrigin = trackedJobState?.origin ?? null
@@ -389,11 +471,12 @@ function ProviderFilesPart({
     let cancelled = false
     let timerId: number | null = null
     const controller = new AbortController()
+    const polledDocumentId = documentId
 
     const pollOnce = async () => {
       try {
         const latest = await fetchPdfJob(trackedJobId, { signal: controller.signal })
-        if (cancelled) {
+        if (cancelled || controller.signal.aborted || latest.document_id !== polledDocumentId) {
           return
         }
         setTrackedJobState((current) =>
@@ -403,11 +486,44 @@ function ProviderFilesPart({
         )
         setPollError(null)
         if (!isActivePdfJobStatus(latest.status)) {
-          await handleTrackedJobFinishedRef.current()
+          if (pendingAddJobIdsByDocument.get(polledDocumentId) === trackedJobId) {
+            pendingAddJobIdsByDocument.delete(polledDocumentId)
+          }
+          await handleTrackedJobFinishedRef.current(polledDocumentId)
           return
         }
       } catch (error) {
-        if (cancelled || isAbortError(error)) {
+        if (cancelled || controller.signal.aborted || isAbortError(error)) {
+          return
+        }
+        if (error instanceof ApiHttpError && error.httpStatus === 404) {
+          if (pendingAddJobIdsByDocument.get(polledDocumentId) === trackedJobId) {
+            pendingAddJobIdsByDocument.delete(polledDocumentId)
+          }
+          try {
+            const refetched = await refetchActiveJobsRef.current()
+            if (cancelled || controller.signal.aborted) {
+              return
+            }
+            const remainingActive =
+              refetched.data?.find((job) => isActivePdfJobStatus(job.status)) ?? null
+            if (remainingActive && remainingActive.job_id !== trackedJobId) {
+              setTrackedJobState({
+                job: remainingActive,
+                origin: isSupplementAddJob(remainingActive) ? 'user_add' : 'server_active',
+              })
+              setPollError(null)
+            } else {
+              setTrackedJobState(null)
+              setPollError(null)
+              await handleTrackedJobFinishedRef.current(polledDocumentId)
+            }
+          } catch {
+            if (!cancelled && !controller.signal.aborted) {
+              setTrackedJobState(null)
+              setPollError('Could not check progress for adding files.')
+            }
+          }
           return
         }
         setPollError('Could not check progress for adding files.')
@@ -431,7 +547,7 @@ function ProviderFilesPart({
         window.clearTimeout(timerId)
       }
     }
-  }, [open, trackedJobId, isTrackedJobActive, pollIntervalMs, pollRetryCount])
+  }, [open, documentId, trackedJobId, isTrackedJobActive, pollIntervalMs, pollRetryCount])
 
   const listingResult = listingQuery.data
   const others = useMemo(
@@ -455,6 +571,9 @@ function ProviderFilesPart({
     return chosen
   }, [selectedIds, tickableOthers])
 
+  const isAddTrackedJob =
+    trackedJob !== null
+    && (trackedJobOrigin === 'user_add' || isSupplementAddJob(trackedJob))
   const serverJobStillActive =
     serverActiveJob !== null
     && !(
@@ -462,11 +581,16 @@ function ProviderFilesPart({
       && trackedJob.job_id === serverActiveJob.job_id
       && !isTrackedJobActive
     )
-  const hasBlockingActiveJob =
-    serverJobStillActive
-    || (trackedJob !== null && trackedJobOrigin === 'server_active' && isTrackedJobActive)
-  const isUserAddJobActive = trackedJob !== null && trackedJobOrigin === 'user_add' && isTrackedJobActive
-  const showTickboxes = !hasBlockingActiveJob && !activeJobsQuery.isPending
+  const hasActiveJobForPaper = serverJobStillActive || isTrackedJobActive
+  const showImportRunningNotice =
+    (serverJobStillActive && !isSupplementAddJob(serverActiveJob))
+    || (trackedJob !== null && !isAddTrackedJob && isTrackedJobActive)
+  const showTickboxes =
+    isPaperCompleted
+    && !hasActiveJobForPaper
+    && !activeJobsQuery.isPending
+    && !activeJobsQuery.isError
+    && !reconcilingRetainedJob
 
   const handleToggleSelect = useCallback((providerFileId: string) => {
     setAddRefusal(null)
@@ -482,7 +606,7 @@ function ProviderFilesPart({
   }, [])
 
   const handleAddSelected = useCallback(async () => {
-    if (selectedFiles.length === 0 || submitting || isUserAddJobActive || hasBlockingActiveJob) {
+    if (!isPaperCompleted || selectedFiles.length === 0 || submitting || hasActiveJobForPaper || activeJobsQuery.isError) {
       return
     }
     submitAbortControllerRef.current?.abort()
@@ -505,20 +629,35 @@ function ProviderFilesPart({
         },
         { signal: controller.signal },
       )
-      if (!mountedRef.current || activeDocumentIdRef.current !== documentId) {
+      if (controller.signal.aborted || !mountedRef.current || activeDocumentIdRef.current !== documentId) {
         return
       }
       setSelectedIds(new Set())
       setTrackedJobState({ job: acceptedJob, origin: 'user_add' })
       setSubmitting(false)
-      if (!isActivePdfJobStatus(acceptedJob.status)) {
-        await handleTrackedJobFinishedRef.current()
+      if (isActivePdfJobStatus(acceptedJob.status)) {
+        pendingAddJobIdsByDocument.set(documentId, acceptedJob.job_id)
+      } else {
+        pendingAddJobIdsByDocument.delete(documentId)
+        await handleTrackedJobFinishedRef.current(documentId)
       }
     } catch (error) {
-      if (!mountedRef.current || activeDocumentIdRef.current !== documentId || isAbortError(error)) {
+      if (
+        controller.signal.aborted
+        || !mountedRef.current
+        || activeDocumentIdRef.current !== documentId
+        || isAbortError(error)
+      ) {
         return
       }
       setSubmitting(false)
+      if (error instanceof AuthenticationError) {
+        const signInText =
+          listingRefusalText('document_source_curator_token_unavailable', 409, provider)
+          ?? 'Sign in again to add files to this paper.'
+        setAddRefusal({ code: 'authentication_required', text: signInText, retryable: false })
+        return
+      }
       if (error instanceof AddDocumentSourceFilesError) {
         if (error.code === 'document_source_import_disabled') {
           setImportDisabled(true)
@@ -539,21 +678,22 @@ function ProviderFilesPart({
             const retryable =
               error.code === 'file_removal_unfinished'
               || (error.code === 'document_source_curator_token_unavailable' && error.httpStatus === 503)
-            setAddRefusal({ text, retryable })
+            setAddRefusal({ code: error.code, text, retryable })
           }
           return
         }
       }
-      setAddRefusal({ text: 'Could not add files to this paper.', retryable: true })
+      setAddRefusal({ code: null, text: 'Could not add files to this paper.', retryable: true })
     } finally {
       if (submitAbortControllerRef.current === controller) {
         submitAbortControllerRef.current = null
       }
     }
   }, [
+    activeJobsQuery.isError,
     documentId,
-    hasBlockingActiveJob,
-    isUserAddJobActive,
+    hasActiveJobForPaper,
+    isPaperCompleted,
     provider,
     queryClient,
     selectedFiles,
@@ -565,6 +705,12 @@ function ProviderFilesPart({
     setPollError(null)
     setPollRetryCount((count) => count + 1)
   }, [])
+
+  const handleRetryRetainedOrActiveJobs = useCallback(() => {
+    setPollError(null)
+    setRetainedRetryCount((count) => count + 1)
+    void activeJobsQuery.refetch()
+  }, [activeJobsQuery])
 
   if (importDisabled) {
     return null
@@ -609,12 +755,12 @@ function ProviderFilesPart({
   const trackedProgress = trackedJob
     ? parseSupplementJobProgress(trackedJob.metadata, { currentStage: trackedJob.current_stage })
     : null
-  const isAddTrackedJob =
-    trackedJob !== null
-    && (trackedJobOrigin === 'user_add' || trackedJob.metadata?.job_kind === 'supplement_add')
   const showRefusalAlert =
     addRefusal !== null
-    && !(hasBlockingActiveJob && addRefusal.text === LIBRARY_ADD_TEXT.importStillRunning)
+    && !(showImportRunningNotice && addRefusal.code === 'import_in_progress')
+  const canRetryAddRefusal = Boolean(
+    addRefusal?.retryable && selectedFiles.length > 0 && showTickboxes && !submitting,
+  )
   const terminalAddAlertText =
     isAddTrackedJob && !isTrackedJobActive && (trackedJob.status === 'failed' || trackedJob.status === 'cancelled')
       ? trackedJob.error_message || trackedJob.message || (trackedJob.status === 'cancelled' ? 'Cancelled' : 'Adding files failed.')
@@ -622,8 +768,21 @@ function ProviderFilesPart({
 
   return (
     <Stack spacing={1.5}>
-      {hasBlockingActiveJob ? (
+      {showImportRunningNotice ? (
         <Alert severity="info">{LIBRARY_ADD_TEXT.importStillRunning}</Alert>
+      ) : null}
+
+      {activeJobsQuery.isError && !hasActiveJobForPaper ? (
+        <Alert
+          severity="warning"
+          action={(
+            <Button size="small" color="inherit" onClick={() => void activeJobsQuery.refetch()}>
+              {TRY_AGAIN_BUTTON_TEXT}
+            </Button>
+          )}
+        >
+          Could not check whether this paper has an active import.
+        </Alert>
       ) : null}
 
       {trackedJob ? (
@@ -689,13 +848,24 @@ function ProviderFilesPart({
             ) : null}
           </Stack>
         ) : null
+      ) : pollError ? (
+        <Alert
+          severity="warning"
+          action={(
+            <Button size="small" color="inherit" onClick={handleRetryRetainedOrActiveJobs}>
+              {TRY_AGAIN_BUTTON_TEXT}
+            </Button>
+          )}
+        >
+          {pollError}
+        </Alert>
       ) : null}
 
       {showRefusalAlert ? (
         <Alert
           severity="warning"
           action={
-            addRefusal.retryable ? (
+            canRetryAddRefusal ? (
               <Button size="small" color="inherit" onClick={() => void handleAddSelected()}>
                 {TRY_AGAIN_BUTTON_TEXT}
               </Button>
@@ -725,7 +895,7 @@ function ProviderFilesPart({
                   provider={provider}
                   canSelect={canSelect}
                   selected={canSelect && selectedIds.has(file.provider_file_id)}
-                  selectionDisabled={submitting || isUserAddJobActive}
+                  selectionDisabled={submitting}
                   onToggleSelect={handleToggleSelect}
                 />
               )
@@ -737,7 +907,7 @@ function ProviderFilesPart({
             <Button
               variant="contained"
               size="small"
-              disabled={selectedFiles.length === 0 || submitting || isUserAddJobActive}
+              disabled={selectedFiles.length === 0 || submitting}
               onClick={() => void handleAddSelected()}
             >
               {addFilesButtonText(selectedFiles.length)}
@@ -764,6 +934,7 @@ export default function DocumentFilesSection({
   providerLabel,
   providerShortLabel,
   configuredProviderShortLabel,
+  processingStatus,
   open,
   onFilesChanged,
   pollIntervalMs = PDF_PROGRESS_POLL_INTERVAL_MS,
@@ -806,9 +977,11 @@ export default function DocumentFilesSection({
         )}
         {providerLabel ? (
           <ProviderFilesPart
+            key={documentId}
             documentId={documentId}
             provider={providerLabel}
             providerShortLabel={providerShortLabel}
+            processingStatus={processingStatus}
             open={open}
             onFilesChanged={onFilesChanged}
             pollIntervalMs={pollIntervalMs}

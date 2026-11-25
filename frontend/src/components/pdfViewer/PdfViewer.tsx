@@ -7,6 +7,8 @@ import {
   onPDFDocumentChanged,
   onPDFViewerDocumentCleared,
   onPDFViewerNavigateEvidence,
+  onPaperFilesRefresh,
+  showPaperFilesInViewer,
 } from '@/components/pdfViewer/pdfEvents'
 import { normalizePdfViewerDocumentUrl } from '@/components/pdfViewer/viewerDocumentUrl'
 import type { EvidenceNavigationCommand } from '@/features/curation/evidence'
@@ -78,7 +80,7 @@ import {
   type ViewerTelemetry,
 } from './pdfViewerTypes'
 import { usePdfViewerUpload } from './usePdfViewerUpload'
-import { fileDisplayLabel, isPdfFile, type ViewerFile } from './viewerFiles'
+import { fetchViewerFiles, fileDisplayLabel, isPdfFile, type ViewerFile } from './viewerFiles'
 import {
   buildEvidenceFileResult,
   openedFileAnnouncement,
@@ -148,6 +150,8 @@ export function PdfViewer({
 
   const [status, setStatus] = useState<ViewerStatus>('idle')
   const [activeDocument, setActiveDocument] = useState<ViewerDocument | null>(null)
+  const activeDocumentRef = useRef<ViewerDocument | null>(activeDocument)
+  activeDocumentRef.current = activeDocument
   const [error, setError] = useState<string | null>(null)
   const [retryKey, setRetryKey] = useState(0)
   const [_telemetry, setTelemetry] = useState<ViewerTelemetry>({
@@ -922,15 +926,16 @@ export function PdfViewer({
 
   const updateViewerState = useCallback(
     (updates: Partial<ViewerState>) => {
-      if (!activeDocument) return
+      const currentDocument = activeDocumentRef.current
+      if (!currentDocument) return
       viewerStateRef.current = {
         ...viewerStateRef.current,
         ...updates,
         lastInteraction: new Date().toISOString(),
       }
-      persistViewerSession(activeDocument, viewerStateRef.current)
+      persistViewerSession(currentDocument, viewerStateRef.current)
     },
-    [activeDocument, persistViewerSession],
+    [persistViewerSession],
   )
 
   const attachPdfEventListeners = useCallback(
@@ -1342,7 +1347,11 @@ export function PdfViewer({
         return
       }
 
-      if (activeDocument && activeDocument.documentId === event.detail.documentId && status !== 'error') {
+      if (
+        activeDocument
+        && activeDocument.documentId === event.detail.documentId
+        && (status !== 'error' || event.detail.refreshOnlyIfOpen)
+      ) {
         // The same paper again (a re-render, or a file joined or left): keep the file
         // the curator is on when it is still there, and reload nothing.
         const current = activeViewerFile(activeDocument)
@@ -1359,6 +1368,7 @@ export function PdfViewer({
               mainFileUnavailable: event.detail.mainFileUnavailable,
               unavailableFiles: event.detail.unavailableFiles,
             }
+            activeDocumentRef.current = updatedDoc
             setActiveDocument(updatedDoc)
             persistViewerSession(updatedDoc, viewerStateRef.current)
           }
@@ -1370,10 +1380,18 @@ export function PdfViewer({
         }
       }
 
+      const preservedActiveFileId =
+        event.detail.refreshOnlyIfOpen
+        && activeDocument
+        && activeDocument.documentId === event.detail.documentId
+        && files.some((file) => file.file_id === activeDocument.activeFileId)
+          ? activeDocument.activeFileId
+          : event.detail.activeFileId
+
       const nextDoc: ViewerDocument = {
         documentId: event.detail.documentId,
         files,
-        activeFileId: event.detail.activeFileId,
+        activeFileId: preservedActiveFileId,
         mainFileUnavailable: event.detail.mainFileUnavailable,
         unavailableFiles: event.detail.unavailableFiles,
         loadedAt: new Date().toISOString(),
@@ -1454,6 +1472,40 @@ export function PdfViewer({
     signalLoadError,
     status,
   ])
+
+  useEffect(() => {
+    let activeController: AbortController | null = null
+    const unregisterCrossTabRefresh = onPaperFilesRefresh((signal) => {
+      const openDoc = activeDocumentRef.current
+      if (!openDoc || openDoc.documentId !== signal.documentId) {
+        return
+      }
+      activeController?.abort()
+      const controller = new AbortController()
+      activeController = controller
+      void fetchViewerFiles(signal.documentId, controller.signal)
+        .then((payload) => {
+          if (controller.signal.aborted) {
+            return
+          }
+          if (activeDocumentRef.current?.documentId !== signal.documentId) {
+            return
+          }
+          showPaperFilesInViewer(signal.documentId, payload.files, {
+            refreshOnlyIfOpen: true,
+            broadcast: false,
+          })
+        })
+        .catch(() => {
+          // Best-effort cross-tab refresh; leave current open viewer undisturbed on transient failure.
+        })
+    })
+
+    return () => {
+      activeController?.abort()
+      unregisterCrossTabRefresh()
+    }
+  }, [])
 
   useEffect(() => {
     return () => {

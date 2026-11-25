@@ -314,6 +314,7 @@ const DocumentDetailsDialog: React.FC<DocumentDetailsDialogProps> = ({
                     documentId={documentId}
                     providerLabel={listedProviderLabel(sourceProvenance)}
                     providerShortLabel={resolveSupplementProviderShortLabel(sourceProvenance)}
+                    processingStatus={processingStatusCurrent}
                     open={open}
                     onFilesChanged={handleFilesChanged}
                   />

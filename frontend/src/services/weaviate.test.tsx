@@ -4,8 +4,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   ACTIVE_PDF_JOB_STATUSES,
   AddDocumentSourceFilesError,
+  ApiHttpError,
   AuthenticationError,
   addDocumentSourceFiles,
+  fetchActivePdfJobsForDocument,
   fetchDocumentList,
   fetchDocumentSourceProviderConfiguration,
   fetchPdfJob,
@@ -361,7 +363,7 @@ describe('weaviate service', () => {
       }
     });
 
-    it('raises AuthenticationError on 401 and rejects malformed 202 job payloads from addDocumentSourceFiles', async () => {
+    it('raises AuthenticationError aligned with fetchApi on 401 and rejects malformed 202 job payloads from addDocumentSourceFiles', async () => {
       mockFetch
         .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({ detail: 'Unauthorized' }) })
         .mockResolvedValueOnce({ ok: true, status: 202, json: async () => ({ unexpected: true }) });
@@ -370,7 +372,7 @@ describe('weaviate service', () => {
         addDocumentSourceFiles('doc-1', {
           files: [{ provider_file_id: '20', md5: 'm1', converted_md5: 'c1' }],
         }),
-      ).rejects.toBeInstanceOf(AuthenticationError);
+      ).rejects.toThrow(new AuthenticationError('Session expired - redirecting to login'));
       await expect(
         addDocumentSourceFiles('doc-1', {
           files: [{ provider_file_id: '20', md5: 'm1', converted_md5: 'c1' }],
@@ -378,7 +380,7 @@ describe('weaviate service', () => {
       ).rejects.toThrow('Add files response is missing required job fields.');
     });
 
-    it('filters fetchPdfJobs by documentId and forwards AbortSignal to fetchPdfJobs and fetchPdfJob', async () => {
+    it('paginates across all active jobs in fetchActivePdfJobsForDocument, preserves ApiHttpError status on fetchPdfJob, and forwards AbortSignal', async () => {
       expect(ACTIVE_PDF_JOB_STATUSES).toEqual(['pending', 'running', 'cancel_requested']);
       expect(isActivePdfJobStatus('pending')).toBe(true);
       expect(isActivePdfJobStatus('running')).toBe(true);
@@ -387,50 +389,83 @@ describe('weaviate service', () => {
       expect(isActivePdfJobStatus('failed')).toBe(false);
       expect(isActivePdfJobStatus('cancelled')).toBe(false);
 
-      const jobA = {
-        job_id: 'job-a',
-        document_id: 'doc-a',
+      const otherJob = {
+        job_id: 'job-other',
+        document_id: 'doc-b',
         user_id: 7,
         status: 'running',
-        progress_percentage: 40,
+        progress_percentage: 20,
         cancel_requested: false,
         created_at: '2026-11-24T12:00:00Z',
         updated_at: '2026-11-24T12:01:00Z',
       };
-      const jobB = {
-        ...jobA,
-        job_id: 'job-b',
-        document_id: 'doc-b',
+      const targetJobOnPage2 = {
+        ...otherJob,
+        job_id: 'job-target-page2',
+        document_id: 'doc-a',
       };
       mockFetch
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => ({ jobs: [jobA, jobB], total: 2, limit: 50, offset: 0 }),
+          json: async () => ({ jobs: [otherJob], total: 2, limit: 1, offset: 0 }),
         })
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => jobA,
+          json: async () => ({ jobs: [targetJobOnPage2], total: 2, limit: 1, offset: 1 }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => targetJobOnPage2,
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 404,
+          json: async () => ({ detail: 'PDF job missing not found' }),
         });
 
       const controller = new AbortController();
-      const filtered = await fetchPdfJobs(
-        { status: [...ACTIVE_PDF_JOB_STATUSES], documentId: 'doc-a', limit: 50 },
-        { signal: controller.signal },
-      );
-      expect(filtered.jobs).toEqual([jobA]);
-      expect(filtered.total).toBe(1);
+      const activeForDocA = await fetchActivePdfJobsForDocument('doc-a', {
+        pageSize: 1,
+        signal: controller.signal,
+      });
+      expect(activeForDocA).toEqual([targetJobOnPage2]);
       expect(mockFetch).toHaveBeenNthCalledWith(
         1,
-        '/api/weaviate/pdf-jobs?status=pending&status=running&status=cancel_requested&limit=50',
+        '/api/weaviate/pdf-jobs?status=pending&status=running&status=cancel_requested&limit=1',
+        expect.objectContaining({ signal: controller.signal }),
+      );
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        '/api/weaviate/pdf-jobs?status=pending&status=running&status=cancel_requested&limit=1&offset=1',
         expect.objectContaining({ signal: controller.signal }),
       );
 
-      await expect(fetchPdfJob('job-a', { signal: controller.signal })).resolves.toEqual(jobA);
+      await expect(fetchPdfJob('job-target-page2', { signal: controller.signal })).resolves.toEqual(
+        targetJobOnPage2,
+      );
       expect(mockFetch).toHaveBeenNthCalledWith(
-        2,
-        '/api/weaviate/pdf-jobs/job-a',
+        3,
+        '/api/weaviate/pdf-jobs/job-target-page2',
         expect.objectContaining({ signal: controller.signal }),
       );
+
+      let caught: unknown = null;
+      try {
+        await fetchPdfJob('missing');
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(ApiHttpError);
+      expect((caught as ApiHttpError).httpStatus).toBe(404);
+
+      // fetchPdfJobs returns the exact server payload with total preserved.
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ jobs: [otherJob], total: 75, limit: 50, offset: 0 }),
+      });
+      const rawPage = await fetchPdfJobs({ status: ['running'], limit: 50 });
+      expect(rawPage.total).toBe(75);
+      expect(rawPage.jobs).toEqual([otherJob]);
     });
   });
 

@@ -9,6 +9,7 @@ import {
 import { logger } from './logger';
 import { clearAllNamespacedChatLocalStorage } from '../lib/chatCacheKeys';
 import { safeSetItem } from '../lib/browserStorage';
+import { PDF_JOB_LIMIT } from '../features/documents/documentIntakeConfig';
 import type {
   AddPaperFileInput,
   AddPaperFilesRequest,
@@ -51,6 +52,45 @@ export class AuthenticationError extends Error {
     this.name = 'AuthenticationError';
   }
 }
+
+/**
+ * HTTP error thrown by `fetchApi` preserving the numeric HTTP status alongside the message.
+ */
+export class ApiHttpError extends Error {
+  readonly httpStatus: number;
+
+  constructor(message: string, httpStatus: number) {
+    super(message);
+    this.name = 'ApiHttpError';
+    this.httpStatus = httpStatus;
+  }
+}
+
+const handleUnauthorizedResponse = (url: string, method: string, action: string): never => {
+  logger.warn('Authentication required - session expired, redirecting to login', {
+    component: 'weaviate-service',
+    action,
+    metadata: {
+      url,
+      method,
+      status: 401,
+    },
+  });
+
+  // Clear auth-bound browser state before redirecting to login.
+  clearAllNamespacedChatLocalStorage();
+  safeSetItem(() => window.sessionStorage, 'intendedPath', window.location.pathname + window.location.search, {
+    owner: 'auth',
+    key: 'intendedPath',
+    workflowCritical: true,
+  });
+
+  // Redirect to login endpoint (backend will redirect to Cognito)
+  window.location.href = '/api/auth/login';
+
+  // Throw error for any pending promises (though redirect will interrupt execution)
+  throw new AuthenticationError('Session expired - redirecting to login');
+};
 
 export interface OperationResult {
   success: boolean;
@@ -636,29 +676,7 @@ export const fetchApi = async <T>(
     if (!response.ok) {
       // Special handling for 401 Unauthorized - session expired or invalid
       if (response.status === 401) {
-        logger.warn('Authentication required - session expired, redirecting to login', {
-          component: 'weaviate-service',
-          action: 'fetchApi',
-          metadata: {
-            url,
-            method,
-            status: 401,
-          },
-        });
-
-        // Clear auth-bound browser state before redirecting to login.
-        clearAllNamespacedChatLocalStorage();
-        safeSetItem(() => window.sessionStorage, 'intendedPath', window.location.pathname + window.location.search, {
-          owner: 'auth',
-          key: 'intendedPath',
-          workflowCritical: true,
-        });
-
-        // Redirect to login endpoint (backend will redirect to Cognito)
-        window.location.href = '/api/auth/login';
-
-        // Throw error for any pending promises (though redirect will interrupt execution)
-        throw new AuthenticationError('Session expired - redirecting to login');
+        handleUnauthorizedResponse(url, method, 'fetchApi');
       }
 
       const error = await response.json().catch(() => ({
@@ -684,7 +702,7 @@ export const fetchApi = async <T>(
         },
       });
 
-      throw new Error(errorMessage);
+      throw new ApiHttpError(errorMessage, response.status);
     }
 
     const data = await response.json();
@@ -852,8 +870,9 @@ export const addDocumentSourceFiles = async (
     })),
   };
 
+  const url = `${API_BASE_URL}/documents/${encodeURIComponent(documentId)}/files`;
   const response = await fetch(
-    `${API_BASE_URL}/documents/${encodeURIComponent(documentId)}/files`,
+    url,
     {
       ...options,
       method: 'POST',
@@ -867,7 +886,7 @@ export const addDocumentSourceFiles = async (
   );
 
   if (response.status === 401) {
-    throw new AuthenticationError('Authentication required');
+    handleUnauthorizedResponse(url, 'POST', 'addDocumentSourceFiles');
   }
 
   const payload = await response.json().catch(() => null);
@@ -1015,7 +1034,6 @@ export const usePdfExtractionHealth = (
 export const fetchPdfJobs = async (
   params: {
     status?: PdfJobStatus[];
-    documentId?: string;
     windowDays?: number;
     limit?: number;
     offset?: number;
@@ -1028,16 +1046,44 @@ export const fetchPdfJobs = async (
   if (params.limit) query.set('limit', String(params.limit));
   if (params.offset) query.set('offset', String(params.offset));
   const suffix = query.toString() ? `?${query.toString()}` : '';
-  const response = await fetchApi<PdfJobListResponse>(`/pdf-jobs${suffix}`, options);
-  if (!params.documentId) {
-    return response;
+  return fetchApi<PdfJobListResponse>(`/pdf-jobs${suffix}`, options);
+};
+
+/**
+ * Paginate through all active PDF jobs for the signed-in curator using the configured
+ * `PDF_JOB_LIMIT` page size and return every active job belonging to `documentId`.
+ */
+export const fetchActivePdfJobsForDocument = async (
+  documentId: string,
+  options?: {
+    pageSize?: number;
+    signal?: AbortSignal;
+  },
+): Promise<PdfProcessingJob[]> => {
+  const pageSize = options?.pageSize ?? PDF_JOB_LIMIT;
+  const matched: PdfProcessingJob[] = [];
+  let offset = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const page = await fetchPdfJobs(
+      {
+        status: [...ACTIVE_PDF_JOB_STATUSES],
+        limit: pageSize,
+        offset,
+      },
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+    for (const job of page.jobs) {
+      if (job.document_id === documentId) {
+        matched.push(job);
+      }
+    }
+    offset += page.jobs.length;
+    hasMore = page.jobs.length > 0 && offset < page.total;
   }
-  const filteredJobs = response.jobs.filter((job) => job.document_id === params.documentId);
-  return {
-    ...response,
-    jobs: filteredJobs,
-    total: filteredJobs.length,
-  };
+
+  return matched;
 };
 
 export const fetchPdfJob = async (
