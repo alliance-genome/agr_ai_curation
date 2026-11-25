@@ -40,6 +40,7 @@ import io
 import logging
 import tempfile
 import uuid
+from collections import Counter
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -1702,6 +1703,7 @@ def _report_nothing_added(result: AddResult, document_id: UUID) -> None:
 
     from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
     from src.lib.observability.sentry import hash_sentry_identifier
+    from src.lib.openai_agents.config import get_document_max_files_per_paper
 
     message = "Every chosen file was left out of the add"
     logger.warning(message, extra={"sentry_skip_event": True})
@@ -1713,6 +1715,7 @@ def _report_nothing_added(result: AddResult, document_id: UUID) -> None:
             level="warning",
             context={
                 "document_id": str(document_id),
+                "reason_counts": Counter(item.reason_code.value for item in result.files if item.reason_code),
                 "refusals": [
                     {
                         "reason_code": item.reason_code.value if item.reason_code else None,
@@ -1720,7 +1723,7 @@ def _report_nothing_added(result: AddResult, document_id: UUID) -> None:
                         "limit_value": item.limit_value,
                         "artifact_id_hash": hash_sentry_identifier(item.provider_file_id),
                     }
-                    for item in result.files
+                    for item in result.files[:get_document_max_files_per_paper()]
                 ],
             },
             fingerprint=["supplement_add_nothing_added"],

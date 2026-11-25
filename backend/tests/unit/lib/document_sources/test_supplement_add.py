@@ -797,9 +797,11 @@ async def test_a_merged_reference_stops_the_add_before_any_download(monkeypatch,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cancelled", [False, True])
-async def test_all_refused_add_warns_once_unless_cancelled(monkeypatch, storage, cancelled):
-    from src.lib.observability.sentry import hash_sentry_identifier
+@pytest.mark.parametrize("cancelled, capture_fails", [(False, False), (True, False), (False, True)])
+async def test_all_refused_add_warns_once_unless_cancelled(monkeypatch, storage, cancelled, capture_fails):
+    from copy import deepcopy
+
+    import sentry_sdk
     from tests.unit.lib.document_sources.test_file_listing import _http_error
     from tests.unit.lib.pdf_jobs.test_pdf_job_service import _FakeSession
 
@@ -814,17 +816,22 @@ async def test_all_refused_add_warns_once_unless_cancelled(monkeypatch, storage,
     monkeypatch.setattr("src.lib.weaviate_client.connection.get_connection", lambda **_kwargs: object())
     monkeypatch.setattr("src.lib.pdf_jobs.service.is_cancel_requested", lambda **_: False)
     monkeypatch.setattr("src.lib.pdf_jobs.service.update_progress", lambda **_: None)
-    reports = []
-    monkeypatch.setattr(
-        "src.lib.observability.runtime.report_runtime_exception",
-        lambda exc, **kwargs: reports.append((exc, kwargs)),
-    )
     job = _pending_supplement_job(status="running")
     # Model cancellation arriving at the terminal write, after the download checkpoints.
     job.cancel_requested = cancelled
     session = _FakeSession([job])
     monkeypatch.setattr("src.lib.pdf_jobs.service.SessionLocal", lambda: session)
 
+    metadata_at_capture = []
+
+    def capture(_exc):
+        assert job.status == "failed"
+        metadata_at_capture.append(deepcopy(job.metadata_json))
+        if capture_fails:
+            raise RuntimeError("fake private transport error")
+        return "event-id"
+
+    monkeypatch.setattr(sentry_sdk, "capture_exception", capture)
     await supplement_add.run_supplement_add_job(_job_request((_chosen(20), _chosen(30))))
 
     assert session.commit_calls == 1
@@ -832,18 +839,11 @@ async def test_all_refused_add_warns_once_unless_cancelled(monkeypatch, storage,
     assert not storage.ready
     provider.aclose.assert_awaited_once()
     if cancelled:
-        assert reports == []
+        assert metadata_at_capture == []
         return
+    assert metadata_at_capture == [job.metadata_json]
     entries = job.metadata_json["supplements"]
     assert [item["reason_code"] for item in entries] == ["too_large", "source_unavailable"]
-    (exc, kwargs), = reports
-    assert kwargs["level"] == "warning" and kwargs["operation"] == "supplement_add_nothing_added"
-    assert [item["reason_code"] for item in kwargs["context"]["refusals"]] == ["too_large", "source_unavailable"]
-    for item, refusal in zip(entries, kwargs["context"]["refusals"], strict=True):
-        assert item["display_name"] and item["display_name"] not in repr(kwargs)
-        assert item["display_name"] not in str(exc)
-        assert refusal["artifact_id_hash"] == hash_sentry_identifier(item["provider_file_id"])
-        assert refusal["limit_value"] == item["limit_value"]
 
 
 @pytest.mark.asyncio
@@ -2352,6 +2352,7 @@ async def test_reporting_failure_preserves_durable_job_and_file_state(monkeypatc
         ("upstream_timeout", ["supplement_add_failed"], ["error"]),
         ("invariant_failed", ["supplement_add_internal_invariant_failed"], ["error"]),
         ("nothing_added", ["supplement_add_nothing_added"], ["warning"]),
+        ("nothing_added_capped", ["supplement_add_nothing_added"], ["warning"]),
         ("finish_failed", ["supplement_add_finish_failed"], ["warning"]),
         ("post_commit_unexpected", ["supplement_add_failed"], ["error"]),
         (
@@ -2373,7 +2374,7 @@ async def test_supplement_job_sentry_payloads_redact_sensitive_strings_and_emit_
 
     from src.lib.observability import background_tasks as bg_observability
     from src.lib.observability import cost_context
-    from src.lib.observability.sentry import before_send
+    from src.lib.observability.sentry import before_send, hash_sentry_identifier
     from src.models.sql.pdf_processing_job import PdfJobStatus
     from tests.unit.lib.pdf_jobs.test_pdf_job_service import _FakeSession
 
@@ -2386,7 +2387,11 @@ async def test_supplement_job_sentry_payloads_redact_sensitive_strings_and_emit_
         f"boom fetching https://abc.internal.example/{fake_filename}"
         f"?doc={fake_doc_id}&curator={fake_email}"
     )
+    left_out: AddResult | None = None
+    detail_cap = 3 if scenario == "nothing_added_capped" else 20
+    private_file_prefix = "private-provider-reference-"
     sensitive_strings = (
+        private_file_prefix,
         fake_email,
         str(fake_doc_id),
         str(fake_job_id),
@@ -2460,10 +2465,19 @@ async def test_supplement_job_sentry_payloads_redact_sensitive_strings_and_emit_
             "add_files_to_paper",
             AsyncMock(side_effect=SupplementAddError("stored_file_path_mismatch")),
         )
-    elif scenario == "nothing_added":
-        left_out = AddResult(files=(
-            supplement_add.FileOutcome("20", "left_out", FileReason.TOO_LARGE, limit_value=40, display_name=fake_filename),
-        ))
+    elif scenario in ("nothing_added", "nothing_added_capped"):
+        monkeypatch.setenv("DOCUMENT_MAX_FILES_PER_PAPER", str(detail_cap))
+        oversized = [
+            supplement_add.FileOutcome(
+                f"{private_file_prefix}{i}", "left_out", FileReason.TOO_LARGE,
+                measured_value=100 + i, limit_value=40, display_name=fake_filename,
+            )
+            for i in range(19)
+        ]
+        unavailable = supplement_add.FileOutcome(
+            f"{private_file_prefix}last", "left_out", FileReason.SOURCE_UNAVAILABLE, display_name=fake_filename,
+        )
+        left_out = AddResult(files=(*oversized, unavailable))
         monkeypatch.setattr(supplement_add, "add_files_to_paper", AsyncMock(return_value=left_out))
     elif scenario == "post_commit_unexpected":
         added = AddResult(files=(
@@ -2508,6 +2522,8 @@ async def test_supplement_job_sentry_payloads_redact_sensitive_strings_and_emit_
     try:
         with caplog.at_level(logging.INFO), sentry_sdk.isolation_scope() as sentry_scope:
             sentry_scope.set_client(client)
+            if left_out is not None:
+                sentry_scope.add_event_processor(lambda event, hint: {**event, "request": {"url": fake_exception_text}})
             await wrapped(request)
             client.flush()
     finally:
@@ -2522,6 +2538,23 @@ async def test_supplement_job_sentry_payloads_redact_sensitive_strings_and_emit_
         assert "request" not in event
         if event["tags"]["operation"] in ("supplement_add_nothing_added", "supplement_add_finish_failed"):
             assert event["contexts"]["runtime_exception"]["document_id"].startswith("sha256:")
+        if event["tags"]["operation"] == "supplement_add_nothing_added":
+            context = event["contexts"]["runtime_exception"]
+            assert context["document_id"] == hash_sentry_identifier(str(fake_doc_id))
+            assert left_out is not None
+            assert context["refusals"] == [
+                {
+                    "reason_code": item.reason_code,
+                    "measured_value": item.measured_value,
+                    "limit_value": item.limit_value,
+                    "artifact_id_hash": hash_sentry_identifier(item.provider_file_id),
+                }
+                for item in left_out.files[:detail_cap]
+            ]
+            assert context["reason_counts"] == {"too_large": 19, "source_unavailable": 1}
+            assert context["omitted_count"] == 20 - detail_cap
+            companion, = [r for r in caplog.records if r.getMessage() == "Every chosen file was left out of the add"]
+            assert companion.sentry_skip_event is True
         serialized = json.dumps(event)
         for secret in sensitive_strings:
             assert secret not in serialized, f"Leaked {secret!r} into Sentry payload: {serialized}"

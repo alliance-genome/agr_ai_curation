@@ -1309,6 +1309,12 @@ def gen_ai_workflow_transaction(
 def _redact_runtime_exception_context(context: Mapping[str, Any]) -> dict[str, Any]:
     """Preserve bounded runtime diagnostics without exposing raw identifiers."""
 
+    from src.lib.observability.runtime import supplement_refusal_context
+
+    refusals = supplement_refusal_context(context.get("component"), context.get("operation"), context)
+    if refusals is not None:
+        return refusals
+
     redacted: dict[str, Any] = {}
     for child_key, child_value in context.items():
         key = str(child_key)
