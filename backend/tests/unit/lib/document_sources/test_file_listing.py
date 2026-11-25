@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import weakref
 from typing import Any
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
@@ -110,7 +111,7 @@ def _limits(**overrides) -> FileCheckLimits:
 
 async def _listing(
     rows, *, groups=("WB",), payloads=None, store=None, licence_open=None, licence_name=None,
-    in_paper=(), limits=None, check_limit=20,
+    in_paper=(), limits=None, check_limit=20, caller_reports_download_outages=False,
 ):
     client = _Client(payloads or {})
     client.show_reference_payload = _abc_reference_record(
@@ -128,6 +129,7 @@ async def _listing(
         route=ListingRoute.PAPER if in_paper else ListingRoute.IDENTIFIER,
         provider_observations={},
         find_paper_in_library=None if in_paper else _not_in_library,
+        caller_reports_download_outages=caller_reports_download_outages,
     )
     return listing, client
 
@@ -679,6 +681,58 @@ async def test_an_unavailable_text_is_tried_once_per_listing():
     listing, client = await _listing(_pair(20, "WB"), payloads={"21": _http_error(502)})
     assert _by_id(listing)["20"].check.status is ListedFileCheckStatus.TEXT_UNAVAILABLE
     assert len([name for name, _ in client.calls if name == "download_referencefile"]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reporter_fails", [False, True])
+async def test_listing_aggregates_download_outages(monkeypatch, caplog, reporter_fails):
+    from src.lib.observability import runtime
+    from tests.unit.api.test_document_source_file_listing_endpoints import _capture_sentry_events
+
+    private_id = 987654321
+    outage = ABCLiteratureHTTPError("private storage diagnostic", status_code=503, endpoint="download_file")
+    reporter = Mock(wraps=runtime.report_runtime_exception)
+    if reporter_fails:
+        reporter.side_effect = RuntimeError("private reporter detail")
+    monkeypatch.setattr(runtime, "report_runtime_exception", reporter)
+    rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), *_pair(30, "WB"), *_pair(private_id, "WB")]
+    with _capture_sentry_events(monkeypatch, "/private/listing/url") as events:
+        listing, _ = await _listing(rows, payloads={"21": GOOD_TABLE, "31": outage, str(private_id + 1): outage})
+
+    files = _by_id(listing)
+    assert files["20"].check.status is ListedFileCheckStatus.PASSED
+    assert files["30"].check.status is files[str(private_id)].check.status is ListedFileCheckStatus.TEXT_UNAVAILABLE
+    reporter.assert_called_once()
+    records = [record for record in caplog.records if record.name == file_listing.__name__]
+    assert len(records) == (2 if reporter_fails else 1)
+    assert all(record.sentry_skip_event and record.exc_info is None for record in records)
+    for secret in (str(private_id), str(private_id + 1), "Made_up_S", "AGRKB:101", "curator-token",
+                   str(outage), "private reporter detail", "/private/listing/url"):
+        assert secret not in repr(events) and secret not in caplog.text
+    if reporter_fails:
+        assert events == []
+    else:
+        event, = events
+        assert "request" not in event
+        assert event["level"] == "warning"
+        assert event["fingerprint"] == ["file_listing_download_unavailable"]
+        assert event["contexts"]["runtime_exception"] == {
+            "component": "document_source", "operation": "file_listing_download_unavailable",
+            "unavailable_count": 2, "checked_count": 3,
+        }
+
+
+@pytest.mark.asyncio
+async def test_listing_ordinary_refusals_are_quiet(monkeypatch):
+    report = Mock()
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+    rows = [row for file_id in (20, 30, 40) for row in _pair(file_id, "WB")]
+    listing, _ = await _listing(rows, payloads={"21": _http_error(403), "31": _http_error(404), "41": _http_error(413)})
+    files = _by_id(listing)
+    assert files["20"].check.status is ListedFileCheckStatus.TEXT_ACCESS_DENIED
+    assert files["30"].check.status is ListedFileCheckStatus.TEXT_MISSING
+    assert files["40"].check.reason is FileReason.TOO_LARGE
+    report.assert_not_called()
 
 
 @pytest.mark.asyncio

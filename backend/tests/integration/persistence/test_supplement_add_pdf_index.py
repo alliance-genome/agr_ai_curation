@@ -73,7 +73,7 @@ def _pdf_entry() -> ListedFile:
 
 @pytest.fixture
 def pdf_listing(monkeypatch, index):  # noqa: F811
-    async def listing(document_id, *, owner_user_id, provider, context):
+    async def listing(document_id, *, owner_user_id, provider, context, caller_reports_download_outages=False):
         return FileListing(
             provider="made_up_provider", reference_id="101", reference_curie="MADE:101", main_status="ready",
             files=(_pdf_entry(),), not_shown_count=0, duplicate_copies_count=0, check_version="made-up",

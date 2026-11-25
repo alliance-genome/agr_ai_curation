@@ -295,7 +295,8 @@ async def test_a_paper_listing_resolves_the_papers_curie_and_requires_its_refere
     monkeypatch.setattr(file_listing_service, "_paper_lookup", lambda *_: _paper())
 
     async def listed(provider, lookup, context, files_in_paper, *, route, provider_observations,
-                     owner_user_id, expected_reference_id=None):
+                     owner_user_id, expected_reference_id=None, caller_reports_download_outages=False):
+        assert not caller_reports_download_outages
         captured.update(
             lookup=lookup, files=files_in_paper, expected=expected_reference_id, route=route,
             observations=provider_observations,

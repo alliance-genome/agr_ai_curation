@@ -146,6 +146,7 @@ async def _list_resolved(
     expected_reference_id: str | None = None,
     artifacts: Sequence[SourceArtifact] | None = None,
     check_unchecked: bool = True,
+    caller_reports_download_outages: bool = False,
 ) -> FileListing:
     from src.lib.openai_agents.config import get_document_file_listing_check_limit
 
@@ -177,6 +178,7 @@ async def _list_resolved(
         ),
         artifacts=artifacts,
         check_unchecked=check_unchecked,
+        caller_reports_download_outages=caller_reports_download_outages,
     )
 
 
@@ -190,6 +192,7 @@ async def _list(
     provider_observations: Mapping[str, ProviderObservation],
     owner_user_id: int,
     expected_reference_id: str | None = None,
+    caller_reports_download_outages: bool = False,
 ) -> FileListing:
     token = (context.curator_token or "").strip()
     if not token:
@@ -205,6 +208,7 @@ async def _list(
         provider_observations=provider_observations,
         owner_user_id=owner_user_id,
         expected_reference_id=expected_reference_id,
+        caller_reports_download_outages=caller_reports_download_outages,
     )
 
 
@@ -296,6 +300,7 @@ async def list_files_for_paper(
     owner_user_id: int,
     provider: DocumentSourceProvider,
     context: DocumentSourceRequestContext,
+    caller_reports_download_outages: bool = False,
 ) -> FileListing:
     """List an imported paper's provider files; only papers imported from the provider have them.
 
@@ -316,6 +321,7 @@ async def list_files_for_paper(
         provider, paper.reference_curie, context, paper.file_ids,
         route=ListingRoute.PAPER, provider_observations=paper.provider_observations,
         owner_user_id=owner_user_id, expected_reference_id=paper.reference_id,
+        caller_reports_download_outages=caller_reports_download_outages,
     )
 
 
@@ -328,6 +334,7 @@ async def list_files_for_paper_from_artifacts(
     reference: SourceReference,
     artifacts: Sequence[SourceArtifact],
     check_unchecked: bool = True,
+    caller_reports_download_outages: bool = False,
 ) -> FileListing:
     """List an imported paper's files from a resolved reference and already-fetched artifacts.
 
@@ -363,4 +370,5 @@ async def list_files_for_paper_from_artifacts(
         expected_reference_id=paper.reference_id,
         artifacts=artifacts,
         check_unchecked=check_unchecked,
+        caller_reports_download_outages=caller_reports_download_outages,
     )
