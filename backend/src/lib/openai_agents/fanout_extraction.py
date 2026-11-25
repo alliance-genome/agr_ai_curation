@@ -464,15 +464,16 @@ def _not_applicable(
     return None
 
 
-def _report_discarded_writer_failure(error: Exception) -> None:
+def _report_discarded_writer_failure(error: Exception, *, message: str, operation: str) -> None:
     try:
         if exception_chain_already_captured(error):
             return
         if runtime.report_runtime_exception(
-            runtime.sanitized_runtime_error("Additional fan-out writer failed"),
+            runtime.sanitized_runtime_error(message),
             component="extraction_fanout",
-            operation="extraction_fanout_additional_writer_failure",
+            operation=operation,
             context={"type": type(error).__name__},
+            include_request=False,
         ):
             setattr(error, "_ai_curation_sentry_captured", True)
     except Exception:
@@ -866,7 +867,10 @@ class FanoutExtraction:
                         error = task.exception()
                         if isinstance(error, Exception) and id(error) not in seen:
                             seen.add(id(error))
-                            _report_discarded_writer_failure(error)
+                            _report_discarded_writer_failure(
+                                error, message="Additional fan-out writer failed",
+                                operation="extraction_fanout_additional_writer_failure",
+                            )
                 if pending or failed_writer is not None:
                     self._trace_writers_stopped(tasks, pending, stop_reason, failed_writer, stop_started)
         return [task.result() for task in tasks]
@@ -938,7 +942,8 @@ class FanoutExtraction:
                         "writer": index, "attempt": attempt, "outcome": "succeeded",
                     })
                 return outcome
-            first_error = first_error or failure
+            if first_error is None:
+                first_error = failure
             task = asyncio.current_task()
             if task is not None and task.cancelling():
                 if attempt > 1:
@@ -965,6 +970,11 @@ class FanoutExtraction:
             attempt += 1
         if attempt > 1:
             self._trace("writer_rerun_finished", {"writer": index, "attempt": attempt, "outcome": "failed"})
+            if failure is not first_error:
+                _report_discarded_writer_failure(
+                    failure, message="Fan-out writer rerun failed",
+                    operation="extraction_fanout_writer_rerun_failure",
+                )
         # Raised outside the except block, so the first error keeps its own cause chain.
         raise first_error
 

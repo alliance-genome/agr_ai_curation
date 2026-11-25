@@ -99,10 +99,12 @@ the owner exits remain reportable. Discarded child-task failures are reported
 during drain; transparent SDK `UserError` wrappers retain reporting identity.
 This does not alter admission, decisions, Langfuse evidence or span status.
 
-Extraction fan-out leaves the primary writer failure to its caller. During
-task draining it reports each distinct discarded writer failure, including
-cleanup failures during parent cancellation. The event uses a fixed message,
-the exception class and the operation `extraction_fanout_additional_writer_failure`.
+Extraction fan-out propagates the first writer error when its rerun fails. If
+the terminal rerun raises a distinct exception, fan-out reports it under
+`extraction_fanout_writer_rerun_failure`. During task draining it reports
+additional discarded writer failures, including cleanup failures during parent
+cancellation, under `extraction_fanout_additional_writer_failure`. Both events
+use a fixed message and the discarded exception's class and omit request data.
 Cancelled writers and errors already marked as captured stay quiet.
 
 Expected successful liveness, readiness, PDF-extraction-health, document-status,
