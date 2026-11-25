@@ -325,7 +325,84 @@ async def test_listing_refresh_cursor_cache_respects_configured_max_entries(monk
 
     cursors = file_listing._listing_cursor_store()
     assert len(cursors) == 1
-    assert ("abc_literature", "202") in cursors
+    assert ("abc_literature", "202", ("WB",)) in cursors
+
+
+@pytest.mark.asyncio
+async def test_overlapping_slow_refresh_does_not_rewind_listing_cursor():
+    store = _Store()
+    rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), *_pair(30, "WB"), *_pair(40, "WB")]
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    class _SlowFirstClient(_Client):
+        async def download_referencefile(self, artifact_id, *, request_bearer_token=None, max_bytes=None):
+            if artifact_id == "21":
+                first_started.set()
+                await release_first.wait()
+            return await super().download_referencefile(
+                artifact_id, request_bearer_token=request_bearer_token, max_bytes=max_bytes,
+            )
+
+    async def run_listing(payloads):
+        client = _SlowFirstClient(payloads)
+        client.show_reference_payload = _abc_reference_record()
+        client.show_referencefiles_payload = rows  # type: ignore[assignment]
+        provider = provider_from_fake(client)
+        reference = await provider.resolve_reference("AGRKB:101", request_bearer_token="curator-token")
+        listing = await list_reference_files(
+            provider=provider, reference=reference, authorized_group_ids=("WB",),
+            bearer_kind=ProviderBearerKind.CURATOR, request_bearer_token="curator-token",
+            limits=_limits(), check_limit=1, load_stored=store.load, save_assessment=store.save,
+            route=ListingRoute.IDENTIFIER, provider_observations={}, find_paper_in_library=_not_in_library,
+        )
+        return listing, client
+
+    payloads = {"21": _http_error(413), "31": GOOD_TABLE, "41": GOOD_TABLE}
+    slow_first = asyncio.create_task(run_listing(payloads))
+    await first_started.wait()
+
+    # Second overlapping refresh reserves file 30 and completes before the slow first request finishes.
+    second_listing, second_client = await run_listing(payloads)
+    assert [kwargs["artifact_id"] for name, kwargs in second_client.calls if name == "download_referencefile"] == ["31"]
+    assert _by_id(second_listing)["30"].check.status is ListedFileCheckStatus.PASSED
+
+    # Completing the slow first request late must not rewind the cursor back to file 20.
+    release_first.set()
+    first_listing, first_client = await slow_first
+    assert [kwargs["artifact_id"] for name, kwargs in first_client.calls if name == "download_referencefile"] == ["21"]
+    assert _by_id(first_listing)["20"].check.reason is FileReason.TOO_LARGE
+
+    # Third refresh advances directly to file 40 instead of re-checking oversized file 20.
+    third_listing, third_client = await run_listing(payloads)
+    assert [kwargs["artifact_id"] for name, kwargs in third_client.calls if name == "download_referencefile"] == ["41"]
+    assert _by_id(third_listing)["40"].check.status is ListedFileCheckStatus.PASSED
+    assert _by_id(third_listing)["40"].tickable is True
+
+
+@pytest.mark.asyncio
+async def test_listing_refresh_cursor_is_isolated_by_access_scope():
+    store = _Store()
+    rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), *_pair(30, "FB")]
+    payloads = {"21": _http_error(413), "31": GOOD_TABLE}
+
+    # Curator A sees both 20 (oversized, WB) and 30 (valid, FB).
+    first_a, client_a1 = await _listing(rows, groups=("WB", "FB"), payloads=payloads, store=store, check_limit=1)
+    assert _by_id(first_a)["20"].check.reason is FileReason.TOO_LARGE
+    assert _by_id(first_a)["30"].check.status is ListedFileCheckStatus.CHECK_LIMIT_REACHED
+    assert [kwargs["artifact_id"] for name, kwargs in client_a1.calls if name == "download_referencefile"] == ["21"]
+
+    # Curator B sees only 20 (WB) and must not clear or rewind Curator A's cursor.
+    first_b, client_b = await _listing(rows, groups=("WB",), payloads=payloads, store=store, check_limit=1)
+    assert set(_by_id(first_b)) == {"10", "20"}
+    assert _by_id(first_b)["20"].check.reason is FileReason.TOO_LARGE
+    assert [kwargs["artifact_id"] for name, kwargs in client_b.calls if name == "download_referencefile"] == ["21"]
+
+    # Curator A's second refresh (even with different group order/casing) advances to 30.
+    second_a, client_a2 = await _listing(rows, groups=("fb", "wb"), payloads=payloads, store=store, check_limit=1)
+    assert _by_id(second_a)["30"].check.status is ListedFileCheckStatus.PASSED
+    assert _by_id(second_a)["30"].tickable is True
+    assert [kwargs["artifact_id"] for name, kwargs in client_a2.calls if name == "download_referencefile"] == ["31"]
 
 
 @pytest.mark.asyncio

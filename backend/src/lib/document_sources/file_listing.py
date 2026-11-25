@@ -245,16 +245,20 @@ _download_limiters: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asynci
     weakref.WeakKeyDictionary()
 )
 
-# Bounded per-loop cursor tracking the last unchecked candidate attempted when a
+_ListingCursorKey = tuple[str, str, tuple[str, ...]]
+
+# Bounded per-loop cursor tracking the last unchecked candidate reserved when a
 # reference has more uncached files than check_limit, so consecutive refreshes
 # advance past uncached failures (e.g. provider-aborted TOO_LARGE or checksum
-# mismatches) instead of starving later files.
-_listing_check_cursors: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, OrderedDict[tuple[str, str], tuple[int, str]]]" = (
+# mismatches) instead of starving later files. Keyed by (provider, reference,
+# normalized authorized groups) so callers with different visibility scopes do
+# not clear or rewind each other's cursors.
+_listing_check_cursors: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, OrderedDict[_ListingCursorKey, tuple[int, str]]]" = (
     weakref.WeakKeyDictionary()
 )
 
 
-def _listing_cursor_store() -> "OrderedDict[tuple[str, str], tuple[int, str]]":
+def _listing_cursor_store() -> "OrderedDict[_ListingCursorKey, tuple[int, str]]":
     loop = asyncio.get_running_loop()
     cursors = _listing_check_cursors.get(loop)
     if cursors is None:
@@ -265,7 +269,7 @@ def _listing_cursor_store() -> "OrderedDict[tuple[str, str], tuple[int, str]]":
 
 def _order_unchecked_candidates(
     unchecked: list["_Candidate"],
-    cursor_key: tuple[str, str] | None,
+    cursor_key: _ListingCursorKey | None,
 ) -> list["_Candidate"]:
     if cursor_key is None or len(unchecked) <= 1:
         return unchecked
@@ -281,7 +285,7 @@ def _order_unchecked_candidates(
 
 
 def _update_listing_cursor(
-    cursor_key: tuple[str, str] | None,
+    cursor_key: _ListingCursorKey | None,
     *,
     to_check: list["_Candidate"],
     unchecked_count: int,
@@ -575,10 +579,14 @@ async def list_reference_files(
         else:
             unchecked.append(candidate)
 
+    access_scope = tuple(sorted({str(value).strip().upper() for value in groups if str(value).strip()}))
     ref_key = reference.reference_id or reference.reference_curie
-    cursor_key = (provider.provider_id, ref_key) if ref_key else None
+    cursor_key: _ListingCursorKey | None = (provider.provider_id, ref_key, access_scope) if ref_key else None
+    # Reserve candidates and advance the cursor synchronously before awaiting downloads
+    # so overlapping refreshes do not check the same file or rewind progress on late completion.
     ordered_unchecked = _order_unchecked_candidates(unchecked, cursor_key)
     to_check = ordered_unchecked[: max(0, check_limit)]
+    _update_listing_cursor(cursor_key, to_check=to_check, unchecked_count=len(unchecked))
     for candidate in ordered_unchecked[len(to_check):]:
         checks[candidate.original.artifact_id] = ListedFileCheck(ListedFileCheckStatus.CHECK_LIMIT_REACHED)
 
@@ -613,7 +621,6 @@ async def list_reference_files(
 
     results = await asyncio.gather(*(check_candidate(candidate) for candidate in to_check))
     checks.update(zip((candidate.original.artifact_id for candidate in to_check), results))
-    _update_listing_cursor(cursor_key, to_check=to_check, unchecked_count=len(unchecked))
 
     for candidate in unique:
         original = candidate.original
