@@ -68,6 +68,7 @@ CONTEXT = DocumentSourceRequestContext(
 )
 WORKBOOK = b"# Made_up_S20\n\n## Sheet1\n\nMade-up rows.\n\n| strain | score |\n| --- | --- |\n| s1 | 1 |\n"
 WORKBOOK_2 = b"# Made_up_S40\n\n## Sheet1\n\n| gene | count |\n| --- | --- |\n| g1 | 3 |\n"
+WORKBOOKS = {"21": WORKBOOK, "41": WORKBOOK_2}
 ACTIVE = {PdfJobStatus.PENDING.value, PdfJobStatus.RUNNING.value, PdfJobStatus.CANCEL_REQUESTED.value}
 
 
@@ -177,10 +178,10 @@ class _Provider:
         return self.payloads[artifact_id]
 
 
-def _artifact(artifact_id, role, artifact_format, **metadata) -> SourceArtifact:
+def _artifact(artifact_id, role, artifact_format, *, md5sum, **metadata) -> SourceArtifact:
     return SourceArtifact(
         provider="made_up_provider", artifact_id=artifact_id, role=role, artifact_format=artifact_format,
-        status=SourceArtifactStatus.AVAILABLE, display_name=f"Made_up_S{artifact_id}", md5sum=f"md5-{artifact_id}",
+        status=SourceArtifactStatus.AVAILABLE, display_name=f"Made_up_S{artifact_id}", md5sum=md5sum,
         access_policy=SourceAccessPolicy(scope=SourceAccessScope.RESTRICTED, group_ids=("group-a",)),
         metadata=metadata,
     )
@@ -189,10 +190,11 @@ def _artifact(artifact_id, role, artifact_format, **metadata) -> SourceArtifact:
 def _entry(original_id: int, in_paper: frozenset[str]) -> ListedFile:
     original = _artifact(
         str(original_id), SourceArtifactRole.SOURCE_SUPPLEMENT, SourceArtifactFormat.UNKNOWN,
-        file_class="supplement", file_extension="xlsx",
+        md5sum=f"md5-{original_id}", file_class="supplement", file_extension="xlsx",
     )
     converted = _artifact(
         str(original_id + 1), SourceArtifactRole.CONVERTED_TEXT, SourceArtifactFormat.MARKDOWN,
+        md5sum=hashlib.md5(WORKBOOKS[str(original_id + 1)]).hexdigest(),
         file_class="converted_merged_supplement", file_extension="md",
     )
     return ListedFile(
@@ -221,13 +223,14 @@ async def _listing(document_id, *, owner_user_id, provider, context):
 
 
 def _chosen(original_id: int) -> ChosenFile:
-    return ChosenFile(str(original_id), md5=f"md5-{original_id}", converted_md5=f"md5-{original_id + 1}")
+    return ChosenFile(str(original_id), md5=f"md5-{original_id}",
+                      converted_md5=hashlib.md5(WORKBOOKS[str(original_id + 1)]).hexdigest())
 
 
 async def _add(document_id, owner_id, connection, files, *, job_id, checkpoint=None, payloads=None, commit_state=None):
     return await supplement_add.add_files_to_paper(
         document_id, owner_id, CONTEXT, files, job_id=job_id,
-        provider=_Provider(payloads or {"21": WORKBOOK, "41": WORKBOOK_2}),
+        provider=_Provider(payloads or WORKBOOKS),
         weaviate_client=connection, stage_checkpoint=checkpoint or AsyncMock(), commit_state=commit_state,
     )
 
@@ -1061,14 +1064,15 @@ AWKWARD = (
 
 
 @pytest.mark.asyncio
-async def test_pieces_saved_json_and_viewer_blocks_carry_the_same_sections_for_awkward_names(owner_id, index):
+async def test_pieces_saved_json_and_viewer_blocks_carry_the_same_sections_for_awkward_names(owner_id, index, monkeypatch):
     import json
 
     from src.config import get_pdf_storage_path
 
+    monkeypatch.setitem(WORKBOOKS, "21", AWKWARD)
     paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
     job = supplement_add.start_supplement_add(paper, owner_id, [_chosen(20)])
-    await _add(paper, owner_id, index, [_chosen(20)], job_id=UUID(job.job_id), payloads={"21": AWKWARD})
+    await _add(paper, owner_id, index, [_chosen(20)], job_id=UUID(job.job_id))
     (_, added) = _rows(paper)
 
     fields = ("section_title", "parent_section", "subsection", "section_path")

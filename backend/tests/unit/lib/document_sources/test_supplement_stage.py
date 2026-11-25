@@ -9,6 +9,7 @@ made up.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from types import SimpleNamespace
 from collections.abc import Callable
 from typing import Any
@@ -173,6 +174,9 @@ def _context():
     )
 
 
+GOOD_TABLE_MD5 = hashlib.md5(GOOD_TABLE).hexdigest()
+
+
 def _chosen(provider_file_id, *, converted_md5=None):
     return ChosenSupplement(
         provider_file_id=provider_file_id, md5=f"md5-{provider_file_id}", converted_md5=converted_md5,
@@ -226,7 +230,7 @@ async def test_converted_supplements_are_added_without_asking_abc(job):
     paper = _Paper([_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB")], payloads={"21": GOOD_TABLE})
 
     client, add, outcomes = await _run(
-        chosen=[_chosen("20", converted_md5="md5-21")], paper=paper,
+        chosen=[_chosen("20", converted_md5=GOOD_TABLE_MD5)], paper=paper,
         last_answer_payload=None, conversion_requested=False, clock=clock,
     )
 
@@ -256,7 +260,7 @@ async def test_a_file_abc_converts_during_the_wait_joins_without_any_conversion_
     assert client.reads == 3  # one show_all read per poll until the converted row appears
     assert paper.listings == 2  # the stage's first listing, then one when the new text appeared
     assert clock.now == 1_000_000.0 + 3 * 60  # DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS default
-    assert [(file.provider_file_id, file.converted_md5) for file in add.calls[0]] == [("30", "md5-31")]
+    assert [(file.provider_file_id, file.converted_md5) for file in add.calls[0]] == [("30", GOOD_TABLE_MD5)]
     assert outcomes.ended == ["completed"]
     assert _final_entries(job) == {"30": ("added", None)}
 
@@ -332,7 +336,7 @@ async def test_a_file_abc_fails_during_the_wait_ends_not_converted_in_time_at_th
                    payloads={"21": GOOD_TABLE})
 
     client, add, outcomes = await _run(
-        chosen=[_chosen("20", converted_md5="md5-21"), _chosen("30")],
+        chosen=[_chosen("20", converted_md5=GOOD_TABLE_MD5), _chosen("30")],
         paper=paper, last_answer_payload=RUNNING, clock=clock,
     )
 
@@ -385,7 +389,7 @@ async def test_failed_reads_end_the_wait_after_the_tolerated_count_a_refused_log
                    payloads={"21": GOOD_TABLE})
 
     client, _add, outcomes = await _run(
-        chosen=[_chosen("20", converted_md5="md5-21"), _chosen("30")], paper=paper,
+        chosen=[_chosen("20", converted_md5=GOOD_TABLE_MD5), _chosen("30")], paper=paper,
         last_answer_payload=RUNNING, clock=clock, read_error=_http(status),
     )
 
@@ -638,7 +642,7 @@ async def test_a_stage_whose_wait_time_is_used_up_adds_only_what_abc_already_con
     client, provider = _plain_provider()
 
     add, outcomes = await _stage(
-        job, chosen=[_chosen("20", converted_md5="md5-21"), _chosen("30"), _chosen("40")], paper=paper,
+        job, chosen=[_chosen("20", converted_md5=GOOD_TABLE_MD5), _chosen("30"), _chosen("40")], paper=paper,
         main_ready_at=clock() - 10_801, clock=clock, provider=provider,
         conversion_requested=True, last_answer=None, login_expires_at=clock() + 86400,
     )
@@ -659,7 +663,7 @@ async def test_a_stage_whose_login_is_inside_the_reserve_ends_at_once_asking_abc
     client, provider = _plain_provider()
 
     add, outcomes = await _stage(
-        job, chosen=[_chosen("20", converted_md5="md5-21")], paper=paper, main_ready_at=clock(),
+        job, chosen=[_chosen("20", converted_md5=GOOD_TABLE_MD5)], paper=paper, main_ready_at=clock(),
         clock=clock, provider=provider, login_expires_at=clock() + 300,  # inside the 900 s reserve
     )
 
@@ -703,7 +707,7 @@ async def test_an_abc_failure_inside_the_add_ends_with_a_reason_not_a_stage_fail
     client, provider = _plain_provider()
 
     _add, outcomes = await _stage(
-        job, chosen=[_chosen("20", converted_md5="md5-21")], paper=paper, main_ready_at=clock(),
+        job, chosen=[_chosen("20", converted_md5=GOOD_TABLE_MD5)], paper=paper, main_ready_at=clock(),
         clock=clock, provider=provider, add=_RaisingAdd(error),
     )
 
@@ -723,7 +727,7 @@ async def test_a_cancel_during_the_add_leaves_no_entry_adding(job):
             await stage_checkpoint("saving_files")
 
     _add, outcomes = await _stage(
-        job, chosen=[_chosen("20", converted_md5="md5-21")], paper=paper, main_ready_at=clock(),
+        job, chosen=[_chosen("20", converted_md5=GOOD_TABLE_MD5)], paper=paper, main_ready_at=clock(),
         clock=clock, provider=provider, add=_CancelledAdd(),
     )
 
@@ -739,7 +743,7 @@ async def test_an_unexpected_failure_leaves_every_open_file_out_by_name_then_rea
 
     with pytest.raises(KeyError):
         await _stage(
-            job, chosen=[_chosen("20", converted_md5="md5-21")], paper=paper, main_ready_at=clock(),
+            job, chosen=[_chosen("20", converted_md5=GOOD_TABLE_MD5)], paper=paper, main_ready_at=clock(),
             clock=clock, provider=provider, add=_RaisingAdd(KeyError("made-up bug")),
         )
 
@@ -763,7 +767,7 @@ async def test_an_add_refusal_keeps_its_measured_and_limit_values(job):
         return await _RefusingAdd()(files=files)
 
     _add, outcomes = await _stage(
-        job, chosen=[_chosen("20", converted_md5="md5-21")], paper=paper, main_ready_at=clock(),
+        job, chosen=[_chosen("20", converted_md5=GOOD_TABLE_MD5)], paper=paper, main_ready_at=clock(),
         clock=clock, provider=provider, add=_call,
     )
 
@@ -822,7 +826,7 @@ async def test_a_stage_ended_by_a_delete_mid_listing_is_not_a_stage_failure(job,
         job_id=JOB_ID,
         run=lambda: stage.run_supplement_stage(
             job_id=JOB_ID, document_id=DOCUMENT_ID, owner_user_id=7, reference="AGRKB:101",
-            plan=SupplementPlan(chosen=(_chosen("20", converted_md5="md5-21"),), request_context=_context(),
+            plan=SupplementPlan(chosen=(_chosen("20", converted_md5=GOOD_TABLE_MD5),), request_context=_context(),
                                 login_expires_at=None, owner_user_id=7, reference="AGRKB:101"),
             conversion_requested=False, last_answer=None, main_ready_at=clock(), provider=provider,
             weaviate_client=object(), outcomes=outcomes, list_files=_DeletedPaper().list_files,

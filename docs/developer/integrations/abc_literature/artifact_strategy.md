@@ -197,14 +197,15 @@ numbers, never wording (`src/lib/document_sources/file_listing.py`).
   `DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES`; at most `DOCUMENT_FILE_LISTING_CHECK_LIMIT` files
   per listing (default 20, the per-paper file limit), the rest `check_limit_reached`. Each file
   is checked and released before its download slot is freed. A converted text without an MD5 is
-  not downloaded (`text_without_checksum`). `too_large` is stored like any refusal; a failed
-  download (`text_unavailable`, `text_missing`, `text_access_denied`) is tried once per listing
-  and not stored. There is no per-user rate limit: the repository has no such mechanism. R7 (one
-  top-level title) applies to converted Word and Excel files. R3 is a note only
+  not downloaded (`text_without_checksum`). If the downloaded bytes differ from the listed MD5,
+  the file is `not_checked` and a later listing can retry. A download stopped by the provider
+  (`too_large`, `text_unavailable`, `text_missing`, `text_access_denied`) is reported for that
+  listing only. The cache stores results for checksum-verified bytes. There is no per-user rate
+  limit. R7 (one top-level title) applies to converted Word and Excel files. R3 is a note only
   (`DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW`). Results are stored in `document_file_assessments`
   by the converted text's provider file id, MD5 and a check version that includes every
-  threshold and the token encoding, and reused only after the access checks. A refusal found
-  while listing sends no Sentry event. The listing does not clean or parse text.
+  threshold, the token encoding, and the provider's single-title rule. Access checks precede reuse.
+  A refusal found while listing sends no Sentry event. The listing does not clean or parse text.
 - Each entry is named by the original's provider file id (an import writes it to
   `source_provider_source_file_id`; "in this paper" matches it). It carries the original's MD5
   (`md5`), the converted text's MD5 (`converted_md5`, which an import sends back to detect a

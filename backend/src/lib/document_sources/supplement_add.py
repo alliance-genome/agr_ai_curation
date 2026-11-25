@@ -46,7 +46,12 @@ from uuid import UUID
 from sqlalchemy import and_, select
 
 from src.lib.document_sources.access import DocumentSourceRequestContext
-from src.lib.document_sources.file_assessment import FileProfile, assess_converted_file
+from src.lib.document_sources.file_assessment import (
+    FileCheckLimits,
+    FileProfile,
+    assess_converted_file,
+    normalize_md5,
+)
 from src.lib.document_sources.file_listing import (
     ProviderFileDownloadFailure,
     ListedFile,
@@ -314,7 +319,10 @@ async def _check_and_write(
             # A paper's main file is never added to an existing paper.
             outcomes[file_id] = left_out(FileReason.FILE_NOT_TICKABLE)
             continue
-        if listed.converted_md5 != chosen.converted_md5 or listed.md5 != chosen.md5:
+        if (
+            normalize_md5(listed.converted_md5) != normalize_md5(chosen.converted_md5)
+            or normalize_md5(listed.md5) != normalize_md5(chosen.md5)
+        ):
             outcomes[file_id] = left_out(FileReason.FILE_CHANGED_SINCE_LISTED)
             continue
         if file_count + 1 > max_files:
@@ -380,7 +388,8 @@ def _spool_pdf(content: bytes, *, listed_md5: str | None, spool: Path) -> _Spool
 
     from src.lib.pipeline.upload import pdf_page_count
 
-    if hashlib.md5(content).hexdigest() != listed_md5:
+    expected_md5 = normalize_md5(listed_md5)
+    if not expected_md5 or hashlib.md5(content).hexdigest() != expected_md5:
         return FileReason.FILE_CHANGED_SINCE_LISTED
     try:
         page_count = pdf_page_count(io.BytesIO(content))
@@ -408,13 +417,14 @@ async def _download_pdf(
     left_out = lambda reason, limit=None: FileOutcome(  # noqa: E731
         listed.provider_file_id, "left_out", reason, limit_value=limit,
     )
-    if not listed.md5:
+    expected_md5 = normalize_md5(listed.md5)
+    if not expected_md5:
         # Without the provider's MD5 the bytes cannot be matched to what was listed.
         return left_out(FileReason.FILE_NOT_TICKABLE)
     try:
         outcome = await download_provider_file(
             provider, listed.provider_file_id, request_bearer_token=token, max_bytes=cap,
-            use=lambda content: _spool_pdf(content, listed_md5=listed.md5, spool=spool),
+            use=lambda content: _spool_pdf(content, listed_md5=expected_md5, spool=spool),
         )
     except DocumentSourceError:
         return left_out(FileReason.SOURCE_DOWNLOAD_FAILED)
@@ -438,7 +448,7 @@ async def _download_and_check(
     *,
     token: str,
     download_cap: int,
-    limits: Any,
+    limits: FileCheckLimits,
 ) -> tuple[str, str] | FileOutcome:
     """Download the converted text with the curator's login and run the stored or new checks."""
 
@@ -448,8 +458,11 @@ async def _download_and_check(
     assert converted is not None
     profile = FileProfile(single_title_required=listed.single_title_required)
     load, save = _stores(provider.provider_id)
-    md5 = converted.md5sum
-    stored = await asyncio.to_thread(load, converted.artifact_id, md5, limits.check_version) if md5 else None
+    md5 = normalize_md5(converted.md5sum)
+    if not md5:
+        return FileOutcome(listed.provider_file_id, "left_out", FileReason.FILE_NOT_TICKABLE)
+    version = limits.assessment_version(profile)
+    stored = await asyncio.to_thread(load, converted.artifact_id, md5, version)
     if stored is not None and stored.refused:
         # Refused before for this exact text and check version: not downloaded again.
         return FileOutcome(
@@ -458,6 +471,8 @@ async def _download_and_check(
         )
 
     def use(content: bytes):
+        if hashlib.md5(content).hexdigest() != md5:
+            return FileOutcome(listed.provider_file_id, "left_out", FileReason.FILE_CHANGED_SINCE_LISTED)
         assessment = stored if stored is not None else assess_converted_file(content, profile, limits)
         return content, hashlib.sha256(content).hexdigest(), assessment
 
@@ -478,9 +493,11 @@ async def _download_and_check(
             listed.provider_file_id, "left_out", failure_codes[outcome.failure], limit_value=outcome.limit_value,
         )
     assert outcome.result is not None
+    if isinstance(outcome.result, FileOutcome):
+        return outcome.result
     content, sha256, assessment = outcome.result
-    if stored is None and md5:
-        await asyncio.to_thread(save, converted.artifact_id, md5, limits.check_version, assessment)
+    if stored is None:
+        await asyncio.to_thread(save, converted.artifact_id, md5, version, assessment)
     if assessment.refused:
         return FileOutcome(
             listed.provider_file_id, "left_out", assessment.reason,
@@ -771,7 +788,7 @@ def _new_row(
         source_markdown_path=markdown_path,
         source_provider_source_file_id=original.artifact_id,
         source_provider_converted_artifact_id=converted.artifact_id,
-        source_md5=original.md5sum,
+        source_md5=normalize_md5(original.md5sum),
         source_converted_artifact_sha256=item.sha256,
         source_file_class=str(converted.metadata.get("file_class") or converted.role.value),
         source_file_extension=str(converted.metadata.get("file_extension") or converted.artifact_format.value),

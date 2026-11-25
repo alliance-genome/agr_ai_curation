@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
-from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -59,10 +58,9 @@ PDF_TEXT = b"## Supplementary methods\n\nMade-up methods of the supplement.\n\n#
 
 def _pdf_entry() -> ListedFile:
     original = _artifact("60", SourceArtifactRole.SOURCE_PDF, SourceArtifactFormat.PDF,
-                         file_class="supplement", file_extension="pdf")
-    original = replace(original, md5sum=hashlib.md5(PDF).hexdigest())
+                         md5sum=hashlib.md5(PDF).hexdigest(), file_class="supplement", file_extension="pdf")
     converted = _artifact("61", SourceArtifactRole.CONVERTED_TEXT, SourceArtifactFormat.MARKDOWN,
-                          file_class="converted_merged_supplement", file_extension="md")
+                          md5sum=hashlib.md5(PDF_TEXT).hexdigest(), file_class="converted_merged_supplement", file_extension="md")
     return ListedFile(
         provider_file_id="60", converted_text_id="61", display_name=original.display_name, file_role="supplement",
         status=ListedFileStatus.READY, check=ListedFileCheck(ListedFileCheckStatus.NOT_CHECKED),
@@ -89,7 +87,7 @@ def pdf_listing(monkeypatch, index):  # noqa: F811
 @pytest.mark.asyncio
 async def test_a_pdf_supplement_is_stored_served_and_read_from_its_text(owner_id, pdf_listing, tmp_path):  # noqa: F811
     paper = await asyncio.to_thread(_paper, owner_id, pdf_listing)
-    chosen = ChosenFile("60", md5=hashlib.md5(PDF).hexdigest(), converted_md5="md5-61")
+    chosen = ChosenFile("60", md5=hashlib.md5(PDF).hexdigest(), converted_md5=hashlib.md5(PDF_TEXT).hexdigest())
 
     result = await _add(paper, owner_id, pdf_listing, [chosen], job_id=uuid4(),
                         payloads={"60": PDF, "61": PDF_TEXT})
@@ -122,7 +120,7 @@ async def test_a_failed_pdf_write_leaves_no_stored_pdf_and_the_paper_unchanged( 
     owner_id, pdf_listing, tmp_path, monkeypatch,  # noqa: F811
 ):
     paper = await asyncio.to_thread(_paper, owner_id, pdf_listing)
-    chosen = ChosenFile("60", md5=hashlib.md5(PDF).hexdigest(), converted_md5="md5-61")
+    chosen = ChosenFile("60", md5=hashlib.md5(PDF).hexdigest(), converted_md5=hashlib.md5(PDF_TEXT).hexdigest())
 
     async def fail(*_args, **_kwargs):
         raise RuntimeError("made-up storage failure")

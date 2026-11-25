@@ -10,6 +10,7 @@ persistence tests cover the real rows. All values are made up.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import threading
 from dataclasses import dataclass, field
@@ -32,7 +33,7 @@ from tests.unit.lib.document_sources.test_abc_literature_provider import (
     _abc_show_all_row,
     provider_from_fake,
 )
-from tests.unit.lib.document_sources.test_file_listing import _Client, _limits, _pair, _Store
+from tests.unit.lib.document_sources.test_file_listing import _Client, _limits, _listing, _pair, _Store
 
 _REAL_DELETE_PIECES = supplement_add._delete_pieces
 _REAL_DELETE_PIECES_OF_DELETED_PAPER = supplement_add._delete_pieces_of_deleted_paper
@@ -169,10 +170,12 @@ def _paper_lookup(monkeypatch, file_ids=("10",)):
     )
 
 
-def _chosen(original_id: int, *, converted_id: int | None = None, md5_suffix="") -> ChosenFile:
-    converted = converted_id if converted_id is not None else original_id + 1
+def _chosen(original_id: int, *, content: bytes | None = None, md5_suffix="") -> ChosenFile:
+    if content is None:
+        content = GOOD[str(original_id + 1)]
     return ChosenFile(
-        provider_file_id=str(original_id), md5=f"md5-{original_id}{md5_suffix}", converted_md5=f"md5-{converted}",
+        provider_file_id=str(original_id), md5=f"md5-{original_id}{md5_suffix}",
+        converted_md5=hashlib.md5(content).hexdigest(),
     )
 
 
@@ -187,7 +190,6 @@ def _by_id(result: AddResult):
     return {item.provider_file_id: item for item in result.files}
 
 
-ROWS = [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), *_pair(30, "WB"), *_pair(40, "WB")]
 GOOD = {
     "21": _workbook("Made_up_S20", "Sheet1"),
     "31": b"# One\n\n# Two\n",  # an Office file must have exactly one top-level title (R7)
@@ -195,10 +197,67 @@ GOOD = {
 }
 
 
+def _rows(payloads):
+    rows = [_abc_show_all_main_pdf(10, "WB")]
+    for converted_id, content in payloads.items():
+        rows.extend(_pair(int(converted_id) - 1, "WB", content=content))
+    return rows
+
+
+ROWS = _rows(GOOD)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cached_pass", [False, True])
+async def test_changed_download_is_left_out_without_writes(monkeypatch, storage, cached_pass):
+    store = _Store()
+    rows = _pair(20, "WB", content=GOOD["21"])
+    if cached_pass:
+        await _listing(rows, payloads=GOOD, store=store)
+        assert len(store.saved) == 1
+        assert not next(iter(store.saved.values())).refused
+
+    def unexpected_save(*_args):
+        pytest.fail("changed bytes must not create or replace an assessment")
+
+    monkeypatch.setattr(supplement_add, "assess_converted_file", lambda *_: pytest.fail("assessed changed bytes"))
+    monkeypatch.setattr(file_listing_service, "_stores", lambda _provider: (store.load, unexpected_save))
+    _, provider = _provider(rows, {"21": GOOD["21"] + b"changed"})
+    _paper_lookup(monkeypatch)
+    result = await _add(provider, [_chosen(20)])
+    assert _by_id(result)["20"].reason_code is FileReason.FILE_CHANGED_SINCE_LISTED
+    assert storage.inserted == [] and storage.stored == [] and storage.saved_json == {}
+
+
+@pytest.mark.asyncio
+async def test_uppercase_md5_passes_add_and_reuses_cached_assessment(monkeypatch, storage):
+    store = _Store()
+    lower_md5 = hashlib.md5(GOOD["21"]).hexdigest()
+    lower_rows = _pair(20, "WB", content=GOOD["21"])
+    await _listing(lower_rows, payloads=GOOD, store=store)
+    assert [key[1] for key in store.saved] == [lower_md5]
+
+    upper_rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB", md5="  MD5-20  ", content=GOOD["21"])]
+    upper_rows[2]["md5sum"] = f" {lower_md5.upper()} "
+
+    monkeypatch.setattr(file_listing_service, "_stores", lambda _provider: (store.load, store.save))
+    monkeypatch.setattr(supplement_add, "assess_converted_file", lambda *_: pytest.fail("cached check should be reused"))
+    _, provider = _provider(upper_rows, {"21": GOOD["21"]})
+    _paper_lookup(monkeypatch)
+    chosen = ChosenFile(provider_file_id="20", md5="MD5-20", converted_md5=lower_md5.upper())
+
+    result = await _add(provider, [chosen])
+    assert _by_id(result)["20"].outcome == "added"
+    assert len(storage.inserted) == 1
+    assert storage.inserted[0].source_md5 == "md5-20"
+    assert [key[1] for key in store.saved] == [lower_md5]
+
+
 @pytest.mark.asyncio
 async def test_a_refused_second_file_of_three_is_left_out_and_the_other_two_are_added(monkeypatch, storage):
     client, provider = _provider(ROWS, GOOD)
     _paper_lookup(monkeypatch)
+    monkeypatch.setattr(supplement_add, "assess_converted_file", lambda *_: pytest.fail("listing already checked"))
     result = await _add(provider, [_chosen(40), _chosen(30), _chosen(20)])
 
     outcomes = _by_id(result)
@@ -247,9 +306,9 @@ async def test_two_sheets_give_two_sections_and_the_saved_json_matches_the_store
 @pytest.mark.asyncio
 async def test_an_abstract_heading_in_a_supplement_is_only_a_section_of_that_file(monkeypatch, storage):
     payload = b"# Made_up_S20\n\n## Abstract\n\nMade-up text under a heading called Abstract.\n"
-    _, provider = _provider(ROWS, {**GOOD, "21": payload})
+    _, provider = _provider(_rows({"21": payload}), {"21": payload})
     _paper_lookup(monkeypatch)
-    result = await _add(provider, [_chosen(20)])
+    result = await _add(provider, [_chosen(20, content=payload)])
 
     file_id = _by_id(result)["20"].file_id
     assert {element["parent_section"] for element in storage.saved_json[file_id]} == {"Made_up_S20", "Abstract"}
@@ -265,7 +324,8 @@ async def test_unconverted_changed_unlisted_and_already_added_files_are_left_out
     _, provider = _provider(rows, GOOD)
     _paper_lookup(monkeypatch, file_ids=("10", "40"))
     result = await _add(provider, [
-        _chosen(50, converted_id=51), _chosen(20, md5_suffix="-changed"), _chosen(99), _chosen(40), _chosen(10),
+        _chosen(50, content=b""), _chosen(20, md5_suffix="-changed"), _chosen(99, content=b""),
+        _chosen(40), _chosen(10, content=b""),
     ])
 
     reasons = {item.provider_file_id: item.reason_code for item in result.files}
@@ -284,9 +344,10 @@ async def test_the_paper_total_counts_the_main_file_and_later_smaller_files_can_
     monkeypatch.setenv("DOCUMENT_PAPER_MAX_TEXT_BYTES", "1100")
     big = _workbook("Made_up_S20", *[f"Sheet{index}" for index in range(8)])
     small = _workbook("Made_up_S40", "Sheet1")
-    _, provider = _provider(ROWS, {**GOOD, "21": big, "41": small})
+    payloads = {"21": big, "41": small}
+    _, provider = _provider(_rows(payloads), payloads)
     _paper_lookup(monkeypatch)
-    result = await _add(provider, [_chosen(20), _chosen(40)])
+    result = await _add(provider, [_chosen(20, content=big), _chosen(40, content=small)])
 
     outcomes = _by_id(result)
     assert outcomes["20"].reason_code is FileReason.PAPER_TEXT_LIMIT
@@ -769,9 +830,10 @@ SECTION_CASES = {
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", list(SECTION_CASES))
 async def test_every_element_and_every_stored_piece_has_a_section(monkeypatch, storage, case):
-    _, provider = _provider(ROWS, {**GOOD, "21": SECTION_CASES[case]})
+    content = SECTION_CASES[case]
+    _, provider = _provider(_rows({"21": content}), {"21": content})
     _paper_lookup(monkeypatch)
-    result = await _add(provider, [_chosen(20)])
+    result = await _add(provider, [_chosen(20, content=content)])
 
     added = _by_id(result)["20"]
     assert added.outcome == "added", added

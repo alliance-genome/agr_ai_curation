@@ -9,6 +9,7 @@ values are made up.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -55,6 +56,7 @@ CONTEXT = DocumentSourceRequestContext(
 )
 WORKBOOK = b"# Made_up_S20\n\n## Sheet1\n\n| strain | score |\n| --- | --- |\n| s1 | 1 |\n"
 WORKBOOK_2 = b"# Made_up_S40\n\n## Sheet1\n\n| gene | count |\n| --- | --- |\n| g1 | 3 |\n"
+WORKBOOKS = {"21": WORKBOOK, "41": WORKBOOK_2}
 
 
 @pytest.fixture
@@ -123,10 +125,10 @@ class _Provider:
         return self.payloads[artifact_id]
 
 
-def _artifact(artifact_id, role, artifact_format, **metadata) -> SourceArtifact:
+def _artifact(artifact_id, role, artifact_format, *, md5sum, **metadata) -> SourceArtifact:
     return SourceArtifact(
         provider="made_up_provider", artifact_id=artifact_id, role=role, artifact_format=artifact_format,
-        status=SourceArtifactStatus.AVAILABLE, display_name=f"Made_up_S{artifact_id}", md5sum=f"md5-{artifact_id}",
+        status=SourceArtifactStatus.AVAILABLE, display_name=f"Made_up_S{artifact_id}", md5sum=md5sum,
         access_policy=SourceAccessPolicy(scope=SourceAccessScope.RESTRICTED, group_ids=("group-a",)),
         metadata=metadata,
     )
@@ -135,10 +137,11 @@ def _artifact(artifact_id, role, artifact_format, **metadata) -> SourceArtifact:
 def _supplement_entry(original_id: int, in_paper: frozenset[str]) -> ListedFile:
     original = _artifact(
         str(original_id), SourceArtifactRole.SOURCE_SUPPLEMENT, SourceArtifactFormat.UNKNOWN,
-        file_class="supplement", file_extension="xlsx",
+        md5sum=f"md5-{original_id}", file_class="supplement", file_extension="xlsx",
     )
     converted = _artifact(
         str(original_id + 1), SourceArtifactRole.CONVERTED_TEXT, SourceArtifactFormat.MARKDOWN,
+        md5sum=hashlib.md5(WORKBOOKS[str(original_id + 1)]).hexdigest(),
         file_class="converted_merged_supplement", file_extension="md",
     )
     return ListedFile(
@@ -175,7 +178,8 @@ def listing(monkeypatch):
 
 
 def _chosen(original_id: int) -> ChosenFile:
-    return ChosenFile(str(original_id), md5=f"md5-{original_id}", converted_md5=f"md5-{original_id + 1}")
+    return ChosenFile(str(original_id), md5=f"md5-{original_id}",
+                      converted_md5=hashlib.md5(WORKBOOKS[str(original_id + 1)]).hexdigest())
 
 
 async def _add(document_id, owner_id, files, payloads, job_id=None):

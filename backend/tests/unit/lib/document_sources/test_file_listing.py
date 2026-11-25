@@ -9,6 +9,7 @@ made up.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import weakref
 from typing import Any
 from uuid import uuid4
@@ -17,7 +18,7 @@ import pytest
 
 from src.lib.document_sources import file_listing
 
-from src.lib.document_sources.file_assessment import FileCheckLimits
+from src.lib.document_sources.file_assessment import FileAssessment, FileCheckLimits
 from src.lib.document_sources.file_reasons import FileReason
 from src.lib.document_sources.file_listing import (
     FileListingError,
@@ -67,7 +68,7 @@ class _Client(FakeABCLiteratureClient):
         return payload
 
 
-def _pair(original_id: int, *mods, extension="xlsx", converted_mods=None, md5=None):
+def _pair(original_id: int, *mods, extension="xlsx", converted_mods=None, md5=None, content=GOOD_TABLE):
     original = _abc_show_all_row(
         original_id, *mods, file_class="supplement", file_extension=extension,
         display_name=f"Made_up_S{original_id}",
@@ -79,6 +80,7 @@ def _pair(original_id: int, *mods, extension="xlsx", converted_mods=None, md5=No
         file_class="converted_merged_supplement", file_extension="md",
         display_name=f"Made_up_S{original_id}_{extension}", source=_abc_source(original),
     )
+    converted["md5sum"] = hashlib.md5(content).hexdigest()
     return [original, converted]
 
 
@@ -160,10 +162,36 @@ async def test_a_second_listing_downloads_nothing_and_a_changed_md5_is_checked_a
     _, client = await _listing(rows, payloads={}, store=store)
     assert not [name for name, _ in client.calls if name == "download_referencefile"]
 
-    changed = [*_pair(20, "WB")]
-    changed[1]["md5sum"] = "md5-changed"
-    _, client = await _listing(changed, payloads={"21": GOOD_TABLE}, store=store)
+    changed_text = GOOD_TABLE + b"more text"
+    changed = _pair(20, "WB", content=changed_text)
+    _, client = await _listing(changed, payloads={"21": changed_text}, store=store)
     assert [name for name, _ in client.calls if name == "download_referencefile"] == ["download_referencefile"]
+
+
+@pytest.mark.asyncio
+async def test_changed_bytes_are_not_checked_or_cached_and_can_be_retried():
+    store = _Store()
+    rows = _pair(20, "WB")
+    listing, _ = await _listing(rows, payloads={"21": GOOD_TABLE + b"changed"}, store=store)
+    file = _by_id(listing)["20"]
+    assert file.check.status is ListedFileCheckStatus.NOT_CHECKED
+    assert file.check.reason is None
+    assert not file.tickable
+    assert store.saved == {}
+
+    listing, _ = await _listing(rows, payloads={"21": GOOD_TABLE}, store=store)
+    assert _by_id(listing)["20"].check.status is ListedFileCheckStatus.PASSED
+
+
+@pytest.mark.asyncio
+async def test_a_previous_check_version_is_reassessed():
+    store = _Store()
+    rows = _pair(20, "WB")
+    # Version 2 key for _limits(), before the title rule and byte verification.
+    store.save("21", rows[1]["md5sum"], "2-0ca4b65e03f97bcd", FileAssessment(True, FileReason.INVALID_TEXT))
+    listing, _ = await _listing(rows, payloads={"21": GOOD_TABLE}, store=store)
+    assert _by_id(listing)["20"].check.status is ListedFileCheckStatus.PASSED
+    assert len(store.saved) == 2
 
 
 @pytest.mark.asyncio
@@ -179,7 +207,7 @@ async def test_a_changed_threshold_checks_again():
 async def test_a_refusal_is_stored_and_reported_with_its_code():
     store = _Store()
     bad = "# T\n\n| a | b |\n| --- | --- |\n| 1 | 2 | 3 |\n".encode()
-    listing, _ = await _listing([*_pair(20, "WB")], payloads={"21": bad}, store=store)
+    listing, _ = await _listing(_pair(20, "WB", content=bad), payloads={"21": bad}, store=store)
     check = _by_id(listing)["20"].check
     assert check.status is ListedFileCheckStatus.REFUSED
     assert check.reason is FileReason.TABLE_CELLS_MISMATCH
@@ -187,12 +215,194 @@ async def test_a_refusal_is_stored_and_reported_with_its_code():
 
 
 @pytest.mark.asyncio
-async def test_an_oversized_download_is_a_too_large_refusal():
+async def test_an_oversized_download_is_reported_without_caching_unverified_bytes():
+    store = _Store()
     listing, _ = await _listing(
-        [*_pair(20, "WB")], payloads={"21": _http_error(413)},
+        [*_pair(20, "WB")], payloads={"21": _http_error(413)}, store=store,
     )
     check = _by_id(listing)["20"].check
     assert check.reason is FileReason.TOO_LARGE and check.limit_value == 10_000
+    assert store.saved == {}
+
+
+@pytest.mark.asyncio
+async def test_uppercase_md5_matches_bytes_and_reuses_cached_assessment_across_case():
+    store = _Store()
+    lower_md5 = hashlib.md5(GOOD_TABLE).hexdigest()
+    pair = _pair(20, "WB", md5="  ORIG-UPPER  ")
+    pair[1]["md5sum"] = f" {lower_md5.upper()} "
+    rows = [_abc_show_all_main_pdf(10, "WB"), *pair]
+
+    listing, client = await _listing(rows, payloads={"21": GOOD_TABLE}, store=store)
+    file = _by_id(listing)["20"]
+    assert file.check.status is ListedFileCheckStatus.PASSED
+    assert file.tickable is True
+    assert file.md5 == "orig-upper"
+    assert file.converted_md5 == lower_md5
+    assert [key[1] for key in store.saved] == [lower_md5]
+    assert [name for name, _ in client.calls if name == "download_referencefile"] == ["download_referencefile"]
+
+    # Refresh with lowercase MD5 reuses the cached assessment without downloading again.
+    lower_pair = _pair(20, "WB", md5="orig-upper")
+    lower_pair[1]["md5sum"] = lower_md5
+    listing_cached, client_cached = await _listing(
+        [_abc_show_all_main_pdf(10, "WB"), *lower_pair], payloads={}, store=store,
+    )
+    assert _by_id(listing_cached)["20"].check.status is ListedFileCheckStatus.PASSED
+    assert _by_id(listing_cached)["20"].tickable is True
+    assert not [name for name, _ in client_cached.calls if name == "download_referencefile"]
+
+    # Whitespace-only MD5 is treated as missing.
+    blank_rows = _pair(30, "WB")
+    blank_rows[1]["md5sum"] = "   "
+    blank_listing, blank_client = await _listing(blank_rows, payloads={"31": GOOD_TABLE}, store=store)
+    assert _by_id(blank_listing)["30"].check.status is ListedFileCheckStatus.TEXT_WITHOUT_CHECKSUM
+    assert not [name for name, _ in blank_client.calls if name == "download_referencefile"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first_payload", "expected_first_status", "expected_first_reason"),
+    [
+        (_http_error(413), ListedFileCheckStatus.REFUSED, FileReason.TOO_LARGE),
+        (GOOD_TABLE + b"mismatch", ListedFileCheckStatus.NOT_CHECKED, None),
+    ],
+    ids=["oversized-first-file", "checksum-mismatched-first-file"],
+)
+async def test_uncached_first_file_failure_does_not_starve_later_files_on_refresh(
+    first_payload, expected_first_status, expected_first_reason,
+):
+    store = _Store()
+    rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), *_pair(30, "WB")]
+    payloads = {"21": first_payload, "31": GOOD_TABLE}
+
+    first_listing, first_client = await _listing(rows, payloads=payloads, store=store, check_limit=1)
+    first_files = _by_id(first_listing)
+    assert first_files["20"].check.status is expected_first_status
+    assert first_files["20"].check.reason is expected_first_reason
+    assert first_files["20"].tickable is False
+    assert first_files["30"].check.status is ListedFileCheckStatus.CHECK_LIMIT_REACHED
+    assert first_files["30"].tickable is False
+    assert [kwargs["artifact_id"] for name, kwargs in first_client.calls if name == "download_referencefile"] == ["21"]
+    assert store.saved == {}
+
+    second_listing, second_client = await _listing(rows, payloads=payloads, store=store, check_limit=1)
+    second_files = _by_id(second_listing)
+    assert second_files["20"].check.status is ListedFileCheckStatus.CHECK_LIMIT_REACHED
+    assert second_files["30"].check.status is ListedFileCheckStatus.PASSED
+    assert second_files["30"].tickable is True
+    assert [kwargs["artifact_id"] for name, kwargs in second_client.calls if name == "download_referencefile"] == ["31"]
+    assert len(store.saved) == 1
+
+    # Once file 30 is cached, a third listing serves 30 from cache and re-checks 20.
+    third_listing, third_client = await _listing(rows, payloads=payloads, store=store, check_limit=1)
+    third_files = _by_id(third_listing)
+    assert third_files["20"].check.status is expected_first_status
+    assert third_files["30"].check.status is ListedFileCheckStatus.PASSED
+    assert third_files["30"].tickable is True
+    assert [kwargs["artifact_id"] for name, kwargs in third_client.calls if name == "download_referencefile"] == ["21"]
+
+
+@pytest.mark.asyncio
+async def test_listing_refresh_cursor_cache_respects_configured_max_entries(monkeypatch):
+    monkeypatch.setenv("DOCUMENT_FILE_LISTING_CURSOR_CACHE_MAX_ENTRIES", "1")
+    rows = [*_pair(20, "WB"), *_pair(30, "WB")]
+    payloads = {"21": _http_error(413), "31": GOOD_TABLE}
+
+    for ref_id in ("101", "202"):
+        client = _Client(payloads)
+        client.show_reference_payload = dict(_abc_reference_record(), reference_id=int(ref_id), curie=f"AGRKB:{ref_id}")
+        client.show_referencefiles_payload = rows  # type: ignore[assignment]
+        provider = provider_from_fake(client)
+        reference = await provider.resolve_reference(f"AGRKB:{ref_id}", request_bearer_token="curator-token")
+        store = _Store()
+        await list_reference_files(
+            provider=provider, reference=reference, authorized_group_ids=("WB",),
+            bearer_kind=ProviderBearerKind.CURATOR, request_bearer_token="curator-token",
+            limits=_limits(), check_limit=1, load_stored=store.load, save_assessment=store.save,
+            route=ListingRoute.IDENTIFIER, provider_observations={}, find_paper_in_library=_not_in_library,
+        )
+
+    cursors = file_listing._listing_cursor_store()
+    assert len(cursors) == 1
+    assert ("abc_literature", "202", ("WB",)) in cursors
+
+
+@pytest.mark.asyncio
+async def test_overlapping_slow_refresh_does_not_rewind_listing_cursor():
+    store = _Store()
+    rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), *_pair(30, "WB"), *_pair(40, "WB")]
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    class _SlowFirstClient(_Client):
+        async def download_referencefile(self, artifact_id, *, request_bearer_token=None, max_bytes=None):
+            if artifact_id == "21":
+                first_started.set()
+                await release_first.wait()
+            return await super().download_referencefile(
+                artifact_id, request_bearer_token=request_bearer_token, max_bytes=max_bytes,
+            )
+
+    async def run_listing(payloads):
+        client = _SlowFirstClient(payloads)
+        client.show_reference_payload = _abc_reference_record()
+        client.show_referencefiles_payload = rows  # type: ignore[assignment]
+        provider = provider_from_fake(client)
+        reference = await provider.resolve_reference("AGRKB:101", request_bearer_token="curator-token")
+        listing = await list_reference_files(
+            provider=provider, reference=reference, authorized_group_ids=("WB",),
+            bearer_kind=ProviderBearerKind.CURATOR, request_bearer_token="curator-token",
+            limits=_limits(), check_limit=1, load_stored=store.load, save_assessment=store.save,
+            route=ListingRoute.IDENTIFIER, provider_observations={}, find_paper_in_library=_not_in_library,
+        )
+        return listing, client
+
+    payloads = {"21": _http_error(413), "31": GOOD_TABLE, "41": GOOD_TABLE}
+    slow_first = asyncio.create_task(run_listing(payloads))
+    await first_started.wait()
+
+    # Second overlapping refresh reserves file 30 and completes before the slow first request finishes.
+    second_listing, second_client = await run_listing(payloads)
+    assert [kwargs["artifact_id"] for name, kwargs in second_client.calls if name == "download_referencefile"] == ["31"]
+    assert _by_id(second_listing)["30"].check.status is ListedFileCheckStatus.PASSED
+
+    # Completing the slow first request late must not rewind the cursor back to file 20.
+    release_first.set()
+    first_listing, first_client = await slow_first
+    assert [kwargs["artifact_id"] for name, kwargs in first_client.calls if name == "download_referencefile"] == ["21"]
+    assert _by_id(first_listing)["20"].check.reason is FileReason.TOO_LARGE
+
+    # Third refresh advances directly to file 40 instead of re-checking oversized file 20.
+    third_listing, third_client = await run_listing(payloads)
+    assert [kwargs["artifact_id"] for name, kwargs in third_client.calls if name == "download_referencefile"] == ["41"]
+    assert _by_id(third_listing)["40"].check.status is ListedFileCheckStatus.PASSED
+    assert _by_id(third_listing)["40"].tickable is True
+
+
+@pytest.mark.asyncio
+async def test_listing_refresh_cursor_is_isolated_by_access_scope():
+    store = _Store()
+    rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB"), *_pair(30, "FB")]
+    payloads = {"21": _http_error(413), "31": GOOD_TABLE}
+
+    # Curator A sees both 20 (oversized, WB) and 30 (valid, FB).
+    first_a, client_a1 = await _listing(rows, groups=("WB", "FB"), payloads=payloads, store=store, check_limit=1)
+    assert _by_id(first_a)["20"].check.reason is FileReason.TOO_LARGE
+    assert _by_id(first_a)["30"].check.status is ListedFileCheckStatus.CHECK_LIMIT_REACHED
+    assert [kwargs["artifact_id"] for name, kwargs in client_a1.calls if name == "download_referencefile"] == ["21"]
+
+    # Curator B sees only 20 (WB) and must not clear or rewind Curator A's cursor.
+    first_b, client_b = await _listing(rows, groups=("WB",), payloads=payloads, store=store, check_limit=1)
+    assert set(_by_id(first_b)) == {"10", "20"}
+    assert _by_id(first_b)["20"].check.reason is FileReason.TOO_LARGE
+    assert [kwargs["artifact_id"] for name, kwargs in client_b.calls if name == "download_referencefile"] == ["21"]
+
+    # Curator A's second refresh (even with different group order/casing) advances to 30.
+    second_a, client_a2 = await _listing(rows, groups=("fb", "wb"), payloads=payloads, store=store, check_limit=1)
+    assert _by_id(second_a)["30"].check.status is ListedFileCheckStatus.PASSED
+    assert _by_id(second_a)["30"].tickable is True
+    assert [kwargs["artifact_id"] for name, kwargs in client_a2.calls if name == "download_referencefile"] == ["31"]
 
 
 @pytest.mark.asyncio
@@ -282,12 +492,16 @@ async def test_files_already_in_the_paper_are_marked():
 @pytest.mark.asyncio
 async def test_the_single_title_rule_comes_from_the_provider_for_office_files_only():
     two_titles = "# One\n\n# Two\n\nreadable made-up text here\n".encode()
-    pdf_pair = _pair(20, "WB", extension="pdf")
-    office_pair = _pair(30, "WB")
-    listing, _ = await _listing([*pdf_pair, *office_pair], payloads={"21": two_titles, "31": two_titles})
-    files = _by_id(listing)
-    assert files["20"].check.status is ListedFileCheckStatus.PASSED
-    assert files["30"].check.reason is FileReason.TITLE_COUNT
+    store = _Store()
+    pdf = _pair(20, "WB", extension="pdf", content=two_titles)
+    office = _pair(20, "WB", content=two_titles)
+    for rows, expected in [(pdf, None), (office, FileReason.TITLE_COUNT)]:
+        listing, _ = await _listing(rows, payloads={"21": two_titles}, store=store)
+        assert _by_id(listing)["20"].check.reason is expected
+
+    assert len(store.saved) == 2
+    listing, _ = await _listing(pdf, store=store)
+    assert _by_id(listing)["20"].check.status is ListedFileCheckStatus.PASSED
 
 
 @pytest.mark.asyncio
@@ -320,12 +534,11 @@ def test_file_roles_are_mapped_explicitly():
 @pytest.mark.asyncio
 async def test_entries_carry_both_md5s_format_category_and_profile_for_an_import():
     rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB", md5="original-md5")]
-    rows[2]["md5sum"] = "converted-md5"
     listing, _ = await _listing(rows, payloads={"21": GOOD_TABLE})
     files = _by_id(listing)
     supplement = files["20"]
     assert supplement.md5 == "original-md5"
-    assert supplement.converted_md5 == "converted-md5"
+    assert supplement.converted_md5 == hashlib.md5(GOOD_TABLE).hexdigest()
     # Core formats only: an Office original is "unknown"; a PDF supplement is "pdf".
     assert supplement.artifact_format == "unknown"
     assert supplement.category is SupplementFileCategory.CONVERTIBLE
@@ -333,7 +546,7 @@ async def test_entries_carry_both_md5s_format_category_and_profile_for_an_import
     assert files["10"].category is None and files["10"].single_title_required is False
 
     entry = {item["provider_file_id"]: item for item in listing_to_payload(listing)["files"]}["20"]
-    assert entry["md5"] == "original-md5" and entry["converted_md5"] == "converted-md5"
+    assert entry["md5"] == "original-md5" and entry["converted_md5"] == hashlib.md5(GOOD_TABLE).hexdigest()
     assert entry["format"] == "unknown" and entry["category"] == "convertible"
 
 
@@ -454,7 +667,7 @@ async def test_a_converted_text_without_an_md5_is_never_downloaded():
 @pytest.mark.asyncio
 async def test_too_large_is_stored_so_a_second_listing_does_not_download_it_again():
     store = _Store()
-    rows = _pair(20, "WB")
+    rows = _pair(20, "WB", content=b"x" * 20)
     await _listing(rows, payloads={"21": b"x" * 20}, store=store, limits=_limits(max_bytes=10))
     listing, client = await _listing(rows, payloads={}, store=store, limits=_limits(max_bytes=10))
     assert _by_id(listing)["20"].check.reason is FileReason.TOO_LARGE
@@ -478,7 +691,7 @@ async def test_a_pdf_supplement_with_merged_and_legacy_tei_texts_lists_the_merge
     rows = [_abc_show_all_main_pdf(10, "WB"), original, merged, tei, *_pair(30, "WB")]
     listing, client = await _listing(rows, payloads={"21": GOOD_TABLE, "31": GOOD_TABLE})
     files = _by_id(listing)
-    assert files["20"].converted_text_id == "21" and files["20"].converted_md5 == "md5-21"
+    assert files["20"].converted_text_id == "21" and files["20"].converted_md5 == merged["md5sum"]
     assert files["30"].check.status is ListedFileCheckStatus.PASSED and "10" in files
     assert sorted(kwargs["artifact_id"] for name, kwargs in client.calls if name == "download_referencefile") == [
         "21", "31",

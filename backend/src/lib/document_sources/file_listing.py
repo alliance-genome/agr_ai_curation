@@ -33,7 +33,9 @@ one of this paper's imports about the file (``ProviderObservation``).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import weakref
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -45,6 +47,7 @@ from src.lib.document_sources.file_assessment import (
     FileCheckLimits,
     FileProfile,
     assess_converted_file,
+    normalize_md5,
 )
 from src.lib.document_sources.file_reasons import (
     PROVIDER_OBSERVATION_REASONS,
@@ -242,6 +245,65 @@ _download_limiters: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asynci
     weakref.WeakKeyDictionary()
 )
 
+_ListingCursorKey = tuple[str, str, tuple[str, ...]]
+
+# Bounded per-loop cursor tracking the last unchecked candidate reserved when a
+# reference has more uncached files than check_limit, so consecutive refreshes
+# advance past uncached failures (e.g. provider-aborted TOO_LARGE or checksum
+# mismatches) instead of starving later files. Keyed by (provider, reference,
+# normalized authorized groups) so callers with different visibility scopes do
+# not clear or rewind each other's cursors.
+_listing_check_cursors: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, OrderedDict[_ListingCursorKey, tuple[int, str]]]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _listing_cursor_store() -> "OrderedDict[_ListingCursorKey, tuple[int, str]]":
+    loop = asyncio.get_running_loop()
+    cursors = _listing_check_cursors.get(loop)
+    if cursors is None:
+        cursors = OrderedDict()
+        _listing_check_cursors[loop] = cursors
+    return cursors
+
+
+def _order_unchecked_candidates(
+    unchecked: list["_Candidate"],
+    cursor_key: _ListingCursorKey | None,
+) -> list["_Candidate"]:
+    if cursor_key is None or len(unchecked) <= 1:
+        return unchecked
+    cursors = _listing_cursor_store()
+    last_checked = cursors.get(cursor_key)
+    if last_checked is None:
+        return unchecked
+    cursors.move_to_end(cursor_key)
+    for index, candidate in enumerate(unchecked):
+        if _id_order(candidate.original) > last_checked:
+            return unchecked[index:] + unchecked[:index]
+    return unchecked
+
+
+def _update_listing_cursor(
+    cursor_key: _ListingCursorKey | None,
+    *,
+    to_check: list["_Candidate"],
+    unchecked_count: int,
+) -> None:
+    if cursor_key is None:
+        return
+    cursors = _listing_cursor_store()
+    if not to_check or unchecked_count <= len(to_check):
+        cursors.pop(cursor_key, None)
+        return
+    from src.lib.openai_agents.config import get_document_file_listing_cursor_cache_max_entries
+
+    max_entries = get_document_file_listing_cursor_cache_max_entries()
+    cursors[cursor_key] = _id_order(to_check[-1].original)
+    cursors.move_to_end(cursor_key)
+    while len(cursors) > max_entries:
+        cursors.popitem(last=False)
+
 
 def _download_limiter() -> asyncio.Semaphore:
     from src.lib.openai_agents.config import get_document_file_download_concurrency
@@ -318,6 +380,7 @@ def _id_order(artifact: SourceArtifact) -> tuple[int, str]:
 class _Candidate:
     original: SourceArtifact
     category: SupplementFileCategory
+    profile: FileProfile
     converted: SourceArtifact | None = None
     duplicates: list[SourceArtifact] = field(default_factory=list)
 
@@ -429,8 +492,8 @@ async def list_reference_files(
             status=ListedFileStatus.READY,
             check=ListedFileCheck(ListedFileCheckStatus.NOT_CHECKED),
             in_this_paper=main_in_paper,
-            md5=source.md5sum,
-            converted_md5=converted.md5sum if converted is not None else None,
+            md5=normalize_md5(source.md5sum),
+            converted_md5=normalize_md5(converted.md5sum) if converted is not None else None,
             artifact_format=source.artifact_format.value,
             category=None,
             single_title_required=False,
@@ -447,7 +510,10 @@ async def list_reference_files(
     for artifact in artifacts:
         category = provider.supplement_file_category(artifact)
         if category is not None:
-            candidates[artifact.artifact_id] = _Candidate(original=artifact, category=category)
+            candidates[artifact.artifact_id] = _Candidate(
+                original=artifact, category=category,
+                profile=FileProfile(single_title_required=provider.converted_text_has_single_title(artifact)),
+            )
     converted_by_parent: dict[str, list[SourceArtifact]] = {}
     for artifact in artifacts:
         if provider.is_listed_converted_supplement_text(artifact):
@@ -480,7 +546,7 @@ async def list_reference_files(
     duplicate_copies = 0
     unique: list[_Candidate] = []
     for candidate in openable:
-        md5 = candidate.original.md5sum
+        md5 = normalize_md5(candidate.original.md5sum)
         if md5 is None:
             unique.append(candidate)
             continue
@@ -494,44 +560,66 @@ async def list_reference_files(
             duplicate_copies += 1
 
     checks: dict[str, ListedFileCheck] = {}
-    to_check: list[_Candidate] = []
+    unchecked: list[_Candidate] = []
     for candidate in unique:
         text = candidate.converted
         if text is None:
             continue
-        if not text.md5sum:
+        text_md5 = normalize_md5(text.md5sum)
+        if not text_md5:
             # Without the provider's MD5 an import cannot tell the text changed since
             # listing, and a result cannot be stored: not downloaded, not offered.
             checks[candidate.original.artifact_id] = ListedFileCheck(ListedFileCheckStatus.TEXT_WITHOUT_CHECKSUM)
             continue
-        stored = await asyncio.to_thread(load_stored, text.artifact_id, text.md5sum, limits.check_version)
+        stored = await asyncio.to_thread(
+            load_stored, text.artifact_id, text_md5, limits.assessment_version(candidate.profile),
+        )
         if stored is not None:
             checks[candidate.original.artifact_id] = _check_from_assessment(stored)
-        elif len(to_check) < check_limit:
-            to_check.append(candidate)
         else:
-            checks[candidate.original.artifact_id] = ListedFileCheck(ListedFileCheckStatus.CHECK_LIMIT_REACHED)
+            unchecked.append(candidate)
 
-    async def check(candidate: _Candidate) -> ListedFileCheck:
+    access_scope = tuple(sorted({str(value).strip().upper() for value in groups if str(value).strip()}))
+    ref_key = reference.reference_id or reference.reference_curie
+    cursor_key: _ListingCursorKey | None = (provider.provider_id, ref_key, access_scope) if ref_key else None
+    # Reserve candidates and advance the cursor synchronously before awaiting downloads
+    # so overlapping refreshes do not check the same file or rewind progress on late completion.
+    ordered_unchecked = _order_unchecked_candidates(unchecked, cursor_key)
+    to_check = ordered_unchecked[: max(0, check_limit)]
+    _update_listing_cursor(cursor_key, to_check=to_check, unchecked_count=len(unchecked))
+    for candidate in ordered_unchecked[len(to_check):]:
+        checks[candidate.original.artifact_id] = ListedFileCheck(ListedFileCheckStatus.CHECK_LIMIT_REACHED)
+
+    async def check_candidate(candidate: _Candidate) -> ListedFileCheck:
         text = candidate.converted
-        assert text is not None and text.md5sum
-        profile = FileProfile(single_title_required=provider.converted_text_has_single_title(candidate.original))
+        assert text is not None
+        text_md5 = normalize_md5(text.md5sum)
+        assert text_md5 is not None
+
+        def assess(content: bytes) -> FileAssessment | None:
+            if hashlib.md5(content).hexdigest() != text_md5:
+                return None
+            return assess_converted_file(content, candidate.profile, limits)
+
         outcome = await download_provider_file(
             provider, text.artifact_id, request_bearer_token=request_bearer_token,
-            max_bytes=limits.max_bytes, use=lambda content: assess_converted_file(content, profile, limits),
+            max_bytes=limits.max_bytes, use=assess,
         )
         if outcome.failure is ProviderFileDownloadFailure.TOO_LARGE:
-            assessment = FileAssessment(refused=True, reason=FileReason.TOO_LARGE, limit_value=outcome.limit_value)
-        elif outcome.failure is not None:
-            # Not a property of the file: reported, never stored, tried once per listing.
+            # The provider stopped before returning bytes whose checksum we could verify.
+            return _check_from_assessment(FileAssessment(
+                refused=True, reason=FileReason.TOO_LARGE, limit_value=outcome.limit_value,
+            ))
+        if outcome.failure is not None:
             return ListedFileCheck(ListedFileCheckStatus(outcome.failure.value))
-        else:
-            assert outcome.result is not None
-            assessment = outcome.result
-        await asyncio.to_thread(save_assessment, text.artifact_id, text.md5sum, limits.check_version, assessment)
-        return _check_from_assessment(assessment)
+        if outcome.result is None:
+            return ListedFileCheck(ListedFileCheckStatus.NOT_CHECKED)
+        await asyncio.to_thread(
+            save_assessment, text.artifact_id, text_md5, limits.assessment_version(candidate.profile), outcome.result,
+        )
+        return _check_from_assessment(outcome.result)
 
-    results = await asyncio.gather(*(check(candidate) for candidate in to_check))
+    results = await asyncio.gather(*(check_candidate(candidate) for candidate in to_check))
     checks.update(zip((candidate.original.artifact_id for candidate in to_check), results))
 
     for candidate in unique:
@@ -561,11 +649,11 @@ async def list_reference_files(
             status=status,
             check=check,
             in_this_paper=in_this_paper,
-            md5=original.md5sum,
-            converted_md5=candidate.converted.md5sum if candidate.converted else None,
+            md5=normalize_md5(original.md5sum),
+            converted_md5=normalize_md5(candidate.converted.md5sum) if candidate.converted else None,
             artifact_format=original.artifact_format.value,
             category=candidate.category,
-            single_title_required=provider.converted_text_has_single_title(original),
+            single_title_required=candidate.profile.single_title_required,
             tickable=not_tickable is None,
             not_tickable_reason=not_tickable,
             # A file in the paper shows no observation: what the provider said before it was added is stale.
