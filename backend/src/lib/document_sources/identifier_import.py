@@ -1398,6 +1398,7 @@ class IdentifierImportService:
                 document_id=document_id,
                 saved_path=saved_path,
                 weaviate_document_created=True,
+                sql_record_committed=True,
             )
             raise
 
@@ -1476,40 +1477,62 @@ class IdentifierImportService:
         document_id: str,
         saved_path: Path,
         weaviate_document_created: bool,
+        sql_record_committed: bool = False,
     ) -> None:
-        # Remove the staged PDF before deleting Weaviate/SQL records so a cancellation
-        # during Weaviate cleanup can never strand private files without an SQL owner.
-        _cleanup_saved_pdf(saved_path)
-        try:
-            if weaviate_document_created:
-                try:
-                    await self._delete_document(user_sub, document_id)
-                except Exception as cleanup_err:
-                    logger.warning(
-                        "Best-effort Weaviate cleanup failed for identifier import %s: %s",
-                        document_id,
-                        cleanup_err,
-                    )
-        finally:
-            session = self._session_factory()
+        # Remove the staged PDF first and verify it is gone. When an SQL owner was
+        # committed and staged file cleanup fails, retain both Weaviate and SQL
+        # ownership so the curator/cleanup can retry deletion without stranding files.
+        files_removed = _cleanup_saved_pdf(saved_path)
+        if not files_removed and sql_record_committed:
+            logger.warning(
+                "Retaining SQL and Weaviate ownership during import compensation because staged PDF cleanup failed",
+                extra={"sentry_skip_event": True},
+            )
+            return
+
+        # Let the Weaviate wipe outcome govern SQL owner deletion: if delete_document
+        # reports an error or incomplete chunk wipe (or raises CancelledError after an
+        # incomplete/unstarted wipe), retain the SQL owner alongside the Weaviate parent.
+        # On a cancelled drain where the wipe succeeded, delete_document itself already
+        # deleted the SQL owner before delivering CancelledError.
+        weaviate_cleanup_ok = True
+        if weaviate_document_created:
             try:
-                persisted = (
-                    session.execute(
-                        select(ViewerPDFDocument).where(
-                            ViewerPDFDocument.id == uuid.UUID(document_id),
-                        )
-                    )
-                    .scalars()
-                    .first()
+                delete_result = await self._delete_document(user_sub, document_id)
+            except Exception as cleanup_err:
+                logger.warning(
+                    "Best-effort Weaviate cleanup failed for identifier import %s: %s",
+                    document_id,
+                    cleanup_err,
                 )
-                if persisted:
-                    session.delete(persisted)
-                    session.commit()
-            except Exception:
-                session.rollback()
-            finally:
-                session.close()
-            _cleanup_saved_pdf(saved_path)
+                weaviate_cleanup_ok = False
+            else:
+                if isinstance(delete_result, dict) and (
+                    "error" in delete_result or "chunks_failed" in delete_result
+                ):
+                    weaviate_cleanup_ok = False
+
+        if not (files_removed and weaviate_cleanup_ok):
+            return
+
+        session = self._session_factory()
+        try:
+            persisted = (
+                session.execute(
+                    select(ViewerPDFDocument).where(
+                        ViewerPDFDocument.id == uuid.UUID(document_id),
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if persisted:
+                session.delete(persisted)
+                session.commit()
+        except Exception:
+            session.rollback()
+        finally:
+            session.close()
 
     @staticmethod
     def _error_result_from_decision(
@@ -1875,6 +1898,18 @@ def _write_source_pdf(
     return saved_path
 
 
-def _cleanup_saved_pdf(saved_path: Path) -> None:
-    if saved_path.exists():
-        shutil.rmtree(saved_path.parent, ignore_errors=True)
+def _cleanup_saved_pdf(saved_path: Path) -> bool:
+    if not saved_path.exists() and not saved_path.is_symlink():
+        return True
+    try:
+        shutil.rmtree(saved_path.parent)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.warning(
+            "Failed to remove staged PDF artifacts (%s)",
+            type(exc).__name__,
+            extra={"sentry_skip_event": True},
+        )
+        return False
+    return not saved_path.exists() and not saved_path.is_symlink()

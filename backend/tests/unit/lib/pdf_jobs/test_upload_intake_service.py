@@ -1875,15 +1875,19 @@ async def test_intake_upload_job_creation_compensation_cancelled_during_chunk_wi
         events.append("parent")
         return True
 
+    sql_owner_deleted = False
+
+    def _delete_sql_row(*_args):
+        nonlocal sql_owner_deleted
+        sql_owner_deleted = True
+        events.append("sql")
+        return True
+
     chunks.data.delete_many.side_effect = _delete_many
     papers.data.delete_by_id.side_effect = _delete_by_id
     monkeypatch.setattr(weaviate_docs, "get_connection", lambda: connection)
     monkeypatch.setattr(weaviate_docs, "get_user_collections", lambda *_: (chunks, papers))
-    monkeypatch.setattr(
-        weaviate_docs,
-        "_delete_sql_row",
-        lambda *_args: events.append("sql") or False,
-    )
+    monkeypatch.setattr(weaviate_docs, "_delete_sql_row", _delete_sql_row)
 
     initial_session = _FakeSession()
     persisted_record = SimpleNamespace(id=uuid4())
@@ -1924,6 +1928,126 @@ async def test_intake_upload_job_creation_compensation_cancelled_during_chunk_wi
         await asyncio.wait_for(task, timeout=5)
 
     assert events == ["chunks", "parent", "sql"]
-    assert cleanup_session.deleted == [persisted_record]
-    assert cleanup_session.commit_calls == 1
+    assert sql_owner_deleted is True
     assert not list(tmp_path.rglob("*.pdf"))
+
+
+@pytest.mark.asyncio
+async def test_intake_upload_job_creation_compensation_retains_owner_on_persistent_unlink_failure(
+    monkeypatch, tmp_path,
+):
+    from src.lib.pdf_jobs import upload_intake_service as module
+
+    initial_session = _FakeSession()
+    persisted_record = SimpleNamespace(id=uuid4())
+    cleanup_session = _FakeSession(execute_row=persisted_record)
+    sessions = [initial_session, cleanup_session]
+    delete_document_mock = AsyncMock()
+    monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("locked")))
+
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: sessions.pop(0),
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        create_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=delete_document_mock,
+        create_job_fn=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("job row failed")),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    with pytest.raises(RuntimeError, match="job row failed"):
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
+    assert list(tmp_path.rglob("*.pdf"))
+    delete_document_mock.assert_not_awaited()
+    assert cleanup_session.deleted == []
+    assert cleanup_session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_intake_upload_job_creation_compensation_retains_owner_on_incomplete_wipe(
+    monkeypatch, tmp_path, cancelled,
+):
+    import asyncio
+    from contextlib import contextmanager
+    import threading
+    from unittest.mock import MagicMock
+
+    from src.lib.weaviate_client import documents as weaviate_docs
+
+    wipe_entered = threading.Event()
+    resume_wipe = threading.Event()
+
+    @contextmanager
+    def _session():
+        yield MagicMock()
+
+    connection = MagicMock()
+    connection.session.side_effect = _session
+    chunks, papers = MagicMock(), MagicMock()
+
+    def _delete_many(**_kwargs):
+        wipe_entered.set()
+        if cancelled:
+            assert resume_wipe.wait(timeout=5)
+        return SimpleNamespace(successful=0, matches=1, failed=1)
+
+    chunks.data.delete_many.side_effect = _delete_many
+    monkeypatch.setattr(weaviate_docs, "get_connection", lambda: connection)
+    monkeypatch.setattr(weaviate_docs, "get_user_collections", lambda *_: (chunks, papers))
+    delete_sql_row = MagicMock()
+    monkeypatch.setattr(weaviate_docs, "_delete_sql_row", delete_sql_row)
+    monkeypatch.setattr(weaviate_docs.runtime, "report_runtime_exception", MagicMock())
+
+    initial_session = _FakeSession()
+    persisted_record = SimpleNamespace(id=uuid4())
+    cleanup_session = _FakeSession(execute_row=persisted_record)
+    sessions = [initial_session, cleanup_session]
+
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: sessions.pop(0),
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        create_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=weaviate_docs.delete_document,
+        create_job_fn=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("job row failed")),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    coro = service.intake_upload(
+        background_tasks=BackgroundTasks(),
+        file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+        user={"sub": "user-1"},
+    )
+    if cancelled:
+        task = asyncio.create_task(coro)
+        try:
+            assert await asyncio.to_thread(wipe_entered.wait, 5)
+            task.cancel("cancelled during incomplete upload compensation wipe")
+            await asyncio.sleep(0.02)
+            assert not task.done()
+        finally:
+            resume_wipe.set()
+        with pytest.raises(asyncio.CancelledError, match="cancelled during incomplete upload compensation wipe"):
+            await asyncio.wait_for(task, timeout=5)
+    else:
+        with pytest.raises(RuntimeError, match="job row failed"):
+            await coro
+
+    papers.data.delete_by_id.assert_not_called()
+    delete_sql_row.assert_not_called()
+    assert cleanup_session.deleted == []
+    assert cleanup_session.commit_calls == 0

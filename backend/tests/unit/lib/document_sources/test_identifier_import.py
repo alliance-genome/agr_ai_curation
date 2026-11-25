@@ -1806,3 +1806,167 @@ async def test_post_commit_import_compensation_cancelled_during_chunk_wipe_clean
     assert events == ["chunks", "parent", "sql"]
     assert sql_owner_deleted is True
     assert not list(tmp_path.rglob("*.pdf"))
+
+
+@pytest.mark.asyncio
+async def test_post_commit_import_compensation_retains_owner_on_persistent_unlink_failure(
+    monkeypatch, tmp_path,
+):
+    from src.lib.document_sources import identifier_import as module
+
+    sessions: list[_FakeSession] = []
+    persisted_row_holder: list[object] = []
+
+    class _TrackingSession(_FakeSession):
+        def add(self, row):
+            super().add(row)
+            persisted_row_holder.append(row)
+
+        def execute(self, *_args, **_kwargs):
+            return _ExecuteResult(persisted_row_holder[0] if persisted_row_holder else None)
+
+    class _FailingDispatch(_DispatchRecorder):
+        async def dispatch_provider_markdown_execution(self, *, background_tasks, request):
+            raise RuntimeError("dispatch boom after commit")
+
+        async def dispatch_upload_execution(self, *, background_tasks, request):
+            raise RuntimeError("dispatch boom after commit")
+
+    delete_document_mock = AsyncMock()
+    monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("locked")))
+
+    provider = _FakeProvider()
+    service = IdentifierImportService(
+        upload_execution_service=_FailingDispatch(),
+        session_factory=lambda: _TrackingSession(sessions),
+        storage_path_provider=lambda: tmp_path,
+        principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        provider_factory=lambda: provider,
+        create_document_fn=AsyncMock(return_value={"success": True}),
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        get_document_fn=AsyncMock(return_value=None),
+        delete_document_fn=delete_document_mock,
+        find_existing_source_document_fn=lambda *_args, **_kwargs: None,
+        import_batch_limit_provider=lambda: 10,
+    )
+
+    with pytest.raises(RuntimeError, match="dispatch boom after commit"):
+        await service.import_identifiers(
+            background_tasks=BackgroundTasks(),
+            identifiers="PMID:123",
+            user={"sub": "user-1"},
+            document_source_context=DocumentSourceRequestContext(
+                bearer_kind=ProviderBearerKind.CURATOR,
+                provider_groups=("FBStaff",),
+                authorized_group_ids=("FB",),
+                curator_token="curator-token",
+            ),
+        )
+
+    # Persistent unlink failure leaves the PDF on disk and retains BOTH Weaviate and SQL ownership.
+    assert list(tmp_path.rglob("*.pdf"))
+    delete_document_mock.assert_not_awaited()
+    assert not any(session.deleted for session in sessions)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_post_commit_import_compensation_retains_owner_on_incomplete_wipe(
+    monkeypatch, tmp_path, cancelled,
+):
+    import asyncio
+    from contextlib import contextmanager
+    import threading
+    from unittest.mock import MagicMock
+
+    from src.lib.weaviate_client import documents as weaviate_docs
+
+    wipe_entered = threading.Event()
+    resume_wipe = threading.Event()
+
+    @contextmanager
+    def _session():
+        yield MagicMock()
+
+    connection = MagicMock()
+    connection.session.side_effect = _session
+    chunks, papers = MagicMock(), MagicMock()
+
+    def _delete_many(**_kwargs):
+        wipe_entered.set()
+        if cancelled:
+            assert resume_wipe.wait(timeout=5)
+        return SimpleNamespace(successful=0, matches=1, failed=1)
+
+    chunks.data.delete_many.side_effect = _delete_many
+    monkeypatch.setattr(weaviate_docs, "get_connection", lambda: connection)
+    monkeypatch.setattr(weaviate_docs, "get_user_collections", lambda *_: (chunks, papers))
+    delete_sql_row = MagicMock()
+    monkeypatch.setattr(weaviate_docs, "_delete_sql_row", delete_sql_row)
+    monkeypatch.setattr(weaviate_docs.runtime, "report_runtime_exception", MagicMock())
+
+    sessions: list[_FakeSession] = []
+    persisted_row_holder: list[object] = []
+
+    class _TrackingSession(_FakeSession):
+        def add(self, row):
+            super().add(row)
+            persisted_row_holder.append(row)
+
+        def execute(self, *_args, **_kwargs):
+            return _ExecuteResult(persisted_row_holder[0] if persisted_row_holder else None)
+
+    class _FailingDispatch(_DispatchRecorder):
+        async def dispatch_provider_markdown_execution(self, *, background_tasks, request):
+            raise RuntimeError("dispatch boom after commit")
+
+        async def dispatch_upload_execution(self, *, background_tasks, request):
+            raise RuntimeError("dispatch boom after commit")
+
+    service = IdentifierImportService(
+        upload_execution_service=_FailingDispatch(),
+        session_factory=lambda: _TrackingSession(sessions),
+        storage_path_provider=lambda: tmp_path,
+        principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        provider_factory=_FakeProvider,
+        create_document_fn=AsyncMock(return_value={"success": True}),
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        get_document_fn=AsyncMock(return_value=None),
+        delete_document_fn=weaviate_docs.delete_document,
+        find_existing_source_document_fn=lambda *_args, **_kwargs: None,
+        import_batch_limit_provider=lambda: 10,
+    )
+
+    coro = service.import_identifiers(
+        background_tasks=BackgroundTasks(),
+        identifiers="PMID:123",
+        user={"sub": "user-1"},
+        document_source_context=DocumentSourceRequestContext(
+            bearer_kind=ProviderBearerKind.CURATOR,
+            provider_groups=("FBStaff",),
+            authorized_group_ids=("FB",),
+            curator_token="curator-token",
+        ),
+    )
+
+    if cancelled:
+        task = asyncio.create_task(coro)
+        try:
+            assert await asyncio.to_thread(wipe_entered.wait, 5)
+            task.cancel("cancelled during incomplete compensation wipe")
+            await asyncio.sleep(0.02)
+            assert not task.done()
+        finally:
+            resume_wipe.set()
+        with pytest.raises(asyncio.CancelledError, match="cancelled during incomplete compensation wipe"):
+            await asyncio.wait_for(task, timeout=5)
+    else:
+        with pytest.raises(RuntimeError, match="dispatch boom after commit"):
+            await coro
+
+    # Incomplete wipe retains BOTH the Weaviate parent and the SQL owner for retry.
+    papers.data.delete_by_id.assert_not_called()
+    delete_sql_row.assert_not_called()
+    assert not any(session.deleted for session in sessions)

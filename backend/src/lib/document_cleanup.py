@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 import logging
 from typing import Any, TypeVar
 from uuid import UUID
@@ -29,6 +32,44 @@ from src.lib.curation_workspace.models import (
 
 logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
+
+
+@dataclass
+class DeleteDrainState:
+    """Per-operation state shared with destructive delete helpers during shielded drain."""
+
+    started: bool = False
+    cancelled: bool = False
+
+
+_DELETE_DRAIN_STATE: ContextVar[DeleteDrainState | None] = ContextVar(
+    "delete_drain_state",
+    default=None,
+)
+
+
+@contextmanager
+def delete_drain_context() -> Iterator[DeleteDrainState]:
+    """Bind a fresh ``DeleteDrainState`` for the active paper delete request."""
+    state = DeleteDrainState()
+    token = _DELETE_DRAIN_STATE.set(state)
+    try:
+        yield state
+    finally:
+        _DELETE_DRAIN_STATE.reset(token)
+
+
+def mark_destructive_delete_started() -> None:
+    """Record that the active paper delete has submitted its first destructive worker."""
+    state = _DELETE_DRAIN_STATE.get()
+    if state is not None:
+        state.started = True
+
+
+def is_cancelled_delete_drain() -> bool:
+    """Return whether the active paper delete is draining after caller cancellation."""
+    state = _DELETE_DRAIN_STATE.get()
+    return bool(state is not None and state.cancelled)
 
 
 async def drain_shielded(
@@ -78,7 +119,7 @@ async def drain_shielded(
                 if on_cancel is not None:
                     try:
                         on_cancel()
-                    except Exception:
+                    except (Exception, asyncio.CancelledError):
                         logger.warning(
                             "Cancelled cleanup notification callback failed",
                             extra={"sentry_skip_event": True},
@@ -98,7 +139,7 @@ async def drain_shielded(
             if on_cancelled_error is not None:
                 try:
                     on_cancelled_error(exc)
-                except Exception:
+                except (Exception, asyncio.CancelledError):
                     logger.warning(
                         "Cancelled cleanup error callback failed",
                         extra={"sentry_skip_event": True},

@@ -824,16 +824,18 @@ When a paper delete (`DELETE /weaviate/documents/{document_id}`) is cancelled
 after destructive cleanup starts, the delete drains under `paper_operation_lock`
 through completion or a recorded failure before releasing the lock and
 delivering `asyncio.CancelledError`. An incomplete chunk wipe stays owned solely
-by `weaviate_client` / `paper_delete_chunk_wipe_incomplete` with no second
-capture. Any other failure encountered while draining a cancelled paper delete
-(such as a stored-file removal error, Weaviate parent delete failure, or
-database pool timeout) reports once under component `documents` and operation
-`paper_delete_cancelled_drain_failed` with `include_request=False`, a fixed,
-chain-free error, a low-cardinality fingerprint of
-`(operation, step, exception_type)`, and context holding only `document_id_hash`,
-`step`, and `exception_type`. Companion warnings skip log-event promotion
-(`sentry_skip_event=True`), omit raw document IDs and raw exception details, and
-never prevent the original cancellation from propagating even if reporting fails.
+by `weaviate_client` / `paper_delete_chunk_wipe_incomplete` with
+`include_request=False` and no second capture. Any other failure encountered
+while draining a cancelled paper delete (such as a chunk or parent worker error,
+stored-file removal error, Weaviate parent delete failure, or database pool
+timeout) suppresses raw worker log-event promotion and reports once under
+component `documents` and operation `paper_delete_cancelled_drain_failed` with
+`include_request=False`, a fixed, chain-free error, a low-cardinality
+fingerprint of `(operation, step, exception_type)`, and context holding only
+`document_id_hash`, `step`, and `exception_type`. Companion warnings skip
+log-event promotion (`sentry_skip_event=True`), omit raw document IDs and raw
+exception details, and never prevent the original cancellation from propagating
+even if reporting fails.
 
 Adding converted supplements to a paper (`supplement_add.py`) sends no event for
 a file it leaves out. When every chosen file is left out, it reports one warning

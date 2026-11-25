@@ -842,9 +842,37 @@ class UploadIntakeService:
         saved_path: Path,
         weaviate_document_created: bool,
     ) -> None:
-        # Remove staged file artifacts before deleting SQL/Weaviate ownership so
-        # cancellation during Weaviate cleanup cannot strand a private PDF on disk.
-        self._cleanup_saved_file_artifacts(saved_path)
+        # Remove staged file artifacts first; if the private PDF cannot be removed,
+        # retain SQL and Weaviate ownership so the curator/cleanup can retry deletion.
+        if not self._cleanup_saved_file_artifacts(saved_path):
+            logger.warning(
+                "Retaining SQL and Weaviate ownership during job-creation compensation because staged PDF cleanup failed",
+                extra={"sentry_skip_event": True},
+            )
+            return
+
+        # Let the Weaviate wipe outcome govern SQL owner deletion: an incomplete wipe
+        # or Weaviate failure retains both the Weaviate parent and the SQL owner.
+        weaviate_cleanup_ok = True
+        if weaviate_document_created:
+            try:
+                delete_result = await self._delete_document(user_sub, document_id)
+            except Exception as cleanup_err:
+                logger.warning(
+                    "Best-effort Weaviate cleanup failed for document %s: %s",
+                    document_id,
+                    cleanup_err,
+                )
+                weaviate_cleanup_ok = False
+            else:
+                if isinstance(delete_result, dict) and (
+                    "error" in delete_result or "chunks_failed" in delete_result
+                ):
+                    weaviate_cleanup_ok = False
+
+        if not weaviate_cleanup_ok:
+            return
+
         cleanup_session = self._session_factory()
         try:
             persisted = (
@@ -868,13 +896,6 @@ class UploadIntakeService:
             )
         finally:
             cleanup_session.close()
-
-        await self._compensate_persistence_failure(
-            user_sub=user_sub,
-            document_id=document_id,
-            saved_path=saved_path,
-            weaviate_document_created=weaviate_document_created,
-        )
 
     async def _resolve_phantom_duplicate(
         self,
@@ -936,9 +957,21 @@ class UploadIntakeService:
             self._cleanup_saved_file_artifacts(saved_path)
 
     @staticmethod
-    def _cleanup_saved_file_artifacts(saved_path: Path) -> None:
-        if saved_path.exists():
-            shutil.rmtree(saved_path.parent, ignore_errors=True)
+    def _cleanup_saved_file_artifacts(saved_path: Path) -> bool:
+        if not saved_path.exists() and not saved_path.is_symlink():
+            return True
+        try:
+            shutil.rmtree(saved_path.parent)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning(
+                "Failed to remove staged PDF artifacts (%s)",
+                type(exc).__name__,
+                extra={"sentry_skip_event": True},
+            )
+            return False
+        return not saved_path.exists() and not saved_path.is_symlink()
 
     @staticmethod
     def _duplicate_detail(existing: ViewerPDFDocument) -> dict[str, Any]:

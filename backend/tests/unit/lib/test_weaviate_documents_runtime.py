@@ -451,6 +451,7 @@ async def test_delete_document_preserves_owners_until_chunk_wipe_completes(
         "component": "weaviate_client",
         "operation": "paper_delete_chunk_wipe_incomplete",
         "context": counts,
+        "include_request": False,
     }
     for sensitive in (user_id, document_id, private_detail):
         assert sensitive not in repr(report.call_args)
@@ -861,6 +862,86 @@ async def test_drain_shielded_preserves_cancellation_when_on_cancelled_error_fai
         await asyncio.wait_for(task, timeout=2)
 
     assert callback_called is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "helper_name",
+    ["delete_paper_chunks", "delete_paper_object", "delete_paper_search_entries", "delete_document"],
+)
+async def test_delete_helpers_cancel_before_submission_when_caller_already_cancelling(
+    monkeypatch, helper_name,
+):
+    chunks, papers = MagicMock(), MagicMock()
+    connection = _connection_with_client(MagicMock())
+    get_conn = MagicMock(return_value=connection)
+    monkeypatch.setattr(documents, "get_connection", get_conn)
+    monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
+    delete_sql_row = MagicMock()
+    monkeypatch.setattr(documents, "_delete_sql_row", delete_sql_row)
+
+    helper = getattr(documents, helper_name)
+
+    async def _run_with_pending_cancel():
+        current = asyncio.current_task()
+        assert current is not None
+        current.cancel("before helper")
+        return await helper("user-1", "doc-1")
+
+    with pytest.raises(asyncio.CancelledError, match="before helper"):
+        await asyncio.create_task(_run_with_pending_cancel())
+
+    get_conn.assert_not_called()
+    connection.session.assert_not_called()
+    chunks.data.delete_many.assert_not_called()
+    papers.data.delete_by_id.assert_not_called()
+    delete_sql_row.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failing_callback", ["on_cancel", "on_cancelled_error"])
+async def test_drain_shielded_preserves_cancellation_when_callbacks_raise_cancelled_error(
+    failing_callback,
+):
+    from src.lib.document_cleanup import drain_shielded
+
+    entered = asyncio.Event()
+    resume = asyncio.Event()
+    cleanup_finished = False
+
+    async def _cleanup():
+        nonlocal cleanup_finished
+        entered.set()
+        await resume.wait()
+        cleanup_finished = True
+        if failing_callback == "on_cancelled_error":
+            raise RuntimeError("cleanup boom")
+
+    def _bad_on_cancel() -> None:
+        raise asyncio.CancelledError("bogus on_cancel")
+
+    def _bad_on_error(_exc: Exception) -> None:
+        raise asyncio.CancelledError("bogus on_cancelled_error")
+
+    task = asyncio.create_task(
+        drain_shielded(
+            _cleanup(),
+            on_cancel=_bad_on_cancel if failing_callback == "on_cancel" else None,
+            on_cancelled_error=_bad_on_error if failing_callback == "on_cancelled_error" else None,
+        )
+    )
+    await asyncio.wait_for(entered.wait(), timeout=2)
+    task.cancel("original cancel")
+    await asyncio.sleep(0)
+    # Even when on_cancel raises CancelledError, drain_shielded keeps draining the worker.
+    assert not task.done()
+    assert cleanup_finished is False
+
+    resume.set()
+    with pytest.raises(asyncio.CancelledError, match="original cancel"):
+        await asyncio.wait_for(task, timeout=2)
+
+    assert cleanup_finished is True
 
 
 @pytest.mark.asyncio
