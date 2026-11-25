@@ -106,8 +106,14 @@ def mock_weaviate():
                 objects = list(tenant_docs.values())[offset:offset + limit]
                 return SimpleNamespace(objects=objects)
 
-            def _fetch_object_by_id(document_id):
-                return tenant_docs.get(str(document_id))
+            def _fetch_object_by_id(document_id, *, return_properties=None):
+                paper = tenant_docs.get(str(document_id))
+                if paper is None or return_properties is None:
+                    return paper
+                return SimpleNamespace(
+                    uuid=paper.uuid,
+                    properties={key: value for key, value in paper.properties.items() if key in return_properties},
+                )
 
             def _delete_by_id(document_id):
                 tenant_docs.pop(str(document_id), None)
