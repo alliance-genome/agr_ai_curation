@@ -567,6 +567,62 @@ configure_stack_for_provider() {
   RERANK_PROVIDER="${provider}" compose up -d backend
 }
 
+read_env_file_value() {
+  local env_file="$1"
+  local key="$2"
+  if [[ -z "${env_file}" || ! -f "${env_file}" || ! -r "${env_file}" ]]; then
+    return 0
+  fi
+
+  local raw_line line value
+  while IFS= read -r raw_line || [[ -n "${raw_line}" ]]; do
+    line="${raw_line%$'\r'}"
+    if [[ -z "${line//[[:space:]]/}" || "${line}" =~ ^[[:space:]]*# ]]; then
+      continue
+    fi
+    if [[ "${line}" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+      if [[ "${BASH_REMATCH[2]}" == "${key}" ]]; then
+        value="${BASH_REMATCH[3]}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        if [[ "${value}" =~ ^\"(.*)\"[[:space:]]*$ ]]; then
+          value="${BASH_REMATCH[1]}"
+        elif [[ "${value}" =~ ^\'(.*)\'[[:space:]]*$ ]]; then
+          value="${BASH_REMATCH[1]}"
+        else
+          value="${value%%[[:space:]]#*}"
+          value="${value%"${value##*[![:space:]]}"}"
+        fi
+        printf "%s" "${value}"
+        return 0
+      fi
+    fi
+  done < "${env_file}"
+}
+
+load_smoke_environment() {
+  local caller_testing_api_key="${TESTING_API_KEY:-}"
+  local caller_admin_emails="${ADMIN_EMAILS:-}"
+
+  # shellcheck disable=SC1091
+  . "${SCRIPT_DIR}/load-home-test-env.sh"
+  source_smoke_extra_env_file
+
+  if [[ -n "${caller_testing_api_key}" ]]; then
+    export TESTING_API_KEY="${caller_testing_api_key}"
+  elif [[ -z "${TESTING_API_KEY:-}" ]]; then
+    local compose_env_file="${SMOKE_COMPOSE_ENV_FILE:-${AGR_DEV_ENV_FILE:-${REPO_ENV_FILE}}}"
+    local file_api_key
+    file_api_key="$(read_env_file_value "${compose_env_file}" "TESTING_API_KEY")"
+    if [[ -n "${file_api_key}" ]]; then
+      export TESTING_API_KEY="${file_api_key}"
+    fi
+  fi
+
+  if [[ -n "${caller_admin_emails}" ]]; then
+    export ADMIN_EMAILS="${caller_admin_emails}"
+  fi
+}
+
 main() {
   cd "${REPO_ROOT}"
   mkdir -p "${OUT_DIR}"
@@ -574,9 +630,7 @@ main() {
   DERIVED_ITEMS=()
   PROVIDERS=(bedrock_cohere local_transformers none)
 
-  # shellcheck disable=SC1091
-  . "${SCRIPT_DIR}/load-home-test-env.sh"
-  source_smoke_extra_env_file
+  load_smoke_environment
   apply_smoke_port_overrides
   ensure_python_bin
   ensure_smoke_compose_override_file

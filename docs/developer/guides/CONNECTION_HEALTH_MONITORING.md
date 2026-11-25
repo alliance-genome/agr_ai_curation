@@ -22,9 +22,10 @@ cross-worker coordination or background polling scheduler. Frontend polling
 defaults are unchanged.
 
 `CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS` defaults to 45 seconds, longer than the
-slowest configured probe timeout (weaviate, 30 seconds), so the public summary
-can be up to 45 seconds old. The monotonic expiry and the
-UTC `observed_at` response field both refer to **sweep start**, not response time.
+slowest configured probe timeout (weaviate, 30 seconds), so the cached
+observation can be up to 45 seconds old. The monotonic expiry and the
+UTC `observed_at` field returned on the admin response both refer to **sweep start**,
+not response time.
 Cache hits retain that timestamp. A sweep that consumes the whole freshness
 window may return its completed observation to its waiting callers but is
 already expired for the next request. Its age remains explicit. Each probe's

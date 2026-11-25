@@ -82,9 +82,7 @@ def test_production_forwards_batch_zip_metadata_chunk_size(monkeypatch, configur
 def test_compose_forwards_weaviate_chunk_fetch_page_size(monkeypatch, configured, expected):
     key = "WEAVIATE_CHUNK_FETCH_PAGE_SIZE"
     production = _load_compose()["services"]["backend"]["environment"]
-    development = dict(
-        item.split("=", 1) for item in _load_dev_compose()["services"]["backend"]["environment"]
-    )
+    development = _list_environment(_load_dev_compose()["services"]["backend"]["environment"])
     # Assert the actual Compose substitution contract, including its source key.
     assert production[key] == "${WEAVIATE_CHUNK_FETCH_PAGE_SIZE:-250}"
     assert development[key] == "${WEAVIATE_CHUNK_FETCH_PAGE_SIZE:-250}"
@@ -114,7 +112,7 @@ def test_compose_forwards_table_header_rule_to_every_chunking_service(
     reference = "${" + key + ":-" + default + "}"
     for service in ("backend", "benchmark_worker"):
         assert production[service]["environment"][key] == reference
-    assert dict(item.split("=", 1) for item in development["backend"]["environment"])[key] == reference
+    assert _list_environment(development["backend"]["environment"])[key] == reference
     assert development["benchmark_worker"]["environment"][key] == reference
     assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == default
     if configured is None:
@@ -126,11 +124,12 @@ def test_compose_forwards_table_header_rule_to_every_chunking_service(
 
 def test_compose_forwards_admin_emails_to_backend():
     production = _load_compose()["services"]["backend"]["environment"]
-    development = dict(
-        item.split("=", 1) for item in _load_dev_compose()["services"]["backend"]["environment"]
-    )
+    development_entries = _load_dev_compose()["services"]["backend"]["environment"]
     assert production["ADMIN_EMAILS"] == "${ADMIN_EMAILS:-}"
-    assert development["ADMIN_EMAILS"] == "${ADMIN_EMAILS:-}"
+    # Passthrough form forwards shell ADMIN_EMAILS when set without erasing
+    # ADMIN_EMAILS loaded from AGR_DEV_ENV_FILE (.env) when unset in the shell.
+    assert "ADMIN_EMAILS" in development_entries
+    assert not any(entry.startswith("ADMIN_EMAILS=") for entry in development_entries)
 
 
 def _load_dev_compose() -> dict:
@@ -161,7 +160,7 @@ def test_benchmark_api_settings_reach_api_process(compose_path, backend_name, wo
     services = yaml.safe_load(compose_path.read_text(encoding="utf-8"))["services"]
     environment = services[backend_name]["environment"]
     if isinstance(environment, list):
-        environment = dict(item.split("=", 1) for item in environment)
+        environment = _list_environment(environment)
     assert environment["BENCHMARK_API_ENABLED"] == (
         "false" if compose_path == COMPOSE_PATH else "${BENCHMARK_API_ENABLED:-false}"
     )
@@ -207,8 +206,15 @@ def test_benchmark_worker_is_isolated_and_production_dispatch_is_disabled():
     )
 
 
-def _list_environment(entries: list[str]) -> dict[str, str]:
-    return dict(entry.split("=", 1) for entry in entries)
+def _list_environment(entries: list[str]) -> dict[str, str | None]:
+    parsed: dict[str, str | None] = {}
+    for entry in entries:
+        if "=" in entry:
+            key, value = entry.split("=", 1)
+            parsed[key] = value
+        else:
+            parsed[entry] = None
+    return parsed
 
 
 def _bind_targets(service: dict) -> dict[str, str]:
@@ -989,7 +995,7 @@ def _weaviate_clients(services: dict) -> dict:
     for name, service in services.items():
         env = service.get("environment") or {}
         if isinstance(env, list):
-            env = dict(entry.split("=", 1) for entry in env)
+            env = _list_environment(env)
         depends = service.get("depends_on") or {}
         connects = any(key.startswith("WEAVIATE_") and "HOST" in key for key in env) or any(
             dep.startswith("weaviate") for dep in depends
@@ -1229,7 +1235,7 @@ def test_worker_sentry_configuration_matches_backend_in_each_environment():
     } == prod_sentry
 
     dev = _load_dev_compose()["services"]
-    backend_env = dict(item.split("=", 1) for item in dev["backend"]["environment"])
+    backend_env = _list_environment(dev["backend"]["environment"])
     worker_env = dev["benchmark_worker"]["environment"]
     assert worker_env["SENTRY_DSN"] == backend_env["SENTRY_DSN"] == "${SENTRY_DEV_DSN:-}"
     assert worker_env["SENTRY_DEV_DSN"] == backend_env["SENTRY_DEV_DSN"] == ""

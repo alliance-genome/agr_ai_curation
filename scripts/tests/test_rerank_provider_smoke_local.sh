@@ -236,6 +236,66 @@ EOF
   )
 }
 
+test_load_smoke_environment_preserves_caller_api_key_over_blank_home_env() {
+  (
+    cd "${REPO_ROOT}"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/scripts/testing/rerank_provider_smoke_local.sh"
+
+    local temp_dir
+    temp_dir="$(mktemp -d)"
+    trap 'rm -rf "${temp_dir}"' EXIT
+
+    local home_env="${temp_dir}/home.env"
+    cat > "${home_env}" <<'EOF'
+TESTING_API_KEY=
+ADMIN_EMAILS=
+OTHER_HOME_VAR=loaded-from-home
+EOF
+
+    export TEST_SECRETS_ENV_FILE="${home_env}"
+    export TESTING_API_KEY="caller-forwarded-key"
+    export ADMIN_EMAILS="admin@example.org"
+    unset SMOKE_EXTRA_ENV_FILE SMOKE_COMPOSE_ENV_FILE AGR_DEV_ENV_FILE
+
+    load_smoke_environment >/dev/null
+
+    [[ "${TESTING_API_KEY}" == "caller-forwarded-key" ]]
+    [[ "${ADMIN_EMAILS}" == "admin@example.org" ]]
+    [[ "${OTHER_HOME_VAR}" == "loaded-from-home" ]]
+  )
+}
+
+test_load_smoke_environment_reads_testing_api_key_from_compose_env_file_for_direct_run() {
+  (
+    cd "${REPO_ROOT}"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/scripts/testing/rerank_provider_smoke_local.sh"
+
+    local temp_dir
+    temp_dir="$(mktemp -d)"
+    trap 'rm -rf "${temp_dir}"' EXIT
+
+    local home_env="${temp_dir}/home.env"
+    printf 'TESTING_API_KEY=\n' > "${home_env}"
+
+    local compose_env="${temp_dir}/compose.env"
+    cat > "${compose_env}" <<'EOF'
+TESTING_API_KEY="compose-file-key"
+UNRELATED_COMPOSE_VAR=should-not-mutate-shell
+EOF
+
+    export TEST_SECRETS_ENV_FILE="${home_env}"
+    export SMOKE_COMPOSE_ENV_FILE="${compose_env}"
+    unset TESTING_API_KEY UNRELATED_COMPOSE_VAR SMOKE_EXTRA_ENV_FILE
+
+    load_smoke_environment >/dev/null
+
+    [[ "${TESTING_API_KEY}" == "compose-file-key" ]]
+    [[ -z "${UNRELATED_COMPOSE_VAR:-}" ]]
+  )
+}
+
 test_local_transformers_target_check_passes_for_local_compose_url
 test_local_transformers_target_check_passes_for_custom_override_url
 test_local_transformers_target_check_passes_for_repo_env_url
@@ -243,5 +303,7 @@ test_local_transformers_target_check_fails_for_mismatched_configured_url
 test_compose_override_file_is_skipped_when_repo_env_sets_reranker_url
 test_compose_override_file_is_created_for_custom_reranker_url
 test_run_http_check_sends_api_key_via_stdin_only_for_admin_paths
+test_load_smoke_environment_preserves_caller_api_key_over_blank_home_env
+test_load_smoke_environment_reads_testing_api_key_from_compose_env_file_for_direct_run
 
 echo "rerank_provider_smoke_local tests passed"

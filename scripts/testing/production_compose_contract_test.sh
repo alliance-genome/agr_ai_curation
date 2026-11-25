@@ -242,10 +242,12 @@ SENTRY_OPENAI_INCLUDE_PROMPTS=false
 SENTRY_AI_CONTENT_CAPTURE_TIER=2
 SENTRY_AI_CONTENT_PREVIEW_MAX_CHARS=2000
 SENTRY_TRANSACTION_RETAINED_SPANS_MAX=50
+ADMIN_EMAILS=dev@example.org
 ENV
 # Deliberately inject production-shaped shell variables. The shared dev stack
 # must still resolve the dev-only DSN and its service-env capture settings.
 env \
+  -u ADMIN_EMAILS \
   AGR_DEV_ENV_FILE="${development_env_file}" \
   SENTRY_DSN='https://prod-public-key@prod-ingest.example.internal/4' \
   SENTRY_ENVIRONMENT=production \
@@ -257,8 +259,8 @@ env \
   --env-file "${development_env_file}" \
   -f "${repo_root}/docker-compose.yml" \
   config --format json >"${development_rendered_file}"
-# The host capacity must win over the service env file's value of 3.
-MAX_PARALLEL_VALIDATORS=2 AGR_DEV_ENV_FILE="${env_file}" docker compose --env-file "${env_file}" \
+# The host capacity and admin allowlist override must win over the service env file.
+ADMIN_EMAILS=override@example.org MAX_PARALLEL_VALIDATORS=2 AGR_DEV_ENV_FILE="${env_file}" docker compose --env-file "${env_file}" \
   -f "${repo_root}/docker-compose.yml" config --format json >"${development_override_file}"
 python3 - "${development_rendered_file}" "${development_override_file}" <<'PY'
 import json
@@ -307,6 +309,8 @@ assert backend_env["SENTRY_LOG_EVENT_LEVEL"] == "ERROR"
 assert str(backend_env["SENTRY_TRACES_SAMPLE_RATE"]) == "1.0"
 assert backend_env["SENTRY_PROFILES_SAMPLE_RATE"] == ""
 assert str(backend_env["SENTRY_ALLOW_INSECURE_DSN"]).lower() == "true"
+assert backend_env["ADMIN_EMAILS"] == "dev@example.org"
+assert override_backend_env["ADMIN_EMAILS"] == "override@example.org"
 assert str(backend_env["SENTRY_SYNTHETIC_TEST_ENDPOINTS_ENABLED"]).lower() == "false"
 assert str(backend_env["SENTRY_AI_AGENTS_MONITORING_ENABLED"]).lower() == "true"
 assert str(backend_env["SENTRY_OPENAI_AGENTS_INTEGRATION_ENABLED"]).lower() == "false"
