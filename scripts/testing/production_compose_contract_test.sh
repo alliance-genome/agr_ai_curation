@@ -332,6 +332,24 @@ assert any(
 )
 PY
 
+# Verify an explicitly empty DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT is preserved as ""
+# (not defaulted to 400) so strict backend startup validation rejects it.
+empty_ceiling_env_file="${temp_dir}/empty-ceiling.env"
+empty_ceiling_prod_json="${temp_dir}/empty-ceiling-prod.json"
+empty_ceiling_dev_json="${temp_dir}/empty-ceiling-dev.json"
+sed 's/^DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT=.*/DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT=/' "${env_file}" >"${empty_ceiling_env_file}"
+docker compose --env-file "${empty_ceiling_env_file}" -f "${compose_file}" config --format json >"${empty_ceiling_prod_json}"
+AGR_DEV_ENV_FILE="${empty_ceiling_env_file}" docker compose --env-file "${empty_ceiling_env_file}" \
+  -f "${repo_root}/docker-compose.yml" config --format json >"${empty_ceiling_dev_json}"
+python3 - "${empty_ceiling_prod_json}" "${empty_ceiling_dev_json}" <<'PY'
+import json
+import sys
+
+for path in sys.argv[1:]:
+    config = json.load(open(path, encoding="utf-8"))
+    assert config["services"]["backend"]["environment"]["DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"] == "", path
+PY
+
 docker compose --env-file "${env_file}" -f "${compose_file}" config --format json >"${rendered_file}"
 # Exercise the same validator with deterministic image metadata while the
 # installer tests cover its real image-inspection invocation.

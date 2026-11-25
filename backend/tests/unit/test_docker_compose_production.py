@@ -495,7 +495,6 @@ def test_compose_forwards_document_file_converted_text_cap():
         ("DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS", "10800"),
         ("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", "60"),
         ("DOCUMENT_SOURCE_LISTING_MAX_FAILED_READS", "3"),
-        ("DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT", "400"),
         ("DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS", "900"),
         ("DOCUMENT_SUPPLEMENT_MAX_CONCURRENT_WAITS", "10"),
     ],
@@ -507,6 +506,20 @@ def test_compose_forwards_provider_import_wait_settings(name, default):
 
     assert documented_default == default
     expected = f"${{{name}:-{default}}}"
+    assert dev_env[name] == expected
+    assert production_env[name] == expected
+
+
+def test_compose_forwards_request_ceiling_preserving_empty_string():
+    name = "DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"
+    dev_env = _list_environment(_load_dev_compose()["services"]["backend"]["environment"])
+    production_env = _load_compose()["services"]["backend"]["environment"]
+    documented_default = _load_env_assignments(ENV_EXAMPLE_PATH)[name]
+
+    assert documented_default == "400"
+    # Omit ':' so an unset variable defaults to 400 while an explicit empty string
+    # reaches the backend as "" and fails strict startup parsing.
+    expected = f"${{{name}-{documented_default}}}"
     assert dev_env[name] == expected
     assert production_env[name] == expected
 

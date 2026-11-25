@@ -2479,6 +2479,12 @@ def _smallest_interval(wait_seconds: float, most_intervals: int) -> float | None
     return math.ceil(wait_seconds / most_intervals * 100) / 100
 
 
+def _format_interval_seconds(value: float) -> str:
+    """Format a hundredths-rounded interval without precision loss or scientific notation."""
+    formatted = f"{value:.2f}".rstrip("0").rstrip(".")
+    return formatted or "0"
+
+
 def validate_document_source_wait_settings() -> None:
     """Startup check: invalid or conflicting wait settings fail the deploy, each by name.
 
@@ -2523,7 +2529,7 @@ def validate_document_source_wait_settings() -> None:
             and main_wait_max_polls(deadline_seconds=deadline_seconds, poll_seconds=proposed_poll) <= max_polls
         ):
             remediation = (
-                f"set DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS to at least {proposed_poll:g}, "
+                f"set DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS to at least {_format_interval_seconds(proposed_poll)}, "
                 "lower DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS, or raise DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"
             )
         elif max_polls <= 6:
@@ -2557,7 +2563,8 @@ def validate_document_source_wait_settings() -> None:
             <= max_polls
         ):
             remediation = (
-                f"set DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS to at least {proposed_listing_poll:g}, "
+                f"set DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS to at least "
+                f"{_format_interval_seconds(proposed_listing_poll)}, "
                 "lower DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS, or raise DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT"
             )
         else:

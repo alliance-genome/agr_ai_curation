@@ -2905,3 +2905,57 @@ def test_startup_poll_interval_advice_at_cap_seven_is_accepted_when_room_exists(
     monkeypatch.setenv("DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS", "50")
     validate_document_source_wait_settings()
 
+
+@pytest.mark.parametrize(
+    ("env", "setting", "expected_display"),
+    [
+        # 30001 / (8 - 5) = 10000.333... -> 10000.34; {:g} rounded down to 10000.3, which startup rejects.
+        (
+            {
+                "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS": "30001",
+                "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS": "30",
+                "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS": "100",
+                "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS": "15",
+                "DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT": "8",
+            },
+            "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS",
+            "10000.34",
+        ),
+        # 86401 / (7 + 1) = 10800.125 -> 10800.13; {:g} rounded down to 10800.1, which startup rejects.
+        (
+            {
+                "DOCUMENT_SOURCE_IMPORT_TIMEOUT_SECONDS": "100",
+                "DOCUMENT_SOURCE_POLL_INTERVAL_SECONDS": "50",
+                "DOCUMENT_SOURCE_REQUEST_TIMEOUT_SECONDS": "10",
+                "DOCUMENT_SUPPLEMENT_WAIT_TIMEOUT_SECONDS": "86401",
+                "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS": "60",
+                "DOCUMENT_SOURCE_MAX_POLLS_PER_WAIT": "7",
+            },
+            "DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS",
+            "10800.13",
+        ),
+    ],
+)
+def test_startup_displayed_interval_preserves_hundredths_and_is_accepted_verbatim(
+    monkeypatch, env, setting, expected_display,
+):
+    import re
+
+    from src.lib.openai_agents.config import (
+        DocumentSourceWaitSettingsError,
+        validate_document_source_wait_settings,
+    )
+
+    _clear_wait_settings(monkeypatch)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    with pytest.raises(DocumentSourceWaitSettingsError) as error:
+        validate_document_source_wait_settings()
+    match = re.search(rf"{setting} to at least ([0-9.]+)", str(error.value))
+    assert match is not None, str(error.value)
+    displayed = match.group(1)
+    assert displayed == expected_display
+
+    monkeypatch.setenv(setting, displayed)
+    validate_document_source_wait_settings()
+
