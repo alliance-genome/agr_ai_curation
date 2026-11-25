@@ -317,12 +317,16 @@ QUOTED_DOUBLE="val # not a comment" # trailing comment
 QUOTED_SINGLE='single # not a comment'   # trailing comment
 CLEARED_KEY=initial
 CLEARED_KEY= # cleared by last assignment
+HASH_PREFIX_KEY=#sample
+ESCAPED_DOUBLE_KEY="ab\"cd" # comment
 EOF
 
     [[ "$(read_env_file_value "${env_file}" "TESTING_API_KEY")" == "second-value" ]]
     [[ "$(read_env_file_value "${env_file}" "QUOTED_DOUBLE")" == "val # not a comment" ]]
     [[ "$(read_env_file_value "${env_file}" "QUOTED_SINGLE")" == "single # not a comment" ]]
     [[ "$(read_env_file_value "${env_file}" "CLEARED_KEY")" == "" ]]
+    [[ "$(read_env_file_value "${env_file}" "HASH_PREFIX_KEY")" == "#sample" ]]
+    [[ "$(read_env_file_value "${env_file}" "ESCAPED_DOUBLE_KEY")" == 'ab"cd' ]]
   )
 }
 
@@ -389,6 +393,29 @@ EOF
     ensure_smoke_compose_override_file
     [[ -n "${SMOKE_COMPOSE_OVERRIDE_FILE}" ]]
     grep -F 'ADMIN_EMAILS: ""' "${SMOKE_COMPOSE_OVERRIDE_FILE}" >/dev/null
+    cleanup_smoke_compose_override
+
+    # 4) Literal '$' in ADMIN_EMAILS is escaped as '$$' so Docker Compose does not interpolate it
+    unset REVIEW_ALIAS
+    export ADMIN_EMAILS='ops$REVIEW_ALIAS@example.org'
+    export TEST_SECRETS_ENV_FILE="${blank_home_env}"
+    load_smoke_environment >/dev/null
+    [[ "${ADMIN_EMAILS}" == 'ops$REVIEW_ALIAS@example.org' ]]
+    cleanup_smoke_compose_override
+    ensure_smoke_compose_override_file
+    [[ -n "${SMOKE_COMPOSE_OVERRIDE_FILE}" ]]
+    grep -F 'ADMIN_EMAILS: "ops$$REVIEW_ALIAS@example.org"' "${SMOKE_COMPOSE_OVERRIDE_FILE}" >/dev/null
+    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+      local empty_env="${temp_dir}/empty.env"
+      : > "${empty_env}"
+      local rendered_admin
+      # Docker Compose v2 re-escapes literal '$' as '$$' in `config` output for
+      # round-tripping; setting REVIEW_ALIAS=INJECTED proves interpolation did not fire.
+      rendered_admin="$(env REVIEW_ALIAS=INJECTED AGR_DEV_ENV_FILE="${empty_env}" \
+        docker compose --env-file "${empty_env}" -f docker-compose.yml -f "${SMOKE_COMPOSE_OVERRIDE_FILE}" config --format json \
+        | python3 -c 'import json, sys; print(json.load(sys.stdin)["services"]["backend"]["environment"]["ADMIN_EMAILS"])')"
+      [[ "${rendered_admin}" == 'ops$$REVIEW_ALIAS@example.org' ]]
+    fi
     cleanup_smoke_compose_override
   )
 }

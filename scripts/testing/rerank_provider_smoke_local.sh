@@ -85,6 +85,16 @@ print(json.dumps(sys.argv[1]))
 PY
 }
 
+compose_yaml_escape() {
+  local value="${1:-}"
+  ensure_python_bin
+  "${PY_BIN}" - "$value" <<'PY'
+import json
+import sys
+print(json.dumps(sys.argv[1].replace("$", "$$")))
+PY
+}
+
 compose() {
   local compose_args=()
   append_smoke_compose_args compose_args
@@ -145,10 +155,10 @@ ensure_smoke_compose_override_file() {
     echo "  backend:"
     echo "    environment:"
     if [[ "${has_reranker_url}" -eq 1 ]]; then
-      echo "      RERANKER_URL: $(json_escape "${RERANKER_URL}")"
+      echo "      RERANKER_URL: $(compose_yaml_escape "${RERANKER_URL}")"
     fi
     if [[ "${has_admin_emails}" -eq 1 ]]; then
-      echo "      ADMIN_EMAILS: $(json_escape "${ADMIN_EMAILS}")"
+      echo "      ADMIN_EMAILS: $(compose_yaml_escape "${ADMIN_EMAILS}")"
     fi
   } > "${SMOKE_COMPOSE_OVERRIDE_FILE}"
 }
@@ -591,39 +601,60 @@ read_env_file_value() {
     return 0
   fi
 
-  local found=0
-  local matched_value=""
-  local raw_line line value
-  while IFS= read -r raw_line || [[ -n "${raw_line}" ]]; do
-    line="${raw_line%$'\r'}"
-    if [[ -z "${line//[[:space:]]/}" || "${line}" =~ ^[[:space:]]*# ]]; then
-      continue
-    fi
-    if [[ "${line}" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
-      if [[ "${BASH_REMATCH[2]}" == "${key}" ]]; then
-        value="${BASH_REMATCH[3]}"
-        value="${value#"${value%%[![:space:]]*}"}"
-        if [[ "${value}" =~ ^\"([^\"]*)\"([[:space:]]*(#.*)?)?$ ]]; then
-          value="${BASH_REMATCH[1]}"
-        elif [[ "${value}" =~ ^\'([^\']*)\'([[:space:]]*(#.*)?)?$ ]]; then
-          value="${BASH_REMATCH[1]}"
-        else
-          if [[ "${value}" =~ ^# ]]; then
-            value=""
-          else
-            value="${value%%[[:space:]]#*}"
-            value="${value%"${value##*[![:space:]]}"}"
-          fi
-        fi
-        matched_value="${value}"
-        found=1
-      fi
-    fi
-  done < "${env_file}"
+  ensure_python_bin
+  "${PY_BIN}" - "${env_file}" "${key}" <<'PY'
+import re
+import sys
 
-  if [[ "${found}" -eq 1 ]]; then
-    printf "%s" "${matched_value}"
-  fi
+env_file, target_key = sys.argv[1], sys.argv[2]
+assign_re = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+found = False
+matched = ""
+
+with open(env_file, "r", encoding="utf-8", errors="replace") as handle:
+    for raw_line in handle:
+        line = raw_line.rstrip("\r\n")
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        match = assign_re.match(line)
+        if not match or match.group(1) != target_key:
+            continue
+        raw_val = match.group(2)
+        stripped = raw_val.lstrip(" \t")
+        if stripped.startswith('"'):
+            chars = []
+            i = 1
+            closed = False
+            while i < len(stripped):
+                ch = stripped[i]
+                if ch == "\\" and i + 1 < len(stripped):
+                    nxt = stripped[i + 1]
+                    if nxt in ('"', "\\"):
+                        chars.append(nxt)
+                    else:
+                        chars.append("\\")
+                        chars.append(nxt)
+                    i += 2
+                    continue
+                if ch == '"':
+                    closed = True
+                    break
+                chars.append(ch)
+                i += 1
+            value = "".join(chars) if closed else stripped
+        elif stripped.startswith("'"):
+            end = stripped.find("'", 1)
+            value = stripped[1:end] if end != -1 else stripped
+        else:
+            comment_match = re.search(r"[ \t]+#", raw_val)
+            uncommented = raw_val[: comment_match.start()] if comment_match else raw_val
+            value = uncommented.strip(" \t")
+        matched = value
+        found = True
+
+if found:
+    sys.stdout.write(matched)
+PY
 }
 
 load_smoke_environment() {
