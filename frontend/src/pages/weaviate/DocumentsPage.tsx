@@ -8,6 +8,8 @@ import type {
 } from '@/features/documents/documentTableTypes';
 import {
   fetchDocumentList,
+  markDocumentsListRefreshHandled,
+  subscribeDocumentsListInvalidated,
   useDeleteDocument,
   useReembedDocument,
 } from '../../services/weaviate';
@@ -129,6 +131,7 @@ const DocumentsPage: React.FC = () => {
     if (!mountedRef.current) {
       return;
     }
+    markDocumentsListRefreshHandled();
     const {
       paginationModel: currentPagination,
       queryFilters: currentFilters,
@@ -156,7 +159,7 @@ const DocumentsPage: React.FC = () => {
       }, {
         signal: requestController.signal,
       });
-      if (requestId !== documentRequestIdRef.current) {
+      if (!mountedRef.current || requestId !== documentRequestIdRef.current) {
         return;
       }
       const totalItems = data.total;
@@ -169,7 +172,11 @@ const DocumentsPage: React.FC = () => {
       setTotalCount(totalItems);
       console.log('[DocumentsPage] Refresh success', { count: data.documents.length });
     } catch (error) {
-      if (requestController.signal.aborted || requestId !== documentRequestIdRef.current) {
+      if (
+        !mountedRef.current
+        || requestController.signal.aborted
+        || requestId !== documentRequestIdRef.current
+      ) {
         return;
       }
       console.error('Error fetching documents:', error);
@@ -179,24 +186,28 @@ const DocumentsPage: React.FC = () => {
         severity: 'error',
       });
     } finally {
-      if (requestId === documentRequestIdRef.current) {
+      if (mountedRef.current && requestId === documentRequestIdRef.current) {
         setLoading(false);
       }
     }
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
+    const unsubscribe = subscribeDocumentsListInvalidated(() => {
+      void handleRefresh();
+    });
+    return () => {
+      mountedRef.current = false;
+      unsubscribe();
+      requestControllerRef.current?.abort();
+    };
+  }, [handleRefresh]);
+
+  useEffect(() => {
     console.log('[DocumentsPage] Mounted – triggering initial refresh');
     void handleRefresh();
   }, [handleRefresh, paginationModel, queryFilters, sortModel]);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      requestControllerRef.current?.abort();
-    };
-  }, []);
 
   const handleDelete = React.useCallback(async (id: string) => {
     try {

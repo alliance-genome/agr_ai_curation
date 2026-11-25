@@ -20,7 +20,10 @@ import {
   singleMainPdfFile,
 } from '@/components/pdfViewer/viewerFilesFixtures'
 import { WAITING_FOR_SUPPLEMENTS_STAGE } from '@/features/documents/supplementProgress'
-import type { PdfProcessingJob } from '@/services/weaviate'
+import {
+  subscribeDocumentsListInvalidated,
+  type PdfProcessingJob,
+} from '@/services/weaviate'
 import fileListingFixture from '@/test/fixtures/supplements/file_listing.json'
 import removalCheckFixture from '@/test/fixtures/supplements/removal_check.json'
 import supplementAddMetadataFixture from '@/test/fixtures/supplements/supplement_add_metadata.json'
@@ -29,6 +32,7 @@ import supplementWaitMetadataFixture from '@/test/fixtures/supplements/supplemen
 import DocumentFilesSection, {
   PAPER_SOURCE_FILES_STALE_MS,
   clearPendingAddJobIds,
+  hasPendingViewerRefresh,
   listedProviderLabel,
   paperActiveJobsQueryKey,
   paperFilesQueryKey,
@@ -3510,6 +3514,313 @@ describe('DocumentFilesSection (Library Remove)', () => {
       </QueryClientProvider>,
     )
     expect(within(errorDialog).getByRole('button', { name: 'Try again' })).toBeDisabled()
+  })
+
+  it('discards an older delayed /files refresh so it cannot overwrite a newer removal in cache or the open viewer', async () => {
+    const user = userEvent.setup()
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const viewerEvents: PDFViewerDocumentChangedDetail[] = []
+    const unsubscribeViewer = onPDFDocumentChanged((event) => viewerEvents.push(event.detail))
+    const MAIN_ONLY_PAYLOAD: ViewerFilesPayload = {
+      ...FOUR_FILES_PAYLOAD,
+      files: [FOUR_FILES_PAYLOAD.files[0]!],
+    }
+
+    let paperFilesCalls = 0
+    let firstPostRemovalSignal: AbortSignal | undefined
+    let resolveFirstPostRemovalFiles!: (response: Response) => void
+
+    stubApi({
+      paperFiles: (_url, init) => {
+        paperFilesCalls += 1
+        if (paperFilesCalls === 1) {
+          return jsonResponse(FOUR_FILES_PAYLOAD)
+        }
+        if (paperFilesCalls === 2) {
+          // Direct post-removal #1 `/files` stays pending (and later resolves even if aborted).
+          firstPostRemovalSignal = init?.signal ?? undefined
+          return new Promise<Response>((resolve) => {
+            resolveFirstPostRemovalFiles = resolve
+          })
+        }
+        if (paperFilesCalls === 3) {
+          // Reopened mount loads the intermediate 2-ready-file list before removal #2.
+          return jsonResponse(THREE_FILES_AFTER_REMOVAL)
+        }
+        // Removal #2 direct `/files` resolves immediately with main-only payload.
+        return jsonResponse(MAIN_ONLY_PAYLOAD)
+      },
+      onRemovalCheck: (fileId) => jsonResponse(removalCheckFor('removable_plain', { file_id: fileId })),
+      onRemoveFile: (fileId) =>
+        jsonResponse({
+          document_id: DOCUMENT_ID,
+          file_id: fileId,
+          removed: true,
+          cleanup_finished: true,
+          ready_file_count: fileId === TEXT_SUPPLEMENT_FILE_ID ? 2 : 1,
+        }),
+    })
+
+    try {
+      // Removal #1: remove Table_S1.xlsx and unmount before its direct `/files` refresh completes.
+      const firstView = renderSection(
+        { providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT },
+        client,
+      )
+      const firstRemove = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+      await waitFor(() => expect(firstRemove).toBeEnabled())
+      await user.click(firstRemove)
+      const firstDialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+      await user.click(within(firstDialog).getByRole('button', { name: 'Remove file' }))
+      await waitFor(() => expect(paperFilesCalls).toBe(2))
+      firstView.unmount()
+
+      // Removal #2 on the same paper finishes and publishes MAIN_ONLY_PAYLOAD first.
+      renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT }, client)
+      const secondRemove = await screen.findByRole('button', { name: 'Remove Figure_S2.pdf' })
+      await waitFor(() => expect(secondRemove).toBeEnabled())
+      await user.click(secondRemove)
+      const secondDialog = await screen.findByRole('dialog', { name: 'Remove Figure_S2.pdf?' })
+      await user.click(within(secondDialog).getByRole('button', { name: 'Remove file' }))
+
+      await waitFor(() => {
+        expect(viewerEvents).toHaveLength(1)
+        expect(viewerEvents[0]!.files.map((file) => file.file_id)).toEqual([MAIN_FILE_ID])
+      })
+      expect(firstPostRemovalSignal?.aborted).toBe(true)
+
+      // Late resolution of removal #1's stale `/files` payload must NEVER overwrite cache or viewer.
+      resolveFirstPostRemovalFiles(jsonResponse(THREE_FILES_AFTER_REMOVAL))
+      await new Promise((resolve) => setTimeout(resolve, 40))
+
+      const cached = client.getQueryData<ViewerFilesPayload>(paperFilesQueryKey(DOCUMENT_ID))
+      expect(cached?.files.map((file) => file.file_id)).toEqual([MAIN_FILE_ID])
+      expect(viewerEvents).toHaveLength(1)
+      expect(viewerEvents[0]!.files.map((file) => file.file_id)).toEqual([MAIN_FILE_ID])
+    } finally {
+      unsubscribeViewer()
+    }
+  })
+
+  it('recovers an inactive paper viewer when direct /files fails after switching papers and expires failed markers by TTL', async () => {
+    const user = userEvent.setup()
+    const PAPER_B_ID = '22222222-2222-2222-2222-222222222222'
+    const PAPER_B_FILES: ViewerFilesPayload = {
+      document_id: PAPER_B_ID,
+      files: [{ ...FOUR_FILES_PAYLOAD.files[0]!, file_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb' }],
+    }
+    const viewerEvents: PDFViewerDocumentChangedDetail[] = []
+    const unsubscribeViewer = onPDFDocumentChanged((event) => viewerEvents.push(event.detail))
+
+    // Part 1: Paper A DELETE finishes after switching to Paper B; first direct `/files` fails 503,
+    // independent recovery `/files` succeeds and updates Paper A's open viewer without retaining A's id.
+    let paperAFilesCalls = 0
+    let resolveDeleteA!: (response: Response) => void
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        const method = (init?.method ?? 'GET').toUpperCase()
+        if (url === `/api/pdf-viewer/documents/${DOCUMENT_ID}/files`) {
+          paperAFilesCalls += 1
+          if (paperAFilesCalls === 1) return jsonResponse(FOUR_FILES_PAYLOAD)
+          if (paperAFilesCalls === 2) return jsonResponse({ detail: 'Transient 503' }, 503)
+          return jsonResponse(THREE_FILES_AFTER_REMOVAL)
+        }
+        if (url === `/api/pdf-viewer/documents/${PAPER_B_ID}/files`) {
+          return jsonResponse(PAPER_B_FILES)
+        }
+        if (url.startsWith('/api/weaviate/pdf-jobs?')) {
+          return jsonResponse({ jobs: [] })
+        }
+        if (url.endsWith('/source-files')) {
+          return jsonResponse(fileListingFixture)
+        }
+        if (url.endsWith('/removal-check')) {
+          return jsonResponse(removalCheckFor('removable_plain'))
+        }
+        if (method === 'DELETE' && url.includes(`/api/weaviate/documents/${DOCUMENT_ID}/files/`)) {
+          return await new Promise<Response>((resolve) => {
+            resolveDeleteA = resolve
+          })
+        }
+        throw new Error(`Unexpected fetch: ${method} ${url}`)
+      }),
+    )
+
+    try {
+      const view = renderSection(
+        { providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT },
+        client,
+      )
+      const removeButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+      await waitFor(() => expect(removeButton).toBeEnabled())
+      await user.click(removeButton)
+      const dialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+      await user.click(within(dialog).getByRole('button', { name: 'Remove file' }))
+      await waitFor(() => expect(resolveDeleteA).toBeTypeOf('function'))
+
+      // Switch dialog to Paper B while Paper A's DELETE is still in flight.
+      view.rerender(
+        <QueryClientProvider client={client}>
+          <DocumentFilesSection
+            documentId={PAPER_B_ID}
+            providerLabel={PROVIDER}
+            providerShortLabel={PROVIDER_SHORT}
+            processingStatus="completed"
+            open
+            pollIntervalMs={20}
+          />
+        </QueryClientProvider>,
+      )
+      await waitFor(() => {
+        expect(client.getQueryData(paperFilesQueryKey(PAPER_B_ID))).toBeDefined()
+      })
+
+      resolveDeleteA(
+        jsonResponse({
+          document_id: DOCUMENT_ID,
+          file_id: TEXT_SUPPLEMENT_FILE_ID,
+          removed: true,
+          cleanup_finished: true,
+          ready_file_count: 2,
+        }),
+      )
+
+      await waitFor(() => {
+        expect(paperAFilesCalls).toBe(3)
+        expect(viewerEvents).toHaveLength(1)
+      })
+      expect(viewerEvents[0]).toMatchObject({
+        documentId: DOCUMENT_ID,
+        refreshOnlyIfOpen: true,
+      })
+      expect(viewerEvents[0]!.files.map((file) => file.file_id)).toEqual([
+        MAIN_FILE_ID,
+        PDF_SUPPLEMENT_FILE_ID,
+      ])
+      expect(hasPendingViewerRefresh(DOCUMENT_ID)).toBe(false)
+      view.unmount()
+
+      // Part 2: When BOTH direct and recovery `/files` fail 503 while Paper A is inactive,
+      // the pending marker is TTL-bounded and expires after PAPER_SOURCE_FILES_STALE_MS.
+      let persistentFailCalls = 0
+      let resolveSecondDelete!: (response: Response) => void
+      const client2 = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+          const method = (init?.method ?? 'GET').toUpperCase()
+          if (url === `/api/pdf-viewer/documents/${DOCUMENT_ID}/files`) {
+            persistentFailCalls += 1
+            if (persistentFailCalls === 1) return jsonResponse(FOUR_FILES_PAYLOAD)
+            return jsonResponse({ detail: 'Still unavailable' }, 503)
+          }
+          if (url === `/api/pdf-viewer/documents/${PAPER_B_ID}/files`) {
+            return jsonResponse(PAPER_B_FILES)
+          }
+          if (url.startsWith('/api/weaviate/pdf-jobs?')) {
+            return jsonResponse({ jobs: [] })
+          }
+          if (url.endsWith('/source-files')) {
+            return jsonResponse(fileListingFixture)
+          }
+          if (url.endsWith('/removal-check')) {
+            return jsonResponse(removalCheckFor('removable_plain'))
+          }
+          if (method === 'DELETE' && url.includes(`/api/weaviate/documents/${DOCUMENT_ID}/files/`)) {
+            return await new Promise<Response>((resolve) => {
+              resolveSecondDelete = resolve
+            })
+          }
+          throw new Error(`Unexpected fetch: ${method} ${url}`)
+        }),
+      )
+
+      const view2 = renderSection(
+        { providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT },
+        client2,
+      )
+      const remove2 = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+      await waitFor(() => expect(remove2).toBeEnabled())
+      await user.click(remove2)
+      const dialog2 = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+      await user.click(within(dialog2).getByRole('button', { name: 'Remove file' }))
+      await waitFor(() => expect(resolveSecondDelete).toBeTypeOf('function'))
+      view2.unmount()
+
+      const baseNow = Date.now()
+      const dateNowSpy = vi.spyOn(Date, 'now').mockReturnValue(baseNow)
+      try {
+        resolveSecondDelete(
+          jsonResponse({
+            document_id: DOCUMENT_ID,
+            file_id: TEXT_SUPPLEMENT_FILE_ID,
+            removed: true,
+            cleanup_finished: true,
+            ready_file_count: 2,
+          }),
+        )
+        await waitFor(() => expect(persistentFailCalls).toBe(3))
+        expect(hasPendingViewerRefresh(DOCUMENT_ID)).toBe(true)
+
+        dateNowSpy.mockReturnValue(baseNow + PAPER_SOURCE_FILES_STALE_MS + 1)
+        expect(hasPendingViewerRefresh(DOCUMENT_ID)).toBe(false)
+      } finally {
+        dateNowSpy.mockRestore()
+      }
+    } finally {
+      unsubscribeViewer()
+    }
+  })
+
+  it('notifies subscribed Library listeners when an issued DELETE finishes after unmount without a live direct callback', async () => {
+    const user = userEvent.setup()
+    const libraryListener = vi.fn()
+    const unsubscribeLibrary = subscribeDocumentsListInvalidated(libraryListener)
+    const unmountedDirectCallback = vi.fn()
+    let resolveDelete!: (response: Response) => void
+
+    stubApi({
+      onRemovalCheck: () => jsonResponse(removalCheckFor('removable_plain')),
+      onRemoveFile: () =>
+        new Promise<Response>((resolve) => {
+          resolveDelete = resolve
+        }),
+    })
+
+    try {
+      const view = renderSection({
+        providerLabel: PROVIDER,
+        providerShortLabel: PROVIDER_SHORT,
+        onFilesChanged: unmountedDirectCallback,
+      })
+      const removeButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+      await waitFor(() => expect(removeButton).toBeEnabled())
+      await user.click(removeButton)
+      const dialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+      await user.click(within(dialog).getByRole('button', { name: 'Remove file' }))
+      await waitFor(() => expect(resolveDelete).toBeTypeOf('function'))
+
+      view.unmount()
+      resolveDelete(
+        jsonResponse({
+          document_id: DOCUMENT_ID,
+          file_id: TEXT_SUPPLEMENT_FILE_ID,
+          removed: true,
+          cleanup_finished: true,
+          ready_file_count: 2,
+        }),
+      )
+
+      await waitFor(() => expect(libraryListener).toHaveBeenCalledTimes(1))
+      expect(unmountedDirectCallback).toHaveBeenCalledTimes(1)
+    } finally {
+      unsubscribeLibrary()
+    }
   })
 })
 

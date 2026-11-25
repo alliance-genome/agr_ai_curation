@@ -1528,3 +1528,42 @@ export const useWeaviateHealth = (
     ...options,
   });
 };
+
+type DocumentsListInvalidatedListener = () => void;
+const documentsListInvalidatedListeners = new Set<DocumentsListInvalidatedListener>();
+let documentsListRefreshHandledInDispatch = false;
+
+/** Subscribe active Library views so delayed file mutations refresh remounted pages too. */
+export function subscribeDocumentsListInvalidated(
+  listener: DocumentsListInvalidatedListener,
+): () => void {
+  documentsListInvalidatedListeners.add(listener);
+  return () => {
+    documentsListInvalidatedListeners.delete(listener);
+  };
+}
+
+/** Mark the active dispatch as already handled by a mounted Library page's direct callback. */
+export function markDocumentsListRefreshHandled(): void {
+  documentsListRefreshHandledInDispatch = true;
+}
+
+/**
+ * Run a direct Library refresh callback when available and fall back to notifying any
+ * currently mounted Library subscriber (for example, a remounted DocumentsPage after
+ * an in-flight DELETE finishes) without double-fetching when the direct callback handled it.
+ */
+export function dispatchDocumentsListInvalidated(runDirectCallback?: () => void): void {
+  const previousHandled = documentsListRefreshHandledInDispatch;
+  documentsListRefreshHandledInDispatch = false;
+  try {
+    runDirectCallback?.();
+    if (!documentsListRefreshHandledInDispatch) {
+      for (const listener of Array.from(documentsListInvalidatedListeners)) {
+        listener();
+      }
+    }
+  } finally {
+    documentsListRefreshHandledInDispatch = previousHandled;
+  }
+}

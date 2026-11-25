@@ -300,6 +300,73 @@ describe('openCurationWorkspace', () => {
     await expect(
       resolveCurationWorkspaceSessionId({ documentId: 'doc-1' }),
     ).rejects.toThrow('Could not open the curation workspace.')
+
+    // Uncoded 4xx (e.g. 403) must also use client-owned wording and NEVER echo raw server detail.
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(buildSessionListResponse([])), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            detail: 'Internal RBAC policy rejected tenant override',
+          }),
+          {
+            status: 403,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        ),
+      )
+
+    let forbidden403: unknown = null
+    try {
+      await resolveCurationWorkspaceSessionId({ documentId: 'doc-1' })
+    } catch (error) {
+      forbidden403 = error
+    }
+    expect(forbidden403).toBeInstanceOf(CurationWorkspaceRequestError)
+    expect(forbidden403).toMatchObject({
+      status: 403,
+      code: null,
+      message: 'Could not open the curation workspace.',
+    })
+    expect((forbidden403 as Error).message).not.toContain('Internal RBAC policy')
+
+    // 404 uses client-owned wording rather than echoing raw server detail.
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(buildSessionListResponse([])), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            detail: 'Raw internal document lookup miss for doc-1',
+          }),
+          {
+            status: 404,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        ),
+      )
+
+    let notFound404: unknown = null
+    try {
+      await resolveCurationWorkspaceSessionId({ documentId: 'doc-1' })
+    } catch (error) {
+      notFound404 = error
+    }
+    expect(notFound404).toBeInstanceOf(CurationWorkspaceRequestError)
+    expect(notFound404).toMatchObject({
+      status: 404,
+      message: 'No prepared curation session is available for this document.',
+    })
+    expect((notFound404 as Error).message).not.toContain('Raw internal document lookup')
   })
 
   it('reports launch availability when no session exists yet but bootstrap is possible', async () => {

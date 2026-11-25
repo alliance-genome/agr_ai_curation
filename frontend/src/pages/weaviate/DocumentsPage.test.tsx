@@ -1,3 +1,4 @@
+import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '../../test/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
@@ -5,7 +6,11 @@ import type {
   DocumentPaginationModel,
   DocumentSortModel,
 } from '@/features/documents/documentTableTypes';
-import type { DocumentFilter, DocumentSummary } from '../../services/weaviate';
+import {
+  dispatchDocumentsListInvalidated,
+  type DocumentFilter,
+  type DocumentSummary,
+} from '../../services/weaviate';
 import DocumentsPage, { lastDocumentPage } from './DocumentsPage';
 
 vi.hoisted(() => {
@@ -466,5 +471,57 @@ describe('DocumentsPage request ownership', () => {
     });
     await waitFor(() => expect(vi.mocked(global.fetch)).toHaveBeenCalledTimes(3));
     expect(fetchUrl(2)).toContain('page=3&page_size=50');
+  });
+
+  it('loads initial documents cleanly under React.StrictMode double-effect mount', async () => {
+    vi.mocked(global.fetch).mockImplementation(async () => documentListResponse('strict-mode-doc', 7));
+
+    render(
+      <React.StrictMode>
+        <DocumentsPage />
+      </React.StrictMode>,
+    );
+
+    expect(await screen.findByText('strict-mode-doc.pdf')).toBeInTheDocument();
+    expect(screen.getByTestId('document-list')).toHaveAttribute('data-total-count', '7');
+  });
+
+  it('refreshes a remounted DocumentsPage with its current page when an earlier DELETE finishes after navigation away and back', async () => {
+    vi.mocked(global.fetch)
+      .mockResolvedValueOnce(documentListResponse('before-unmount', 120))
+      .mockResolvedValueOnce(documentListResponse('remount-page-one', 120))
+      .mockResolvedValueOnce(documentListResponse('remount-page-three-before', 120, {
+        limit: 50,
+        offset: 100,
+      }))
+      .mockResolvedValueOnce(documentListResponse('remount-page-three-after', 119, {
+        limit: 50,
+        offset: 100,
+      }));
+
+    // Instance 1 mounts, starts an in-flight DELETE (capturing its onRefresh callback), then unmounts.
+    const firstMount = render(<DocumentsPage />);
+    await screen.findByText('before-unmount.pdf');
+    const staleRefreshFromFirstMount = capturedDocumentListRefresh;
+    expect(staleRefreshFromFirstMount).toBeDefined();
+    firstMount.unmount();
+
+    // User navigates back: Instance 2 mounts and navigates to page 3.
+    render(<DocumentsPage />);
+    await screen.findByText('remount-page-one.pdf');
+    fireEvent.click(screen.getByRole('button', { name: 'Show page three' }));
+    await screen.findByText('remount-page-three-before.pdf');
+    expect(fetchUrl(2)).toContain('page=3&page_size=50');
+
+    // Earlier DELETE finishes and dispatches invalidation via Instance 1's captured callback:
+    // Instance 1 no-ops (unmounted), so Instance 2 refreshes its active page 3 with the updated count.
+    await act(async () => {
+      dispatchDocumentsListInvalidated(staleRefreshFromFirstMount);
+    });
+
+    expect(await screen.findByText('remount-page-three-after.pdf')).toBeInTheDocument();
+    expect(screen.getByTestId('document-list')).toHaveAttribute('data-total-count', '119');
+    expect(vi.mocked(global.fetch)).toHaveBeenCalledTimes(4);
+    expect(fetchUrl(3)).toContain('page=3&page_size=50');
   });
 });

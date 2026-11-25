@@ -46,6 +46,7 @@ import {
   DocumentFileRemovalError,
   addDocumentSourceFiles,
   checkDocumentFileRemoval,
+  dispatchDocumentsListInvalidated,
   fetchActivePdfJobsForDocument,
   fetchDocumentSourceProviderConfiguration,
   fetchPdfJob,
@@ -119,11 +120,25 @@ const pendingAddJobIdsByDocument = new Map<string, PendingAddJobEntry>()
  * still runs the deferred `/files` + `/source-files` refresh once active jobs settle empty.
  */
 const pending404RefreshByDocument = new Map<string, number>()
+interface PendingViewerRefreshEntry {
+  generation: number
+  recordedAt: number
+}
+
 /**
- * Documents whose post-removal direct `/files` fetch failed and still need to publish a
- * `refreshOnlyIfOpen` viewer refresh once a recovery `/files` fetch succeeds.
+ * Per-document direct `/files` refresh sequence and abort controllers so an older post-mutation
+ * refresh finishing late can never overwrite a newer removal in cache or the open viewer.
  */
-const pendingViewerRefreshByDocument = new Set<string>()
+let nextViewerRefreshGeneration = 0
+const latestViewerRefreshGenerationByDocument = new Map<string, number>()
+const activeViewerRefreshControllerByDocument = new Map<string, AbortController>()
+
+/**
+ * Documents whose post-removal `/files` fetch failed and still need to publish a
+ * `refreshOnlyIfOpen` viewer refresh once a recovery `/files` fetch succeeds.
+ * Bounded by `PAPER_SOURCE_FILES_STALE_MS` so inactive documents are never retained indefinitely.
+ */
+const pendingViewerRefreshByDocument = new Map<string, PendingViewerRefreshEntry>()
 
 function pruneStalePendingAddJobs(now = Date.now()): void {
   for (const [docId, entry] of pendingAddJobIdsByDocument.entries()) {
@@ -137,6 +152,14 @@ function pruneStalePending404Refreshes(now = Date.now()): void {
   for (const [docId, recordedAt] of pending404RefreshByDocument.entries()) {
     if (now - recordedAt > PAPER_SOURCE_FILES_STALE_MS) {
       pending404RefreshByDocument.delete(docId)
+    }
+  }
+}
+
+function pruneStalePendingViewerRefreshes(now = Date.now()): void {
+  for (const [docId, entry] of pendingViewerRefreshByDocument.entries()) {
+    if (now - entry.recordedAt > PAPER_SOURCE_FILES_STALE_MS) {
+      pendingViewerRefreshByDocument.delete(docId)
     }
   }
 }
@@ -177,11 +200,45 @@ function clearPending404Refresh(documentId: string): void {
   pending404RefreshByDocument.delete(documentId)
 }
 
+function markPendingViewerRefresh(documentId: string, generation: number): void {
+  const now = Date.now()
+  pruneStalePendingViewerRefreshes(now)
+  pendingViewerRefreshByDocument.set(documentId, { generation, recordedAt: now })
+}
+
+function clearPendingViewerRefresh(documentId: string): void {
+  pendingViewerRefreshByDocument.delete(documentId)
+}
+
+function consumePendingViewerRefresh(documentId: string, expectedGeneration: number): boolean {
+  pruneStalePendingViewerRefreshes()
+  const entry = pendingViewerRefreshByDocument.get(documentId)
+  if (!entry || entry.generation !== expectedGeneration) {
+    return false
+  }
+  if ((latestViewerRefreshGenerationByDocument.get(documentId) ?? 0) !== expectedGeneration) {
+    return false
+  }
+  pendingViewerRefreshByDocument.delete(documentId)
+  return true
+}
+
+/** Whether a document currently has a TTL-bounded pending viewer refresh marker (for tests). */
+export function hasPendingViewerRefresh(documentId: string): boolean {
+  pruneStalePendingViewerRefreshes()
+  return pendingViewerRefreshByDocument.has(documentId)
+}
+
 /** Clear retained add job ids and deferred refresh markers (used for test isolation). */
 export function clearPendingAddJobIds(): void {
   pendingAddJobIdsByDocument.clear()
   pending404RefreshByDocument.clear()
   pendingViewerRefreshByDocument.clear()
+  latestViewerRefreshGenerationByDocument.clear()
+  for (const controller of activeViewerRefreshControllerByDocument.values()) {
+    controller.abort()
+  }
+  activeViewerRefreshControllerByDocument.clear()
 }
 
 /**
@@ -713,7 +770,9 @@ function ProviderFilesPart({
         setRetainedReconcileFailed(false)
         setPollError(null)
         setAddRefusal((prev) => (prev?.code === 'import_in_progress' ? null : prev))
-        onFilesChangedRef.current?.()
+        dispatchDocumentsListInvalidated(onFilesChangedRef.current)
+      } else {
+        dispatchDocumentsListInvalidated()
       }
     }
   }, [refreshPaperSurfaces])
@@ -1441,8 +1500,9 @@ export default function DocumentFilesSection({
   const filesQuery = useQuery({
     queryKey: paperFilesQueryKey(documentId),
     queryFn: async ({ signal }) => {
+      const expectedGeneration = latestViewerRefreshGenerationByDocument.get(documentId) ?? 0
       const payload = await fetchViewerFiles(documentId, signal)
-      if (pendingViewerRefreshByDocument.delete(documentId)) {
+      if (consumePendingViewerRefresh(documentId, expectedGeneration)) {
         showPaperFilesInViewer(documentId, payload.files, { refreshOnlyIfOpen: true })
       }
       return payload
@@ -1464,25 +1524,91 @@ export default function DocumentFilesSection({
       targetDocumentId: string,
       options?: { invalidateFilesOnFailure?: boolean },
     ) => {
+      // Track a monotonic generation and abort any older direct `/files` refresh for this
+      // paper so an earlier mutation's slow response can never overwrite a newer removal in
+      // query cache or the open viewer.
+      const refreshGeneration = ++nextViewerRefreshGeneration
+      latestViewerRefreshGenerationByDocument.set(targetDocumentId, refreshGeneration)
+      activeViewerRefreshControllerByDocument.get(targetDocumentId)?.abort()
+      const directRefreshController = new AbortController()
+      activeViewerRefreshControllerByDocument.set(targetDocumentId, directRefreshController)
+      const isLatestGeneration = () =>
+        latestViewerRefreshGenerationByDocument.get(targetDocumentId) === refreshGeneration
+
       // Cancel any older in-flight viewer /files query first so it cannot resolve later and
       // overwrite the fresher payload while the dialog stays open, then fetch fresh viewer
       // files directly (not bound to an unmount-cancelling query observer) so closing the
       // dialog mid-completion still populates the cache and publishes the viewer refresh.
       const viewerRefreshPromise = (async () => {
         try {
-          await queryClient.cancelQueries({ queryKey: paperFilesQueryKey(targetDocumentId) })
-        } catch {
-          // Best-effort cancellation; still fetch the fresh viewer file list.
-        }
-        try {
-          const payload = await fetchViewerFiles(targetDocumentId)
-          pendingViewerRefreshByDocument.delete(targetDocumentId)
-          queryClient.setQueryData(paperFilesQueryKey(targetDocumentId), payload)
-          showPaperFilesInViewer(targetDocumentId, payload.files, { refreshOnlyIfOpen: true })
-        } catch {
-          if (options?.invalidateFilesOnFailure) {
-            pendingViewerRefreshByDocument.add(targetDocumentId)
-            await queryClient.invalidateQueries({ queryKey: paperFilesQueryKey(targetDocumentId) })
+          try {
+            await queryClient.cancelQueries({ queryKey: paperFilesQueryKey(targetDocumentId) })
+          } catch {
+            // Best-effort cancellation; still fetch the fresh viewer file list.
+          }
+          if (directRefreshController.signal.aborted || !isLatestGeneration()) {
+            return
+          }
+          try {
+            const payload = await fetchViewerFiles(targetDocumentId, directRefreshController.signal)
+            if (directRefreshController.signal.aborted || !isLatestGeneration()) {
+              return
+            }
+            clearPendingViewerRefresh(targetDocumentId)
+            queryClient.setQueryData(paperFilesQueryKey(targetDocumentId), payload)
+            showPaperFilesInViewer(targetDocumentId, payload.files, { refreshOnlyIfOpen: true })
+          } catch {
+            if (
+              directRefreshController.signal.aborted
+              || !isLatestGeneration()
+              || !options?.invalidateFilesOnFailure
+            ) {
+              return
+            }
+            markPendingViewerRefresh(targetDocumentId, refreshGeneration)
+            const hasActiveFilesObserver =
+              queryClient.getQueryCache().find({
+                queryKey: paperFilesQueryKey(targetDocumentId),
+                type: 'active',
+              }) !== undefined
+            if (hasActiveFilesObserver) {
+              await queryClient.invalidateQueries({ queryKey: paperFilesQueryKey(targetDocumentId) })
+              return
+            }
+            // Paper is inactive (dialog closed or switched to another paper): mark any cached
+            // entry stale and attempt an independent recovery fetch so an open viewer for this
+            // paper still reconciles without waiting for reopen or retaining the id forever.
+            await queryClient.invalidateQueries({
+              queryKey: paperFilesQueryKey(targetDocumentId),
+              refetchType: 'none',
+            })
+            if (directRefreshController.signal.aborted || !isLatestGeneration()) {
+              return
+            }
+            try {
+              const recoveredPayload = await fetchViewerFiles(
+                targetDocumentId,
+                directRefreshController.signal,
+              )
+              if (directRefreshController.signal.aborted || !isLatestGeneration()) {
+                return
+              }
+              clearPendingViewerRefresh(targetDocumentId)
+              queryClient.setQueryData(paperFilesQueryKey(targetDocumentId), recoveredPayload)
+              showPaperFilesInViewer(targetDocumentId, recoveredPayload.files, {
+                refreshOnlyIfOpen: true,
+              })
+            } catch {
+              // Keep TTL-bounded pending marker so reopening within PAPER_SOURCE_FILES_STALE_MS
+              // still reconciles the viewer, without retaining the document id indefinitely.
+            }
+          }
+        } finally {
+          if (
+            activeViewerRefreshControllerByDocument.get(targetDocumentId)
+            === directRefreshController
+          ) {
+            activeViewerRefreshControllerByDocument.delete(targetDocumentId)
           }
         }
       })()
@@ -1517,7 +1643,7 @@ export default function DocumentFilesSection({
       try {
         await refreshPaperSurfaces(targetDocumentId, { invalidateFilesOnFailure: true })
       } finally {
-        notifyFilesChanged?.()
+        dispatchDocumentsListInvalidated(notifyFilesChanged)
         if (mountedRef.current && activeDocumentIdRef.current === targetDocumentId) {
           setRefreshingAfterRemoval(false)
         }

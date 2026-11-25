@@ -174,7 +174,7 @@ async function bootstrapCurationSession(
   )
 
   if (!response.ok) {
-    const { message, code } = await readCurationApiErrorWithCode(response)
+    const { code } = await readCurationApiErrorWithCode(response)
     if (response.status === 409 && code === RESULT_QUOTES_REMOVED_FILE_ERROR_CODE) {
       throw new CurationWorkspaceRequestError(
         409,
@@ -182,14 +182,18 @@ async function bootstrapCurationSession(
         RESULT_QUOTES_REMOVED_FILE_ERROR_CODE,
       )
     }
-    if (response.status === 409 || response.status >= 500 || code !== null) {
+    if (response.status === 404) {
       throw new CurationWorkspaceRequestError(
-        response.status,
-        'Could not open the curation workspace.',
+        404,
+        'No prepared curation session is available for this document.',
         code,
       )
     }
-    throw new Error(message)
+    throw new CurationWorkspaceRequestError(
+      response.status,
+      'Could not open the curation workspace.',
+      code,
+    )
   }
 
   const payload = await response.json() as CurationDocumentBootstrapResponse
