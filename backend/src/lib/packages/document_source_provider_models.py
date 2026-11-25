@@ -43,10 +43,10 @@ class DocumentSourceProviderPresentation:
     """Non-secret provider presentation metadata exposed to generic consumers."""
 
     display_label: str
-    short_label: str = ""
     reference_label_priority: tuple[str, ...] = ()
     identifier_help_label: str = ""
     identifier_examples: tuple[str, ...] = ()
+    short_label: str = ""
 
     def __post_init__(self) -> None:
         display_label = self.display_label.strip()

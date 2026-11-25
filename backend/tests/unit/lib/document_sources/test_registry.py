@@ -100,6 +100,11 @@ def test_provider_presentation_exposes_stripped_short_label_only_when_non_empty(
     assert without_short.short_label == ""
     assert "short_label" not in without_short.as_public_dict()
 
+    positional = DocumentSourceProviderPresentation("Example Literature", ("reference_curie",))
+    assert positional.display_label == "Example Literature"
+    assert positional.reference_label_priority == ("reference_curie",)
+    assert positional.short_label == ""
+
 
 def test_provider_presentation_rejects_partial_identifier_guidance() -> None:
     with pytest.raises(ValueError, match="must be configured together"):
