@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -29,6 +30,29 @@ from src.lib.observability.sentry import before_send
 
 def _request() -> Request:
     return Request({"type": "http", "method": "GET", "path": "/weaviate/document-sources/files", "headers": []})
+
+
+@contextmanager
+def _capture_sentry_events(monkeypatch, request_url):
+    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "false")
+    events = []
+
+    class MemoryTransport(Transport):
+        def capture_envelope(self, envelope):
+            events.extend(item.get_event() for item in envelope.items if item.headers["type"] == "event")
+
+    with sentry_sdk.Client(
+        dsn="https://public@example.invalid/1",
+        transport=MemoryTransport,
+        default_integrations=False,
+        integrations=[LoggingIntegration(event_level=logging.ERROR)],
+        before_send=before_send,
+        include_local_variables=False,
+    ) as sdk, sentry_sdk.isolation_scope() as scope:
+        scope.set_client(sdk)
+        scope.add_event_processor(lambda event, hint: {**event, "request": {"url": request_url}})
+        yield events
+        sdk.flush()
 
 
 def _context(token: str | None = "curator-token") -> DocumentSourceRequestContext:
@@ -115,6 +139,65 @@ async def test_listing_failures_are_codes(monkeypatch, wired, error, status, cod
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["identifier", "paper"])
+@pytest.mark.parametrize("reporter_fails", [False, True], ids=["reported", "reporter-raises"])
+async def test_unexpected_listing_failure_is_sanitized(monkeypatch, wired, caplog, route, reporter_fails):
+    error = ConnectionError("private provider response")
+    error.__cause__ = OSError("private transport token")
+    error.__cause__.__context__ = ValueError("private provider context")
+    lookup = AsyncMock(side_effect=error)
+    user = {"sub": "private-curator"}
+    if route == "paper":
+        identifier = str(uuid4())
+        url = f"/documents/{identifier}/source-files"
+        monkeypatch.setattr(file_listing_service, "list_files_for_paper", lookup)
+        listing = documents.list_document_source_files_for_paper(_request(), document_id=identifier, user=user)
+    else:
+        identifier = "SOURCE:private-listing-id"
+        url = f"/document-sources/files?identifier={identifier}"
+        monkeypatch.setattr(file_listing_service, "list_files_for_identifier", lookup)
+        listing = documents.list_document_source_files_by_identifier(_request(), identifier=identifier, user=user)
+
+    reporter = Mock(wraps=documents.report_runtime_exception)
+    if reporter_fails:
+        reporter.side_effect = RuntimeError("private reporter detail")
+    monkeypatch.setattr(documents, "report_runtime_exception", reporter)
+    monkeypatch.setenv("RUNTIME_OBSERVABILITY_CONTEXT_VALUE_MAX_CHARS", "10")
+    with _capture_sentry_events(monkeypatch, url) as events:
+        with pytest.raises(HTTPException) as raised:
+            await listing
+
+    assert raised.value.status_code == 500
+    assert raised.value.detail == {"error": "file_listing_failed"}
+    assert raised.value.__cause__ is None and raised.value.__context__ is None
+    assert wired.closed
+    reporter.assert_called_once()
+    reported, = reporter.call_args.args
+    assert reported.__cause__ is None and reported.__context__ is None
+    record, = [record for record in caplog.records if record.name == documents.__name__]
+    assert record.levelno == logging.ERROR
+    assert record.sentry_skip_event is True and record.exc_info is None
+    for private in (identifier, user["sub"], str(error), str(error.__cause__),
+                    str(error.__cause__.__context__), "private reporter detail"):
+        assert private not in repr(events)
+        assert private not in caplog.text
+    if reporter_fails:
+        assert events == []
+    else:
+        event, = events
+        assert "request" not in event
+        assert event["level"] == "error"
+        assert event["contexts"]["runtime_exception"] == {
+            "component": "document_file_listing",
+            "operation": "file_listing_failed",
+            "exception_type": "Connection",
+        }
+        value, = event["exception"]["values"]
+        assert value["type"] == "RuntimeError"
+        assert value["value"] == "Document-source file listing failed"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("missing", [False, True], ids=["listed", "not-found"])
 @pytest.mark.parametrize("reporter_fails", [False, True], ids=["reported", "reporter-raises"])
 async def test_provider_cleanup_failure_preserves_listing(monkeypatch, wired, caplog, missing, reporter_fails):
@@ -131,23 +214,7 @@ async def test_provider_cleanup_failure_preserves_listing(monkeypatch, wired, ca
     if reporter_fails:
         reporter.side_effect = RuntimeError("private reporter detail")
     monkeypatch.setattr(documents, "report_runtime_exception", reporter)
-    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "false")
-    events = []
-
-    class MemoryTransport(Transport):
-        def capture_envelope(self, envelope):
-            events.extend(item.get_event() for item in envelope.items if item.headers["type"] == "event")
-
-    with sentry_sdk.Client(
-        dsn="https://public@example.invalid/1",
-        transport=MemoryTransport,
-        default_integrations=False,
-        integrations=[LoggingIntegration(event_level=logging.ERROR)],
-        before_send=before_send,
-        include_local_variables=False,
-    ) as sdk, sentry_sdk.isolation_scope() as scope:
-        scope.set_client(sdk)
-        scope.add_event_processor(lambda event, hint: {**event, "request": {"url": f"/documents/{identifier}"}})
+    with _capture_sentry_events(monkeypatch, f"/documents/{identifier}") as events:
         listing = documents.list_document_source_files_by_identifier(
             _request(), identifier=identifier, user={"sub": "private-curator"},
         )
@@ -158,7 +225,6 @@ async def test_provider_cleanup_failure_preserves_listing(monkeypatch, wired, ca
             assert raised.value.detail == {"error": "reference_not_found"}
         else:
             assert await listing == listing_to_payload(EMPTY)
-        sdk.flush()
 
     close.assert_awaited_once_with()
     reporter.assert_called_once()
