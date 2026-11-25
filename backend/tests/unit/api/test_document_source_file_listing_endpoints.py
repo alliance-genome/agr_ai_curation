@@ -2,23 +2,29 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+import sentry_sdk
 from fastapi import HTTPException
+from sentry_sdk.integrations.logging import LoggingIntegration
+from sentry_sdk.transport import Transport
 from starlette.requests import Request
 
 from src.api import documents
 from src.lib.document_sources import file_listing_service
 from src.lib.document_sources.access import DocumentSourceRequestContext
-from src.lib.document_sources.file_listing import FileListing, ListingRoute
+from src.lib.document_sources.file_listing import FileListing, ListingRoute, listing_to_payload
 from src.lib.document_sources.file_listing_service import FileListingUnavailable
 from src.lib.document_sources.models import (
     DocumentSourceReferenceNotFound,
     ProviderBearerKind,
     SourceReference,
 )
+from src.lib.observability.sentry import before_send
 
 
 def _request() -> Request:
@@ -106,6 +112,79 @@ async def test_listing_failures_are_codes(monkeypatch, wired, error, status, cod
     assert raised.value.status_code == status
     assert raised.value.detail == {"error": code}
     assert wired.closed is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", [False, True], ids=["listed", "not-found"])
+@pytest.mark.parametrize("reporter_fails", [False, True], ids=["reported", "reporter-raises"])
+async def test_provider_cleanup_failure_preserves_listing(monkeypatch, wired, caplog, missing, reporter_fails):
+    identifier = "SOURCE:private-listing-id"
+    close_error = OSError("private provider response")
+    close_error.__cause__ = ValueError("private transport detail")
+    close = AsyncMock(side_effect=close_error)
+    monkeypatch.setattr(wired, "aclose", close)
+    lookup = AsyncMock(return_value=EMPTY)
+    if missing:
+        lookup.side_effect = DocumentSourceReferenceNotFound(identifier)
+    monkeypatch.setattr(file_listing_service, "list_files_for_identifier", lookup)
+    reporter = Mock(wraps=documents.report_runtime_exception)
+    if reporter_fails:
+        reporter.side_effect = RuntimeError("private reporter detail")
+    monkeypatch.setattr(documents, "report_runtime_exception", reporter)
+    monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "false")
+    events = []
+
+    class MemoryTransport(Transport):
+        def capture_envelope(self, envelope):
+            events.extend(item.get_event() for item in envelope.items if item.headers["type"] == "event")
+
+    with sentry_sdk.Client(
+        dsn="https://public@example.invalid/1",
+        transport=MemoryTransport,
+        default_integrations=False,
+        integrations=[LoggingIntegration(event_level=logging.ERROR)],
+        before_send=before_send,
+        include_local_variables=False,
+    ) as sdk, sentry_sdk.isolation_scope() as scope:
+        scope.set_client(sdk)
+        scope.add_event_processor(lambda event, hint: {**event, "request": {"url": f"/documents/{identifier}"}})
+        listing = documents.list_document_source_files_by_identifier(
+            _request(), identifier=identifier, user={"sub": "private-curator"},
+        )
+        if missing:
+            with pytest.raises(HTTPException) as raised:
+                await listing
+            assert raised.value.status_code == 404
+            assert raised.value.detail == {"error": "reference_not_found"}
+        else:
+            assert await listing == listing_to_payload(EMPTY)
+        sdk.flush()
+
+    close.assert_awaited_once_with()
+    reporter.assert_called_once()
+    error, = reporter.call_args.args
+    assert error.__cause__ is None and error.__context__ is None
+    record, = [record for record in caplog.records if record.name == documents.__name__]
+    assert record.sentry_skip_event is True and record.exc_info is None
+    for private in (
+        identifier, "private-curator", str(close_error), str(close_error.__cause__), "private reporter detail",
+    ):
+        assert private not in repr(events)
+        assert private not in caplog.text
+    if reporter_fails:
+        assert events == []
+    else:
+        event, = events
+        assert "request" not in event
+        assert event["level"] == "warning"
+        assert event["contexts"]["runtime_exception"] == {
+            "component": "document_file_listing",
+            "operation": "provider_cleanup_failed",
+            "exception_type": "OSError",
+        }
+        value, = event["exception"]["values"]
+        assert value["type"] == "RuntimeError"
+        assert value["value"] == "Document-source file listing provider cleanup failed"
 
 
 @pytest.mark.asyncio

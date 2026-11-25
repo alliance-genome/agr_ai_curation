@@ -732,6 +732,13 @@ context. Companion warnings skip log-event promotion. Cleanup and reporting
 failures preserve the lookup result. Not-found and access-denied outcomes
 produce no lookup event.
 
+Both file-listing routes report provider close failures under component
+`document_file_listing` and operation `provider_cleanup_failed`. The warning
+event carries a fixed, chain-free exception and the bounded exception class.
+It omits the request because the URL can identify a document. The companion
+warning skips log-event promotion. The endpoint preserves the listing payload
+or mapped HTTP error even if reporting fails.
+
 Upload intake reports checksum provider failures under component `upload_intake`
 and operation `checksum_lookup_failed`. The report carries a fixed, chain-free
 error and the exception class. Intake removes the staged upload and returns the
