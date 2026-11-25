@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Coroutine
+import logging
 from typing import Any, TypeVar
 from uuid import UUID
 
@@ -26,16 +27,47 @@ from src.lib.curation_workspace.models import (
     DomainValidationFinding,
 )
 
+logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
 
 
 async def drain_shielded(
     coro: Coroutine[Any, Any, _T],
     *,
+    started: Callable[[], bool] | None = None,
+    on_cancel: Callable[[], None] | None = None,
     on_cancelled_error: Callable[[Exception], None] | None = None,
 ) -> _T:
-    """Finish owned destructive cleanup across cancellations, then deliver cancellation."""
-    task = asyncio.create_task(coro)
+    """Finish owned destructive cleanup across cancellations, then deliver cancellation.
+
+    When ``started`` is provided, cancellation arriving before ``started()`` becomes
+    True aborts before destructive work begins (including across the ``create_task``
+    scheduling gap). Once ``started()`` is True (or when omitted because the first
+    destructive worker was already submitted synchronously), cancellation drains the
+    inner task to completion before re-raising the original ``CancelledError``.
+    """
+    caller = asyncio.current_task()
+    if started is not None and not started():
+        try:
+            await asyncio.sleep(0)
+        except BaseException:
+            coro.close()
+            raise
+
+    initial_cancels = caller.cancelling() if caller is not None else 0
+
+    async def _guarded() -> _T:
+        if (
+            started is not None
+            and not started()
+            and caller is not None
+            and caller.cancelling() > initial_cancels
+        ):
+            coro.close()
+            raise asyncio.CancelledError
+        return await coro
+
+    task = asyncio.create_task(_guarded())
     cancelled: asyncio.CancelledError | None = None
     while not task.done():
         try:
@@ -43,6 +75,16 @@ async def drain_shielded(
         except asyncio.CancelledError as exc:
             if cancelled is None:
                 cancelled = exc
+                if on_cancel is not None:
+                    try:
+                        on_cancel()
+                    except Exception:
+                        logger.warning(
+                            "Cancelled cleanup notification callback failed",
+                            extra={"sentry_skip_event": True},
+                        )
+            if started is not None and not started():
+                task.cancel()
         except Exception:
             if cancelled is None:
                 raise
@@ -54,7 +96,13 @@ async def drain_shielded(
             if not isinstance(exc, Exception):
                 raise exc
             if on_cancelled_error is not None:
-                on_cancelled_error(exc)
+                try:
+                    on_cancelled_error(exc)
+                except Exception:
+                    logger.warning(
+                        "Cancelled cleanup error callback failed",
+                        extra={"sentry_skip_event": True},
+                    )
     raise cancelled
 
 

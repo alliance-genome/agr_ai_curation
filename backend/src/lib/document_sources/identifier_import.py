@@ -1477,34 +1477,39 @@ class IdentifierImportService:
         saved_path: Path,
         weaviate_document_created: bool,
     ) -> None:
-        if weaviate_document_created:
-            try:
-                await self._delete_document(user_sub, document_id)
-            except Exception as cleanup_err:
-                logger.warning(
-                    "Best-effort Weaviate cleanup failed for identifier import %s: %s",
-                    document_id,
-                    cleanup_err,
-                )
-        session = self._session_factory()
-        try:
-            persisted = (
-                session.execute(
-                    select(ViewerPDFDocument).where(
-                        ViewerPDFDocument.id == uuid.UUID(document_id),
-                    )
-                )
-                .scalars()
-                .first()
-            )
-            if persisted:
-                session.delete(persisted)
-                session.commit()
-        except Exception:
-            session.rollback()
-        finally:
-            session.close()
+        # Remove the staged PDF before deleting Weaviate/SQL records so a cancellation
+        # during Weaviate cleanup can never strand private files without an SQL owner.
         _cleanup_saved_pdf(saved_path)
+        try:
+            if weaviate_document_created:
+                try:
+                    await self._delete_document(user_sub, document_id)
+                except Exception as cleanup_err:
+                    logger.warning(
+                        "Best-effort Weaviate cleanup failed for identifier import %s: %s",
+                        document_id,
+                        cleanup_err,
+                    )
+        finally:
+            session = self._session_factory()
+            try:
+                persisted = (
+                    session.execute(
+                        select(ViewerPDFDocument).where(
+                            ViewerPDFDocument.id == uuid.UUID(document_id),
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+                if persisted:
+                    session.delete(persisted)
+                    session.commit()
+            except Exception:
+                session.rollback()
+            finally:
+                session.close()
+            _cleanup_saved_pdf(saved_path)
 
     @staticmethod
     def _error_result_from_decision(

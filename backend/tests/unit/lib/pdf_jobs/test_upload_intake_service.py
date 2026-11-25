@@ -1840,3 +1840,90 @@ async def test_an_upload_that_waits_for_conversion_records_whether_the_request_w
     else:
         assert "metadata" not in created_jobs[0]
         assert request.conversion_answer is None
+
+
+@pytest.mark.asyncio
+async def test_intake_upload_job_creation_compensation_cancelled_during_chunk_wipe_cleans_saved_pdf(
+    monkeypatch, tmp_path,
+):
+    import asyncio
+    from contextlib import contextmanager
+    import threading
+    from unittest.mock import MagicMock
+
+    from src.lib.weaviate_client import documents as weaviate_docs
+
+    wipe_entered = threading.Event()
+    resume_wipe = threading.Event()
+    events: list[str] = []
+
+    @contextmanager
+    def _session():
+        yield MagicMock()
+
+    connection = MagicMock()
+    connection.session.side_effect = _session
+    chunks, papers = MagicMock(), MagicMock()
+
+    def _delete_many(**_kwargs):
+        wipe_entered.set()
+        assert resume_wipe.wait(timeout=5)
+        events.append("chunks")
+        return SimpleNamespace(successful=0, matches=0, failed=0)
+
+    def _delete_by_id(_doc_id):
+        events.append("parent")
+        return True
+
+    chunks.data.delete_many.side_effect = _delete_many
+    papers.data.delete_by_id.side_effect = _delete_by_id
+    monkeypatch.setattr(weaviate_docs, "get_connection", lambda: connection)
+    monkeypatch.setattr(weaviate_docs, "get_user_collections", lambda *_: (chunks, papers))
+    monkeypatch.setattr(
+        weaviate_docs,
+        "_delete_sql_row",
+        lambda *_args: events.append("sql") or False,
+    )
+
+    initial_session = _FakeSession()
+    persisted_record = SimpleNamespace(id=uuid4())
+    cleanup_session = _FakeSession(execute_row=persisted_record)
+    sessions = [initial_session, cleanup_session]
+
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: sessions.pop(0),
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        create_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=weaviate_docs.delete_document,
+        create_job_fn=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("job row failed")),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    task = asyncio.create_task(
+        service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+    )
+    try:
+        assert await asyncio.to_thread(wipe_entered.wait, 5)
+        assert not list(tmp_path.rglob("*.pdf"))
+        task.cancel("cancelled during upload compensation")
+        await asyncio.sleep(0.02)
+        assert not task.done()
+    finally:
+        resume_wipe.set()
+
+    with pytest.raises(asyncio.CancelledError, match="cancelled during upload compensation"):
+        await asyncio.wait_for(task, timeout=5)
+
+    assert events == ["chunks", "parent", "sql"]
+    assert cleanup_session.deleted == [persisted_record]
+    assert cleanup_session.commit_calls == 1
+    assert not list(tmp_path.rglob("*.pdf"))

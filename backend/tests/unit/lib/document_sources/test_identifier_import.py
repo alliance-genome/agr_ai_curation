@@ -1691,3 +1691,118 @@ async def test_resolve_reference_401_sentry_reporting_depends_on_bearer_kind(
         assert kwargs["include_request"] is False
         assert secret not in repr((str(exc), kwargs))
         assert "PMID:123" not in repr((str(exc), kwargs))
+
+
+@pytest.mark.asyncio
+async def test_post_commit_import_compensation_cancelled_during_chunk_wipe_cleans_saved_pdf(
+    monkeypatch, tmp_path,
+):
+    import asyncio
+    from contextlib import contextmanager
+    import threading
+    from unittest.mock import MagicMock
+
+    from src.lib.weaviate_client import documents as weaviate_docs
+
+    wipe_entered = threading.Event()
+    resume_wipe = threading.Event()
+    events: list[str] = []
+
+    @contextmanager
+    def _session():
+        yield MagicMock()
+
+    connection = MagicMock()
+    connection.session.side_effect = _session
+    chunks, papers = MagicMock(), MagicMock()
+
+    def _delete_many(**_kwargs):
+        wipe_entered.set()
+        assert resume_wipe.wait(timeout=5)
+        events.append("chunks")
+        return SimpleNamespace(successful=0, matches=0, failed=0)
+
+    def _delete_by_id(_doc_id):
+        events.append("parent")
+        return True
+
+    chunks.data.delete_many.side_effect = _delete_many
+    papers.data.delete_by_id.side_effect = _delete_by_id
+    monkeypatch.setattr(weaviate_docs, "get_connection", lambda: connection)
+    monkeypatch.setattr(weaviate_docs, "get_user_collections", lambda *_: (chunks, papers))
+
+    sql_owner_deleted = False
+
+    def _delete_sql_row(_user_id, _document_id):
+        nonlocal sql_owner_deleted
+        sql_owner_deleted = True
+        events.append("sql")
+        return True
+
+    monkeypatch.setattr(weaviate_docs, "_delete_sql_row", _delete_sql_row)
+
+    sessions: list[_FakeSession] = []
+    persisted_row_holder: list[object] = []
+
+    class _TrackingSession(_FakeSession):
+        def add(self, row):
+            super().add(row)
+            persisted_row_holder.append(row)
+
+        def execute(self, *_args, **_kwargs):
+            if sql_owner_deleted or not persisted_row_holder:
+                return _ExecuteResult(None)
+            return _ExecuteResult(persisted_row_holder[0])
+
+    class _FailingDispatch(_DispatchRecorder):
+        async def dispatch_provider_markdown_execution(self, *, background_tasks, request):
+            raise RuntimeError("dispatch boom after commit")
+
+        async def dispatch_upload_execution(self, *, background_tasks, request):
+            raise RuntimeError("dispatch boom after commit")
+
+    provider = _FakeProvider()
+    service = IdentifierImportService(
+        upload_execution_service=_FailingDispatch(),
+        session_factory=lambda: _TrackingSession(sessions),
+        storage_path_provider=lambda: tmp_path,
+        principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        provider_factory=lambda: provider,
+        create_document_fn=AsyncMock(return_value={"success": True}),
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        get_document_fn=AsyncMock(return_value=None),
+        delete_document_fn=weaviate_docs.delete_document,
+        find_existing_source_document_fn=lambda *_args, **_kwargs: None,
+        import_batch_limit_provider=lambda: 10,
+    )
+
+    task = asyncio.create_task(
+        service.import_identifiers(
+            background_tasks=BackgroundTasks(),
+            identifiers="PMID:123",
+            user={"sub": "user-1"},
+            document_source_context=DocumentSourceRequestContext(
+                bearer_kind=ProviderBearerKind.CURATOR,
+                provider_groups=("FBStaff",),
+                authorized_group_ids=("FB",),
+                curator_token="curator-token",
+            ),
+        )
+    )
+    try:
+        assert await asyncio.to_thread(wipe_entered.wait, 5)
+        # Saved PDF is already cleaned up before Weaviate/SQL ownership is removed.
+        assert not list((tmp_path / "user-1").rglob("*.pdf"))
+        task.cancel("cancelled during import compensation")
+        await asyncio.sleep(0.02)
+        assert not task.done()
+    finally:
+        resume_wipe.set()
+
+    with pytest.raises(asyncio.CancelledError, match="cancelled during import compensation"):
+        await asyncio.wait_for(task, timeout=5)
+
+    assert events == ["chunks", "parent", "sql"]
+    assert sql_owner_deleted is True
+    assert not list(tmp_path.rglob("*.pdf"))

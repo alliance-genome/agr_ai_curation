@@ -809,6 +809,61 @@ async def test_delete_paper_search_entries_cancel_during_chunk_wipe_deletes_pare
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("helper_name", ["delete_document", "delete_paper_chunks", "delete_paper_search_entries"])
+async def test_delete_helpers_cancelled_before_submission_do_not_start_destructive_work(
+    monkeypatch, helper_name,
+):
+    chunks, papers = MagicMock(), MagicMock()
+    monkeypatch.setattr(documents, "get_connection", lambda: _connection_with_client(MagicMock()))
+    monkeypatch.setattr(documents, "get_user_collections", lambda *_: (chunks, papers))
+    delete_sql_row = MagicMock()
+    monkeypatch.setattr(documents, "_delete_sql_row", delete_sql_row)
+
+    helper = getattr(documents, helper_name)
+    task = asyncio.create_task(helper("user-1", "doc-1"))
+    task.cancel("cancelled before submission")
+    with pytest.raises(asyncio.CancelledError, match="cancelled before submission"):
+        await task
+
+    chunks.data.delete_many.assert_not_called()
+    papers.data.delete_by_id.assert_not_called()
+    delete_sql_row.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_drain_shielded_preserves_cancellation_when_on_cancelled_error_fails():
+    from src.lib.document_cleanup import drain_shielded
+
+    entered = asyncio.Event()
+    resume = asyncio.Event()
+    callback_called = False
+
+    async def _failing_cleanup():
+        entered.set()
+        await resume.wait()
+        raise RuntimeError("cleanup boom")
+
+    def _failing_observer(_exc: Exception) -> None:
+        nonlocal callback_called
+        callback_called = True
+        raise RuntimeError("observer boom")
+
+    task = asyncio.create_task(
+        drain_shielded(_failing_cleanup(), on_cancelled_error=_failing_observer)
+    )
+    await asyncio.wait_for(entered.wait(), timeout=2)
+    task.cancel("original cancel")
+    await asyncio.sleep(0)
+    assert not task.done()
+
+    resume.set()
+    with pytest.raises(asyncio.CancelledError, match="original cancel"):
+        await asyncio.wait_for(task, timeout=2)
+
+    assert callback_called is True
+
+
+@pytest.mark.asyncio
 async def test_get_document_handles_no_chunks_after_uuid_filter_failure():
     doc_uuid = "00000000-0000-0000-0000-000000000999"
     doc_response = SimpleNamespace(

@@ -842,6 +842,9 @@ class UploadIntakeService:
         saved_path: Path,
         weaviate_document_created: bool,
     ) -> None:
+        # Remove staged file artifacts before deleting SQL/Weaviate ownership so
+        # cancellation during Weaviate cleanup cannot strand a private PDF on disk.
+        self._cleanup_saved_file_artifacts(saved_path)
         cleanup_session = self._session_factory()
         try:
             persisted = (
@@ -916,17 +919,21 @@ class UploadIntakeService:
         weaviate_document_created: bool,
     ) -> None:
         """Best-effort compensation for partial persistence failures."""
-        if weaviate_document_created:
-            try:
-                await self._delete_document(user_sub, document_id)
-            except Exception as cleanup_err:
-                logger.warning(
-                    "Best-effort Weaviate cleanup failed for document %s: %s",
-                    document_id,
-                    cleanup_err,
-                )
-
+        # Remove staged file artifacts before deleting Weaviate/SQL ownership so
+        # cancellation during Weaviate cleanup cannot strand a private PDF on disk.
         self._cleanup_saved_file_artifacts(saved_path)
+        try:
+            if weaviate_document_created:
+                try:
+                    await self._delete_document(user_sub, document_id)
+                except Exception as cleanup_err:
+                    logger.warning(
+                        "Best-effort Weaviate cleanup failed for document %s: %s",
+                        document_id,
+                        cleanup_err,
+                    )
+        finally:
+            self._cleanup_saved_file_artifacts(saved_path)
 
     @staticmethod
     def _cleanup_saved_file_artifacts(saved_path: Path) -> None:

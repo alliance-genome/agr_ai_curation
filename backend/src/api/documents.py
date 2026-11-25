@@ -47,6 +47,7 @@ from ..lib.document_sources.provenance import build_document_source_provenance
 from ..lib.document_sources.registry import get_document_source_provider_metadata
 from ..lib.http_errors import log_exception, raise_sanitized_http_exception
 from ..lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
+from ..lib.observability.sentry import hash_sentry_identifier
 from ..lib.pdf_jobs import service as pdf_job_service
 from ..lib.pdf_jobs.upload_execution_service import (
     UploadExecutionService,
@@ -1658,6 +1659,11 @@ async def delete_document_endpoint(
                     _require_removable_paths, cleanup_snapshot, FilePath(get_pdf_storage_path()), str(user["sub"]),
                 )
 
+                destructive_started = False
+                cancelled_during_delete = False
+                failure_step = "chunk_wipe"
+                failure_already_reported = False
+
                 # Remove physical files while holding a row lock so an in-flight rename
                 # cannot race with the final path snapshot. Keep the Weaviate parent object
                 # and SQL row intact until every stored file is gone so duplicate checks
@@ -1699,7 +1705,8 @@ async def delete_document_endpoint(
                         file_session.rollback()
                         raise
                     except Exception as file_error:
-                        logger.error('Failed to cleanup stored files for %s: %s', document_id, file_error)
+                        if not cancelled_during_delete:
+                            logger.error('Failed to cleanup stored files for %s: %s', document_id, file_error)
                         file_session.rollback()
                         raise
                     finally:
@@ -1724,66 +1731,95 @@ async def delete_document_endpoint(
                         cleanup_session.rollback()
                         raise
                     except Exception as db_error:
-                        logger.error('Failed to cleanup PostgreSQL for %s: %s', document_id, db_error)
+                        if not cancelled_during_delete:
+                            logger.error('Failed to cleanup PostgreSQL for %s: %s', document_id, db_error)
                         cleanup_session.rollback()
                         raise
                     finally:
                         cleanup_session.close()
 
                 async def complete_delete() -> OperationResult:
-                    try:
-                        # Always run the tenant-scoped chunk wipe, even when the parent index object
-                        # is already absent, so a retry clears any stray chunks before files and SQL.
-                        chunk_result = await delete_paper_chunks(user["sub"], document_id)
-                        if not chunk_result.get("success"):
+                    nonlocal destructive_started, failure_step, failure_already_reported
+                    # Always run the tenant-scoped chunk wipe, even when the parent index object
+                    # is already absent, so a retry clears any stray chunks before files and SQL.
+                    # ``delete_paper_chunks`` submits its worker synchronously before suspending,
+                    # so setting ``destructive_started`` here aligns the shield boundary with the
+                    # first destructive submission (preflight checks above, including ending a
+                    # waiting supplement stage, remain cancellable before the wipe starts).
+                    failure_step = "chunk_wipe"
+                    destructive_started = True
+                    chunk_result = await delete_paper_chunks(user["sub"], document_id)
+                    if not chunk_result.get("success"):
+                        if "chunks_failed" in chunk_result:
+                            # ``_build_chunk_wipe_result`` already emitted
+                            # ``paper_delete_chunk_wipe_incomplete``; avoid double capture.
+                            failure_already_reported = True
+                        raise HTTPException(
+                            status_code=500,
+                            detail=chunk_result.get("message", "Failed to delete document"),
+                        )
+
+                    failure_step = "stored_files"
+                    await asyncio.to_thread(remove_paper_files)
+
+                    if not document_missing_in_weaviate:
+                        failure_step = "parent_object"
+                        parent_result = await delete_paper_object(
+                            user["sub"], document_id, allow_missing=True,
+                        )
+                        if not parent_result.get("success"):
                             raise HTTPException(
                                 status_code=500,
-                                detail=chunk_result.get("message", "Failed to delete document"),
+                                detail=parent_result.get("message", "Failed to delete document"),
                             )
 
-                        await asyncio.to_thread(remove_paper_files)
+                    failure_step = "sql_cleanup"
+                    await asyncio.to_thread(finish_delete)
 
-                        if not document_missing_in_weaviate:
-                            parent_result = await delete_paper_object(
-                                user["sub"], document_id, allow_missing=True,
-                            )
-                            if not parent_result.get("success"):
-                                raise HTTPException(
-                                    status_code=500,
-                                    detail=parent_result.get("message", "Failed to delete document"),
-                                )
-
-                        await asyncio.to_thread(finish_delete)
-
-                        return OperationResult(
-                            success=True,
-                            message=f"Document {document_id} and {chunk_result['chunks_deleted']} chunks deleted successfully",
-                            operation="delete_document",
-                            document_id=document_id,
-                        )
-                    except (HTTPException, PoolTimeoutError):
-                        raise
-                    except Exception as exc:
-                        raise_sanitized_http_exception(
-                            logger,
-                            status_code=500,
-                            detail="Failed to delete document",
-                            log_message=f"Error deleting document {document_id}",
-                            exc=exc,
-                        )
-
-                def _log_cancelled_delete_failure(exc: Exception) -> None:
-                    logger.warning(
-                        "Paper delete stopped with %s while draining after cancellation",
-                        type(exc).__name__,
-                        extra={"document_id": document_id, "sentry_skip_event": True},
+                    return OperationResult(
+                        success=True,
+                        message=f"Document {document_id} and {chunk_result['chunks_deleted']} chunks deleted successfully",
+                        operation="delete_document",
+                        document_id=document_id,
                     )
 
-                # Once the first destructive write starts, keep ownership under the paper
+                def _mark_delete_cancelled() -> None:
+                    nonlocal cancelled_during_delete
+                    cancelled_during_delete = True
+
+                def _report_cancelled_delete_failure(exc: Exception) -> None:
+                    exc_type = type(exc).__name__
+                    document_id_hash = hash_sentry_identifier(document_id)
+                    logger.warning(
+                        "Paper delete stopped with %s at %s while draining after cancellation (document_id_hash=%s)",
+                        exc_type,
+                        failure_step,
+                        document_id_hash,
+                        extra={"sentry_skip_event": True},
+                    )
+                    if failure_already_reported:
+                        return
+                    sanitized = sanitized_runtime_error("Paper delete failed while draining after cancellation")
+                    report_runtime_exception(
+                        sanitized,
+                        component="documents",
+                        operation="paper_delete_cancelled_drain_failed",
+                        context={
+                            "document_id_hash": document_id_hash,
+                            "step": failure_step,
+                            "exception_type": exc_type,
+                        },
+                        fingerprint=["paper_delete_cancelled_drain_failed", failure_step, exc_type],
+                        include_request=False,
+                    )
+
+                # Once the first destructive write is submitted, keep ownership under the paper
                 # lock through completion or a recorded failure before delivering cancellation.
                 return await drain_shielded(
                     complete_delete(),
-                    on_cancelled_error=_log_cancelled_delete_failure,
+                    started=lambda: destructive_started,
+                    on_cancel=_mark_delete_cancelled,
+                    on_cancelled_error=_report_cancelled_delete_failure,
                 )
 
             except (HTTPException, PoolTimeoutError):
