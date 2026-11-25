@@ -64,7 +64,8 @@ from ..lib.weaviate_client.documents import (
     async_list_documents as list_documents,
 )
 from ..lib.weaviate_client.documents import (
-    delete_paper_search_entries,
+    delete_paper_chunks,
+    delete_paper_object,
     get_document,
     update_document_filename,
 )
@@ -1657,26 +1658,29 @@ async def delete_document_endpoint(
                     _require_removable_paths, cleanup_snapshot, FilePath(get_pdf_storage_path()), str(user["sub"]),
                 )
 
-                result = {"success": True, "chunks_deleted": 0}
-                if not document_missing_in_weaviate:
-                    result = await delete_paper_search_entries(user["sub"], document_id)
-
-                if not result.get("success"):
+                # Always run the tenant-scoped chunk wipe, even when the parent index object
+                # is already absent, so a retry clears any stray chunks before files and SQL.
+                chunk_result = await delete_paper_chunks(user["sub"], document_id)
+                if not chunk_result.get("success"):
                     raise HTTPException(
                         status_code=500,
-                        detail=result.get("message", "Failed to delete document")
+                        detail=chunk_result.get("message", "Failed to delete document")
                     )
 
-                # Keep the owned rows and paths available for retry until every file is gone.
-                def finish_delete() -> None:
-                    cleanup_session = SessionLocal()
+                # Remove physical files while holding a row lock so an in-flight rename
+                # cannot race with the final path snapshot. Keep the Weaviate parent object
+                # and SQL row intact until every stored file is gone so duplicate checks
+                # cannot treat the retained row as a phantom and strand files on disk.
+                def remove_paper_files() -> None:
+                    file_session = SessionLocal()
                     try:
-                        doc_to_delete = require_owned_document(cleanup_session, pg_doc.id, pg_doc.user_id)
-                        cleanup_values = _document_cleanup_snapshot(doc_to_delete)
-                        cleanup_document_curation_dependencies(cleanup_session, cleanup_values["id"])
-                        # Delete physical files
+                        doc_to_clean = require_owned_document(
+                            file_session, pg_doc.id, pg_doc.user_id, for_update=True,
+                        )
+                        cleanup_values = _document_cleanup_snapshot(doc_to_clean)
                         base_storage = FilePath(get_pdf_storage_path())
                         user_sub = str(user["sub"])
+                        _require_removable_paths(cleanup_values, base_storage, user_sub)
                         single_files: list[str] = []
                         for file_values in cleanup_values["files"]:
                             # A main stored PDF may take its paper folder with it (only
@@ -1700,7 +1704,36 @@ async def delete_document_endpoint(
                                 single_files.extend(_removed_paths(file_values))
                         remove_stored_files(single_files, owner_subject=user_sub)
                         _remove_empty_paper_folders(base_storage, user_sub, document_id)
+                    except HTTPException:
+                        file_session.rollback()
+                        raise
+                    except Exception as file_error:
+                        logger.error('Failed to cleanup stored files for %s: %s', document_id, file_error)
+                        file_session.rollback()
+                        raise
+                    finally:
+                        file_session.close()
 
+                await asyncio.to_thread(remove_paper_files)
+
+                if not document_missing_in_weaviate:
+                    parent_result = await delete_paper_object(
+                        user["sub"], document_id, allow_missing=True,
+                    )
+                    if not parent_result.get("success"):
+                        raise HTTPException(
+                            status_code=500,
+                            detail=parent_result.get("message", "Failed to delete document"),
+                        )
+
+                # Keep the owned SQL row available for retry until files and index entries are gone.
+                def finish_delete() -> None:
+                    cleanup_session = SessionLocal()
+                    try:
+                        doc_to_delete = require_owned_document(
+                            cleanup_session, pg_doc.id, pg_doc.user_id, for_update=True,
+                        )
+                        cleanup_document_curation_dependencies(cleanup_session, doc_to_delete.id)
                         cleanup_session.delete(doc_to_delete)
                         cleanup_session.commit()
                         logger.info('Deleted PostgreSQL record for %s', document_id)
@@ -1722,7 +1755,7 @@ async def delete_document_endpoint(
 
                 return OperationResult(
                     success=True,
-                    message=f"Document {document_id} and {result['chunks_deleted']} chunks deleted successfully",
+                    message=f"Document {document_id} and {chunk_result['chunks_deleted']} chunks deleted successfully",
                     operation="delete_document",
                     document_id=document_id
                 )

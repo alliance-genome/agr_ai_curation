@@ -619,9 +619,13 @@ def _wire_delete(monkeypatch, owner_id, *, in_wipe=None, wipe_seconds: float = 0
         deleted = await asyncio.to_thread(chunk_reads.delete_pieces_of_deleted_paper, document_id, user_sub)
         return {"success": True, "chunks_deleted": deleted}
 
+    async def delete_parent(_user_sub, _document_id, *, allow_missing=False):
+        return {"success": True, "deleted": True}
+
     monkeypatch.setattr(documents_api, "provision_user_async", provision)
     monkeypatch.setattr(documents_api, "get_document", present)
-    monkeypatch.setattr(documents_api, "delete_paper_search_entries", wipe)
+    monkeypatch.setattr(documents_api, "delete_paper_chunks", wipe)
+    monkeypatch.setattr(documents_api, "delete_paper_object", delete_parent)
 
 
 async def _delete(paper: UUID):

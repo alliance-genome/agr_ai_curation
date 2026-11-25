@@ -626,6 +626,127 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
             raise
 
 
+async def _wipe_paper_chunks(chunk_collection: Any, document_id: str) -> Dict[str, Any]:
+    """Delete every tenant-scoped chunk for a paper and verify bulk-delete counts."""
+    delete_result = await asyncio.get_event_loop().run_in_executor(
+        None,
+        lambda: chunk_collection.data.delete_many(
+            where=Filter.by_property("documentId").equal(document_id)
+        )
+    )
+
+    chunks_deleted = int(delete_result.successful)
+    chunks_matched = int(delete_result.matches)
+    chunks_failed = int(delete_result.failed)
+    if chunks_failed or chunks_deleted != chunks_matched:
+        counts = {
+            "chunks_deleted": chunks_deleted,
+            "chunks_matched": chunks_matched,
+            "chunks_failed": chunks_failed,
+        }
+        try:
+            runtime.report_runtime_exception(
+                runtime.sanitized_runtime_error("Paper chunk deletion was incomplete"),
+                component="weaviate_client",
+                operation="paper_delete_chunk_wipe_incomplete",
+                context=counts,
+            )
+        except Exception:
+            logger.warning("Failed to report incomplete chunk deletion", extra={"sentry_skip_event": True})
+        return {
+            "success": False,
+            "message": "Document deletion reported as unsuccessful",
+            "documentId": document_id,
+            **counts,
+        }
+
+    return {
+        "success": True,
+        "message": "Document chunks deleted successfully",
+        "documentId": document_id,
+        "chunks_deleted": chunks_deleted,
+        "chunks_matched": chunks_matched,
+    }
+
+
+async def delete_paper_chunks(user_id: str, document_id: str) -> Dict[str, Any]:
+    """Wipe all tenant-scoped chunks for a paper without removing its parent index object."""
+    if not user_id:
+        raise ValueError("user_id is required for tenant-scoped document deletion (FR-011, FR-014)")
+
+    connection = get_connection()
+    if not connection:
+        raise RuntimeError("No Weaviate connection established")
+
+    with connection.session() as client:
+        try:
+            chunk_collection, _ = get_user_collections(client, user_id)
+            return await _wipe_paper_chunks(chunk_collection, document_id)
+        except Exception as e:
+            logger.error("Failed to delete chunks for document %s: %s", document_id, e)
+            return {
+                "success": False,
+                "message": f"Failed to delete document: {e}",
+                "documentId": document_id,
+                "chunks_deleted": 0,
+                "error": {
+                    "code": "DELETE_FAILED",
+                    "details": str(e),
+                },
+            }
+
+
+async def delete_paper_object(
+    user_id: str,
+    document_id: str,
+    *,
+    allow_missing: bool = False,
+) -> Dict[str, Any]:
+    """Delete the tenant-scoped parent paper object from Weaviate."""
+    if not user_id:
+        raise ValueError("user_id is required for tenant-scoped document deletion (FR-011, FR-014)")
+
+    connection = get_connection()
+    if not connection:
+        raise RuntimeError("No Weaviate connection established")
+
+    with connection.session() as client:
+        try:
+            _, pdf_collection = get_user_collections(client, user_id)
+            doc_deleted = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: pdf_collection.data.delete_by_id(document_id)
+            )
+            deleted = bool(doc_deleted)
+            success = deleted or allow_missing
+            return {
+                "success": success,
+                "deleted": deleted,
+                "message": (
+                    "Document object deleted successfully"
+                    if deleted
+                    else (
+                        "Document object already absent"
+                        if allow_missing
+                        else "Document deletion reported as unsuccessful"
+                    )
+                ),
+                "documentId": document_id,
+            }
+        except Exception as e:
+            logger.error("Failed to delete document object %s: %s", document_id, e)
+            return {
+                "success": False,
+                "deleted": False,
+                "message": f"Failed to delete document: {e}",
+                "documentId": document_id,
+                "error": {
+                    "code": "DELETE_FAILED",
+                    "details": str(e),
+                },
+            }
+
+
 async def delete_paper_search_entries(user_id: str, document_id: str) -> Dict[str, Any]:
     """Wipe the tenant's chunks, then delete the index object only after a complete wipe."""
     # T037: Validate user_id is provided (required for tenant scoping)
@@ -640,39 +761,9 @@ async def delete_paper_search_entries(user_id: str, document_id: str) -> Dict[st
         try:
             # Get tenant-scoped collections (FR-011: user-specific data isolation)
             chunk_collection, pdf_collection = get_user_collections(client, user_id)
-
-            # Delete all chunks for this document using v4 API
-            delete_result = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: chunk_collection.data.delete_many(
-                    where=Filter.by_property("documentId").equal(document_id)
-                )
-            )
-
-            chunks_deleted = int(delete_result.successful)
-            chunks_matched = int(delete_result.matches)
-            chunks_failed = int(delete_result.failed)
-            if chunks_failed or chunks_deleted != chunks_matched:
-                counts = {
-                    "chunks_deleted": chunks_deleted,
-                    "chunks_matched": chunks_matched,
-                    "chunks_failed": chunks_failed,
-                }
-                try:
-                    runtime.report_runtime_exception(
-                        runtime.sanitized_runtime_error("Paper chunk deletion was incomplete"),
-                        component="weaviate_client",
-                        operation="paper_delete_chunk_wipe_incomplete",
-                        context=counts,
-                    )
-                except Exception:
-                    logger.warning("Failed to report incomplete chunk deletion", extra={"sentry_skip_event": True})
-                return {
-                    "success": False,
-                    "message": "Document deletion reported as unsuccessful",
-                    "documentId": document_id,
-                    **counts,
-                }
+            chunk_result = await _wipe_paper_chunks(chunk_collection, document_id)
+            if not chunk_result.get("success"):
+                return chunk_result
 
             # Then delete the document itself
             doc_deleted = await asyncio.get_event_loop().run_in_executor(
@@ -684,8 +775,8 @@ async def delete_paper_search_entries(user_id: str, document_id: str) -> Dict[st
                 "success": bool(doc_deleted),
                 "message": "Document and chunks deleted successfully" if doc_deleted else "Document deletion reported as unsuccessful",
                 "documentId": document_id,
-                "chunks_deleted": chunks_deleted,
-                "chunks_matched": chunks_matched,
+                "chunks_deleted": chunk_result["chunks_deleted"],
+                "chunks_matched": chunk_result["chunks_matched"],
             }
 
         except Exception as e:
