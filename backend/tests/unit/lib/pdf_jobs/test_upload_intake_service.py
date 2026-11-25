@@ -53,6 +53,61 @@ from src.lib.document_sources.models import ProviderBearerKind
 FAKE_UPLOAD_MD5 = "f87357c6cdc4f067" + "e19f42aebabc6fb7"
 
 
+class _FakePaperLockConnection:
+    """In-memory PostgreSQL advisory lock simulator for upload compensation tests."""
+
+    held: set[int] = set()
+
+    def execute(self, statement, params):
+        sql = str(statement)
+        key = params["key"]
+        if "pg_try_advisory_lock" in sql:
+            taken = key not in self.held
+            self.held.add(key)
+            return SimpleNamespace(scalar_one=lambda: taken)
+        if "pg_advisory_unlock" in sql:
+            self.held.discard(key)
+            return SimpleNamespace(scalar_one=lambda: True)
+        raise AssertionError(f"unexpected lock statement {sql}")
+
+    def commit(self):
+        pass
+
+    def close(self):
+        pass
+
+    def invalidate(self):
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _compensation_lock_and_jobs_fixture(monkeypatch):
+    _FakePaperLockConnection.held = set()
+    monkeypatch.setattr(
+        "src.models.sql.database.engine",
+        SimpleNamespace(connect=lambda: _FakePaperLockConnection()),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        upload_intake_module.pdf_job_service,
+        "get_active_job_for_document",
+        lambda **_kwargs: None,
+    )
+
+    def _open_lock_session(conn=None):
+        if conn is not None:
+            assert isinstance(conn, _FakePaperLockConnection)
+        return None
+
+    monkeypatch.setattr(upload_intake_module, "open_paper_lock_session", _open_lock_session)
+    monkeypatch.setattr(
+        "src.lib.document_files.paper_lock.open_paper_lock_session",
+        _open_lock_session,
+    )
+    yield _FakePaperLockConnection
+    assert _FakePaperLockConnection.held == set(), "compensation left paper lock held"
+
+
 def test_provider_decision_error_fields_cover_every_status():
     assert set(upload_intake_module._CHECKSUM_DECISION_ERROR_FIELDS) == set(
         ChecksumImportDecisionStatus
@@ -1426,7 +1481,7 @@ async def test_intake_upload_integrity_error_compensates_and_returns_duplicate_e
     dispatch = _DispatchRecorder()
     delete_document_calls = []
 
-    async def _delete_document(user_sub, document_id):
+    async def _delete_document(user_sub, document_id, **_kwargs):
         delete_document_calls.append((user_sub, document_id))
 
     create_document_calls = []
@@ -1486,7 +1541,7 @@ async def test_intake_upload_file_size_constraint_error_is_not_misreported_as_li
     dispatch = _DispatchRecorder()
     delete_document_calls = []
 
-    async def _delete_document(user_sub, document_id):
+    async def _delete_document(user_sub, document_id, **_kwargs):
         delete_document_calls.append((user_sub, document_id))
 
     service = UploadIntakeService(
@@ -1527,7 +1582,7 @@ async def test_intake_upload_generic_commit_failure_rolls_back_and_cleans_up(tmp
     dispatch = _DispatchRecorder()
     delete_document_calls = []
 
-    async def _delete_document(user_sub, document_id):
+    async def _delete_document(user_sub, document_id, **_kwargs):
         delete_document_calls.append((user_sub, document_id))
 
     service = UploadIntakeService(
@@ -1569,7 +1624,7 @@ async def test_intake_upload_runtime_error_rolls_back_and_compensates_without_di
     delete_document_calls = []
     create_job_calls = []
 
-    async def _delete_document(user_sub, document_id):
+    async def _delete_document(user_sub, document_id, **_kwargs):
         delete_document_calls.append((user_sub, document_id))
 
     service = UploadIntakeService(
@@ -1648,7 +1703,7 @@ async def test_intake_upload_non_integrity_persistence_error_rolls_back_and_clea
     dispatch = _DispatchRecorder()
     delete_document_calls = []
 
-    async def _delete_document(user_sub, document_id):
+    async def _delete_document(user_sub, document_id, **_kwargs):
         delete_document_calls.append((user_sub, document_id))
 
     def _boom_on_add(_row):
@@ -1689,12 +1744,14 @@ async def test_intake_upload_non_integrity_persistence_error_rolls_back_and_clea
 async def test_intake_upload_job_creation_failure_compensates_sql_weaviate_and_files(tmp_path):
     initial_session = _FakeSession()
     persisted_record = SimpleNamespace(id=uuid4())
+    snapshot_session = _FakeSession(execute_row=persisted_record)
     cleanup_session = _FakeSession(execute_row=persisted_record)
-    sessions = [initial_session, cleanup_session]
+    # 1: persist document, 2: snapshot live SQL files before Weaviate delete, 3: SQL delete fallback
+    sessions = [initial_session, snapshot_session, cleanup_session]
     dispatch = _DispatchRecorder()
     delete_document_calls = []
 
-    async def _delete_document(user_sub, document_id):
+    async def _delete_document(user_sub, document_id, **_kwargs):
         delete_document_calls.append((user_sub, document_id))
 
     def _session_factory():
@@ -1840,3 +1897,1064 @@ async def test_an_upload_that_waits_for_conversion_records_whether_the_request_w
     else:
         assert "metadata" not in created_jobs[0]
         assert request.conversion_answer is None
+
+
+@pytest.mark.asyncio
+async def test_intake_upload_job_creation_compensation_cancelled_during_chunk_wipe_cleans_saved_pdf(
+    monkeypatch, tmp_path,
+):
+    import asyncio
+    from contextlib import contextmanager
+    import threading
+    from unittest.mock import MagicMock
+
+    from src.lib.weaviate_client import documents as weaviate_docs
+
+    wipe_entered = threading.Event()
+    resume_wipe = threading.Event()
+    events: list[str] = []
+
+    @contextmanager
+    def _session():
+        yield MagicMock()
+
+    connection = MagicMock()
+    connection.session.side_effect = _session
+    chunks, papers = MagicMock(), MagicMock()
+
+    def _delete_many(**_kwargs):
+        wipe_entered.set()
+        assert resume_wipe.wait(timeout=5)
+        events.append("chunks")
+        return SimpleNamespace(successful=0, matches=0, failed=0)
+
+    def _delete_by_id(_doc_id):
+        events.append("parent")
+        return True
+
+    sql_owner_deleted = False
+
+    def _delete_sql_row(*_args, **_kwargs):
+        nonlocal sql_owner_deleted
+        sql_owner_deleted = True
+        events.append("sql")
+        return True
+
+    chunks.data.delete_many.side_effect = _delete_many
+    papers.data.delete_by_id.side_effect = _delete_by_id
+    monkeypatch.setattr(weaviate_docs, "get_connection", lambda: connection)
+    monkeypatch.setattr(weaviate_docs, "get_user_collections", lambda *_: (chunks, papers))
+    monkeypatch.setattr(weaviate_docs, "_delete_sql_row", _delete_sql_row)
+
+    initial_session = _FakeSession()
+    persisted_record = SimpleNamespace(id=uuid4())
+    snapshot_session = _FakeSession(execute_row=persisted_record)
+    cleanup_session = _FakeSession(execute_row=persisted_record)
+    sessions = [initial_session, snapshot_session, cleanup_session]
+
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: sessions.pop(0),
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        create_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=weaviate_docs.delete_document,
+        create_job_fn=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("job row failed")),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    task = asyncio.create_task(
+        service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+    )
+    try:
+        assert await asyncio.to_thread(wipe_entered.wait, 5)
+        assert not list(tmp_path.rglob("*.pdf"))
+        task.cancel("cancelled during upload compensation")
+        await asyncio.sleep(0.02)
+        assert not task.done()
+    finally:
+        resume_wipe.set()
+
+    with pytest.raises(asyncio.CancelledError, match="cancelled during upload compensation"):
+        await asyncio.wait_for(task, timeout=5)
+
+    assert events == ["chunks", "parent", "sql"]
+    assert sql_owner_deleted is True
+    assert not list(tmp_path.rglob("*.pdf"))
+
+
+@pytest.mark.asyncio
+async def test_intake_upload_job_creation_compensation_retains_owner_on_persistent_unlink_failure(
+    monkeypatch, tmp_path,
+):
+    import shutil
+
+    initial_session = _FakeSession()
+    persisted_record = SimpleNamespace(id=uuid4())
+    snapshot_session = _FakeSession(execute_row=persisted_record)
+    cleanup_session = _FakeSession(execute_row=persisted_record)
+    sessions = [initial_session, snapshot_session, cleanup_session]
+    delete_document_mock = AsyncMock()
+    monkeypatch.setattr(shutil, "rmtree", lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("locked")))
+
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: sessions.pop(0),
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        create_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=delete_document_mock,
+        create_job_fn=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("job row failed")),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    with pytest.raises(RuntimeError, match="job row failed"):
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
+    assert list(tmp_path.rglob("*.pdf"))
+    delete_document_mock.assert_not_awaited()
+    assert cleanup_session.deleted == []
+    assert cleanup_session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_intake_upload_pre_commit_compensation_retains_weaviate_and_reports_on_persistent_unlink_failure(
+    monkeypatch, tmp_path,
+):
+    import shutil
+    from src.lib.document_cleanup import runtime as cleanup_runtime
+    from src.lib.observability.sentry import hash_sentry_identifier
+
+    session = _FakeSession(
+        fail_commit_on_call=1,
+        commit_error=RuntimeError("database unavailable"),
+    )
+    delete_document_mock = AsyncMock()
+    report_mock = Mock()
+    monkeypatch.setattr(cleanup_runtime, "report_runtime_exception", report_mock)
+    monkeypatch.setattr(
+        shutil,
+        "rmtree",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("locked")),
+    )
+
+    created_doc_ids: list[str] = []
+
+    async def _create_document(_user_sub, doc):
+        created_doc_ids.append(str(doc.id))
+        return {"success": True}
+
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: session,
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        create_document_fn=_create_document,
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=delete_document_mock,
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
+    assert len(created_doc_ids) == 1
+    doc_id = created_doc_ids[0]
+    assert list(tmp_path.rglob("*.pdf"))
+    delete_document_mock.assert_not_awaited()
+    report_mock.assert_called_once()
+    (err,) = report_mock.call_args.args
+    assert err.__cause__ is None and err.__context__ is None
+    assert report_mock.call_args.kwargs == {
+        "component": "pdf_jobs",
+        "operation": "intake_compensation_file_cleanup_failed",
+        "context": {
+            "document_id_hash": hash_sentry_identifier(doc_id),
+            "sql_committed": False,
+            "weaviate_retained": True,
+        },
+        "fingerprint": ["intake_compensation_file_cleanup_failed", "pdf_jobs", "pre_commit"],
+        "include_request": False,
+    }
+    assert doc_id not in repr(report_mock.call_args)
+    assert str(tmp_path) not in repr(report_mock.call_args)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("competing_mode", ["lock_held", "active_job"])
+async def test_intake_upload_job_creation_compensation_skips_when_competing_supplement_add_owns_paper(
+    monkeypatch, tmp_path, competing_mode,
+):
+    from src.lib.document_files.paper_lock import paper_lock_key
+
+    initial_session = _FakeSession()
+    persisted_record = SimpleNamespace(id=uuid4())
+    cleanup_session = _FakeSession(execute_row=persisted_record)
+    sessions = [initial_session, cleanup_session]
+    delete_document_mock = AsyncMock()
+    created_doc_ids: list[str] = []
+
+    async def _create_document(_user_sub, doc):
+        created_doc_ids.append(str(doc.id))
+        return {"success": True}
+
+    def _fail_create_job(**kwargs):
+        doc_id = str(kwargs["document_id"])
+        if competing_mode == "lock_held":
+            # Simulate a competing supplement add holding the paper advisory lock.
+            _FakePaperLockConnection.held.add(paper_lock_key(doc_id))
+        raise RuntimeError("job row failed")
+
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: sessions.pop(0),
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        create_document_fn=_create_document,
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=delete_document_mock,
+        create_job_fn=_fail_create_job,
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+        get_active_job_fn=(
+            (lambda **_kwargs: SimpleNamespace(status="pending", metadata={"job_kind": "supplement_add"}))
+            if competing_mode == "active_job"
+            else (lambda **_kwargs: None)
+        ),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="job row failed"):
+            await service.intake_upload(
+                background_tasks=BackgroundTasks(),
+                file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+                user={"sub": "user-1"},
+            )
+    finally:
+        if competing_mode == "lock_held" and created_doc_ids:
+            _FakePaperLockConnection.held.discard(paper_lock_key(created_doc_ids[0]))
+
+    # Compensation must never delete files, Weaviate, or SQL underneath a competing add.
+    assert list(tmp_path.rglob("*.pdf"))
+    delete_document_mock.assert_not_awaited()
+    assert cleanup_session.deleted == []
+    assert cleanup_session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_intake_upload_job_creation_compensation_retains_owner_on_incomplete_wipe(
+    monkeypatch, tmp_path, cancelled,
+):
+    import asyncio
+    from contextlib import contextmanager
+    import threading
+    from unittest.mock import MagicMock
+
+    from src.lib.weaviate_client import documents as weaviate_docs
+
+    wipe_entered = threading.Event()
+    resume_wipe = threading.Event()
+
+    @contextmanager
+    def _session():
+        yield MagicMock()
+
+    connection = MagicMock()
+    connection.session.side_effect = _session
+    chunks, papers = MagicMock(), MagicMock()
+
+    def _delete_many(**_kwargs):
+        wipe_entered.set()
+        if cancelled:
+            assert resume_wipe.wait(timeout=5)
+        return SimpleNamespace(successful=0, matches=1, failed=1)
+
+    chunks.data.delete_many.side_effect = _delete_many
+    monkeypatch.setattr(weaviate_docs, "get_connection", lambda: connection)
+    monkeypatch.setattr(weaviate_docs, "get_user_collections", lambda *_: (chunks, papers))
+    delete_sql_row = MagicMock()
+    monkeypatch.setattr(weaviate_docs, "_delete_sql_row", delete_sql_row)
+    monkeypatch.setattr(weaviate_docs.runtime, "report_runtime_exception", MagicMock())
+
+    initial_session = _FakeSession()
+    persisted_record = SimpleNamespace(id=uuid4())
+    snapshot_session = _FakeSession(execute_row=persisted_record)
+    cleanup_session = _FakeSession(execute_row=persisted_record)
+    sessions = [initial_session, snapshot_session, cleanup_session]
+
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: sessions.pop(0),
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        create_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=weaviate_docs.delete_document,
+        create_job_fn=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("job row failed")),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    coro = service.intake_upload(
+        background_tasks=BackgroundTasks(),
+        file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+        user={"sub": "user-1"},
+    )
+    if cancelled:
+        task = asyncio.create_task(coro)
+        try:
+            assert await asyncio.to_thread(wipe_entered.wait, 5)
+            task.cancel("cancelled during incomplete upload compensation wipe")
+            await asyncio.sleep(0.02)
+            assert not task.done()
+        finally:
+            resume_wipe.set()
+        with pytest.raises(asyncio.CancelledError, match="cancelled during incomplete upload compensation wipe"):
+            await asyncio.wait_for(task, timeout=5)
+    else:
+        with pytest.raises(RuntimeError, match="job row failed"):
+            await coro
+
+    papers.data.delete_by_id.assert_not_called()
+    delete_sql_row.assert_not_called()
+    assert cleanup_session.deleted == []
+    assert cleanup_session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_intake_upload_pre_commit_compensation_handles_stat_permission_error(monkeypatch, tmp_path):
+    from pathlib import Path as RealPath
+    from src.lib.document_cleanup import runtime as cleanup_runtime
+
+    session = _FakeSession(
+        fail_commit_on_call=1,
+        commit_error=RuntimeError("database unavailable"),
+    )
+    delete_document_mock = AsyncMock()
+    report_mock = Mock()
+    monkeypatch.setattr(cleanup_runtime, "report_runtime_exception", report_mock)
+
+    orig_exists = RealPath.exists
+
+    def _deny_pdf_exists(self):
+        if self.suffix == ".pdf":
+            raise PermissionError("cannot stat pdf parent")
+        return orig_exists(self)
+
+    monkeypatch.setattr(RealPath, "exists", _deny_pdf_exists)
+
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: session,
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        create_document_fn=AsyncMock(return_value={"success": True}),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=delete_document_mock,
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
+    delete_document_mock.assert_not_awaited()
+    report_mock.assert_called_once()
+    assert report_mock.call_args.kwargs["operation"] == "intake_compensation_file_cleanup_failed"
+    assert report_mock.call_args.kwargs["include_request"] is False
+
+
+@pytest.mark.asyncio
+async def test_intake_upload_committed_compensation_removes_live_renamed_sql_file_snapshot(tmp_path):
+    persisted_records: list[object] = []
+
+    class _TrackingSession(_FakeSession):
+        def add(self, row):
+            super().add(row)
+            persisted_records.append(row)
+
+        def execute(self, *_args, **_kwargs):
+            return _ExecuteResult(persisted_records[0] if persisted_records else None)
+
+    renamed_rel = "user-1/renamed_upload/renamed_paper.pdf"
+
+    def _rename_and_fail_create_job(**_kwargs):
+        # Simulate a concurrent rename moving the PDF and updating live PDFDocumentFile.file_path.
+        original_pdfs = list(tmp_path.rglob("*.pdf"))
+        assert len(original_pdfs) == 1
+        target = tmp_path / renamed_rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        original_pdfs[0].replace(target)
+        persisted_records[0].files[0].file_path = renamed_rel
+        raise RuntimeError("job row failed after rename")
+
+    delete_document_mock = AsyncMock(return_value={"success": True, "postgres_deleted": True})
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: _TrackingSession(),
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        create_document_fn=AsyncMock(return_value={"success": True}),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=delete_document_mock,
+        create_job_fn=_rename_and_fail_create_job,
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    with pytest.raises(RuntimeError, match="job row failed after rename"):
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
+    assert not (tmp_path / renamed_rel).exists()
+    assert not list(tmp_path.rglob("*.pdf"))
+    delete_document_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_committed_compensation_cancel_during_file_removal_drains_worker_and_cleanup_before_lock_release(
+    monkeypatch, tmp_path,
+):
+    import asyncio
+    import threading
+    from src.lib.document_files import paper_lock
+
+    events: list[str] = []
+    worker_entered = threading.Event()
+    resume_worker = threading.Event()
+
+    orig_release = paper_lock._release
+
+    def _tracked_release(conn, key):
+        events.append("lock_unlocked")
+        return orig_release(conn, key)
+
+    monkeypatch.setattr(paper_lock, "_release", _tracked_release)
+
+    persisted_records: list[object] = []
+
+    class _TrackingSession(_FakeSession):
+        def add(self, row):
+            super().add(row)
+            persisted_records.append(row)
+
+        def execute(self, *_args, **_kwargs):
+            return _ExecuteResult(persisted_records[0] if persisted_records else None)
+
+    async def _delete_document(_user_sub, _doc_id, *, connection=None):
+        assert isinstance(connection, _FakePaperLockConnection)
+        events.append("weaviate_and_sql_done")
+        return {"success": True, "postgres_deleted": True}
+
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: _TrackingSession(),
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        create_document_fn=AsyncMock(return_value={"success": True}),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=_delete_document,
+        create_job_fn=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("job row failed")),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    real_remove = service._remove_committed_paper_files
+
+    def _blocking_remove(**kwargs):
+        worker_entered.set()
+        assert resume_worker.wait(timeout=5)
+        result = real_remove(**kwargs)
+        events.append("file_removal_done")
+        return result
+
+    service._remove_committed_paper_files = _blocking_remove  # type: ignore[method-assign]
+
+    task = asyncio.create_task(
+        service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+    )
+    try:
+        assert await asyncio.to_thread(worker_entered.wait, 5)
+        task.cancel("cancelled during file removal worker")
+        await asyncio.sleep(0.02)
+        assert not task.done()
+        assert events == []
+    finally:
+        resume_worker.set()
+
+    with pytest.raises(asyncio.CancelledError, match="cancelled during file removal worker"):
+        await asyncio.wait_for(task, timeout=5)
+
+    assert events == ["file_removal_done", "weaviate_and_sql_done", "lock_unlocked"]
+    assert not list(tmp_path.rglob("*.pdf"))
+    assert _FakePaperLockConnection.held == set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_filename",
+    ["../escape.pdf", "sub/paper.pdf", "..\\escape.pdf", "/etc/passwd.pdf", "bad\x00.pdf"],
+)
+async def test_intake_upload_rejects_filename_with_path_traversal_and_separators(
+    tmp_path, bad_filename,
+):
+    handler_called = False
+
+    def _unexpected_handler(_storage_path):
+        nonlocal handler_called
+        handler_called = True
+        raise AssertionError("upload handler must not be called for unsafe filename")
+
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: _FakeSession(),
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=_unexpected_handler,
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+    )
+
+    with pytest.raises(UploadIntakeValidationError, match="path separators|traversal"):
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename=bad_filename, file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
+    assert handler_called is False
+    assert not list(tmp_path.rglob("*.pdf"))
+
+
+@pytest.mark.asyncio
+async def test_upload_handler_rejects_traversal_filename_before_writing(tmp_path):
+    from src.lib.pipeline.upload import PDFUploadHandler
+
+    user_root = tmp_path / "user-1"
+    handler = PDFUploadHandler(storage_path=user_root)
+    outside_sentinel = tmp_path / "keep.txt"
+    outside_sentinel.write_text("do not delete")
+
+    with pytest.raises(UploadError, match="safe PDF filename"):
+        await handler.save_uploaded_pdf(
+            UploadFile(filename="../escape.pdf", file=BytesIO(b"%PDF-1.7"))
+        )
+
+    assert outside_sentinel.exists()
+    assert not list(tmp_path.rglob("*.pdf"))
+
+
+def test_staged_cleanup_refuses_to_rmtree_outside_expected_paper_directory(tmp_path):
+    doc_id = str(uuid4())
+    unrelated_dir = tmp_path / "user-1" / "unrelated_dir"
+    unrelated_dir.mkdir(parents=True)
+    keep_file = unrelated_dir / "keep.txt"
+    keep_file.write_text("important")
+    outside_pdf = unrelated_dir / "evil.pdf"
+    outside_pdf.write_bytes(b"%PDF-1.7")
+
+    removed = UploadIntakeService._cleanup_saved_file_artifacts(
+        outside_pdf,
+        base_storage=tmp_path,
+        user_sub="user-1",
+        document_id=doc_id,
+    )
+
+    assert removed is False
+    assert keep_file.exists()
+    assert outside_pdf.exists()
+
+
+def test_intake_upload_compensation_reports_one_sanitized_sentry_event_when_delete_document_sql_fails():
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent("""
+        import asyncio
+        from contextlib import contextmanager
+        from io import BytesIO
+        import logging
+        import os
+        from pathlib import Path
+        import tempfile
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+        from uuid import uuid4
+
+        os.environ["SENTRY_CONTENT_REDACTION_ENABLED"] = "false"
+
+        import sentry_sdk
+        from sentry_sdk.integrations.logging import LoggingIntegration
+        from fastapi import BackgroundTasks, UploadFile
+
+        from src.lib.observability.sentry import before_send, hash_sentry_identifier
+        from src.lib.pdf_jobs import upload_intake_service as module
+        from src.lib.weaviate_client import documents as weaviate_docs
+        import src.models.sql.database as sql_db
+
+        doc_id = "33333333-4444-5555-6666-777777777777"
+        secret_detail = "private-postgres-param-for-upload-comp"
+        events = []
+
+        logging.basicConfig(level=logging.INFO)
+        sentry_sdk.init(
+            dsn="http://public@example.invalid/1",
+            transport=events.append,
+            before_send=before_send,
+            include_local_variables=False,
+            default_integrations=False,
+            integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+        )
+
+        def _attach_request_url(event, _hint):
+            event["request"] = {"url": f"https://example.invalid/weaviate/documents/{doc_id}"}
+            return event
+
+        sentry_sdk.get_global_scope().add_event_processor(_attach_request_url)
+
+        class _LockConn:
+            def execute(self, *_a, **_kw):
+                return SimpleNamespace(scalar_one=lambda: True)
+            def commit(self):
+                pass
+            def close(self):
+                pass
+            def invalidate(self):
+                pass
+
+        sql_db.engine = SimpleNamespace(connect=lambda: _LockConn())
+        module.pdf_job_service.get_active_job_for_document = lambda **_kw: None
+        seen_lock_conns = []
+        def _open_lock_session(conn=None):
+            if conn is not None:
+                assert isinstance(conn, _LockConn)
+                seen_lock_conns.append(conn)
+            return None
+        module.open_paper_lock_session = _open_lock_session
+
+        @contextmanager
+        def _w_session(*_a, **_kw):
+            yield MagicMock()
+
+        w_conn = MagicMock()
+        w_conn.session.side_effect = _w_session
+        chunks, papers = MagicMock(), MagicMock()
+        chunks.data.delete_many.return_value = SimpleNamespace(successful=0, matches=0, failed=0)
+        papers.data.delete_by_id.return_value = True
+        weaviate_docs.get_connection = lambda: w_conn
+        weaviate_docs.get_user_collections = lambda *_a: (chunks, papers)
+
+        sql_delete_calls = 0
+
+        def _failing_sql_row(*_a, **_kw):
+            global sql_delete_calls
+            assert isinstance(_kw.get("connection"), _LockConn)
+            sql_delete_calls += 1
+            raise RuntimeError(f"{secret_detail} {doc_id}")
+
+        weaviate_docs._delete_sql_row = _failing_sql_row
+
+        class _Session:
+            def __init__(self, row=None):
+                self._row = row
+                self.deleted = []
+            def execute(self, *_a, **_kw):
+                return SimpleNamespace(scalars=lambda: SimpleNamespace(first=lambda: self._row))
+            def add(self, _row):
+                pass
+            def delete(self, row):
+                self.deleted.append(row)
+            def commit(self):
+                pass
+            def rollback(self):
+                pass
+            def close(self):
+                pass
+
+        class _Handler:
+            def __init__(self, storage_path):
+                self.storage_path = storage_path
+            async def save_uploaded_pdf(self, file):
+                doc_dir = self.storage_path / doc_id
+                doc_dir.mkdir(parents=True, exist_ok=True)
+                p = doc_dir / file.filename
+                p.write_bytes(b"%PDF-1.7")
+                return p, SimpleNamespace(
+                    id=doc_id,
+                    filename=file.filename,
+                    metadata=SimpleNamespace(checksum="chk-1", page_count=1),
+                )
+
+        async def _exercise():
+            with tempfile.TemporaryDirectory() as tmp:
+                persisted = SimpleNamespace(id=doc_id)
+                fallback_session = _Session(persisted)
+                sessions = [_Session(), _Session(persisted), fallback_session]
+                svc = module.UploadIntakeService(
+                    upload_execution_service=MagicMock(),
+                    session_factory=lambda: sessions.pop(0),
+                    storage_path_provider=lambda: Path(tmp),
+                    upload_handler_factory=lambda sp: _Handler(sp),
+                    principal_from_claims_fn=lambda _c: SimpleNamespace(subject="user-1"),
+                    provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+                    create_document_fn=AsyncMock(return_value={"success": True}),
+                    get_document_fn=AsyncMock(return_value=None),
+                    delete_document_fn=weaviate_docs.delete_document,
+                    create_job_fn=lambda **_kw: (_ for _ in ()).throw(RuntimeError("job row failed")),
+                    tenant_name_resolver=lambda _s: "tenant-1",
+                )
+                try:
+                    await svc.intake_upload(
+                        background_tasks=BackgroundTasks(),
+                        file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+                        user={"sub": "user-1"},
+                    )
+                except RuntimeError as exc:
+                    assert "job row failed" in str(exc)
+                else:
+                    raise AssertionError("expected RuntimeError")
+                assert fallback_session.deleted == [], "must not attempt SQL delete a second time"
+
+        asyncio.run(_exercise())
+
+        assert sql_delete_calls == 1, f"expected 1 SQL delete attempt, got {sql_delete_calls}"
+        assert len(events) == 1, f"expected 1 Sentry event, got {len(events)}: {events!r}"
+        event = events[0]
+        assert "request" not in event, f"request leaked: {event.get('request')!r}"
+        assert doc_id not in repr(event), f"raw doc_id leaked: {event!r}"
+        assert secret_detail not in repr(event), f"secret leaked: {event!r}"
+        assert event["contexts"]["runtime_exception"] == {
+            "component": "weaviate_client",
+            "operation": "paper_delete_sql_cleanup_failed",
+            "document_id_hash": hash_sentry_identifier(doc_id),
+            "exception_type": "RuntimeError",
+        }
+    """)
+    result = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.asyncio
+async def test_committed_compensation_cancel_before_file_removal_submission_aborts_cleanly(
+    tmp_path, monkeypatch,
+):
+    """Cancellation arriving after create_task schedules compensation but before file-worker submission deletes nothing."""
+    import asyncio
+    from contextlib import asynccontextmanager
+
+    doc_id = str(uuid4())
+    staged_dir = tmp_path / "user-1" / doc_id
+    staged_dir.mkdir(parents=True)
+    staged_pdf = staged_dir / "paper.pdf"
+    staged_pdf.write_bytes(b"%PDF-1.7\n")
+
+    lock_events: list[str] = []
+    file_removal_calls = 0
+    delete_doc_mock = AsyncMock()
+    sql_delete_calls = 0
+
+    @asynccontextmanager
+    async def _lock(_doc_id):
+        lock_events.append("acquired")
+        try:
+            yield object()
+        finally:
+            lock_events.append("released")
+
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: _FakeSession(),
+        storage_path_provider=lambda: tmp_path,
+        delete_document_fn=delete_doc_mock,
+        paper_operation_lock_fn=_lock,
+        get_active_job_fn=lambda **_kw: None,
+    )
+
+    def _unexpected_file_removal(**_kw):
+        nonlocal file_removal_calls
+        file_removal_calls += 1
+        return True
+
+    def _unexpected_sql_delete(**_kw):
+        nonlocal sql_delete_calls
+        sql_delete_calls += 1
+
+    monkeypatch.setattr(service, "_remove_committed_paper_files", _unexpected_file_removal)
+    monkeypatch.setattr(service, "_delete_committed_sql_row", _unexpected_sql_delete)
+
+    task_holder: list[asyncio.Task] = []
+    real_create_task = asyncio.create_task
+    cancelled_at_guarded = False
+
+    def _cancel_on_guarded_schedule(coro, *args, **kwargs):
+        nonlocal cancelled_at_guarded
+        created = real_create_task(coro, *args, **kwargs)
+        if getattr(coro, "__name__", None) == "_guarded" and not cancelled_at_guarded and task_holder:
+            cancelled_at_guarded = True
+            task_holder[0].cancel("cancelled before file-worker submission")
+        return created
+
+    monkeypatch.setattr("src.lib.document_cleanup.asyncio.create_task", _cancel_on_guarded_schedule)
+
+    comp_task = real_create_task(
+        service._compensate_job_creation_failure(
+            user_sub="user-1",
+            document_id=doc_id,
+            saved_path=staged_pdf,
+            weaviate_document_created=True,
+        )
+    )
+    task_holder.append(comp_task)
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(comp_task, timeout=5)
+
+    assert cancelled_at_guarded is True
+    assert file_removal_calls == 0
+    assert delete_doc_mock.await_count == 0
+    assert sql_delete_calls == 0
+    assert staged_pdf.exists()
+    assert lock_events == ["acquired", "released"]
+
+
+def test_staged_cleanup_refuses_symlinked_owner_directory_pointing_outside_storage(tmp_path):
+    """A symlinked owner directory escaping base_storage must never be traversed or removed."""
+    from src.lib.document_files.storage_paths import StoredPathOutsideOwnerStorage, owner_storage_path
+
+    base_storage = tmp_path / "storage"
+    base_storage.mkdir()
+    outside_target = tmp_path / "outside"
+    doc_id = str(uuid4())
+    outside_doc_dir = outside_target / doc_id
+    outside_doc_dir.mkdir(parents=True)
+    outside_pdf = outside_doc_dir / "paper.pdf"
+    outside_pdf.write_bytes(b"%PDF-1.7\n")
+    outside_keep = outside_doc_dir / "keep.txt"
+    outside_keep.write_text("do not delete")
+
+    owner_link = base_storage / "user-1"
+    owner_link.symlink_to(outside_target, target_is_directory=True)
+    staged_via_link = owner_link / doc_id / "paper.pdf"
+
+    with pytest.raises(StoredPathOutsideOwnerStorage):
+        owner_storage_path(staged_via_link, base_storage, "user-1")
+
+    removed = UploadIntakeService._cleanup_saved_file_artifacts(
+        staged_via_link,
+        base_storage=base_storage,
+        user_sub="user-1",
+        document_id=doc_id,
+    )
+
+    assert removed is False
+    assert outside_pdf.exists()
+    assert outside_keep.exists()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_upload_staged_cleanup_failure_reports_sanitized_sentry_event(
+    tmp_path, monkeypatch,
+):
+    """Duplicate-paper staged cleanup failure reports once via sanitized Sentry reporter while raising duplicate."""
+    from datetime import datetime, timezone
+    from src.lib.observability.sentry import hash_sentry_identifier
+    from src.lib.pdf_jobs import upload_intake_service as module
+
+    doc_id = str(uuid4())
+    existing_doc = SimpleNamespace(
+        id=uuid4(),
+        filename="existing.pdf",
+        status="completed",
+        upload_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    report_mock = Mock(return_value=True)
+    monkeypatch.setattr("src.lib.document_cleanup.runtime.report_runtime_exception", report_mock)
+    monkeypatch.setattr(module.UploadIntakeService, "_cleanup_saved_file_artifacts", classmethod(lambda cls, *_a, **_kw: False))
+
+    class _FixedIdHandler:
+        def __init__(self, storage_path: Path):
+            self.storage_path = storage_path
+
+        async def save_uploaded_pdf(self, file):
+            doc_dir = self.storage_path / doc_id
+            doc_dir.mkdir(parents=True, exist_ok=True)
+            path = doc_dir / file.filename
+            path.write_bytes(b"%PDF-1.7")
+            return path, SimpleNamespace(
+                id=doc_id,
+                filename=file.filename,
+                metadata=SimpleNamespace(checksum="dup-chk-1", page_count=1),
+            )
+
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: _FakeSession(execute_row=existing_doc),
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda sp: _FixedIdHandler(sp),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        get_document_fn=AsyncMock(return_value={"document": {"id": str(existing_doc.id)}}),
+    )
+
+    with pytest.raises(UploadIntakeDuplicateError):
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
+    report_mock.assert_called_once()
+    assert report_mock.call_args.kwargs == {
+        "component": "pdf_jobs",
+        "operation": "intake_compensation_file_cleanup_failed",
+        "context": {
+            "document_id_hash": hash_sentry_identifier(doc_id),
+            "sql_committed": False,
+            "weaviate_retained": False,
+        },
+        "fingerprint": ["intake_compensation_file_cleanup_failed", "pdf_jobs", "pre_commit"],
+        "include_request": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_provider_duplicate_staged_cleanup_failure_reports_sanitized_sentry_event(
+    tmp_path, monkeypatch,
+):
+    """Provider-matched duplicate staged cleanup failure reports once while preserving UploadIntakeDuplicateError."""
+    from datetime import datetime, timezone
+    from src.lib.observability.sentry import hash_sentry_identifier
+    from src.lib.pdf_jobs import upload_intake_service as module
+
+    doc_id = str(uuid4())
+    existing_doc = SimpleNamespace(
+        id=uuid4(),
+        filename="existing.pdf",
+        upload_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    report_mock = Mock(return_value=True)
+    monkeypatch.setattr("src.lib.document_cleanup.runtime.report_runtime_exception", report_mock)
+    monkeypatch.setattr(
+        module.UploadIntakeService,
+        "_cleanup_saved_file_artifacts",
+        classmethod(lambda cls, *_a, **_kw: False),
+    )
+
+    source_artifact = SourceArtifact(
+        provider="abc_literature",
+        artifact_id="src-1",
+        role=SourceArtifactRole.SOURCE_PDF,
+        artifact_format=SourceArtifactFormat.PDF,
+        status=SourceArtifactStatus.AVAILABLE,
+        reference_id="101000001296197",
+        reference_curie="AGRKB:101000001296197",
+        display_name="paper.pdf",
+        md5sum="d41d8cd98f00b204e9800998ecf8427e",
+        access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+    )
+    converted_artifact = SourceArtifact(
+        provider="abc_literature",
+        artifact_id="conv-1",
+        role=SourceArtifactRole.CONVERTED_TEXT,
+        artifact_format=SourceArtifactFormat.MARKDOWN,
+        status=SourceArtifactStatus.AVAILABLE,
+        reference_id="101000001296197",
+        reference_curie="AGRKB:101000001296197",
+        display_name="paper.md",
+        access_policy=SourceAccessPolicy(scope=SourceAccessScope.GLOBAL),
+    )
+    candidate = ChecksumImportCandidate(
+        source_artifact=source_artifact,
+        converted_artifact=converted_artifact,
+    )
+    decision = ChecksumImportDecision(
+        provider="abc_literature",
+        checksum="d41d8cd98f00b204e9800998ecf8427e",
+        status=ChecksumImportDecisionStatus.READY,
+        selected=candidate,
+        candidates=(candidate,),
+        source_artifacts=(source_artifact,),
+    )
+
+    service = UploadIntakeService(
+        upload_execution_service=_DispatchRecorder(),
+        session_factory=lambda: _FakeSession(),
+        storage_path_provider=lambda: tmp_path,
+        document_source_import_enabled_fn=lambda: True,
+        document_source_provider_factory=lambda: _FakeDocumentSourceProvider(),
+        checksum_import_selector=AsyncMock(return_value=decision),
+        find_existing_source_document_fn=lambda *_a, **_kw: existing_doc,
+    )
+
+    staged_pdf = tmp_path / "user-1" / doc_id / "paper.pdf"
+    staged_pdf.parent.mkdir(parents=True, exist_ok=True)
+    staged_pdf.write_bytes(b"%PDF-1.7\n")
+
+    with pytest.raises(UploadIntakeDuplicateError):
+        await service._select_provider_checksum_import_or_raise(
+            checksum="d41d8cd98f00b204e9800998ecf8427e",
+            document_source_context=DocumentSourceRequestContext(
+                bearer_kind=ProviderBearerKind.CURATOR,
+                provider_groups=("FBStaff",),
+                authorized_group_ids=("FB",),
+                curator_token="curator-token",
+            ),
+            saved_path=staged_pdf,
+            session=_FakeSession(),
+            owner_user_id=42,
+            base_storage=tmp_path,
+            user_sub="user-1",
+            document_id=doc_id,
+        )
+
+    report_mock.assert_called_once()
+    assert report_mock.call_args.kwargs == {
+        "component": "pdf_jobs",
+        "operation": "intake_compensation_file_cleanup_failed",
+        "context": {
+            "document_id_hash": hash_sentry_identifier(doc_id),
+            "sql_committed": False,
+            "weaviate_retained": False,
+        },
+        "fingerprint": ["intake_compensation_file_cleanup_failed", "pdf_jobs", "pre_commit"],
+        "include_request": False,
+    }

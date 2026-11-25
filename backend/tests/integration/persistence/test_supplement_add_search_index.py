@@ -759,10 +759,13 @@ def _wire_delete(monkeypatch, owner_id, *, in_wipe=None, wipe_seconds: float = 0
     async def provision(_principal):
         return type("User", (), {"id": owner_id})()
 
-    async def present(_sub, _document_id):
+    async def present(_sub, _document_id, **_kwargs):
         return {"document": {"processingStatus": "completed"}}
 
     async def wipe(user_sub, document_id):
+        from src.lib.document_cleanup import mark_destructive_delete_started
+
+        mark_destructive_delete_started()
         if in_wipe is not None:
             in_wipe.set()
         await asyncio.sleep(wipe_seconds)
@@ -896,18 +899,159 @@ async def test_the_lock_is_released_when_the_delete_fails(owner_id, index, monke
 
 @pytest.mark.asyncio
 async def test_the_lock_is_released_when_the_delete_request_is_cancelled(owner_id, index, monkeypatch):
+    """Cancelling before the first destructive write cancels promptly and releases the lock."""
     paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
-    in_wipe = asyncio.Event()
-    _wire_delete(monkeypatch, owner_id, in_wipe=in_wipe, wipe_seconds=5.0)
-    request = asyncio.ensure_future(_delete(paper))
-    await in_wipe.wait()
-    request.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await request
-    await asyncio.sleep(0.5)  # the release runs in its thread
+    _wire_delete(monkeypatch, owner_id)
+    in_read = asyncio.Event()
+    wipe_started = False
 
+    async def slow_get_document(_sub, _document_id, **_kwargs):
+        in_read.set()
+        await asyncio.sleep(5.0)
+        return {"document": {"processingStatus": "completed"}}
+
+    async def unexpected_wipe(*_args, **_kwargs):
+        nonlocal wipe_started
+        wipe_started = True
+        return {"success": True, "chunks_deleted": 0}
+
+    monkeypatch.setattr(documents_api, "get_document", slow_get_document)
+    monkeypatch.setattr(documents_api, "delete_paper_chunks", unexpected_wipe)
+
+    request = asyncio.create_task(_delete(paper))
+    await asyncio.wait_for(in_read.wait(), timeout=5)
+    request.cancel("cancelled before destructive write")
+    with pytest.raises(asyncio.CancelledError, match="cancelled before destructive write"):
+        await asyncio.wait_for(request, timeout=2)
+
+    assert wipe_started is False
+    assert _indexes(index, str(paper)) == [0, 1, 2]
     job = await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20)])
     assert job.status == PdfJobStatus.PENDING.value
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_delete_during_chunk_wipe_keeps_the_lock_and_finishes_cleanup(
+    owner_id, index, monkeypatch, tmp_path,
+):
+    """Once the chunk wipe starts, cancellation drains under the paper lock before releasing it."""
+    from src.lib.document_files.paper_lock import try_lock_paper_for_add
+    from src.lib.weaviate_client import documents as weaviate_docs
+
+    paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    stored_pdf = tmp_path / TEST_USER_ID / str(paper) / "made-up.pdf"
+    stored_pdf.parent.mkdir(parents=True, exist_ok=True)
+    stored_pdf.write_bytes(b"%PDF-1.4 made-up")
+
+    async def provision(_principal):
+        return type("User", (), {"id": owner_id})()
+
+    monkeypatch.setattr(documents_api, "provision_user_async", provision)
+
+    wipe_entered = threading.Event()
+    allow_wipe_finish = threading.Event()
+    real_get_user_collections = weaviate_docs.get_user_collections
+    real_remove_empty = documents_api._remove_empty_paper_folders
+    real_delete_parent = documents_api.delete_paper_object
+    real_cleanup_deps = documents_api.cleanup_document_curation_dependencies
+    stages: list[tuple[str, bool]] = []
+
+    def _lock_is_held() -> bool:
+        with SessionLocal() as check_session:
+            acquired = try_lock_paper_for_add(check_session, paper)
+            check_session.rollback()
+            return not acquired
+
+    class _GatedData:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def delete_many(self, *args, **kwargs):
+            wipe_entered.set()
+            assert allow_wipe_finish.wait(timeout=10), "chunk wipe barrier timed out"
+            stages.append(("chunk_wipe", _lock_is_held()))
+            return self._inner.delete_many(*args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    class _GatedCollection:
+        def __init__(self, inner):
+            self._inner = inner
+            self.data = _GatedData(inner.data)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    def gated_collections(client, user_id):
+        chunk_collection, pdf_collection = real_get_user_collections(client, user_id)
+        return _GatedCollection(chunk_collection), pdf_collection
+
+    def observed_remove_empty(base_storage, user_sub, document_id):
+        stages.append(("file_cleanup", _lock_is_held()))
+        return real_remove_empty(base_storage, user_sub, document_id)
+
+    async def observed_delete_parent(user_sub, document_id, *, allow_missing=False):
+        stages.append(("parent_delete", await asyncio.to_thread(_lock_is_held)))
+        return await real_delete_parent(user_sub, document_id, allow_missing=allow_missing)
+
+    def observed_cleanup_deps(session, document_id):
+        stages.append(("sql_delete", _lock_is_held()))
+        return real_cleanup_deps(session, document_id)
+
+    monkeypatch.setattr(weaviate_docs, "get_user_collections", gated_collections)
+    monkeypatch.setattr(documents_api, "_remove_empty_paper_folders", observed_remove_empty)
+    monkeypatch.setattr(documents_api, "delete_paper_object", observed_delete_parent)
+    monkeypatch.setattr(documents_api, "cleanup_document_curation_dependencies", observed_cleanup_deps)
+
+    delete_task = asyncio.create_task(_delete(paper))
+    try:
+        assert await asyncio.to_thread(wipe_entered.wait, 10), "delete never reached chunk wipe"
+
+        # Cancel twice while paused inside the real chunk wipe worker.
+        delete_task.cancel("client disconnected")
+        await asyncio.sleep(0.05)
+        delete_task.cancel("second cancellation during drain")
+        await asyncio.sleep(0.05)
+
+        assert not delete_task.done(), "cancelled delete released its lock before the chunk wipe finished"
+        assert await asyncio.to_thread(_lock_is_held), "paper lock was released while chunk wipe was still running"
+
+        # A competing supplement add during the cancelled wipe cannot acquire the lock early.
+        with pytest.raises(ActiveJobExistsError):
+            await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20)])
+        with SessionLocal() as db:
+            assert db.scalar(select(PdfProcessingJob.id).where(PdfProcessingJob.document_id == paper)) is None
+    finally:
+        allow_wipe_finish.set()
+
+    with pytest.raises(asyncio.CancelledError, match="client disconnected"):
+        await asyncio.wait_for(delete_task, timeout=15)
+
+    # The lock remained held through every destructive step until SQL deletion completed.
+    assert stages == [
+        ("chunk_wipe", True),
+        ("file_cleanup", True),
+        ("parent_delete", True),
+        ("sql_delete", True),
+    ]
+    assert not await asyncio.to_thread(_lock_is_held), "paper lock was not released after drain"
+
+    # Competing supplement add after drain fails cleanly (404) and writes no orphan state.
+    with pytest.raises(HTTPException) as add_after_delete:
+        await asyncio.to_thread(supplement_add.start_supplement_add, paper, owner_id, [_chosen(20)])
+    assert add_after_delete.value.status_code == 404
+
+    # Final paper state: SQL rows, stored files, Weaviate parent object, and search chunks are gone.
+    assert not stored_pdf.exists()
+    assert _indexes(index, str(paper)) == []
+    with index.session() as client:
+        papers = client.collections.get("PDFDocument").with_tenant(TEST_TENANT_NAME)
+        assert not papers.data.exists(paper)
+    with SessionLocal() as db:
+        assert db.get(PDFDocument, paper) is None
+        assert db.query(PDFDocumentFile).filter_by(document_id=paper).count() == 0
+        assert db.scalar(select(PdfProcessingJob.id).where(PdfProcessingJob.document_id == paper)) is None
 
 
 # --- a paper's status is never taken from an add -----------------------------------------------
@@ -1209,7 +1353,7 @@ async def test_a_pool_timeout_while_reading_the_papers_index_object_is_the_delet
     paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
     _wire_delete(monkeypatch, owner_id)
 
-    async def no_connection(_sub, _document_id):
+    async def no_connection(_sub, _document_id, **_kwargs):
         raise PoolTimeoutError("made-up: QueuePool limit reached")
 
     monkeypatch.setattr(documents_api, "get_document", no_connection)
@@ -1221,3 +1365,277 @@ async def test_a_pool_timeout_while_reading_the_papers_index_object_is_the_delet
 
     _wire_delete(monkeypatch, owner_id)  # the lock was released: the next delete goes ahead
     assert (await _delete(paper)).success is True
+
+
+@pytest.mark.asyncio
+async def test_competing_supplement_add_and_committed_upload_compensation_never_interleave(
+    owner_id, index, tmp_path,
+):
+    """Committed-paper compensation holds paper_operation_lock and checks active jobs on real Postgres."""
+    from unittest.mock import MagicMock
+    from src.lib.pdf_jobs.upload_intake_service import UploadIntakeService
+    from src.lib.weaviate_client import documents as weaviate_docs
+
+    # Case 1: Compensation acquires paper_operation_lock first; a competing supplement add
+    # during its chunk wipe is refused immediately with ActiveJobExistsError.
+    paper_a = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    staged_a_dir = tmp_path / TEST_USER_ID / str(paper_a)
+    staged_a_dir.mkdir(parents=True)
+    staged_a = staged_a_dir / "paper_a.pdf"
+    staged_a.write_bytes(b"%PDF-1.7\n")
+
+    wipe_entered = asyncio.Event()
+    resume_wipe = asyncio.Event()
+
+    async def _pausing_delete_document(user_sub: str, document_id: str, *, connection=None):
+        wipe_entered.set()
+        await resume_wipe.wait()
+        return await weaviate_docs.delete_document(user_sub, document_id, connection=connection)
+
+    service_a = UploadIntakeService(
+        upload_execution_service=MagicMock(),
+        storage_path_provider=lambda: tmp_path,
+        delete_document_fn=_pausing_delete_document,
+    )
+
+    comp_task = asyncio.create_task(
+        service_a._compensate_job_creation_failure(
+            user_sub=TEST_USER_ID,
+            document_id=str(paper_a),
+            saved_path=staged_a,
+            weaviate_document_created=True,
+        )
+    )
+    try:
+        await asyncio.wait_for(wipe_entered.wait(), timeout=5)
+        with pytest.raises(ActiveJobExistsError):
+            await asyncio.to_thread(
+                supplement_add.start_supplement_add, paper_a, owner_id, [_chosen(20)],
+            )
+    finally:
+        resume_wipe.set()
+
+    await asyncio.wait_for(comp_task, timeout=10)
+    assert not staged_a.exists()
+    assert _rows(paper_a) == [] and _indexes(index, str(paper_a)) == []
+
+    # Case 2: A competing supplement add already committed its active job before
+    # compensation acquires paper_operation_lock; compensation must leave the paper intact.
+    paper_b = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+    staged_b_dir = tmp_path / TEST_USER_ID / str(paper_b)
+    staged_b_dir.mkdir(parents=True)
+    staged_b = staged_b_dir / "paper_b.pdf"
+    staged_b.write_bytes(b"%PDF-1.7\n")
+
+    add_job = await asyncio.to_thread(
+        supplement_add.start_supplement_add, paper_b, owner_id, [_chosen(20)],
+    )
+    service_b = UploadIntakeService(
+        upload_execution_service=MagicMock(),
+        storage_path_provider=lambda: tmp_path,
+        delete_document_fn=weaviate_docs.delete_document,
+    )
+    await service_b._compensate_job_creation_failure(
+        user_sub=TEST_USER_ID,
+        document_id=str(paper_b),
+        saved_path=staged_b,
+        weaviate_document_created=True,
+    )
+
+    assert staged_b.exists()
+    assert [row.role for row in _rows(paper_b)] == ["main"]
+    assert _indexes(index, str(paper_b)) == [0, 1, 2]
+    with SessionLocal() as db:
+        job_row = db.get(PdfProcessingJob, UUID(add_job.job_id))
+        assert job_row is not None and job_row.status == PdfJobStatus.PENDING.value
+
+
+@pytest.mark.asyncio
+async def test_committed_compensation_and_undispatched_job_fail_work_under_one_connection_pool(
+    owner_id, index, tmp_path, monkeypatch,
+):
+    """Upload and identifier-import compensation reuse the advisory-lock connection cleanly under a 1-slot pool."""
+    from unittest.mock import MagicMock
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from src.lib.document_sources.identifier_import import IdentifierImportService
+    from src.lib.pdf_jobs import service as pdf_job_service
+    from src.lib.pdf_jobs.upload_intake_service import UploadIntakeService
+    from src.lib.weaviate_client import documents as weaviate_docs
+    from src.models.sql import database
+
+    one_conn_engine = create_engine(database.engine.url, pool_size=1, max_overflow=0, pool_timeout=1)
+    one_conn_session_local = sessionmaker(
+        bind=one_conn_engine, autocommit=False, autoflush=False, expire_on_commit=False,
+    )
+    monkeypatch.setattr(database, "engine", one_conn_engine)
+    monkeypatch.setattr(database, "SessionLocal", one_conn_session_local)
+    monkeypatch.setattr(pdf_job_service, "SessionLocal", one_conn_session_local)
+
+    def _one_conn_get_db():
+        db = one_conn_session_local()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    monkeypatch.setattr(weaviate_docs, "get_db", _one_conn_get_db)
+
+    try:
+        # 1. Committed upload compensation with a concurrently renamed live SQL file path.
+        paper_u = await asyncio.to_thread(_paper, owner_id, index, main_end=1)
+        renamed_rel = f"{TEST_USER_ID}/renamed_pool1/{paper_u}.pdf"
+        renamed_path = tmp_path / renamed_rel
+        renamed_path.parent.mkdir(parents=True, exist_ok=True)
+        renamed_path.write_bytes(b"%PDF-1.7 renamed\n")
+        stale_staged = tmp_path / TEST_USER_ID / str(paper_u) / "stale_original.pdf"
+        with one_conn_session_local.begin() as db:
+            doc_row = db.get(PDFDocument, paper_u)
+            assert doc_row is not None
+            doc_row.files[0].file_path = renamed_rel
+
+        upload_service = UploadIntakeService(
+            upload_execution_service=MagicMock(),
+            session_factory=one_conn_session_local,
+            storage_path_provider=lambda: tmp_path,
+            delete_document_fn=weaviate_docs.delete_document,
+        )
+        await upload_service._compensate_job_creation_failure(
+            user_sub=TEST_USER_ID,
+            document_id=str(paper_u),
+            saved_path=stale_staged,
+            weaviate_document_created=True,
+        )
+        assert not renamed_path.exists()
+        assert _rows(paper_u) == [] and _indexes(index, str(paper_u)) == []
+
+        # 2. Committed identifier-import compensation with an undispatched pending job
+        #    completes end-to-end under the 1-connection pool without self-starving.
+        paper_i = await asyncio.to_thread(_paper, owner_id, index, main_end=1)
+        import_rel = f"{TEST_USER_ID}/{paper_i}/import.pdf"
+        import_path = tmp_path / import_rel
+        import_path.parent.mkdir(parents=True, exist_ok=True)
+        import_path.write_bytes(b"%PDF-1.7 import\n")
+        with one_conn_session_local.begin() as db:
+            doc_row = db.get(PDFDocument, paper_i)
+            assert doc_row is not None
+            doc_row.files[0].file_path = import_rel
+        undispatched_job = pdf_job_service.create_job(
+            document_id=paper_i,
+            user_id=owner_id,
+            filename="import.pdf",
+        )
+
+        import_service = IdentifierImportService(
+            upload_execution_service=MagicMock(),
+            session_factory=one_conn_session_local,
+            storage_path_provider=lambda: tmp_path,
+            delete_document_fn=weaviate_docs.delete_document,
+        )
+        await import_service._compensate_partial_import(
+            user_sub=TEST_USER_ID,
+            document_id=str(paper_i),
+            saved_path=import_path,
+            weaviate_document_created=True,
+            sql_record_committed=True,
+            created_job_id=undispatched_job.job_id,
+        )
+        assert not import_path.exists()
+        assert _rows(paper_i) == [] and _indexes(index, str(paper_i)) == []
+    finally:
+        one_conn_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_http_delete_endpoint_succeeds_under_one_connection_pool(
+    owner_id, index, tmp_path, monkeypatch,
+):
+    """Uncontended HTTP delete_document_endpoint reuses lock_conn cleanly under pool_size=1, max_overflow=0."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from src.lib.pdf_jobs import service as pdf_job_service
+    from src.lib.weaviate_client import documents as weaviate_docs
+    from src.models.sql import database
+
+    one_conn_engine = create_engine(database.engine.url, pool_size=1, max_overflow=0, pool_timeout=1)
+    one_conn_session_local = sessionmaker(
+        bind=one_conn_engine, autocommit=False, autoflush=False, expire_on_commit=False,
+    )
+    monkeypatch.setattr(database, "engine", one_conn_engine)
+    monkeypatch.setattr(database, "SessionLocal", one_conn_session_local)
+    monkeypatch.setattr(documents_api, "SessionLocal", one_conn_session_local)
+    monkeypatch.setattr(pdf_job_service, "SessionLocal", one_conn_session_local)
+
+    def _one_conn_get_db():
+        db = one_conn_session_local()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    monkeypatch.setattr(weaviate_docs, "get_db", _one_conn_get_db)
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: tmp_path)
+    monkeypatch.setattr(documents_api, "get_pdf_storage_path", lambda: tmp_path)
+
+    async def _provision(_principal):
+        return type("User", (), {"id": owner_id})()
+
+    monkeypatch.setattr(documents_api, "provision_user_async", _provision)
+    # Exercise real weaviate_docs.get_document (SQL ownership check under lock_conn!),
+    # real pdf_job_service.get_latest_job_for_document & end_supplement_wait_for_delete,
+    # real snapshot_for_cleanup, real remove_paper_files, and real finish_delete.
+    monkeypatch.setattr(documents_api, "get_document", weaviate_docs.get_document)
+    monkeypatch.setattr(documents_api, "delete_paper_chunks", weaviate_docs.delete_paper_chunks)
+    monkeypatch.setattr(documents_api, "delete_paper_object", weaviate_docs.delete_paper_object)
+
+    try:
+        paper = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+        main_rel = f"{TEST_USER_ID}/{paper}/main.pdf"
+        main_file = tmp_path / main_rel
+        main_file.parent.mkdir(parents=True, exist_ok=True)
+        main_file.write_bytes(b"%PDF-1.7\n")
+        with one_conn_session_local.begin() as db:
+            doc_row = db.get(PDFDocument, paper)
+            assert doc_row is not None
+            doc_row.files[0].file_path = main_rel
+
+        # Add a waiting supplement stage so end_supplement_wait_for_delete also runs under lock_conn.
+        pdf_job_service.start_supplement_wait_job(
+            document_id=paper,
+            user_id=owner_id,
+            filename="main.pdf",
+        )
+
+        result = await documents_api.delete_document_endpoint(
+            document_id=str(paper),
+            user={"sub": TEST_USER_ID},
+        )
+        assert result.success is True
+        assert not main_file.exists()
+        assert _rows(paper) == [] and _indexes(index, str(paper)) == []
+
+        # An undashed 32-hex UUID HTTP input must normalize to canonical dashed UUID
+        # so Weaviate chunks stored under str(paper_uuid) are actually deleted too.
+        paper_undashed = await asyncio.to_thread(_paper, owner_id, index, main_end=2)
+        undashed_rel = f"{TEST_USER_ID}/{paper_undashed}/main.pdf"
+        undashed_file = tmp_path / undashed_rel
+        undashed_file.parent.mkdir(parents=True, exist_ok=True)
+        undashed_file.write_bytes(b"%PDF-1.7\n")
+        with one_conn_session_local.begin() as db:
+            doc_row = db.get(PDFDocument, paper_undashed)
+            assert doc_row is not None
+            doc_row.files[0].file_path = undashed_rel
+
+        assert _indexes(index, str(paper_undashed)) == [0, 1, 2]
+        undashed_result = await documents_api.delete_document_endpoint(
+            document_id=paper_undashed.hex,
+            user={"sub": TEST_USER_ID},
+        )
+        assert undashed_result.success is True
+        assert undashed_result.document_id == str(paper_undashed)
+        assert not undashed_file.exists()
+        assert _rows(paper_undashed) == [] and _indexes(index, str(paper_undashed)) == []
+    finally:
+        one_conn_engine.dispose()

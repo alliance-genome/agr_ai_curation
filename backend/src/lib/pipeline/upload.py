@@ -26,6 +26,17 @@ def pdf_page_count(source) -> int:
     return len(PdfReader(source).pages)
 
 
+def is_safe_pdf_filename(filename: Optional[str]) -> bool:
+    """Return True iff ``filename`` is a single safe PDF filename component without path traversal."""
+    if not filename or "\x00" in filename:
+        return False
+    if "/" in filename or "\\" in filename:
+        return False
+    if filename in {".", ".."} or Path(filename).name != filename:
+        return False
+    return filename.lower().endswith(".pdf")
+
+
 class UploadError(Exception):
     """Exception raised during file upload operations."""
     pass
@@ -72,16 +83,20 @@ class PDFUploadHandler:
             else:
                 original_filename = f"document_{document_id}.pdf"
 
-            # Validate file is PDF
-            if not original_filename.lower().endswith('.pdf'):
+            # Validate file is a single safe PDF filename component before touching disk
+            if not original_filename or not original_filename.lower().endswith('.pdf'):
                 raise UploadError(f"File must be a PDF, got: {original_filename}")
+            if not is_safe_pdf_filename(original_filename):
+                raise UploadError(f"File must be a safe PDF filename, got: {original_filename}")
 
             # Create document-specific directory
             doc_dir = self.storage_path / document_id
             ensure_writable_directory(doc_dir)
 
-            # Save file
+            # Save file strictly inside doc_dir
             saved_path = doc_dir / original_filename
+            if saved_path.parent.resolve() != doc_dir.resolve():
+                raise UploadError(f"Invalid PDF filename path: {original_filename}")
 
             if hasattr(file, 'read'):
                 # File-like object

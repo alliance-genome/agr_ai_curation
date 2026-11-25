@@ -31,7 +31,6 @@ Two phases (decided 23 Nov 2026, option A):
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -247,7 +246,13 @@ def removal_check(document_id: UUID, owner_user_id: int, file_id: UUID) -> dict[
     return answer
 
 
-def _mark_removed(document_id: UUID, owner_user_id: int, file_id: UUID) -> FileRemoved:
+def _mark_removed(
+    document_id: UUID,
+    owner_user_id: int,
+    file_id: UUID,
+    *,
+    lock_connection: Any = None,
+) -> FileRemoved:
     """Phase 1: every check, then status ``removed``, in one transaction (worker thread).
 
     A file already ``removed`` (an earlier removal whose clean-up failed) passes
@@ -255,6 +260,7 @@ def _mark_removed(document_id: UUID, owner_user_id: int, file_id: UUID) -> FileR
     have come to quote it since (evidence names only ready files).
     """
 
+    from src.lib.document_files.paper_lock import open_paper_lock_session
     from src.lib.pdf_jobs import service as pdf_job_service
     from src.models.sql.database import SessionLocal
     from src.models.sql.user import User
@@ -263,9 +269,14 @@ def _mark_removed(document_id: UUID, owner_user_id: int, file_id: UUID) -> FileR
     # A stale job is reconciled first, as the paper delete does, so a dead add does
     # not block a removal for ever.
     pdf_job_service.get_latest_job_for_document(
-        document_id=document_id, user_id=owner_user_id, reconcile_stale=True,
+        document_id=document_id,
+        user_id=owner_user_id,
+        reconcile_stale=True,
+        connection=lock_connection,
     )
-    with SessionLocal() as session, session.begin():
+    bound_session = open_paper_lock_session(lock_connection)
+    session = bound_session if bound_session is not None else SessionLocal()
+    with session, session.begin():
         require_owned_document(session, document_id, owner_user_id)
         # NOWAIT: a removal never waits for a row lock. A preparation or an anchor write
         # holding the file row FOR SHARE, or anything holding the paper row, makes it
@@ -306,25 +317,44 @@ def _mark_removed(document_id: UUID, owner_user_id: int, file_id: UUID) -> FileR
         )
 
 
-def _mark_removed_or_busy(document_id: UUID, owner_user_id: int, file_id: UUID) -> FileRemoved:
+def _mark_removed_or_busy(
+    document_id: UUID,
+    owner_user_id: int,
+    file_id: UUID,
+    *,
+    lock_connection: Any = None,
+) -> FileRemoved:
     """``_mark_removed``; a row lock held elsewhere is ``PaperRowsBusy`` (NOWAIT)."""
 
     from sqlalchemy.exc import OperationalError
 
     try:
-        return _mark_removed(document_id, owner_user_id, file_id)
+        return _mark_removed(
+            document_id,
+            owner_user_id,
+            file_id,
+            lock_connection=lock_connection,
+        )
     except OperationalError as exc:
         if getattr(exc.orig, "pgcode", None) == "55P03":  # lock_not_available (NOWAIT)
             raise PaperRowsBusy(str(document_id)) from None
         raise
 
 
-def _delete_removed_row(document_id: UUID, file_id: UUID) -> None:
+def _delete_removed_row(
+    document_id: UUID,
+    file_id: UUID,
+    *,
+    lock_connection: Any = None,
+) -> None:
     """Phase 2's last step: the ``removed`` row goes once everything it named is cleared."""
 
+    from src.lib.document_files.paper_lock import open_paper_lock_session
     from src.models.sql.database import SessionLocal
 
-    with SessionLocal() as session, session.begin():
+    bound_session = open_paper_lock_session(lock_connection)
+    session = bound_session if bound_session is not None else SessionLocal()
+    with session, session.begin():
         file_row = session.execute(
             select(PDFDocumentFile).where(PDFDocumentFile.id == file_id)
             .with_for_update(nowait=True).execution_options(populate_existing=True)
@@ -335,72 +365,83 @@ def _delete_removed_row(document_id: UUID, file_id: UUID) -> None:
 
 
 async def remove_paper_file(
-    document_id: UUID, owner_user_id: int, file_id: UUID, *, weaviate_client: Any,
+    document_id: UUID,
+    owner_user_id: int,
+    file_id: UUID,
+    *,
+    weaviate_client: Any,
+    lock_connection: Any = None,
 ) -> FileRemoved:
     """Remove the file; the caller holds the paper's operation lock. Raises ``FileRemovalRefused``."""
 
     from src.lib.document_cache import invalidate_cache
+    from src.lib.document_cleanup import run_thread_drained
     from src.lib.document_files.service import remove_stored_files
     from src.lib.pipeline.store import update_document_piece_count
     from src.lib.weaviate_client.chunks import delete_chunk_range
 
-    removed = await asyncio.to_thread(_mark_removed_or_busy, document_id, owner_user_id, file_id)
-    # From here a cancelled request stops the clean-up part way: the row stays ``removed``
-    # with its range and paths, and a retry or the paper delete finishes it.
+    removed = await run_thread_drained(
+        _mark_removed_or_busy,
+        document_id,
+        owner_user_id,
+        file_id,
+        lock_connection=lock_connection,
+        cancellable_before_start=True,
+    )
+    # From here a cancelled request stops the clean-up part way between phases (the row stays
+    # ``removed`` with its range and paths, and a retry or the paper delete finishes it), while
+    # any already-submitted mutation drains before ``paper_operation_lock`` releases ``lock_connection``.
     subject = removed.owner_subject
     if removed.chunk_range is not None:
         start, end = removed.chunk_range
         try:
-            await asyncio.to_thread(
+            await run_thread_drained(
                 delete_chunk_range,
                 str(document_id),
                 subject,
                 start=start,
                 end=end,
                 caller_reports_failure=True,
+                cancellable_before_start=True,
+                on_cancelled_error=lambda exc: _report_cleanup_failure(exc, document_id, "pieces"),
             )
         except Exception as exc:
             removed.cleanup_failures.append("pieces")
             _report_cleanup_failure(exc, document_id, "pieces")
     try:
-        await asyncio.to_thread(remove_stored_files, removed.stored_paths, owner_subject=subject)
+        await run_thread_drained(
+            remove_stored_files,
+            removed.stored_paths,
+            owner_subject=subject,
+            cancellable_before_start=True,
+            on_cancelled_error=lambda exc: _report_cleanup_failure(exc, document_id, "stored_files"),
+        )
     except Exception as exc:
         removed.cleanup_failures.append("stored_files")
         _report_cleanup_failure(exc, document_id, "stored_files")
-    # Drain any in-flight Weaviate piece-count write before unwinding out of
-    # ``paper_operation_lock`` so a cancelled removal cannot finish writing an
-    # older count after a subsequent add publishes a newer one.
-    count_task = asyncio.create_task(
-        update_document_piece_count(
+    try:
+        await update_document_piece_count(
             str(document_id),
             removed.ready_piece_total,
             weaviate_client,
             subject,
             caller_reports_failure=True,
+            on_cancelled_error=lambda exc: _report_cleanup_failure(exc, document_id, "piece_count"),
         )
-    )
-    try:
-        await asyncio.shield(count_task)
-    except asyncio.CancelledError:
-        while not count_task.done():
-            try:
-                await asyncio.shield(count_task)
-            except asyncio.CancelledError:
-                continue
-            except Exception:
-                break
-        if not count_task.cancelled():
-            count_exc = count_task.exception()
-            if isinstance(count_exc, Exception):
-                _report_cleanup_failure(count_exc, document_id, "piece_count")
-        raise
     except Exception as exc:
         removed.cleanup_failures.append("piece_count")
         _report_cleanup_failure(exc, document_id, "piece_count")
     if removed.cleanup_finished:
         # Only now: until here the row is how a retry or the paper delete finds the leftovers.
         try:
-            await asyncio.to_thread(_delete_removed_row, document_id, file_id)
+            await run_thread_drained(
+                _delete_removed_row,
+                document_id,
+                file_id,
+                lock_connection=lock_connection,
+                cancellable_before_start=True,
+                on_cancelled_error=lambda exc: _report_cleanup_failure(exc, document_id, "file_row"),
+            )
         except Exception as exc:
             removed.cleanup_failures.append("file_row")
             _report_cleanup_failure(exc, document_id, "file_row")

@@ -9,7 +9,10 @@ numbers are never reused.
 
 from __future__ import annotations
 
+import logging
+import shutil
 from collections.abc import Callable, Iterable, Mapping
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -17,7 +20,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.models.sql.pdf_document import (
+    DISPLAY_MODE_TEXT,
     FILE_ROLE_MAIN,
+    FILE_ROLE_SUPPLEMENT,
     FILE_STATUS_FAILED,
     FILE_STATUS_PENDING,
     FILE_STATUS_READY,
@@ -25,6 +30,8 @@ from src.models.sql.pdf_document import (
     PDFDocument,
     PDFDocumentFile,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentFileError(RuntimeError):
@@ -249,7 +256,12 @@ class StoredFilesNotRemoved(RuntimeError):
     """Some stored files could not be deleted; every other path was still tried."""
 
 
-def remove_stored_files(paths: Iterable[str], *, owner_subject: str) -> None:
+def remove_stored_files(
+    paths: Iterable[str],
+    *,
+    owner_subject: str,
+    storage_root: Path | None = None,
+) -> None:
     """Delete stored files, one file at a time; the one helper for removals, adds and paper deletes.
 
     Every path (relative to the storage root) must have its folder inside the owner's
@@ -260,12 +272,10 @@ def remove_stored_files(paths: Iterable[str], *, owner_subject: str) -> None:
     reports the failures after every path was tried, so a retry has the same work left.
     """
 
-    from pathlib import Path
-
     from src.config import get_pdf_storage_path
     from src.lib.document_files.storage_paths import owner_storage_entry
 
-    root = Path(get_pdf_storage_path())
+    root = Path(get_pdf_storage_path()) if storage_root is None else storage_root
     # The folder is resolved and checked; the name is not followed, so a link is deleted
     # as a link and its target is never touched.
     targets = [owner_storage_entry(root / relative, root, owner_subject) for relative in dict.fromkeys(paths)]
@@ -279,6 +289,212 @@ def remove_stored_files(paths: Iterable[str], *, owner_subject: str) -> None:
             failures.append(type(exc).__name__)
     if failures:
         raise StoredFilesNotRemoved(f"{len(failures)} of {len(targets)} stored files not removed ({', '.join(failures)})")
+
+
+def paper_cleanup_snapshot(document: PDFDocument) -> dict[str, Any]:
+    """Snapshot every stored artifact path of a paper before deleting its rows."""
+    return {
+        "id": document.id,
+        "files": [
+            {
+                "role": file_row.role,
+                "display_mode": file_row.display_mode,
+                "file_path": file_row.file_path,
+                "pdfx_json_path": file_row.pdfx_json_path,
+                "processed_json_path": file_row.processed_json_path,
+                "source_markdown_path": file_row.source_markdown_path,
+            }
+            for file_row in document.files
+        ],
+    }
+
+
+def removed_stored_paths(file_values: Mapping[str, Any]) -> tuple[str, ...]:
+    """The stored paths a paper delete removes for one file row."""
+    keys = ("pdfx_json_path", "processed_json_path", "source_markdown_path") + (
+        () if file_values["display_mode"] == DISPLAY_MODE_TEXT else ("file_path",)
+    )
+    return tuple(file_values[key] for key in keys if file_values[key])
+
+
+def require_removable_paper_paths(
+    cleanup_values: Mapping[str, Any],
+    base_storage: Path,
+    user_sub: str,
+) -> None:
+    """Raise ``StoredPathOutsideOwnerStorage`` if owner storage or any stored path escapes storage or names a directory."""
+    from src.lib.document_files.storage_paths import (
+        StoredPathOutsideOwnerStorage,
+        owner_storage_entry,
+        owner_storage_path,
+    )
+
+    owner_storage_path(base_storage / user_sub, base_storage, user_sub)
+    for file_values in cleanup_values["files"]:
+        for relative in removed_stored_paths(file_values):
+            path = owner_storage_entry(base_storage / relative, base_storage, user_sub)
+            if path.is_dir() and not path.is_symlink():
+                raise StoredPathOutsideOwnerStorage("A stored path names a folder, not a file")
+
+
+def remove_paper_stored_files(
+    cleanup_values: Mapping[str, Any],
+    *,
+    base_storage: Path,
+    user_sub: str,
+    document_id: str,
+) -> None:
+    """Validate and delete all stored files belonging to one paper without ignoring unlink errors."""
+    from src.lib.document_files.storage_paths import owner_storage_entry, owner_storage_path
+
+    require_removable_paper_paths(cleanup_values, base_storage, user_sub)
+    user_storage_root = owner_storage_path(base_storage / user_sub, base_storage, user_sub)
+    paper_dir = user_storage_root / document_id
+    single_files: list[str] = []
+
+    for file_values in cleanup_values["files"]:
+        if (
+            file_values["role"] != FILE_ROLE_SUPPLEMENT
+            and file_values["display_mode"] != DISPLAY_MODE_TEXT
+        ):
+            relative_path = file_values["file_path"]
+            if relative_path:
+                file_path = owner_storage_entry(base_storage / relative_path, base_storage, user_sub)
+                owns_folder = (
+                    file_path.relative_to(user_storage_root).parts[:1] == (document_id,)
+                    and len(file_path.relative_to(user_storage_root).parts) >= 2
+                    and not paper_dir.is_symlink()
+                    and paper_dir.resolve() == paper_dir
+                )
+                if owns_folder and paper_dir.is_dir():
+                    shutil.rmtree(paper_dir)
+                elif file_path.is_symlink() or file_path.exists():
+                    file_path.unlink()
+            single_files.extend(
+                path for path in removed_stored_paths(file_values)
+                if path != file_values["file_path"]
+            )
+        else:
+            single_files.extend(removed_stored_paths(file_values))
+
+    remove_stored_files(single_files, owner_subject=user_sub, storage_root=base_storage)
+    if not paper_dir.is_symlink() and paper_dir.resolve() == paper_dir:
+        for folder in (paper_dir / "supplement_pdf", paper_dir):
+            if folder.is_dir() and not folder.is_symlink() and not any(folder.iterdir()):
+                folder.rmdir()
+
+
+def remove_committed_paper_stored_files(
+    session: Session,
+    *,
+    document_id: str,
+    user_sub: str,
+    base_storage: Path,
+    fallback_cleanup: Callable[[], bool],
+) -> bool:
+    """Lock the committed paper row, snapshot its live PDFDocumentFile rows, and remove them.
+
+    Falls back to ``fallback_cleanup`` for any remaining staged artifact (or when a unit test
+    stub has no ``files`` attribute). Returns False without raising on path/unlink failures.
+    """
+    from src.lib.document_files.storage_paths import StoredPathOutsideOwnerStorage
+
+    persisted = (
+        session.execute(
+            select(PDFDocument)
+            .where(PDFDocument.id == UUID(document_id))
+            .with_for_update()
+        )
+        .scalars()
+        .first()
+    )
+    files = getattr(persisted, "files", None) if persisted is not None else None
+    if persisted is not None and files:
+        try:
+            cleanup_values = paper_cleanup_snapshot(persisted)
+            remove_paper_stored_files(
+                cleanup_values,
+                base_storage=base_storage,
+                user_sub=user_sub,
+                document_id=document_id,
+            )
+        except (StoredPathOutsideOwnerStorage, StoredFilesNotRemoved, OSError):
+            return False
+    return fallback_cleanup()
+
+
+def remove_staged_paper_artifacts(
+    saved_path: Path,
+    *,
+    base_storage: Path,
+    user_sub: str,
+    document_id: str,
+) -> bool:
+    """Remove staged PDF artifacts strictly inside ``<base_storage>/<user_sub>/<document_id>``.
+
+    Derives the only removable directory from trusted ``(base_storage, user_sub, document_id)``
+    so a filename containing path separators or traversal segments can never cause
+    ``shutil.rmtree`` to touch an unrelated directory. Wraps all stat/exists/rmtree checks
+    in ``OSError`` handling so permission errors return False cleanly.
+    """
+    from src.lib.document_files.storage_paths import (
+        StoredPathOutsideOwnerStorage,
+        owner_storage_entry,
+        owner_storage_path,
+    )
+
+    try:
+        if (
+            not document_id
+            or "/" in document_id
+            or "\\" in document_id
+            or "\x00" in document_id
+            or document_id in {".", ".."}
+            or Path(document_id).name != document_id
+        ):
+            return False
+        resolved_base = base_storage.resolve()
+        owner_entry = resolved_base / user_sub
+        if owner_entry.is_symlink():
+            logger.warning(
+                "Refusing to remove staged PDF artifacts through symlinked owner folder",
+                extra={"sentry_skip_event": True},
+            )
+            return False
+        owner_root = owner_storage_path(owner_entry, resolved_base, user_sub)
+        owner_root.relative_to(resolved_base)
+        if owner_root != owner_entry:
+            return False
+        expected_dir = owner_root / document_id
+        if expected_dir.is_symlink():
+            return False
+        resolved_expected = expected_dir.resolve()
+        resolved_expected.relative_to(owner_root)
+        if resolved_expected != expected_dir:
+            return False
+
+        entry = owner_storage_entry(saved_path, base_storage, user_sub)
+        if entry.parent.resolve() != expected_dir:
+            logger.warning(
+                "Refusing to remove staged PDF artifacts outside expected paper folder",
+                extra={"sentry_skip_event": True},
+            )
+            return False
+
+        if not entry.exists() and not entry.is_symlink() and not expected_dir.exists():
+            return True
+        try:
+            shutil.rmtree(expected_dir)
+        except FileNotFoundError:
+            pass
+        return not entry.exists() and not entry.is_symlink() and not expected_dir.exists()
+    except (StoredPathOutsideOwnerStorage, ValueError, OSError) as exc:
+        logger.warning(
+            "Failed to remove staged PDF artifacts (%s)",
+            type(exc).__name__,
+            extra={"sentry_skip_event": True},
+        )
+        return False
 
 
 def ready_file_count(paper: PDFDocument) -> int:

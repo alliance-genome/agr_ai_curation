@@ -840,6 +840,56 @@ uses the usual `paper_lock_release_failed` operation. Both warnings omit HTTP
 request metadata (`include_request=False`), carry only the exception type as
 failure detail, and preserve the request's cancellation.
 
+When a paper delete (`DELETE /weaviate/documents/{document_id}`) is cancelled
+after destructive cleanup starts, the delete drains under `paper_operation_lock`
+through completion or a recorded failure before releasing the lock and
+delivering `asyncio.CancelledError`. An incomplete chunk wipe stays owned solely
+by `weaviate_client` / `paper_delete_chunk_wipe_incomplete` with
+`include_request=False` and no second capture. Any other failure encountered
+while draining a cancelled paper delete (such as a chunk or parent worker error,
+Weaviate session reconnect failure whose connection delegates failure reporting
+via `caller_reports_failure=True`, stored-file removal error, Weaviate parent
+delete failure, or database pool timeout) suppresses raw worker log-event
+promotion and reports once under component `documents` and operation
+`paper_delete_cancelled_drain_failed` with `include_request=False`, a fixed,
+chain-free error, a low-cardinality fingerprint of
+`(operation, step, exception_type)`, and context holding only
+`document_id_hash`, `step`, and `exception_type`. Companion warnings skip
+log-event promotion (`sentry_skip_event=True`), omit raw document IDs and raw
+exception details, and never prevent the original cancellation from propagating
+even if reporting fails.
+
+When an ordinary (non-cancelled) HTTP paper delete fails during stored-file
+removal or PostgreSQL record deletion, it avoids raw `logger.error` promotion
+and `raise_sanitized_http_exception` double-capture: it reports once under
+component `documents` and operation `paper_delete_cleanup_failed` with
+`include_request=False`, a fixed, chain-free error, a low-cardinality
+fingerprint of `(operation, step, exception_type)`, and context holding only
+`document_id_hash`, `step`, and `exception_type`, logs one sanitized companion
+warning (`sentry_skip_event=True`, omitting raw document IDs and raw exception
+details), and answers the client with the same sanitized HTTP 500 response.
+
+When upload intake (`upload_intake_service.py`) or identifier import
+(`identifier_import.py`) compensates after a pre-commit or post-commit failure
+(or cleans up a newly staged duplicate PDF) and staged PDF removal fails,
+compensation retains any remaining Weaviate and SQL document ownership rather
+than stranding a private PDF on disk, logs a sanitized companion warning
+(`sentry_skip_event=True`), and reports once under component `pdf_jobs` or
+`document_sources` and operation `intake_compensation_file_cleanup_failed` with
+`include_request=False`, a fixed, chain-free error, a low-cardinality
+fingerprint of `(operation, component, pre_commit|post_commit)`, and context
+holding only `document_id_hash`, `sql_committed`, and `weaviate_retained`.
+
+When post-Weaviate PostgreSQL cleanup fails inside `weaviate_client.delete_document`,
+CLI document deletion (`weaviate_client/cli.py`), or an intake compensation
+fallback SQL delete, the failure is never dropped in a suppressed warning alone:
+it logs one sanitized companion warning (`sentry_skip_event=True`) and reports
+once under component `weaviate_client` (or `pdf_jobs` / `document_sources` for
+fallback SQL cleanup) and operation `paper_delete_sql_cleanup_failed` with
+`include_request=False`, a fixed, chain-free error, a low-cardinality
+fingerprint of `(operation, component, exception_type)`, and context holding
+only `document_id_hash` and `exception_type`.
+
 Adding converted supplements to a paper (`supplement_add.py`) sends no event for
 a file it leaves out. When every chosen file is left out, it reports one warning
 under component `document_files` and operation `supplement_add_nothing_added`,
