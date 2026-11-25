@@ -35,7 +35,7 @@ MAIN_FILE_ID = "main-file-1"
 def index_connection(monkeypatch):
     """Exercise the real status helper with an isolated collection."""
     connection = MagicMock()
-    monkeypatch.setattr("src.lib.weaviate_client.documents.get_connection", lambda: connection)
+    monkeypatch.setattr("src.lib.weaviate_client.documents.get_connection", MagicMock(return_value=connection))
     return connection
 
 
@@ -291,7 +291,7 @@ async def test_failed_status_reconciliation_reports_each_write(
 
         monkeypatch.setattr(WeaviateConnection, "_instance", None)
         connection = WeaviateConnection()
-        monkeypatch.setattr("src.lib.weaviate_client.documents.get_connection", lambda: connection)
+        monkeypatch.setattr("src.lib.weaviate_client.documents.get_connection", MagicMock(return_value=connection))
         monkeypatch.setattr("weaviate.connect_to_local", MagicMock(side_effect=ConnectionError("PRIVATE_INDEX_ERROR")))
         index_context = {"exception_type": "ConnectionError"}
 

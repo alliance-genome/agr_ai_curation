@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from fastapi import BackgroundTasks
+from src.lib.observability import runtime
 from src.lib.observability.cost_context import costed_document_processing
 from src.lib.document_sources.file_reasons import FileReason
 from src.lib.document_sources.ingestion import (
@@ -56,7 +57,7 @@ from src.lib.openai_agents.config import (
 from src.lib.pipeline.orchestrator import DocumentPipelineOrchestrator, ProcessingResult
 from src.lib.pipeline.processing_receipt import PDF_PROCESSING_RECEIPT_KEY
 from src.lib.pipeline.tracker import PipelineTracker
-from src.lib.weaviate_client.documents import update_document_status
+from src.lib.weaviate_client.documents import update_document_status_detailed
 from src.lib.weaviate_helpers import get_connection
 from src.models.document import ProcessingStatus
 from src.models.pipeline import ProcessingStage
@@ -77,6 +78,51 @@ _NON_PENDING_JOB_STATUSES = {
     PdfJobStatus.CANCELLED.value,
 }
 
+
+def _report_secondary_failure(message: str, *, operation: str, context: dict[str, str]) -> None:
+    """Report a discarded failure without interrupting the job that owns the outcome."""
+    logger.warning(message, extra={"sentry_skip_event": True})
+    try:
+        runtime.report_runtime_exception(
+            runtime.sanitized_runtime_error(message),
+            component="pdf_jobs",
+            operation=operation,
+            context=context,
+            include_request=False,
+        )
+    except Exception:
+        logger.warning("Could not report %s", operation, extra={"sentry_skip_event": True})
+
+
+async def _sync_failed_index_status(document_id: str, user_id: str) -> None:
+    try:
+        result = await update_document_status_detailed(
+            document_id,
+            user_id,
+            processing_status=ProcessingStatus.FAILED.value,
+            caller_reports_failure=True,
+        )
+        if result["success"] is True:
+            return
+        context = {"failure_kind": "write_rejected"}
+    except Exception as exc:
+        context = {"exception_type": type(exc).__name__}
+    _report_secondary_failure(
+        "Failed to reconcile document index status",
+        operation="upload_index_status_reconciliation_failed",
+        context=context,
+    )
+
+
+async def _close_provider(provider: DocumentSourceProvider, *, operation: str) -> None:
+    try:
+        await provider.aclose()
+    except Exception as exc:
+        _report_secondary_failure(
+            "Document-source provider close failed",
+            operation=operation,
+            context={"exception_type": type(exc).__name__},
+        )
 
 
 async def _fail_main_file(document_id: str, *, error_message: str) -> None:
@@ -607,14 +653,7 @@ class UploadExecutionService:
                     request=request,
                     failure_stage="pipeline",
                 )
-            try:
-                await update_document_status(request.document_id, request.user_id, ProcessingStatus.FAILED.value)
-            except Exception as status_err:
-                logger.warning(
-                    "Failed to sync document status for failed processing document=%s: %s",
-                    request.document_id,
-                    status_err,
-                )
+            await _sync_failed_index_status(request.document_id, request.user_id)
             if isinstance(exc, PDFCancellationError):
                 await self._mark_cancelled_and_sync_tracker(
                     request,
@@ -669,18 +708,7 @@ class UploadExecutionService:
                 request=request,
                 failure_stage="timeout",
             )
-            try:
-                await update_document_status(
-                    request.document_id,
-                    request.user_id,
-                    ProcessingStatus.FAILED.value,
-                )
-            except Exception as status_err:
-                logger.warning(
-                    "Failed to sync document status for timed-out provider Markdown document=%s: %s",
-                    request.document_id,
-                    status_err,
-                )
+            await _sync_failed_index_status(request.document_id, request.user_id)
             await self._sync_provider_markdown_sql_failure(request, timeout_error)
             await self._mark_failed_and_sync_tracker(
                 request,
@@ -747,18 +775,7 @@ class UploadExecutionService:
                 request=request,
                 failure_stage="timeout",
             )
-            try:
-                await update_document_status(
-                    request.document_id,
-                    request.user_id,
-                    ProcessingStatus.FAILED.value,
-                )
-            except Exception as status_err:
-                logger.warning(
-                    "Failed to sync document status for timed-out provider conversion document=%s: %s",
-                    request.document_id,
-                    status_err,
-                )
+            await _sync_failed_index_status(request.document_id, request.user_id)
             await self._sync_provider_conversion_sql_failure(request, timeout_error)
             await self._mark_failed_and_sync_tracker(
                 request,
@@ -1016,18 +1033,7 @@ class UploadExecutionService:
                         "Could not report provider conversion failure to Sentry",
                         extra={"sentry_skip_event": True},
                     )
-            try:
-                await update_document_status(
-                    request.document_id,
-                    request.user_id,
-                    ProcessingStatus.FAILED.value,
-                )
-            except Exception as status_err:
-                logger.warning(
-                    "Failed to sync document status for failed provider conversion document=%s: %s",
-                    request.document_id,
-                    status_err,
-                )
+            await _sync_failed_index_status(request.document_id, request.user_id)
             if isinstance(exc, PDFCancellationError):
                 await self._mark_cancelled_and_sync_tracker(
                     request,
@@ -1058,13 +1064,7 @@ class UploadExecutionService:
                 )
         finally:
             if provider is not None:
-                try:
-                    await provider.aclose()
-                except Exception as cleanup_err:
-                    logger.warning(
-                        "Best-effort document-source provider cleanup failed: %s",
-                        cleanup_err,
-                    )
+                await _close_provider(provider, operation="provider_conversion_close_failed")
 
     async def _select_converted_main_artifact(
         self,
@@ -1234,18 +1234,7 @@ class UploadExecutionService:
                     request=request,
                     failure_stage="provider_markdown",
                 )
-            try:
-                await update_document_status(
-                    request.document_id,
-                    request.user_id,
-                    ProcessingStatus.FAILED.value,
-                )
-            except Exception as status_err:
-                logger.warning(
-                    "Failed to sync document status for failed provider Markdown document=%s: %s",
-                    request.document_id,
-                    status_err,
-                )
+            await _sync_failed_index_status(request.document_id, request.user_id)
             if isinstance(exc, PDFCancellationError):
                 await self._mark_cancelled_and_sync_tracker(
                     request,
@@ -1265,13 +1254,7 @@ class UploadExecutionService:
                 )
         finally:
             if provider is not None:
-                try:
-                    await provider.aclose()
-                except Exception as cleanup_err:
-                    logger.warning(
-                        "Best-effort document-source provider cleanup failed: %s",
-                        cleanup_err,
-                    )
+                await _close_provider(provider, operation="provider_markdown_close_failed")
 
     async def _continue_with_local_pdf_after_provider_access_denied(
         self,
@@ -1297,18 +1280,7 @@ class UploadExecutionService:
                 request=request,
                 failure_stage="provider_markdown_access",
             )
-            try:
-                await update_document_status(
-                    request.document_id,
-                    request.user_id,
-                    ProcessingStatus.FAILED.value,
-                )
-            except Exception as status_err:
-                logger.warning(
-                    "Failed to sync document status after provider access denial document=%s: %s",
-                    request.document_id,
-                    status_err,
-                )
+            await _sync_failed_index_status(request.document_id, request.user_id)
             if isinstance(request, ProviderMarkdownExecutionRequest):
                 await self._sync_provider_markdown_sql_failure(request, exc)
             else:
@@ -1338,18 +1310,7 @@ class UploadExecutionService:
                 request=request,
                 failure_stage="provider_source_import_sync",
             )
-            try:
-                await update_document_status(
-                    request.document_id,
-                    request.user_id,
-                    ProcessingStatus.FAILED.value,
-                )
-            except Exception as status_err:
-                logger.warning(
-                    "Failed to sync document status after provider source-import persistence failure document=%s: %s",
-                    request.document_id,
-                    status_err,
-                )
+            await _sync_failed_index_status(request.document_id, request.user_id)
             await self._mark_failed_and_sync_tracker(
                 request,
                 message="Provider source-import state could not be persisted",
@@ -1517,7 +1478,7 @@ class UploadExecutionService:
                         add_files=add_files_to_paper_with_listing,
                     )
                 finally:
-                    await provider.aclose()
+                    await _close_provider(provider, operation="supplement_stage_provider_close_failed")
 
             try:
                 supplement_wait.start_supplement_stage(job_id=stage_job_id, run=run, outcomes=outcomes)
@@ -1748,10 +1709,10 @@ class UploadExecutionService:
                 error_message=str(exc),
             )
         except Exception as sync_err:
-            logger.warning(
-                "Failed to sync SQL provider Markdown failure for document=%s: %s",
-                request.document_id,
-                sync_err,
+            _report_secondary_failure(
+                "Could not record provider Markdown failure in SQL",
+                operation="provider_markdown_sql_reconciliation_failed",
+                context={"exception_type": type(sync_err).__name__},
             )
 
     @staticmethod
@@ -1790,10 +1751,10 @@ class UploadExecutionService:
                 error_message=str(exc),
             )
         except Exception as sync_err:
-            logger.warning(
-                "Failed to sync SQL provider conversion failure for document=%s: %s",
-                request.document_id,
-                sync_err,
+            _report_secondary_failure(
+                "Could not record provider conversion failure in SQL",
+                operation="provider_conversion_sql_reconciliation_failed",
+                context={"exception_type": type(sync_err).__name__},
             )
 
     async def _sync_provider_conversion_sql_selection(
@@ -1873,14 +1834,7 @@ class UploadExecutionService:
             reason=cancellation_message,
         )
 
-        try:
-            await update_document_status(request.document_id, request.user_id, ProcessingStatus.FAILED.value)
-        except Exception as status_err:
-            logger.warning(
-                "Failed to sync document status for pre-start cancellation document=%s: %s",
-                request.document_id,
-                status_err,
-            )
+        await _sync_failed_index_status(request.document_id, request.user_id)
 
     async def _finalize_pipeline_result(
         self,

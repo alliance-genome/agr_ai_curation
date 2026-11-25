@@ -49,4 +49,4 @@ def test_default_connection_reads_weaviate_api_key_from_environment(monkeypatch)
         url="http://weaviate:8080",
         api_key="production-key",
     )
-    created.connect.assert_called_once_with()
+    created.connect.assert_called_once_with(caller_reports_failure=False)

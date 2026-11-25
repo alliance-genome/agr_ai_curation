@@ -64,8 +64,15 @@ def _conversion_requests_recorded(monkeypatch):
     return recorded
 
 
+@pytest.fixture
+def index_status_write(monkeypatch):
+    write = AsyncMock(return_value={"success": True})
+    monkeypatch.setattr(service_module, "update_document_status_detailed", write)
+    return write
+
+
 @contextmanager
-def _capture_upload_events(monkeypatch):
+def _capture_upload_events(monkeypatch, *, event_level=logging.ERROR):
     monkeypatch.setenv("SENTRY_CONTENT_REDACTION_ENABLED", "false")
     events = []
 
@@ -76,7 +83,7 @@ def _capture_upload_events(monkeypatch):
     with sentry_sdk.Client(
         dsn="http://public@example.invalid/1", transport=MemoryTransport,
         before_send=sentry.before_send, include_local_variables=False, default_integrations=False,
-        integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+        integrations=[LoggingIntegration(level=logging.INFO, event_level=event_level)],
     ) as client, sentry_sdk.isolation_scope() as scope:
         scope.set_client(client)
         yield events
@@ -285,10 +292,6 @@ class _RaisingProvider(_Provider):
             }
         )
         raise RuntimeError("provider unavailable")
-
-
-async def _async_value(value):
-    return value
 
 
 def _pipeline_result(
@@ -519,7 +522,7 @@ async def test_execute_upload_marks_failed_for_failure_result(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_execute_upload_handles_pre_start_cancellation(monkeypatch):
+async def test_execute_upload_handles_pre_start_cancellation(monkeypatch, index_status_write):
     tracker = _Tracker()
     service = UploadExecutionService(
         pipeline_tracker=tracker,
@@ -529,10 +532,6 @@ async def test_execute_upload_handles_pre_start_cancellation(monkeypatch):
     )
 
     events = {"cancelled": []}
-    status_updates = []
-
-    async def _update_document_status(document_id, user_id, status):
-        status_updates.append((document_id, user_id, status))
 
     monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: True)
     monkeypatch.setattr(
@@ -544,7 +543,6 @@ async def test_execute_upload_handles_pre_start_cancellation(monkeypatch):
             message=kwargs["reason"],
         ),
     )
-    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
 
     await service.execute_upload(
         UploadExecutionRequest(
@@ -556,7 +554,9 @@ async def test_execute_upload_handles_pre_start_cancellation(monkeypatch):
     )
 
     assert len(events["cancelled"]) == 1
-    assert status_updates == [("doc-3", "user-3", "failed")]
+    index_status_write.assert_awaited_once_with(
+        "doc-3", "user-3", processing_status="failed", caller_reports_failure=True,
+    )
     assert tracker.calls[-1]["stage"] == ProcessingStage.FAILED
 
 
@@ -1149,7 +1149,7 @@ def conversion_selection(monkeypatch):
     monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", Mock(
         return_value=SimpleNamespace(status=PdfJobStatus.FAILED.value, message="failed"),
     ))
-    monkeypatch.setattr(service_module, "update_document_status", AsyncMock())
+    monkeypatch.setattr(service_module, "update_document_status_detailed", AsyncMock(return_value={"success": True}))
     monkeypatch.setattr(service, "_sync_provider_conversion_sql_failure", AsyncMock())
     monkeypatch.setattr(service, "_execute_provider_markdown_unbounded", AsyncMock())
     return service, request, session, provider
@@ -1223,7 +1223,9 @@ async def test_conversion_selection_failure_aborts_ingestion(conversion_selectio
     message = "Provider conversion selection could not be persisted"
     assert str(error) == message
     assert error.__context__ is None and error.__cause__ is None
-    service_module.update_document_status.assert_awaited_once_with(request.document_id, request.user_id, "failed")
+    service_module.update_document_status_detailed.assert_awaited_once_with(
+        request.document_id, request.user_id, processing_status="failed", caller_reports_failure=True,
+    )
     service._sync_provider_conversion_sql_failure.assert_awaited_once_with(request, error)
     service_module.pdf_job_service.mark_failed.assert_called_once_with(
         job_id=request.job_id, message=message, stage=ProcessingStage.FAILED.value,
@@ -1255,7 +1257,7 @@ async def test_conversion_selection_cancelled_under_lock_stops_quietly(conversio
     service._execute_provider_markdown_unbounded.assert_not_awaited()
     assert provider.downloads == []
     service_module.pdf_job_service.mark_failed.assert_not_called()
-    service_module.update_document_status.assert_not_awaited()
+    service_module.update_document_status_detailed.assert_not_awaited()
     service._sync_provider_conversion_sql_failure.assert_not_awaited()
     reporter.assert_not_called()
 
@@ -1409,6 +1411,7 @@ async def test_execute_provider_conversion_falls_back_to_local_pdf_when_main_mar
 async def test_execute_provider_markdown_does_not_fallback_for_denied_figure_metadata(
     monkeypatch,
     tmp_path,
+    index_status_write,
 ):
     tracker = _Tracker()
     provider = _Provider()
@@ -1417,19 +1420,9 @@ async def test_execute_provider_markdown_does_not_fallback_for_denied_figure_met
         "meta-bad": DocumentSourceAccessDenied("sidecar access denied")
     }
     ingestion_calls = []
-    status_updates = []
 
     async def _ingest(request, *, weaviate_client):
         ingestion_calls.append({"request": request, "weaviate_client": weaviate_client})
-
-    async def _update_document_status(document_id, user_id, status):
-        status_updates.append(
-            {
-                "document_id": document_id,
-                "user_id": user_id,
-                "status": status,
-            }
-        )
 
     service = UploadExecutionService(
         pipeline_tracker=tracker,
@@ -1444,7 +1437,6 @@ async def test_execute_provider_markdown_does_not_fallback_for_denied_figure_met
     monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
     monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_kwargs: False)
     monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_kwargs: None)
-    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
     completed_events = []
     failed_events = []
     monkeypatch.setattr(
@@ -1494,13 +1486,9 @@ async def test_execute_provider_markdown_does_not_fallback_for_denied_figure_met
             "stage": ProcessingStage.FAILED.value,
         }
     ]
-    assert status_updates == [
-        {
-            "document_id": "doc-provider",
-            "user_id": "user-provider",
-            "status": ProcessingStatus.FAILED.value,
-        }
-    ]
+    index_status_write.assert_awaited_once_with(
+        "doc-provider", "user-provider", processing_status=ProcessingStatus.FAILED.value, caller_reports_failure=True,
+    )
 
 
 def test_select_preferred_main_text_rejects_abc_tei_only_artifact():
@@ -1717,7 +1705,7 @@ def test_upload_selection_rejects_explicit_unknown_artifact():
 
 
 @pytest.mark.asyncio
-async def test_execute_provider_conversion_fails_when_completed_without_canonical_markdown(monkeypatch):
+async def test_execute_provider_conversion_fails_when_completed_without_canonical_markdown(monkeypatch, index_status_write):
     tracker = _Tracker()
     provider = _Provider()
     provider.conversion_results = [
@@ -1744,11 +1732,7 @@ async def test_execute_provider_conversion_fails_when_completed_without_canonica
     ]
     progress_updates = []
     failed_events = []
-    status_updates = []
     sql_failures = []
-
-    async def _update_document_status(document_id, user_id, status):
-        status_updates.append((document_id, user_id, status))
 
     async def _sync_sql_failure(self, request, exc):
         sql_failures.append((request.document_id, str(exc)))
@@ -1773,7 +1757,6 @@ async def test_execute_provider_conversion_fails_when_completed_without_canonica
         lambda **kwargs: failed_events.append(kwargs),
     )
     monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
-    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
     monkeypatch.setattr(
         UploadExecutionService,
         "_sync_provider_conversion_sql_failure",
@@ -1803,7 +1786,9 @@ async def test_execute_provider_conversion_fails_when_completed_without_canonica
             "stage": ProcessingStage.FAILED.value,
         }
     ]
-    assert status_updates == [("doc-conversion", "user-provider", "failed")]
+    index_status_write.assert_awaited_once_with(
+        "doc-conversion", "user-provider", processing_status="failed", caller_reports_failure=True,
+    )
     assert sql_failures == [
         ("doc-conversion", "Provider conversion completed without canonical converted Markdown")
     ]
@@ -1811,7 +1796,7 @@ async def test_execute_provider_conversion_fails_when_completed_without_canonica
 
 
 @pytest.mark.asyncio
-async def test_execute_provider_conversion_marks_failed_when_provider_fails(monkeypatch):
+async def test_execute_provider_conversion_marks_failed_when_provider_fails(monkeypatch, index_status_write):
     tracker = _Tracker()
     provider = _Provider()
     provider.conversion_results = [
@@ -1833,11 +1818,7 @@ async def test_execute_provider_conversion_marks_failed_when_provider_fails(monk
     ]
     progress_updates = []
     failed_events = []
-    status_updates = []
     sql_failures = []
-
-    async def _update_document_status(document_id, user_id, status):
-        status_updates.append((document_id, user_id, status))
 
     async def _sync_sql_failure(self, request, exc):
         sql_failures.append((request.document_id, str(exc)))
@@ -1862,7 +1843,6 @@ async def test_execute_provider_conversion_marks_failed_when_provider_fails(monk
         lambda **kwargs: failed_events.append(kwargs),
     )
     monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
-    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
     monkeypatch.setattr(
         UploadExecutionService,
         "_sync_provider_conversion_sql_failure",
@@ -1892,14 +1872,16 @@ async def test_execute_provider_conversion_marks_failed_when_provider_fails(monk
             "stage": ProcessingStage.FAILED.value,
         }
     ]
-    assert status_updates == [("doc-conversion", "user-provider", "failed")]
+    index_status_write.assert_awaited_once_with(
+        "doc-conversion", "user-provider", processing_status="failed", caller_reports_failure=True,
+    )
     assert sql_failures == [("doc-conversion", "pdfx 500")]
     assert progress_updates[-1]["metadata"]["document_source"]["per_file_progress"][0]["error"] == "pdfx 500"
     assert provider.closed is True
 
 
 @pytest.mark.asyncio
-async def test_execute_provider_conversion_marks_failed_when_provider_has_no_sources(monkeypatch):
+async def test_execute_provider_conversion_marks_failed_when_provider_has_no_sources(monkeypatch, index_status_write):
     tracker = _Tracker()
     provider = _Provider()
     provider.conversion_results = [
@@ -1912,11 +1894,7 @@ async def test_execute_provider_conversion_marks_failed_when_provider_has_no_sou
     ]
     progress_updates = []
     failed_events = []
-    status_updates = []
     sql_failures = []
-
-    async def _update_document_status(document_id, user_id, status):
-        status_updates.append((document_id, user_id, status))
 
     async def _sync_sql_failure(self, request, exc):
         sql_failures.append((request.document_id, str(exc)))
@@ -1941,7 +1919,6 @@ async def test_execute_provider_conversion_marks_failed_when_provider_has_no_sou
         lambda **kwargs: failed_events.append(kwargs),
     )
     monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
-    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
     monkeypatch.setattr(
         UploadExecutionService,
         "_sync_provider_conversion_sql_failure",
@@ -1971,7 +1948,9 @@ async def test_execute_provider_conversion_marks_failed_when_provider_has_no_sou
             "stage": ProcessingStage.FAILED.value,
         }
     ]
-    assert status_updates == [("doc-conversion", "user-provider", "failed")]
+    index_status_write.assert_awaited_once_with(
+        "doc-conversion", "user-provider", processing_status="failed", caller_reports_failure=True,
+    )
     assert sql_failures == [
         ("doc-conversion", "Provider conversion found no convertible source files")
     ]
@@ -1980,18 +1959,14 @@ async def test_execute_provider_conversion_marks_failed_when_provider_has_no_sou
 
 
 @pytest.mark.asyncio
-async def test_execute_provider_conversion_times_out_and_syncs_sql_failure(monkeypatch):
+async def test_execute_provider_conversion_times_out_and_syncs_sql_failure(monkeypatch, index_status_write):
     tracker = _Tracker()
     failed_events = []
-    status_updates = []
     sql_failures = []
 
     async def _slow_conversion(self, request):
         del self, request
         await asyncio.sleep(10)
-
-    async def _update_document_status(document_id, user_id, status):
-        status_updates.append((document_id, user_id, status))
 
     async def _sync_sql_failure(self, request, exc):
         sql_failures.append((request.document_id, str(exc)))
@@ -2022,7 +1997,6 @@ async def test_execute_provider_conversion_times_out_and_syncs_sql_failure(monke
         "mark_failed",
         lambda **kwargs: failed_events.append(kwargs),
     )
-    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
     monkeypatch.setattr(
         UploadExecutionService,
         "_sync_provider_conversion_sql_failure",
@@ -2049,7 +2023,9 @@ async def test_execute_provider_conversion_times_out_and_syncs_sql_failure(monke
         "ABC had not converted this paper 1 second after the import started, "
         "so the import stopped. The time includes any wait behind other imports."
     )
-    assert status_updates == [("doc-conversion", "user-provider", "failed")]
+    index_status_write.assert_awaited_once_with(
+        "doc-conversion", "user-provider", processing_status="failed", caller_reports_failure=True,
+    )
     assert sql_failures == [("doc-conversion", expected_timeout)]
     assert failed_events == [
         {
@@ -2061,19 +2037,15 @@ async def test_execute_provider_conversion_times_out_and_syncs_sql_failure(monke
 
 
 @pytest.mark.asyncio
-async def test_execute_provider_markdown_times_out_and_marks_failed(monkeypatch):
+async def test_execute_provider_markdown_times_out_and_marks_failed(monkeypatch, index_status_write):
     tracker = _Tracker()
     provider = _Provider()
     failed_events = []
-    status_updates = []
     sql_failures = []
 
     async def _ingest(_request, *, weaviate_client):
         del weaviate_client
         await asyncio.sleep(10)
-
-    async def _update_document_status(document_id, user_id, status):
-        status_updates.append((document_id, user_id, status))
 
     async def _sync_sql_failure(self, request, exc):
         sql_failures.append((request.document_id, str(exc)))
@@ -2094,7 +2066,6 @@ async def test_execute_provider_markdown_times_out_and_marks_failed(monkeypatch)
         "mark_failed",
         lambda **kwargs: failed_events.append(kwargs),
     )
-    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
     monkeypatch.setattr(
         UploadExecutionService,
         "_sync_provider_markdown_sql_failure",
@@ -2120,7 +2091,9 @@ async def test_execute_provider_markdown_times_out_and_marks_failed(monkeypatch)
     )
 
     assert provider.closed is True
-    assert status_updates == [("doc-provider", "user-provider", "failed")]
+    index_status_write.assert_awaited_once_with(
+        "doc-provider", "user-provider", processing_status="failed", caller_reports_failure=True,
+    )
     assert sql_failures == [
         ("doc-provider", "Provider Markdown import exceeded 0.01 seconds")
     ]
@@ -2157,7 +2130,7 @@ async def test_execute_provider_markdown_rejects_blank_curator_token_before_down
         "mark_failed",
         lambda **kwargs: failed_events.append(kwargs),
     )
-    monkeypatch.setattr(service_module, "update_document_status", lambda *_args, **_kwargs: _async_value(None))
+    monkeypatch.setattr(service_module, "update_document_status_detailed", AsyncMock(return_value={"success": True}))
     monkeypatch.setattr(
         UploadExecutionService,
         "_sync_provider_markdown_sql_failure",
@@ -2217,7 +2190,7 @@ async def test_execute_provider_markdown_syncs_sql_failure_when_download_fails(m
             message=kwargs["message"],
         ),
     )
-    monkeypatch.setattr(service_module, "update_document_status", lambda *_args, **_kwargs: _async_value(None))
+    monkeypatch.setattr(service_module, "update_document_status_detailed", AsyncMock(return_value={"success": True}))
     monkeypatch.setattr(
         UploadExecutionService,
         "_sync_provider_markdown_sql_failure",
@@ -2258,17 +2231,14 @@ async def test_execute_provider_markdown_syncs_sql_failure_when_download_fails(m
 async def test_provider_access_denial_marks_failed_when_saved_pdf_is_missing(
     monkeypatch,
     tmp_path,
+    index_status_write,
 ):
     service = UploadExecutionService(
         pipeline_tracker=cast(PipelineTracker, _Tracker())
     )
     failure_reports = []
-    status_updates = []
     sql_failures = []
     terminal_failures = []
-
-    async def _update_document_status(document_id, user_id, status):
-        status_updates.append((document_id, user_id, status))
 
     async def _sync_sql_failure(request, exc):
         sql_failures.append((request.document_id, str(exc)))
@@ -2276,7 +2246,6 @@ async def test_provider_access_denial_marks_failed_when_saved_pdf_is_missing(
     async def _mark_failed(request, *, message, stage):
         terminal_failures.append((request.document_id, message, stage))
 
-    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
     monkeypatch.setattr(service, "_sync_provider_markdown_sql_failure", _sync_sql_failure)
     monkeypatch.setattr(service, "_mark_failed_and_sync_tracker", _mark_failed)
     monkeypatch.setattr(
@@ -2307,7 +2276,9 @@ async def test_provider_access_denial_marks_failed_when_saved_pdf_is_missing(
 
     assert failure_reports[0][0] == "provider access denied"
     assert failure_reports[0][1]["failure_stage"] == "provider_markdown_access"
-    assert status_updates == [("doc-provider", "user-provider", "failed")]
+    index_status_write.assert_awaited_once_with(
+        "doc-provider", "user-provider", processing_status="failed", caller_reports_failure=True,
+    )
     assert sql_failures == [("doc-provider", "provider access denied")]
     assert terminal_failures == [
         ("doc-provider", "provider access denied", ProcessingStage.FAILED.value)
@@ -2414,7 +2385,7 @@ async def test_provider_markdown_invalid_utf8_never_reaches_ingestion(monkeypatc
     monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **kwargs: None)
     monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **kwargs: False)
     monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **kwargs: None)
-    monkeypatch.setattr(service_module, "update_document_status", AsyncMock())
+    monkeypatch.setattr(service_module, "update_document_status_detailed", AsyncMock(return_value={"success": True}))
     monkeypatch.setattr(service, "_report_execution_failure", Mock())
     monkeypatch.setattr(service, "_sync_provider_markdown_sql_failure", AsyncMock())
     failed = AsyncMock()
@@ -2560,8 +2531,8 @@ async def test_execute_provider_markdown_fails_when_local_pdf_source_state_canno
     )
     monkeypatch.setattr(
         service_module,
-        "update_document_status",
-        lambda *_args, **_kwargs: _async_value(None),
+        "update_document_status_detailed",
+        AsyncMock(return_value={"success": True}),
     )
     monkeypatch.setattr(
         service_module,
@@ -2635,7 +2606,7 @@ async def test_execute_provider_markdown_marks_cancelled_when_cancel_requested_a
         "mark_failed",
         lambda **kwargs: failed_events.append(kwargs),
     )
-    monkeypatch.setattr(service_module, "update_document_status", lambda *_args, **_kwargs: _async_value(None))
+    monkeypatch.setattr(service_module, "update_document_status_detailed", AsyncMock(return_value={"success": True}))
 
     await service.execute_provider_markdown(
         ProviderMarkdownExecutionRequest(
@@ -2779,7 +2750,7 @@ async def test_terminal_tracker_does_not_invent_state_when_durable_job_is_missin
 
 
 @pytest.mark.asyncio
-async def test_execute_upload_marks_failed_when_orchestrator_raises(monkeypatch):
+async def test_execute_upload_marks_failed_when_orchestrator_raises(monkeypatch, index_status_write):
     job_id = "00000000-0000-0000-0000-000000000003"
     tracker = _Tracker()
     service = UploadExecutionService(
@@ -2788,11 +2759,7 @@ async def test_execute_upload_marks_failed_when_orchestrator_raises(monkeypatch)
     )
 
     events = {"failed": [], "cancelled": []}
-    status_updates = []
     report_calls = []
-
-    async def _update_document_status(document_id, user_id, status):
-        status_updates.append((document_id, user_id, status))
 
     monkeypatch.setattr(service_module, "get_connection", lambda: object())
     monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
@@ -2809,7 +2776,6 @@ async def test_execute_upload_marks_failed_when_orchestrator_raises(monkeypatch)
             message=kwargs["reason"],
         ),
     )
-    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
     monkeypatch.setattr(
         service_module,
         "report_background_task_exception",
@@ -2832,7 +2798,9 @@ async def test_execute_upload_marks_failed_when_orchestrator_raises(monkeypatch)
         )
     )
 
-    assert status_updates == [("doc-exc-1", "user-exc-1", "failed")]
+    index_status_write.assert_awaited_once_with(
+        "doc-exc-1", "user-exc-1", processing_status="failed", caller_reports_failure=True,
+    )
     assert events["failed"] == [{"job_id": job_id, "message": "pipeline down", "stage": ProcessingStage.FAILED.value}]
     assert not events["cancelled"]
     assert report_calls == [
@@ -2940,7 +2908,7 @@ async def test_execute_upload_marks_failed_when_terminal_tracker_sync_raises(mon
 
 
 @pytest.mark.asyncio
-async def test_execute_upload_marks_cancelled_when_orchestrator_raises_cancellation(monkeypatch):
+async def test_execute_upload_marks_cancelled_when_orchestrator_raises_cancellation(monkeypatch, index_status_write):
     job_id = "00000000-0000-0000-0000-000000000006"
     tracker = _Tracker()
     service = UploadExecutionService(
@@ -2949,10 +2917,6 @@ async def test_execute_upload_marks_cancelled_when_orchestrator_raises_cancellat
     )
 
     events = {"failed": [], "cancelled": []}
-    status_updates = []
-
-    async def _update_document_status(document_id, user_id, status):
-        status_updates.append((document_id, user_id, status))
 
     monkeypatch.setattr(service_module, "get_connection", lambda: object())
     monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
@@ -2961,7 +2925,6 @@ async def test_execute_upload_marks_cancelled_when_orchestrator_raises_cancellat
     monkeypatch.setattr(service_module.pdf_job_service, "set_process_id", lambda **_kwargs: None)
     monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **kwargs: events["failed"].append(kwargs))
     monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **kwargs: events["cancelled"].append(kwargs))
-    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
 
     await service.execute_upload(
         UploadExecutionRequest(
@@ -2972,13 +2935,15 @@ async def test_execute_upload_marks_cancelled_when_orchestrator_raises_cancellat
         )
     )
 
-    assert status_updates == [("doc-exc-2", "user-exc-2", "failed")]
+    index_status_write.assert_awaited_once_with(
+        "doc-exc-2", "user-exc-2", processing_status="failed", caller_reports_failure=True,
+    )
     assert not events["failed"]
     assert events["cancelled"] == [{"job_id": job_id, "reason": "cancelled in pipeline"}]
 
 
 @pytest.mark.asyncio
-async def test_execute_upload_marks_cancelled_for_mid_run_cancellation(monkeypatch):
+async def test_execute_upload_marks_cancelled_for_mid_run_cancellation(monkeypatch, index_status_write):
     job_id = "00000000-0000-0000-0000-000000000007"
     tracker = _Tracker()
     cancel_state = {"value": False}
@@ -2988,11 +2953,7 @@ async def test_execute_upload_marks_cancelled_for_mid_run_cancellation(monkeypat
     )
 
     events = {"failed": [], "cancelled": []}
-    status_updates = []
     process_ids = []
-
-    async def _update_document_status(document_id, user_id, status):
-        status_updates.append((document_id, user_id, status))
 
     monkeypatch.setattr(service_module, "get_connection", lambda: object())
     monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", lambda **_kwargs: None)
@@ -3005,7 +2966,6 @@ async def test_execute_upload_marks_cancelled_for_mid_run_cancellation(monkeypat
     )
     monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **kwargs: events["failed"].append(kwargs))
     monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **kwargs: events["cancelled"].append(kwargs))
-    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
 
     await service.execute_upload(
         UploadExecutionRequest(
@@ -3017,7 +2977,9 @@ async def test_execute_upload_marks_cancelled_for_mid_run_cancellation(monkeypat
     )
 
     assert process_ids == [{"job_id": job_id, "process_id": "proc-123"}]
-    assert status_updates == [("doc-mid", "user-mid", "failed")]
+    index_status_write.assert_awaited_once_with(
+        "doc-mid", "user-mid", processing_status="failed", caller_reports_failure=True,
+    )
     assert not events["failed"]
     assert events["cancelled"] == [{"job_id": job_id, "reason": "Processing cancelled by user request"}]
 
@@ -3117,7 +3079,7 @@ async def test_provider_timeout_waits_for_storage_before_terminal_job(monkeypatc
     monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **_: False)
     monkeypatch.setattr(service_module.pdf_job_service, "update_progress", lambda **_: None)
     monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **_: events.append("job_failed"))
-    monkeypatch.setattr(service_module, "update_document_status", AsyncMock())
+    monkeypatch.setattr(service_module, "update_document_status_detailed", AsyncMock(return_value={"success": True}))
     sql_failure = AsyncMock()
     monkeypatch.setattr(service, "_sync_provider_markdown_sql_failure", sql_failure)
     monkeypatch.setattr(service, "_report_execution_failure", lambda *_args, **_: None)
@@ -3266,8 +3228,9 @@ def _wait_request():
 def _record_job_outcomes(monkeypatch):
     outcomes = {"completed": [], "failed": [], "status": [], "sql_failures": []}
 
-    async def _update_document_status(document_id, user_id, status):
-        outcomes["status"].append((document_id, status))
+    async def _update_document_status(document_id, user_id, *, processing_status, caller_reports_failure):
+        outcomes["status"].append((document_id, processing_status))
+        return {"success": True}
 
     async def _sync_selection(self, request, converted_artifact):
         del self, request, converted_artifact
@@ -3292,7 +3255,7 @@ def _record_job_outcomes(monkeypatch):
         lambda **kwargs: outcomes["failed"].append(kwargs),
     )
     monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
-    monkeypatch.setattr(service_module, "update_document_status", _update_document_status)
+    monkeypatch.setattr(service_module, "update_document_status_detailed", _update_document_status)
     monkeypatch.setattr(
         UploadExecutionService, "_sync_provider_conversion_sql_selection", _sync_selection
     )
@@ -3982,22 +3945,18 @@ async def test_complete_main_paper_post_commit_cancellation_still_launches_commi
 
 
 @pytest.mark.asyncio
-async def test_complete_main_paper_marks_stage_job_failed_if_launch_raises(monkeypatch):
+async def test_complete_main_paper_marks_stage_job_failed_if_launch_raises(monkeypatch, index_status_write):
     """A launch failure after main-paper commit fails only the stage job and never corrupts the paper."""
     import threading
 
     from src.lib.document_sources import supplement_wait
 
     completed, failed, reported = [], [], []
-    status_updates = []
     sql_failures = []
 
     async def _ingest(request, *, weaviate_client):
         del request, weaviate_client
         return None
-
-    async def _update_status(document_id, user_id, status):
-        status_updates.append((document_id, user_id, status))
 
     async def _sync_sql_failure(self, request, exc):
         del self
@@ -4020,7 +3979,6 @@ async def test_complete_main_paper_marks_stage_job_failed_if_launch_raises(monke
         raise RuntimeError("event loop refused task")
 
     _quiet_jobs(monkeypatch, completed, failed)
-    monkeypatch.setattr(service_module, "update_document_status", _update_status)
     monkeypatch.setattr(UploadExecutionService, "_sync_provider_markdown_sql_failure", _sync_sql_failure)
     monkeypatch.setattr(
         "src.lib.observability.runtime.report_runtime_exception",
@@ -4044,7 +4002,7 @@ async def test_complete_main_paper_marks_stage_job_failed_if_launch_raises(monke
     assert len(failed) == 1
     assert failed[0]["job_id"] == "stage-launch-boom"
     assert failed[0]["message"] == supplement_wait.SUPPLEMENT_STAGE_FAILED_MESSAGE
-    assert status_updates == []
+    index_status_write.assert_not_awaited()
     assert sql_failures == []
     assert tracker.calls[-1]["document_id"] == "doc-job-provider"
     assert tracker.calls[-1]["stage"] == ProcessingStage.COMPLETED
@@ -4091,21 +4049,18 @@ async def test_complete_main_paper_marks_stage_job_failed_if_launch_raises(monke
 
 
 @pytest.mark.asyncio
-async def test_complete_main_paper_survives_stage_launch_and_mark_failed_both_raising(monkeypatch):
+async def test_complete_main_paper_survives_stage_launch_and_mark_failed_both_raising(monkeypatch, index_status_write):
     """If both start_supplement_stage AND stage mark_failed raise, main paper stays completed and cancel propagates."""
     import threading
 
     from src.lib.document_sources import supplement_wait
 
     completed, mark_failed_calls = [], []
-    status_updates, sql_failures = [], []
+    sql_failures = []
 
     async def _ingest(request, *, weaviate_client):
         del request, weaviate_client
         return None
-
-    async def _update_status(document_id, user_id, status):
-        status_updates.append((document_id, user_id, status))
 
     async def _sync_sql_failure(self, request, exc):
         del self
@@ -4133,7 +4088,6 @@ async def test_complete_main_paper_survives_stage_launch_and_mark_failed_both_ra
 
     _quiet_jobs(monkeypatch, completed)
     monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", _boom_mark_failed)
-    monkeypatch.setattr(service_module, "update_document_status", _update_status)
     monkeypatch.setattr(UploadExecutionService, "_sync_provider_markdown_sql_failure", _sync_sql_failure)
     monkeypatch.setattr(
         "src.lib.observability.runtime.report_runtime_exception",
@@ -4156,7 +4110,7 @@ async def test_complete_main_paper_survives_stage_launch_and_mark_failed_both_ra
     await service.execute_provider_markdown(_markdown_request(supplements=_plan()))
 
     assert [call["job_id"] for call in mark_failed_calls] == ["stage-double-boom"]
-    assert status_updates == []
+    index_status_write.assert_not_awaited()
     assert sql_failures == []
     assert tracker.calls[-1]["document_id"] == "doc-job-provider"
     assert tracker.calls[-1]["stage"] == ProcessingStage.COMPLETED
@@ -4191,7 +4145,7 @@ async def test_complete_main_paper_survives_stage_launch_and_mark_failed_both_ra
         await task
 
     assert [call["job_id"] for call in mark_failed_calls] == ["stage-double-boom"]
-    assert status_updates == []
+    index_status_write.assert_not_awaited()
     assert sql_failures == []
     assert tracker.calls[-1]["document_id"] == "doc-job-provider"
     assert tracker.calls[-1]["stage"] == ProcessingStage.COMPLETED
@@ -4199,7 +4153,7 @@ async def test_complete_main_paper_survives_stage_launch_and_mark_failed_both_ra
 
 
 @pytest.mark.asyncio
-async def test_execute_provider_markdown_deadline_during_commit_launches_stage_and_never_fails_paper(monkeypatch):
+async def test_execute_provider_markdown_deadline_during_commit_launches_stage_and_never_fails_paper(monkeypatch, index_status_write):
     """If execute_provider_markdown times out mid-handoff commit, the stage launches and paper stays completed."""
     import threading
 
@@ -4208,14 +4162,11 @@ async def test_execute_provider_markdown_deadline_during_commit_launches_stage_a
     entered_handoff = threading.Event()
     allow_commit_finish = threading.Event()
     committed = False
-    started, failed, status_updates, sql_failures = [], [], [], []
+    started, failed, sql_failures = [], [], []
 
     async def _ingest(request, *, weaviate_client):
         del request, weaviate_client
         return None
-
-    async def _update_status(document_id, user_id, status):
-        status_updates.append((document_id, user_id, status))
 
     async def _sync_sql_failure(self, request, exc):
         del self
@@ -4244,7 +4195,6 @@ async def test_execute_provider_markdown_deadline_during_commit_launches_stage_a
     _quiet_jobs(monkeypatch, [], failed)
     monkeypatch.setattr(service_module, "get_document_source_import_timeout_seconds", lambda: 0.03)
     monkeypatch.setattr(service_module.pdf_job_service, "get_job_by_id", _get_job_by_id)
-    monkeypatch.setattr(service_module, "update_document_status", _update_status)
     monkeypatch.setattr(UploadExecutionService, "_sync_provider_markdown_sql_failure", _sync_sql_failure)
     monkeypatch.setattr(
         service_module.pdf_job_service,
@@ -4274,7 +4224,7 @@ async def test_execute_provider_markdown_deadline_during_commit_launches_stage_a
 
     assert started == ["stage-after-deadline"]
     assert failed == []
-    assert status_updates == []
+    index_status_write.assert_not_awaited()
     assert sql_failures == []
 
 
@@ -4415,7 +4365,7 @@ async def test_execute_provider_conversion_bounded_timeout_includes_queue_wait_f
     )
     monkeypatch.setattr(UploadExecutionService, "_execute_provider_conversion_unbounded", _slow_conversion)
     monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **kwargs: failed_events.append(kwargs))
-    monkeypatch.setattr(service_module, "update_document_status", AsyncMock(return_value=None))
+    monkeypatch.setattr(service_module, "update_document_status_detailed", AsyncMock(return_value={"success": True}))
     monkeypatch.setattr(UploadExecutionService, "_sync_provider_conversion_sql_failure", AsyncMock(return_value=None))
 
     await service.execute_provider_conversion(
@@ -4478,7 +4428,7 @@ async def test_execute_provider_conversion_post_selection_ingestion_timeout_is_n
     monkeypatch.setattr(UploadExecutionService, "_sync_provider_conversion_sql_selection", AsyncMock(return_value=None))
     monkeypatch.setattr(UploadExecutionService, "_execute_provider_markdown_unbounded", _hang_during_ingestion)
     monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **kwargs: failed_events.append(kwargs))
-    monkeypatch.setattr(service_module, "update_document_status", AsyncMock(return_value=None))
+    monkeypatch.setattr(service_module, "update_document_status_detailed", AsyncMock(return_value={"success": True}))
     monkeypatch.setattr(UploadExecutionService, "_sync_provider_conversion_sql_failure", AsyncMock(return_value=None))
 
     await service.execute_provider_conversion(
@@ -4556,7 +4506,7 @@ async def test_overlapping_replay_for_same_job_id_cannot_clobber_ingesting_markd
     monkeypatch.setattr(UploadExecutionService, "_sync_provider_conversion_sql_selection", AsyncMock(return_value=None))
     monkeypatch.setattr(UploadExecutionService, "_execute_provider_markdown_unbounded", _hang_during_ingestion)
     monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", lambda **kwargs: failed_events.append(kwargs))
-    monkeypatch.setattr(service_module, "update_document_status", AsyncMock(return_value=None))
+    monkeypatch.setattr(service_module, "update_document_status_detailed", AsyncMock(return_value={"success": True}))
     monkeypatch.setattr(UploadExecutionService, "_sync_provider_conversion_sql_failure", AsyncMock(return_value=None))
 
     req = ProviderConversionExecutionRequest(
@@ -4620,7 +4570,7 @@ async def test_a_queued_import_with_supplements_whose_login_is_about_to_expire_f
     _quiet_jobs(monkeypatch, completed, failed)
     monkeypatch.setattr(UploadExecutionService, "_sync_provider_conversion_sql_failure",
                         AsyncMock(return_value=None))
-    monkeypatch.setattr(service_module, "update_document_status", AsyncMock(return_value=None))
+    monkeypatch.setattr(service_module, "update_document_status_detailed", AsyncMock(return_value={"success": True}))
     monkeypatch.delenv("DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS", raising=False)
     service = UploadExecutionService(
         pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: provider,
@@ -4644,7 +4594,7 @@ async def test_markdown_import_login_expired_passes_login_expired_supplement_rea
     monkeypatch.setattr(
         UploadExecutionService, "_sync_provider_markdown_sql_failure", AsyncMock(return_value=None)
     )
-    monkeypatch.setattr(service_module, "update_document_status", AsyncMock(return_value=None))
+    monkeypatch.setattr(service_module, "update_document_status_detailed", AsyncMock(return_value={"success": True}))
     monkeypatch.delenv("DOCUMENT_SUPPLEMENT_ADD_RESERVE_SECONDS", raising=False)
     service = UploadExecutionService(
         pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: _Provider(),
@@ -4763,3 +4713,197 @@ async def test_a_main_wait_never_makes_more_polls_than_the_start_up_cap(monkeypa
     assert len(provider.conversion_requests) == 2  # the wait's own on-demand request and the end one
     assert sent <= main_wait_max_polls(deadline_seconds=deadline, poll_seconds=poll)
     assert len(outcomes["failed"]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage_error", [None, ValueError("stage failed"), asyncio.CancelledError("stage cancelled")])
+@pytest.mark.parametrize("reporter_fails", [False, True])
+async def test_supplement_provider_close_preserves_stage_outcome(monkeypatch, caplog, stage_error, reporter_fails):
+    from src.lib.document_sources import supplement_wait
+
+    provider = _Provider()
+    provider.aclose = AsyncMock(side_effect=OSError("private-close-detail"))
+    service = UploadExecutionService(pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: provider)
+    request = _markdown_request(supplements=_plan())
+    _quiet_jobs(monkeypatch, [])
+    monkeypatch.setattr(
+        service_module.pdf_job_service, "complete_import_and_start_supplement_wait",
+        Mock(return_value=(SimpleNamespace(status="completed", message="ready"), SimpleNamespace(job_id="stage-job"))),
+    )
+    start = Mock()
+    monkeypatch.setattr(supplement_wait, "start_supplement_stage", start)
+    monkeypatch.setattr(supplement_wait, "run_supplement_stage", AsyncMock(side_effect=stage_error))
+    await service._complete_main_paper(request, message="ready")
+    run = start.call_args.kwargs["run"]
+    reporter = Mock(wraps=runtime.report_runtime_exception)
+    if reporter_fails:
+        reporter.side_effect = RuntimeError("private-reporter-detail")
+    monkeypatch.setattr(runtime, "report_runtime_exception", reporter)
+
+    with _capture_upload_events(monkeypatch) as events:
+        if stage_error is None:
+            assert await run() is None
+        else:
+            with pytest.raises(type(stage_error)) as raised:
+                await run()
+            assert raised.value is stage_error
+
+    provider.aclose.assert_awaited_once_with()
+    reporter.assert_called_once()
+    assert reporter.call_args.kwargs["include_request"] is False
+    if reporter_fails:
+        assert events == []
+    else:
+        event, = events
+        assert event["tags"]["operation"] == "supplement_stage_provider_close_failed"
+        assert event["contexts"]["runtime_exception"]["exception_type"] == "OSError"
+        error, = event["exception"]["values"]
+        assert error["value"] == "Document-source provider close failed"
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert warnings and all(r.sentry_skip_event and r.exc_info is None for r in warnings)
+    for private in ("private-close-detail", "private-reporter-detail"):
+        assert private not in repr(events)
+        assert private not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_cancelled_markdown_import_reports_lazy_index_connection_failure_once(monkeypatch):
+    from src.lib.weaviate_client import connection
+
+    request = _markdown_request()
+    reason = "Cancelled before processing started"
+    mark_cancelled = Mock(return_value=SimpleNamespace(status=PdfJobStatus.CANCELLED.value, message=reason))
+    monkeypatch.setattr(service_module.pdf_job_service, "is_cancel_requested", lambda **kwargs: True)
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_cancelled", mark_cancelled)
+    monkeypatch.setattr(connection, "_connection", None)
+    monkeypatch.setattr(connection.WeaviateConnection, "_instance", None)
+    monkeypatch.setenv("WEAVIATE_HOST", "localhost")
+    monkeypatch.setenv("WEAVIATE_PORT", "8080")
+    connect = Mock(side_effect=ConnectionError("fake-private-index-credential"))
+    monkeypatch.setattr(connection.weaviate, "connect_to_local", connect)
+    service = UploadExecutionService(pipeline_tracker=_Tracker())
+
+    with _capture_upload_events(monkeypatch) as events:
+        await service._execute_provider_markdown_unbounded(request)
+
+    mark_cancelled.assert_called_once_with(job_id=request.job_id, reason=reason)
+    connect.assert_called_once()
+    event, = events
+    assert event["tags"]["operation"] == "upload_index_status_reconciliation_failed"
+    assert event["contexts"]["runtime_exception"]["exception_type"] == "ConnectionError"
+    error, = event["exception"]["values"]
+    assert error["value"] == "Failed to reconcile document index status"
+    for private in ("fake-private-index-credential", request.document_id, request.user_id):
+        assert private not in repr(event)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flow", ["markdown", "conversion"])
+@pytest.mark.parametrize("reporter_fails", [False, True])
+async def test_provider_secondary_failures_preserve_job_failure(monkeypatch, caplog, flow, reporter_fails):
+    from src.lib.document_sources import ingestion
+
+    _quiet_jobs(monkeypatch, [])
+    primary_error = ValueError("Import interrupted")
+    provider = _Provider()
+    provider.aclose = AsyncMock(side_effect=OSError("private-provider-detail"))
+    service = UploadExecutionService(pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: provider)
+    primary_reporter = Mock()
+    monkeypatch.setattr(service, "_report_execution_failure", primary_reporter)
+    mark_failed = Mock(return_value=SimpleNamespace(status="failed", message=str(primary_error)))
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_failed", mark_failed)
+    db_error = OperationalError("UPDATE private_sql_table", ("private-param",), Exception("private-db-detail"))
+    main_write, paper_write = AsyncMock(), AsyncMock()
+    if flow == "markdown":
+        request = _markdown_request()
+        provider.download_artifact = AsyncMock(side_effect=primary_error)
+        execute = service._execute_provider_markdown_unbounded
+        index_write = AsyncMock(return_value={"success": False, "error": {"details": "private-index-detail"}})
+        index_context = {"failure_kind": "write_rejected"}
+        main_write.side_effect = db_error
+    else:
+        request = _wait_request()
+        provider.request_conversion = AsyncMock(side_effect=primary_error)
+        execute = service._execute_provider_conversion_unbounded
+        index_write = AsyncMock(side_effect=ConnectionError("private-index-detail"))
+        index_context = {"exception_type": "ConnectionError"}
+        paper_write.side_effect = db_error
+    monkeypatch.setattr(service_module, "update_document_status_detailed", index_write)
+    monkeypatch.setattr(service_module, "_fail_main_file", main_write)
+    monkeypatch.setattr(ingestion, "_sync_sql_document_status", paper_write)
+    reporter = Mock(wraps=runtime.report_runtime_exception)
+    if reporter_fails:
+        reporter.side_effect = RuntimeError("private-reporter-detail")
+    monkeypatch.setattr(runtime, "report_runtime_exception", reporter)
+
+    with _capture_upload_events(monkeypatch, event_level=logging.WARNING) as events:
+        sentry_sdk.get_isolation_scope().add_event_processor(
+            lambda event, hint: {**event, "request": {"url": f"/documents/{request.document_id}"}}
+        )
+        await execute(request)
+
+    primary_reporter.assert_called_once()
+    assert primary_reporter.call_args.args == (primary_error,)
+    mark_failed.assert_called_once_with(job_id=request.job_id, message=str(primary_error), stage="failed")
+    index_write.assert_awaited_once_with(
+        request.document_id, request.user_id, processing_status="failed", caller_reports_failure=True,
+    )
+    expected = {
+        "upload_index_status_reconciliation_failed": ("Failed to reconcile document index status", index_context),
+        f"provider_{flow}_sql_reconciliation_failed": (
+            f"Could not record provider {'Markdown' if flow == 'markdown' else 'conversion'} failure in SQL",
+            {"exception_type": "OperationalError"},
+        ),
+        f"provider_{flow}_close_failed": ("Document-source provider close failed", {"exception_type": "OSError"}),
+    }
+    assert reporter.call_count == len(expected)
+    for call in reporter.call_args_list:
+        error, = call.args
+        assert error.__cause__ is None and error.__context__ is None
+        assert call.kwargs["include_request"] is False
+    if reporter_fails:
+        assert events == []
+    else:
+        assert [event["tags"]["operation"] for event in events] == list(expected)
+        for event in events:
+            operation = event["tags"]["operation"]
+            message, context = expected[operation]
+            assert "request" not in event
+            assert event["contexts"]["runtime_exception"] == {
+                "component": "pdf_jobs", "operation": operation, **context,
+            }
+            error, = event["exception"]["values"]
+            assert (error["type"], error["value"]) == ("RuntimeError", message)
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING and r.name == service_module.__name__]
+    assert len(warnings) == len(expected) * (2 if reporter_fails else 1)
+    assert all(r.sentry_skip_event and r.exc_info is None for r in warnings)
+    for private in (
+        "private_sql_table", "private-param", "private-db-detail", "private-provider-detail",
+        "private-index-detail", "private-reporter-detail", request.document_id, request.user_id, request.curator_token,
+    ):
+        assert private not in repr(events)
+        assert all(private not in r.getMessage() for r in warnings)
+
+
+@pytest.mark.asyncio
+async def test_markdown_import_completes_when_close_and_reporting_fail(monkeypatch):
+    failed = []
+    _quiet_jobs(monkeypatch, [], failed)
+    completed = Mock(return_value=SimpleNamespace(status="completed", message="Processing completed"))
+    monkeypatch.setattr(service_module.pdf_job_service, "mark_completed", completed)
+    provider = _Provider()
+    provider.aclose = AsyncMock(side_effect=OSError("private-close-detail"))
+    reporter = Mock(side_effect=RuntimeError("private-reporter-detail"))
+    monkeypatch.setattr(runtime, "report_runtime_exception", reporter)
+    service = UploadExecutionService(
+        pipeline_tracker=_Tracker(), document_source_provider_factory=lambda: provider,
+        provider_markdown_ingestion_fn=AsyncMock(return_value=None),
+    )
+
+    request = _markdown_request()
+    await service.execute_provider_markdown(request)
+
+    reporter.assert_called_once()
+    assert reporter.call_args.kwargs["operation"] == "provider_markdown_close_failed"
+    completed.assert_called_once_with(job_id=request.job_id, message="Processing completed")
+    assert failed == []

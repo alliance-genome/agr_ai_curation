@@ -380,7 +380,7 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
     monkeypatch.setattr(execution_module.pdf_job_service, "mark_cancelled", lambda **_kwargs: None)
     monkeypatch.setattr(
         execution_module,
-        "update_document_status",
+        "update_document_status_detailed",
         lambda *_args, **_kwargs: pytest.fail("document status should not fail-sync on success"),
     )
     monkeypatch.setattr(ingestion_module, "_validate_provider_markdown", lambda _markdown: [])
