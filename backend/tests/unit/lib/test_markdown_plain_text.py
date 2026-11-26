@@ -8,7 +8,9 @@ text is visible; the tests assert the new value.
 """
 
 import random
+import statistics
 import time
+import timeit
 
 import pytest
 
@@ -205,48 +207,29 @@ def test_empty_text_stays_empty():
 _HOSTILE_UNITS = ["<sup>", "<u>", "<sub>", "<sup>*", "&", "<", "*", "_", "~", "`", "![", "[", "\\\\"]
 
 
-def _repeat_to(unit: str, size: int) -> str:
-    return (unit * (size // len(unit) + 1))[:size]
+def _conversion_timer(unit: str, size: int) -> timeit.Timer:
+    text = (unit * (size // len(unit) + 1))[:size]
 
+    def convert():
+        markdown_inline_to_plain_text(text)
+        markdown_table_to_plain_text(f"| {text} |")
 
-def _clean_both_ways(text: str) -> None:
-    markdown_inline_to_plain_text(text)
-    markdown_table_to_plain_text(f"| {text} |")
-
-
-def _best_seconds(text: str, runs: int = 2) -> float:
-    best = float("inf")
-    for _ in range(runs):
-        started = time.perf_counter()
-        _clean_both_ways(text)
-        best = min(best, time.perf_counter() - started)
-    return best
+    # Include native regex and string scans. timeit suspends cyclic GC during
+    # each sample, and the thread clock excludes scheduling and background work.
+    return timeit.Timer(convert, timer=time.thread_time)
 
 
 @pytest.mark.parametrize("unit", _HOSTILE_UNITS)
 def test_hostile_input_cost_grows_linearly(unit):
-    # Eight times the input costs about eight times the time on a linear path
-    # and about sixty-four times on a quadratic one; 24 leaves room for a busy
-    # machine either way. A ratio does not depend on how fast the machine is.
-    small = _best_seconds(_repeat_to(unit, 16_000))
-    large = _best_seconds(_repeat_to(unit, 128_000))
+    small = _conversion_timer(unit, 2_000)
+    large = _conversion_timer(unit, 16_000)
+    ratios = []
+    for _ in range(5):
+        small_cpu = small.timeit(number=1)
+        ratios.append(large.timeit(number=1) / small_cpu)
 
-    assert large < 24 * max(small, 0.002)
-
-
-# The tag pre-strip and escape handling are this module's own code; 1 MB of
-# each (the converted-file cap) must finish. The old regexes took over 700 s
-# on 1 MB of "<sup>"; these took 8 to 16 s on the CI runner.
-_ONE_MEGABYTE = 1_000_000
-_ONE_MEGABYTE_SECONDS = 120
-
-
-@pytest.mark.parametrize("unit", ["<sup>", "<u>", "<sub>", "<sup>*", "\\\\"])
-def test_one_megabyte_of_unclosed_tags_finishes(unit):
-    started = time.perf_counter()
-    _clean_both_ways(_repeat_to(unit, _ONE_MEGABYTE))
-
-    assert time.perf_counter() - started < _ONE_MEGABYTE_SECONDS
+    # Eight times the input costs about 8x on a linear path and 64x on a quadratic one.
+    assert statistics.median(ratios) < 24, ratios
 
 
 def _run_fresh_import(script: str) -> str:

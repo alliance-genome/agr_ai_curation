@@ -185,9 +185,11 @@ describe('PdfViewer with a paper\'s files', () => {
     stubViewerFetch()
     await showFourFilePaper()
     const [first, second] = screen.getAllByRole('tab')
+    const user = userEvent.setup()
 
-    first!.focus()
-    fireEvent.keyDown(first!, { key: 'ArrowRight' })
+    await user.tab()
+    expect(first).toHaveFocus()
+    await user.keyboard('{ArrowRight}')
 
     expect(second).toHaveFocus()
   })
@@ -312,6 +314,7 @@ describe('PdfViewer with a paper\'s files', () => {
       fireEvent.click(within(banner).getByRole('button', { name: 'Close' }))
       await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
       expect(screen.queryByText('This evidence was saved before files were recorded')).not.toBeInTheDocument()
+      expect(scrollIntoView).not.toHaveBeenCalled()
     })
 
     it('evidence with an explicit null file id is treated as saved before files were recorded', async () => {
