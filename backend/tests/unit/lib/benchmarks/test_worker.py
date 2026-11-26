@@ -990,15 +990,23 @@ async def test_body_cancellation_does_not_wait_for_completion_sql(monkeypatch, c
     )
     from src.lib.benchmarks.worker import _DurableStageObserver
 
+    loop = asyncio.get_running_loop()
+    checkpoint_entered = loop.create_future()
     release = threading.Event()
     body_started = asyncio.Event()
+    lease_renewed = asyncio.Event()
+
+    def block_completion(**kwargs):
+        loop.call_soon_threadsafe(checkpoint_entered.set_result, None)
+        release.wait()
+
     repository = MagicMock()
-    getattr(repository, checkpoint).side_effect = lambda **kwargs: release.wait(2)
+    getattr(repository, checkpoint).side_effect = block_completion
     monkeypatch.setattr("src.lib.benchmarks.worker.BenchmarkRepository", lambda session: repository)
     instance = BenchmarkWorker(session_factory=MagicMock())
-    instance.cell_timeout_seconds = 0.1
+    instance.cell_timeout_seconds = 60
     monkeypatch.setattr(instance, "heartbeat_seconds", 0.01)
-    instance._renew_leases = MagicMock()
+    monkeypatch.setattr(instance, "_renew_leases", lambda *args: loop.call_soon_threadsafe(lease_renewed.set))
     cell = MagicMock(id=uuid4(), job_id=uuid4(), attempt_count=1)
     observer = _DurableStageObserver(
         cell=cell, lease_owner=instance.worker_id, session_factory=instance.session_factory,
@@ -1014,23 +1022,32 @@ async def test_body_cancellation_does_not_wait_for_completion_sql(monkeypatch, c
             finally:
                 contexts_after_cancel.append(current_stage())
 
-    instance._execute_authorized_target = execute
+    monkeypatch.setattr(instance, "_execute_authorized_target", execute)
     task = asyncio.create_task(instance._run_with_heartbeat(AsyncMock(), MagicMock(), cell))
     try:
-        await asyncio.wait_for(body_started.wait(), 1)
+        await asyncio.wait_for(body_started.wait(), timeout=10)
         if stop == "cancel":
             task.cancel()
-        done, _ = await asyncio.wait({task}, timeout=0.5)
+        else:
+            await asyncio.wait_for(lease_renewed.wait(), timeout=10)
+            # Expire the real cell deadline only after the body and heartbeat ran.
+            clock = loop.time
+            monkeypatch.setattr(loop, "time", lambda: clock() + instance.cell_timeout_seconds)
+
+        done, _ = await asyncio.wait_for(
+            asyncio.wait({task, checkpoint_entered}, return_when=asyncio.FIRST_COMPLETED),
+            timeout=10,
+        )
         assert task in done, "cancellation unwind waited for a fresh completion checkpoint"
         with pytest.raises(TimeoutError if stop == "timeout" else asyncio.CancelledError):
-            await task
+            task.result()
         repository.finish_pipeline.assert_not_called()
         repository.finish_stage.assert_not_called()
         assert contexts_after_cancel == [None]
-        if stop == "timeout":
-            instance._renew_leases.assert_called()
     finally:
         release.set()
+        if not task.done():
+            task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 
 
