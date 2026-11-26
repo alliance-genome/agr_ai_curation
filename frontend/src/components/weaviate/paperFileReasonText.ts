@@ -446,7 +446,7 @@ export function fileNoLongerChoosableText(provider?: string | null): string {
 
 /** N33: Library Add button label. */
 export function addFilesButtonText(count: number): string {
-  if (count <= 0) {
+  if (!Number.isFinite(count) || count <= 0) {
     return 'Add files'
   }
   return count === 1

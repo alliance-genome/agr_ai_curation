@@ -1419,8 +1419,6 @@ async def test_identifier_import_service_imports_pdf_when_markdown_is_missing(tm
     assert len(dispatch_recorder.upload_calls) == 1
     upload_request = dispatch_recorder.upload_calls[0]["request"]
     assert isinstance(upload_request, UploadExecutionRequest)
-    assert upload_request.filename == result.results[0].filename
-    assert upload_request.filename
     assert upload_request.file_path.exists()
     assert provider.download_calls == [
         {"artifact_id": "pdf-1", "request_bearer_token": "curator-token"}

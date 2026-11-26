@@ -260,6 +260,7 @@ describe('DocumentFilesSection (Library Files + Add)', () => {
     renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
 
     const list = await screen.findByRole('list', { name: 'Files in ABC Literature not in this paper' })
+    expect(list).toHaveAttribute('role', 'list')
     expect(list).toHaveStyle({ listStyle: 'none', paddingLeft: '0px' })
     const rows = within(list).getAllByRole('listitem')
     expect(rows).toHaveLength(5)
@@ -4148,6 +4149,132 @@ describe('DocumentFilesSection (Library Remove)', () => {
     )
 
     expect(await screen.findByText('Adding files to paper B...')).toBeInTheDocument()
+  })
+
+  it('preserves a failed add job warning alert across a subsequent file removal', async () => {
+    const user = userEvent.setup()
+    let paperFilesCalls = 0
+
+    stubApi({
+      paperFiles: () => {
+        paperFilesCalls += 1
+        return jsonResponse(paperFilesCalls <= 2 ? FOUR_FILES_PAYLOAD : THREE_FILES_AFTER_REMOVAL)
+      },
+      onAddFiles: () => jsonResponse(makeJob({ job_id: 'job-add-failed-1', status: 'pending' }), 202),
+      onFetchJob: () =>
+        jsonResponse(
+          makeJob({
+            job_id: 'job-add-failed-1',
+            status: 'failed',
+            current_stage: 'failed',
+            message: 'Adding files failed.',
+            error_message: 'Adding files failed.',
+            metadata: { job_kind: 'supplement_add', error_code: 'add_failed' },
+          }),
+        ),
+      onRemovalCheck: (fileId) => jsonResponse(removalCheckFor('removable_plain', { file_id: fileId })),
+      onRemoveFile: (fileId) =>
+        jsonResponse({
+          document_id: DOCUMENT_ID,
+          file_id: fileId,
+          removed: true,
+          cleanup_finished: true,
+          ready_file_count: 2,
+        }),
+    })
+
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+
+    // 1) Trigger an add that fails and renders its warning alert.
+    await user.click(await screen.findByRole('checkbox', { name: 'Made_up_S20' }))
+    await user.click(screen.getByRole('button', { name: 'Add 1 file' }))
+    expect(await screen.findByText('Adding files')).toBeInTheDocument()
+    expect(await screen.findByText('Adding files failed.')).toBeInTheDocument()
+
+    // 2) Remove another supplement -> failed add warning alert must remain visible.
+    const removeButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(removeButton).toBeEnabled())
+    await user.click(removeButton)
+    const confirmDialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    await user.click(within(confirmDialog).getByRole('button', { name: 'Remove file' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Remove Table_S1.xlsx' })).not.toBeInTheDocument()
+    })
+    expect(screen.getByText('Adding files')).toBeInTheDocument()
+    expect(screen.getByText('Adding files failed.')).toBeInTheDocument()
+  })
+
+  it('preserves a finished server-discovered supplement-wait outcome summary across a subsequent file removal', async () => {
+    const user = userEvent.setup()
+    let activeJobPhase: 'active' | 'done' = 'active'
+    let paperFilesCalls = 0
+
+    const waitingJob = makeJob({
+      job_id: 'job-wait-preserve-1',
+      status: 'running',
+      current_stage: WAITING_FOR_SUPPLEMENTS_STAGE,
+      metadata: supplementWaitMetadataFixture.mixed_waiting,
+    })
+
+    stubApi({
+      activeJobs: () =>
+        jsonResponse({
+          jobs: activeJobPhase === 'active' ? [waitingJob] : [],
+          total: activeJobPhase === 'active' ? 1 : 0,
+          limit: 50,
+          offset: 0,
+        }),
+      paperFiles: () => {
+        paperFilesCalls += 1
+        return jsonResponse(paperFilesCalls <= 2 ? FOUR_FILES_PAYLOAD : THREE_FILES_AFTER_REMOVAL)
+      },
+      onFetchJob: () => {
+        activeJobPhase = 'done'
+        return jsonResponse(
+          makeJob({
+            job_id: 'job-wait-preserve-1',
+            status: 'completed',
+            current_stage: 'completed',
+            metadata: supplementWaitMetadataFixture.finished_with_wait_timestamp,
+          }),
+        )
+      },
+      onRemovalCheck: (fileId) => jsonResponse(removalCheckFor('removable_plain', { file_id: fileId })),
+      onRemoveFile: (fileId) =>
+        jsonResponse({
+          document_id: DOCUMENT_ID,
+          file_id: fileId,
+          removed: true,
+          cleanup_finished: true,
+          ready_file_count: 2,
+        }),
+    })
+
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT, pollIntervalMs: 30 })
+
+    // 1) Server-discovered supplement-wait finishes and renders its SupplementFilesList outcomes.
+    const progressList = await screen.findByRole('list', { name: 'Supplement files' })
+    await waitFor(() => {
+      expect(within(progressList).getByText('Done_S1.xlsx')).toBeInTheDocument()
+      expect(within(progressList).getByText('Failed_S2.xlsx')).toBeInTheDocument()
+    })
+    const removeButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(removeButton).toBeEnabled())
+
+    // 2) Remove a supplement -> finished supplement-wait outcomes must remain rendered.
+    await user.click(removeButton)
+    const confirmDialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    await user.click(within(confirmDialog).getByRole('button', { name: 'Remove file' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Remove Table_S1.xlsx' })).not.toBeInTheDocument()
+    })
+    const retainedProgressList = screen.getByRole('list', { name: 'Supplement files' })
+    expect(within(retainedProgressList).getByText('Done_S1.xlsx')).toBeInTheDocument()
+    expect(within(retainedProgressList).getByText('Failed_S2.xlsx')).toBeInTheDocument()
   })
 })
 

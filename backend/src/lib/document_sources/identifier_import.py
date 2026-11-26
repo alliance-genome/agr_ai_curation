@@ -1425,7 +1425,6 @@ class IdentifierImportService:
                         job_id=job.job_id,
                         user_id=user_sub,
                         file_path=saved_path,
-                        filename=filename,
                         supplements=supplements,
                         login_expires_at=login_expires_at,
                     ),

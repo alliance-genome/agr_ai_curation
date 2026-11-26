@@ -505,7 +505,6 @@ def _capture_not_started_job_metadata() -> dict[str, Any]:
             job_id=JOB_UUID,
             document_id=DOC_UUID,
             user_id=1,
-            filename="Made_up_main.pdf",
             message="Processing completed",
         )
     assert completed_job is not None and completed_job.status == "completed"

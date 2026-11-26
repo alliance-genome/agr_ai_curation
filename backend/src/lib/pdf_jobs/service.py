@@ -739,25 +739,11 @@ def _open_queued_supplement_entries(job: PdfProcessingJob) -> list[dict] | None:
     return entries if has_queued else None
 
 
-def _resolve_stage_filename(
-    filename: Optional[str],
-    *fallbacks: Optional[str],
-) -> Optional[str]:
-    """Return the first non-blank filename from explicit input and persisted fallbacks."""
-    for candidate in (filename, *fallbacks):
-        if isinstance(candidate, str):
-            stripped = candidate.strip()
-            if stripped:
-                return stripped
-    return None
-
-
 def complete_import_and_start_supplement_wait(
     *,
     job_id: UUID | str,
     document_id: UUID | str,
     user_id: int,
-    filename: Optional[str] = None,
     message: Optional[str] = None,
     metadata: Optional[dict] = None,
 ) -> tuple[Optional[PdfJobResponse], Optional[PdfJobResponse]]:
@@ -842,15 +828,10 @@ def complete_import_and_start_supplement_wait(
                 select(PDFDocument).where(PDFDocument.id == doc_uuid).with_for_update()
             ).scalar_one_or_none()
             if paper is not None:
-                stage_filename = _resolve_stage_filename(
-                    filename,
-                    source_job.filename,
-                    paper.filename,
-                )
                 candidate_stage = PdfProcessingJob(
                     document_id=doc_uuid,
                     user_id=user_id,
-                    filename=stage_filename,
+                    filename=paper.filename,
                     status=PdfJobStatus.PENDING.value,
                     current_stage=WAITING_FOR_SUPPLEMENTS_STAGE,
                     progress_percentage=0,
@@ -907,7 +888,6 @@ def start_supplement_wait_job(
     *,
     document_id: UUID | str,
     user_id: int,
-    filename: Optional[str] = None,
     supplements: Optional[list[dict]] = None,
     source_job_id: Optional[UUID | str] = None,
 ) -> PdfJobResponse:
@@ -964,11 +944,6 @@ def start_supplement_wait_job(
         if paper is None:
             session.rollback()
             raise ActiveJobExistsError(document_id)
-        stage_filename = _resolve_stage_filename(
-            filename,
-            source_job.filename if source_job is not None else None,
-            paper.filename,
-        )
         if source_job is not None:
             updated_source_metadata = dict(source_job.metadata_json or {})
             updated_source_metadata.pop("supplements", None)
@@ -982,7 +957,7 @@ def start_supplement_wait_job(
         # Born in the waiting stage, so a delete can end it from its first moment
         # (queued or not), never only after its first poll.
         return create_job_in_session(
-            session, document_id=doc_uuid, user_id=user_id, filename=stage_filename,
+            session, document_id=doc_uuid, user_id=user_id, filename=paper.filename,
             metadata=metadata,
             current_stage=WAITING_FOR_SUPPLEMENTS_STAGE,
         )

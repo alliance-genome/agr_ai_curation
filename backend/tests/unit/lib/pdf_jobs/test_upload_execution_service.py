@@ -3831,7 +3831,6 @@ async def test_a_ready_main_paper_completes_its_import_job_and_its_supplements_g
             "job_id": "job-provider",
             "document_id": "doc-job-provider",
             "user_id": 42,
-            "filename": "paper.pdf",
             "message": "Processing completed",
             "metadata": None,
         }
@@ -4910,7 +4909,7 @@ async def test_markdown_import_completes_when_close_and_reporting_fail(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_upload_execution_request_forwards_filename_to_supplement_wait_handoff(monkeypatch):
+async def test_upload_execution_request_hands_off_to_supplement_wait_without_filename_kwarg(monkeypatch):
     from src.lib.document_sources import supplement_wait
 
     handoffs = []
@@ -4951,7 +4950,6 @@ async def test_upload_execution_request_forwards_filename_to_supplement_wait_han
             job_id="job-upload-1",
             user_id="user-1",
             file_path=Path("/tmp/imported-paper.pdf"),
-            filename="imported-paper.pdf",
             supplements=_plan(),
         ),
         message="Processing completed",
@@ -4962,7 +4960,6 @@ async def test_upload_execution_request_forwards_filename_to_supplement_wait_han
             "job_id": "job-upload-1",
             "document_id": "doc-upload-1",
             "user_id": 42,
-            "filename": "imported-paper.pdf",
             "message": "Processing completed",
             "metadata": None,
         }

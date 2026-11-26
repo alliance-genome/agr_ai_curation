@@ -934,23 +934,10 @@ def test_the_outline_signal_is_false_for_a_paper_with_no_supplement_wait(monkeyp
     assert service_module.supplement_wait_active(session, uuid4()) is False
 
 
-@pytest.mark.parametrize(
-    ("passed_filename", "source_filename", "paper_filename", "expected_filename"),
-    [
-        ("explicit-paper.pdf", "source-job.pdf", "persisted-paper.pdf", "explicit-paper.pdf"),
-        ("  explicit-paper.pdf  ", "source-job.pdf", "persisted-paper.pdf", "explicit-paper.pdf"),
-        (None, "source-job.pdf", "persisted-paper.pdf", "source-job.pdf"),
-        ("   ", "source-job.pdf", "persisted-paper.pdf", "source-job.pdf"),
-        (None, None, "persisted-paper.pdf", "persisted-paper.pdf"),
-        ("   ", "   ", "persisted-paper.pdf", "persisted-paper.pdf"),
-    ],
-)
-def test_complete_import_and_start_supplement_wait_resolves_stage_filename(
+@pytest.mark.parametrize("source_filename", ["different-source-job.pdf", None, "   "])
+def test_complete_import_and_start_supplement_wait_uses_persisted_paper_filename(
     monkeypatch,
-    passed_filename,
     source_filename,
-    paper_filename,
-    expected_filename,
 ):
     from src.lib.document_files import paper_lock
 
@@ -971,7 +958,7 @@ def test_complete_import_and_start_supplement_wait_resolves_stage_filename(
         ]
     }
     paper = _build_document(source_job, status="completed")
-    paper.filename = paper_filename
+    paper.filename = "persisted-paper.pdf"
     session = _FakeSession([source_job, paper])
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
     monkeypatch.setattr(paper_lock, "try_lock_paper_for_add", lambda _session, _doc_id: True)
@@ -980,35 +967,29 @@ def test_complete_import_and_start_supplement_wait_resolves_stage_filename(
         job_id=source_job.id,
         document_id=source_job.document_id,
         user_id=source_job.user_id,
-        filename=passed_filename,
         message="Processing completed",
     )
 
     assert completed_main is not None
     assert stage_job is not None
-    assert stage_job.filename == expected_filename
-    assert session.added[0].filename == expected_filename
+    assert stage_job.filename == "persisted-paper.pdf"
+    assert session.added[0].filename == "persisted-paper.pdf"
     assert session.commit_calls == 1
 
 
 @pytest.mark.parametrize(
-    ("use_source_job", "passed_filename", "source_filename", "paper_filename", "expected_filename"),
+    ("use_source_job", "source_filename"),
     [
-        (True, "explicit-paper.pdf", "source-job.pdf", "persisted-paper.pdf", "explicit-paper.pdf"),
-        (True, None, "source-job.pdf", "persisted-paper.pdf", "source-job.pdf"),
-        (True, "   ", "source-job.pdf", "persisted-paper.pdf", "source-job.pdf"),
-        (True, None, "   ", "persisted-paper.pdf", "persisted-paper.pdf"),
-        (False, None, None, "persisted-paper.pdf", "persisted-paper.pdf"),
-        (False, "   ", None, "persisted-paper.pdf", "persisted-paper.pdf"),
+        (True, "different-source-job.pdf"),
+        (True, None),
+        (True, "   "),
+        (False, None),
     ],
 )
-def test_start_supplement_wait_job_resolves_stage_filename(
+def test_start_supplement_wait_job_uses_persisted_paper_filename(
     monkeypatch,
     use_source_job,
-    passed_filename,
     source_filename,
-    paper_filename,
-    expected_filename,
 ):
     from src.lib.document_files import paper_lock
 
@@ -1030,7 +1011,7 @@ def test_start_supplement_wait_job_resolves_stage_filename(
         ]
     }
     paper = _build_document(source_job, status="completed")
-    paper.filename = paper_filename
+    paper.filename = "persisted-paper.pdf"
     session = _FakeSession([source_job, paper] if use_source_job else [paper])
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
     monkeypatch.setattr(paper_lock, "try_lock_paper_for_add", lambda _session, _doc_id: True)
@@ -1038,10 +1019,9 @@ def test_start_supplement_wait_job_resolves_stage_filename(
     stage_job = service_module.start_supplement_wait_job(
         document_id=source_job.document_id,
         user_id=source_job.user_id,
-        filename=passed_filename,
         source_job_id=source_job.id if use_source_job else None,
     )
 
-    assert stage_job.filename == expected_filename
-    assert session.added[0].filename == expected_filename
+    assert stage_job.filename == "persisted-paper.pdf"
+    assert session.added[0].filename == "persisted-paper.pdf"
     assert session.commit_calls == 1
