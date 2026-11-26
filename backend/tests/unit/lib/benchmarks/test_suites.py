@@ -19,6 +19,7 @@ from src.lib.benchmarks.suites import (
     resolve_suite,
     validate_suite,
 )
+from src.lib.config import models_loader
 
 
 ROOT = Path(__file__).resolve().parents[5] / "packages" / "alliance" / "benchmarks"
@@ -290,12 +291,6 @@ def test_resolved_plan_is_deeply_immutable():
         ),
         (
             lambda payload: payload["configurations"][0]["routes"].update(
-                {"supervisor": {"provider": "provider-a", "model": "unknown"}}
-            ),
-            "unknown provider/model",
-        ),
-        (
-            lambda payload: payload["configurations"][0]["routes"].update(
                 {
                     "supervisor": {
                         "provider": "provider-a",
@@ -308,12 +303,43 @@ def test_resolved_plan_is_deeply_immutable():
         ),
     ],
 )
-def test_plan_rejects_invalid_slots_models_and_capabilities(mutate, message):
+def test_plan_rejects_invalid_slots_and_capabilities(mutate, message):
     payload = _payload()
     mutate(payload)
 
     with pytest.raises(BenchmarkCatalogError, match=message):
         _resolve(payload)
+
+
+@pytest.mark.parametrize(
+    ("model", "message"),
+    [
+        (
+            "model-old",
+            "asks for model 'model-old', which the model catalog has replaced with "
+            "'model-a'; a replaced version cannot be benchmarked. Route to 'model-a', "
+            "or benchmark a new version before it replaces the current one "
+            "(as a hidden catalog entry).",
+        ),
+        ("model-unknown", "uses unknown provider/model route 'provider-a/model-unknown'"),
+    ],
+    ids=["replaced", "unknown"],
+)
+def test_plan_rejects_unavailable_model(model, message, tmp_path, request):
+    path = tmp_path / "models.yaml"
+    path.write_text(
+        "models:\n  - model_id: model-a\n    provider: provider-a\n    replaces: [model-old]\n",
+        encoding="utf-8",
+    )
+    request.addfinalizer(models_loader.reset_cache)
+    models_loader.load_models(path, packages_dir=tmp_path / "no-packages", force_reload=True)
+    payload = _payload()
+    payload["configurations"][1]["routes"]["agent:extractor"]["model"] = model
+
+    with pytest.raises(BenchmarkCatalogError) as exc:
+        _resolve(payload)
+
+    assert str(exc.value) == f"configuration 'low-extractor' slot 'agent:extractor' {message}"
 
 
 def test_plan_enforces_all_approved_limits():
