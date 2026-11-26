@@ -33,6 +33,10 @@ from .test_supplement_add_search_index import (  # noqa: F401
     owner_id,
 )
 
+EXPECTED_REFUSAL_DETAIL = (
+    "This paper could not be deleted: one of its stored files needs an administrator. Nothing was changed."
+)
+
 
 @pytest.fixture
 def real_delete(monkeypatch, owner_id):
@@ -81,13 +85,16 @@ async def test_a_path_outside_the_curators_storage_refuses_the_delete_before_any
     outside = _write(tmp_path, "another-curator/not-yours.pdf")
     _set(paper, **{column: f"{TEST_USER_ID}/../another-curator/not-yours.pdf"})
     files_before, pieces_before = _stored(tmp_path), _indexes(index, str(paper))
+    file_ids_before = [row.id for row in _rows(paper)]
 
     with pytest.raises(HTTPException) as refused:
         await documents_api.delete_document_endpoint(document_id=str(paper), user={"sub": TEST_USER_ID})
 
     assert refused.value.status_code == 403
+    assert refused.value.detail == EXPECTED_REFUSAL_DETAIL
     with SessionLocal() as db:
         assert db.get(PDFDocument, paper) is not None  # the paper is still in the Library
+    assert [row.id for row in _rows(paper)] == file_ids_before
     assert _indexes(index, str(paper)) == pieces_before == [0, 1, 2]
     assert _paper_object(index, paper)["processingStatus"] == "completed"
     assert _stored(tmp_path) == files_before and outside in files_before
@@ -108,13 +115,16 @@ async def test_a_stored_path_that_names_a_folder_refuses_the_delete_before_anyth
     _write(tmp_path, f"{TEST_USER_ID}/a-folder/inside.txt")
     _set(paper, **{column: f"{TEST_USER_ID}/a-folder"})
     files_before, pieces_before = _stored(tmp_path), _indexes(index, str(paper))
+    file_ids_before = [row.id for row in _rows(paper)]
 
     with pytest.raises(HTTPException) as refused:
         await documents_api.delete_document_endpoint(document_id=str(paper), user={"sub": TEST_USER_ID})
 
     assert refused.value.status_code == 403
+    assert refused.value.detail == EXPECTED_REFUSAL_DETAIL
     with SessionLocal() as db:
         assert db.get(PDFDocument, paper) is not None
+    assert [row.id for row in _rows(paper)] == file_ids_before
     assert _indexes(index, str(paper)) == pieces_before == [0, 1, 2]
     assert _stored(tmp_path) == files_before
 
