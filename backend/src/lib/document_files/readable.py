@@ -145,6 +145,10 @@ class ReadableFile:
         return self.chunk_index_start <= chunk_index <= self.chunk_index_end
 
     @property
+    def fingerprint(self) -> tuple[str, int, int]:
+        return self.file_id, self.chunk_index_start, self.chunk_index_end
+
+    @property
     def chunk_count(self) -> int:
         return self.chunk_index_end - self.chunk_index_start + 1
 
@@ -179,7 +183,7 @@ class ReadableFiles:
     def fingerprint(self) -> tuple[tuple[str, int, int], ...]:
         """Identity of the readable set, for caches built from it."""
 
-        return tuple((file.file_id, file.chunk_index_start, file.chunk_index_end) for file in self.files)
+        return tuple(file.fingerprint for file in self.files)
 
     def labelled(self) -> tuple[tuple[str, ReadableFile], ...]:
         """Each readable file with the name the model sees and passes back as ``file``, in tab order."""
@@ -263,6 +267,23 @@ def readable_files_in_session(
     return ReadableFiles(str(document_id), tuple(files), being_added, converting)
 
 
+@contextmanager
+def lock_readable_files(
+    document_id: str, owner_auth_sub: str, file_ids: set[str],
+) -> Iterator[tuple[Session, ReadableFiles]]:
+    """Pin the cited file rows against removal while the caller accepts a writer input."""
+    from src.models.sql.database import SessionLocal
+
+    with SessionLocal.begin() as db:
+        db.execute(
+            select(PDFDocumentFile.id).where(
+                PDFDocumentFile.document_id == UUID(document_id),
+                PDFDocumentFile.id.in_([UUID(file_id) for file_id in file_ids]),
+            ).order_by(PDFDocumentFile.id).with_for_update(read=True)
+        ).all()
+        yield db, readable_files_in_session(db, document_id, owner_auth_sub)
+
+
 def resolve_readable_files(document_id: str, owner_auth_sub: str) -> ReadableFiles:
     """Resolve readable files in a short read of their own (outside a tool call)."""
 
@@ -279,6 +300,7 @@ __all__ = [
     "ReadingScope",
     "current_reading_scope",
     "file_pages_trusted",
+    "lock_readable_files",
     "readable_files_in_session",
     "reading_scope",
     "resolve_readable_files",

@@ -34,15 +34,13 @@ model (AGENTS.md section 8):
 from __future__ import annotations
 
 import asyncio
-
-from agr_ai_curation_runtime.document_errors import FILES_CHANGED_ERROR_CODE
 import json
 import logging
 import math
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from copy import copy
-from typing import Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from agents import FunctionTool, ItemHelpers, Runner
 from agents.agent import ToolsToFinalOutputResult
@@ -51,7 +49,9 @@ from agents.stream_events import RunItemStreamEvent
 from agents.tool_context import ToolContext
 from openai.types.responses import ResponseFunctionToolCall
 
+from agr_ai_curation_runtime.document_errors import DocumentReadError, files_changed_answer
 from src.lib.context import get_current_user_id
+from src.lib.document_files.readable import ReadableFile, ReadableFiles
 from src.lib.observability import runtime
 from src.lib.observability.sentry import exception_chain_already_captured
 from src.lib.packages import tool_roles
@@ -75,6 +75,9 @@ from .tool_surface import (
     apply_tool_surface,
     tool_surface_trace_attributes,
 )
+
+if TYPE_CHECKING:
+    from .document_references import SourceBinding
 
 logger = logging.getLogger(__name__)
 
@@ -314,6 +317,14 @@ def writer_slices(
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class PrefetchedChunk:
+    index: int
+    source: ReadableFile | None
+    text: str
+    pending_reads: list[SourceBinding]
+
+
 @dataclass(frozen=True)
 class WriterOutcome:
     index: int
@@ -539,7 +550,7 @@ class FanoutExtraction:
         self.new_items: list[Any] = []
         self.writer_outcomes: list[WriterOutcome] = []
         self._planner_result: Any = None
-        self._chunk_views: dict[int, asyncio.Future] = {}
+        self._chunk_views: dict[tuple[int, tuple[str, int, int]], asyncio.Task[PrefetchedChunk]] = {}
         # Writers' tool start and end times by call ID, for the replayed audit.
         self._tool_timings: dict[str, tuple[datetime, datetime]] = {}
         # Ownership bookkeeping for writer re-runs, by (writer, attempt): the tool
@@ -1039,15 +1050,12 @@ class FanoutExtraction:
             chunk_indexes = list(dict.fromkeys(
                 chunk for position in positions for chunk in plan.items[position].chunks
             ))
-            views = (
-                [(chunk, await self._chunk_view(chunk)) for chunk in chunk_indexes]
-                if self.read_tool is not None
-                else []
-            )
             writer = self._writer_agent((index, attempt))
+            prefetched = await self._prefetch_chunks(chunk_indexes)
+            assignment = self._accept_writer_assignment(index, writer_count, positions, prefetched)
             run_input = [
                 {"role": "user", "content": self.input_text},
-                {"role": "developer", "content": self._writer_assignment(index, writer_count, positions, views)},
+                {"role": "developer", "content": assignment},
             ]
             from .runner import run_agent_with_owned_openai_resources
 
@@ -1204,21 +1212,73 @@ class FanoutExtraction:
             lines += [f"read_chunk(chunk_index={chunk}) result:\n{view}" for chunk, view in views]
         return "\n".join(lines)
 
-    async def _chunk_view(self, chunk_index: int) -> str:
-        """Read each cited chunk once per run, shared by every writer that cites it."""
+    async def _prefetch_chunks(self, chunk_indexes: Sequence[int]) -> list[PrefetchedChunk]:
+        if self.read_tool is None or not chunk_indexes:
+            return []
+        readable = await self._prefetch_readable_files()
+        return [await self._chunk_view(chunk, readable.file_for(chunk)) for chunk in chunk_indexes]
 
-        view = self._chunk_views.get(chunk_index)
+    def _accept_writer_assignment(
+        self, index: int, writer_count: int, positions: Sequence[int], chunks: list[PrefetchedChunk],
+    ) -> str:
+        from src.lib.document_files.readable import lock_readable_files
+        from .document_references import record_prefetched_files_read
+
+        if not chunks:
+            return self._writer_assignment(index, writer_count, positions, [])
+        file_ids = {chunk.source.file_id for chunk in chunks if chunk.source is not None}
+        accepted = []
+        views = []
+        # Order acceptance with removal. There is no await between committing this
+        # input and handing it to the runner, and no lock held during the model call.
+        try:
+            with lock_readable_files(self.document_id, self.user_id, file_ids) as (db, readable):
+                current = set(readable.fingerprint)
+                for chunk in chunks:
+                    if chunk.source is not None and chunk.source.fingerprint not in current:
+                        text = exact_json(files_changed_answer(PREFETCH_TOOL_NAME))
+                    else:
+                        text = chunk.text
+                        accepted.append(chunk)
+                    views.append((chunk.index, text))
+                assignment = self._writer_assignment(index, writer_count, positions, views)
+                pending = [binding for chunk in accepted for binding in chunk.pending_reads]
+                record_prefetched_files_read(db, pending)
+        except Exception as exc:
+            raise DocumentReadError(PREFETCH_TOOL_NAME) from exc
+        for chunk in accepted:
+            chunk.pending_reads.clear()
+        return assignment
+
+    async def _prefetch_readable_files(self) -> ReadableFiles:
+        from src.lib.document_files.readable import resolve_readable_files
+
+        try:
+            return await asyncio.to_thread(resolve_readable_files, self.document_id, self.user_id)
+        except Exception as exc:
+            # A failed scope lookup is a failed source read, including for writer reruns.
+            raise DocumentReadError(PREFETCH_TOOL_NAME) from exc
+
+    async def _chunk_view(self, chunk_index: int, source: ReadableFile | None) -> PrefetchedChunk:
+        if source is None:
+            # Let the tool describe the current readable ranges. An out-of-range
+            # answer can change as files come and go, so it is never cached.
+            return await self._read_chunk_view(chunk_index, source)
+
+        key = (chunk_index, source.fingerprint)
+        view = self._chunk_views.get(key)
         if view is None:
-            view = asyncio.ensure_future(self._read_chunk_view(chunk_index))
-            self._chunk_views[chunk_index] = view
+            view = asyncio.create_task(self._read_chunk_view(chunk_index, source))
+            self._chunk_views[key] = view
         return await asyncio.shield(view)
 
-    async def _read_chunk_view(self, chunk_index: int) -> str:
+    async def _read_chunk_view(self, chunk_index: int, source: ReadableFile | None) -> PrefetchedChunk:
         """Render one chunk exactly as the model sees a read_chunk result."""
 
-        from .document_references import project_model_source_items
+        from .document_references import defer_files_read, project_model_source_items
 
         tool = self.read_tool
+        assert tool is not None
         arguments = json.dumps({"chunk_index": chunk_index})
         call_id = f"fanout_prefetch_{chunk_index}"
         context = ToolContext(
@@ -1227,22 +1287,29 @@ class FanoutExtraction:
             tool_call_id=call_id,
             tool_arguments=arguments,
         )
-        # The prefetched text reaches the writers' models: read it under the
-        # planner's history invocation, which the result's files read include
-        # (ALL-1460). The prefetch runs outside any tool call, so no history is active.
+        # Keep canonical tool history under the planner's invocation. Attribute
+        # files shown only once the writer accepts the corresponding input.
         from .run_history import ACTIVE_HISTORY
 
         history = getattr(self.planner_agent, "run_history", None)
         token = ACTIVE_HISTORY.set(history) if history is not None else None
         try:
-            raw = await tool.on_invoke_tool(context, arguments)
+            with defer_files_read() as pending_reads:
+                raw = await tool.on_invoke_tool(context, arguments)
         finally:
             if token is not None:
                 ACTIVE_HISTORY.reset(token)
-        if isinstance(raw, dict) and raw.get("error_code") == FILES_CHANGED_ERROR_CODE:
-            # Withheld because the paper's files changed: never shared with later
-            # writers; the next writer that cites this chunk reads it again.
-            self._chunk_views.pop(chunk_index, None)
+        error_code = raw.get("error_code") if isinstance(raw, dict) else getattr(raw, "error_code", None)
+        # Tie the cache key to the scoped tool's actual read, even if the owner
+        # changed between the initial scope lookup and tool entry.
+        if not error_code and (source is None or any(
+            file.fingerprint != source.fingerprint
+            for binding in pending_reads for file in binding.shown_files().values()
+        )):
+            raw = files_changed_answer(PREFETCH_TOOL_NAME)
+            error_code = raw["error_code"]
+        if error_code:
+            pending_reads.clear()
         call = ResponseFunctionToolCall(
             type="function_call", call_id=call_id, name=_tool_name(tool), arguments=arguments,
         )
@@ -1252,8 +1319,12 @@ class FanoutExtraction:
             user_id=get_current_user_id(),
             cache={},
         )
+        if source is not None and error_code:
+            # Only passages can be reused. A subsequent read gets its own answer.
+            self._chunk_views.pop((chunk_index, source.fingerprint), None)
         output = projected[1]["output"]
-        return output if isinstance(output, str) else exact_json(output)
+        text = output if isinstance(output, str) else exact_json(output)
+        return PrefetchedChunk(chunk_index, source, text, pending_reads)
 
     # -- finalize ----------------------------------------------------------------
 

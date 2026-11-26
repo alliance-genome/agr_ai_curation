@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from copy import deepcopy
 import hashlib
 import json
@@ -25,6 +25,7 @@ from src.lib.context import get_current_session_id, get_current_trace_id, get_cu
 from src.lib.document_files.service import FileRangeMissingError
 from src.lib.document_files.files_read import FILES_READ_KIND
 from src.lib.document_files.readable import (
+    ReadableFile,
     ReadableFiles,
     ReadableFilesError,
     readable_files_in_session,
@@ -197,14 +198,17 @@ class SourceBinding:
     def _locked_transaction(self):
         """One transaction under the reference lock, with the bindings re-read and pinned."""
         with self.store.session_factory() as db, db.begin():
-            # All reference issuers use this transaction lock. It protects a
-            # definition, not model context size, and never spans async tool I/O.
-            if db.bind.dialect.name == "postgresql":
-                lock_key = exact_json([self.user_id, self.history_scope.session_id or self.history_scope.run_id, self.document_id])
-                db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": lock_key})
-            self.records = _read_bindings(self.store, self.history_scope, self.document_id, db=db)
-            self.pin_generation(db=db)
+            self._lock_and_pin(db)
             yield db
+
+    def _lock_and_pin(self, db) -> None:
+        # All reference issuers use this transaction lock. It protects a
+        # definition, not model context size, and never spans async tool I/O.
+        if db.bind.dialect.name == "postgresql":
+            lock_key = exact_json([self.user_id, self.history_scope.session_id or self.history_scope.run_id, self.document_id])
+            db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": lock_key})
+        self.records = _read_bindings(self.store, self.history_scope, self.document_id, db=db)
+        self.pin_generation(db=db)
 
     def note_shown(self, chunk_indexes) -> None:
         """Pieces whose text this call shows the model: reads, search hits, evidence selections.
@@ -225,16 +229,21 @@ class SourceBinding:
         # Files-read rows are append-only, so a file already in this invocation's
         # records (re-read under the lock by ``retain``, or loaded with the binding)
         # stays recorded: skip the locked scan when every shown file is there.
-        if {self._shown_file(index).file_id for index in self.shown_chunk_indexes} <= self._files_recorded():
+        shown = self.shown_files()
+        if shown.keys() <= self._files_recorded():
             return
         with self._locked_transaction() as db:
-            self._record_files_read(sorted(self.shown_chunk_indexes), db=db)
+            self._record_files_read(shown, db=db)
 
-    def _shown_file(self, index: int):
-        file = self.readable.file_for(index)
-        if file is None:
-            raise DocumentReferenceError("A shown chunk is not part of a readable file")
-        return file
+    def shown_files(self) -> dict[str, ReadableFile]:
+        """Files actually shown by this tool call, with their read-time metadata."""
+        shown = {}
+        for index in sorted(self.shown_chunk_indexes):
+            file = self.readable.file_for(index)
+            if file is None:
+                raise DocumentReferenceError("A shown chunk is not part of a readable file")
+            shown[file.file_id] = file
+        return shown
 
     def _files_recorded(self) -> set[str]:
         """The files this invocation's files-read records name, from ``self.records``."""
@@ -246,7 +255,7 @@ class SourceBinding:
             for entry in record["files"]
         }
 
-    def _record_files_read(self, chunk_indexes, *, db) -> None:
+    def _record_files_read(self, shown: dict[str, ReadableFile], *, db) -> None:
         """Record the files these pieces belong to that the invocation had not been shown.
 
         One row per newly shown set of files (ALL-1460, Q8), so a long run writes at
@@ -258,10 +267,6 @@ class SourceBinding:
         Every agent run with history enabled has its own invocation; with history
         disabled each tool call gets a fresh one, so each read then writes a row.
         """
-        shown = {}
-        for index in chunk_indexes:
-            file = self._shown_file(index)
-            shown.setdefault(file.file_id, file)
         invocation_id = self.history_scope.invocation_id
         already = self._files_recorded()
         # Each file as it is now, when it is read: a saved result keeps these values even
@@ -320,6 +325,36 @@ class SourceBinding:
             if span["span_id"] not in result:
                 result.append(span["span_id"])
         return result
+
+
+# A prefetch issues the real spans immediately. Only its files-shown attribution
+# waits until a writer accepts the passage. Each tool task owns its collector.
+_DEFERRED_FILE_READS: ContextVar[list[SourceBinding] | None] = ContextVar(
+    "deferred_file_reads", default=None,
+)
+
+
+@contextmanager
+def defer_files_read():
+    bindings: list[SourceBinding] = []
+    token = _DEFERRED_FILE_READS.set(bindings)
+    try:
+        yield bindings
+    finally:
+        _DEFERRED_FILE_READS.reset(token)
+
+
+def record_prefetched_files_read(db, bindings: list[SourceBinding]) -> None:
+    """Record the accepted files as originally read, once per invocation under its reference lock."""
+    by_invocation: dict[tuple[HistoryScope, str], tuple[SourceBinding, dict[str, ReadableFile]]] = {}
+    for binding in bindings:
+        key = (binding.history_scope, binding.generation)
+        _, files = by_invocation.setdefault(key, (binding, {}))
+        for file_id, file in binding.shown_files().items():
+            files.setdefault(file_id, file)
+    for binding, files in by_invocation.values():
+        binding._lock_and_pin(db)
+        binding._record_files_read(files, db=db)
 
 
 def _generation(db, document_id: str, user_id: str, *, lock: bool = False) -> str:
@@ -431,9 +466,14 @@ async def document_reference_scope(document_id: str, user_id: str, *, tool_name:
         if cancelled:
             raise asyncio.CancelledError
         # Before the evidence update takes effect: a failed write saves no evidence.
-        _, cancelled = await _finish(asyncio.create_task(asyncio.to_thread(binding.record_files_read)))
-        if cancelled:
-            raise asyncio.CancelledError
+        deferred = _DEFERRED_FILE_READS.get()
+        if deferred is None:
+            _, cancelled = await _finish(asyncio.create_task(asyncio.to_thread(binding.record_files_read)))
+            if cancelled:
+                raise asyncio.CancelledError
+        elif binding.shown_chunk_indexes:
+            # A shared passage must not retain an entire scan of the run's history.
+            deferred.append(replace(binding, records=[]))
         binding.commit_updates()
     except DocumentFilesChanged:
         logger.info("Withheld a document tool call: the paper's readable files changed",
