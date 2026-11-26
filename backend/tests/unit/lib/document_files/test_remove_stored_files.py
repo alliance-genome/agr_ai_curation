@@ -123,6 +123,9 @@ def test_zero_removable_paths_still_rejects_symlinked_owner_directory(tmp_path):
     with pytest.raises(HTTPException) as exc_info:
         documents_api._require_removable_paths(empty_cleanup, base_storage, OWNER)
     assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == (
+        "This paper could not be deleted: one of its stored files needs an administrator. Nothing was changed."
+    )
 
     with pytest.raises(StoredPathOutsideOwnerStorage):
         documents_api._remove_empty_paper_folders(base_storage, OWNER, doc_id)

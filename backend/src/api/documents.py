@@ -777,6 +777,11 @@ def _removed_paths(file_values: dict[str, Any]) -> tuple[str, ...]:
     return tuple(file_values[key] for key in keys if file_values[key])
 
 
+_PAPER_DELETE_STORED_FILE_REFUSAL_DETAIL = (
+    "This paper could not be deleted: one of its stored files needs an administrator. Nothing was changed."
+)
+
+
 def _require_removable_paths(cleanup_values: dict[str, Any], base_storage: FilePath, user_sub: str) -> None:
     """Refuse (403) when owner storage or any path a paper delete would remove lies outside the curator's storage."""
     from ..lib.document_files.storage_paths import StoredPathOutsideOwnerStorage, owner_storage_path
@@ -785,7 +790,7 @@ def _require_removable_paths(cleanup_values: dict[str, Any], base_storage: FileP
         owner_storage_path(base_storage / user_sub, base_storage, user_sub)
     except StoredPathOutsideOwnerStorage as exc:
         logger.warning("Owner storage validation failed for %s", user_sub)
-        raise HTTPException(status_code=403, detail="Access denied: file path validation failed") from exc
+        raise HTTPException(status_code=403, detail=_PAPER_DELETE_STORED_FILE_REFUSAL_DETAIL) from exc
 
     for file_values in cleanup_values["files"]:
         for relative in _removed_paths(file_values):
@@ -794,7 +799,7 @@ def _require_removable_paths(cleanup_values: dict[str, Any], base_storage: FileP
             # row, and the delete must not start (it would fail half-way).
             if path.is_dir() and not path.is_symlink():
                 logger.warning("A stored path names a folder, not a file: %s for %s", relative, user_sub)
-                raise HTTPException(status_code=403, detail="Access denied: file path validation failed")
+                raise HTTPException(status_code=403, detail=_PAPER_DELETE_STORED_FILE_REFUSAL_DETAIL)
 
 
 def _removable_path(base_storage: FilePath, relative: str, user_sub: str) -> FilePath:
@@ -811,7 +816,7 @@ def _removable_path(base_storage: FilePath, relative: str, user_sub: str) -> Fil
         return owner_storage_entry(base_storage / relative, base_storage, user_sub)
     except StoredPathOutsideOwnerStorage as exc:
         logger.warning("Path traversal attempt detected: %s sits outside user storage for %s", relative, user_sub)
-        raise HTTPException(status_code=403, detail="Access denied: file path validation failed") from exc
+        raise HTTPException(status_code=403, detail=_PAPER_DELETE_STORED_FILE_REFUSAL_DETAIL) from exc
 
 
 def _delete_user_document_directory_or_file_if_present(
