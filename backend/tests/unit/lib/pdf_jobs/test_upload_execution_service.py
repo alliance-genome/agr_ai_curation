@@ -4907,3 +4907,64 @@ async def test_markdown_import_completes_when_close_and_reporting_fail(monkeypat
     assert reporter.call_args.kwargs["operation"] == "provider_markdown_close_failed"
     completed.assert_called_once_with(job_id=request.job_id, message="Processing completed")
     assert failed == []
+
+
+@pytest.mark.asyncio
+async def test_upload_execution_request_forwards_filename_to_supplement_wait_handoff(monkeypatch):
+    from src.lib.document_sources import supplement_wait
+
+    handoffs = []
+    started = []
+
+    def _complete_and_handoff(**kwargs):
+        handoffs.append(kwargs)
+        return (
+            SimpleNamespace(
+                job_id=kwargs["job_id"],
+                status="completed",
+                current_stage="completed",
+                message=kwargs["message"],
+                error_message=None,
+            ),
+            SimpleNamespace(job_id="stage-job-upload-1"),
+        )
+
+    _quiet_jobs(monkeypatch, [])
+    monkeypatch.setattr(
+        service_module.pdf_job_service,
+        "complete_import_and_start_supplement_wait",
+        _complete_and_handoff,
+    )
+    monkeypatch.setattr(
+        supplement_wait,
+        "start_supplement_stage",
+        lambda *, job_id, run, outcomes: started.append(job_id),
+    )
+    service = UploadExecutionService(
+        pipeline_tracker=_Tracker(),
+        document_source_provider_factory=lambda: _Provider(),
+    )
+
+    await service._complete_main_paper(
+        UploadExecutionRequest(
+            document_id="doc-upload-1",
+            job_id="job-upload-1",
+            user_id="user-1",
+            file_path=Path("/tmp/imported-paper.pdf"),
+            filename="imported-paper.pdf",
+            supplements=_plan(),
+        ),
+        message="Processing completed",
+    )
+
+    assert handoffs == [
+        {
+            "job_id": "job-upload-1",
+            "document_id": "doc-upload-1",
+            "user_id": 42,
+            "filename": "imported-paper.pdf",
+            "message": "Processing completed",
+            "metadata": None,
+        }
+    ]
+    assert started == ["stage-job-upload-1"]

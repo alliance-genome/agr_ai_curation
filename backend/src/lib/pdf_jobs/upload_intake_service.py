@@ -600,6 +600,7 @@ class UploadIntakeService:
                 job_id=job_id,
                 user_id=user_sub,
                 file_path=saved_path,
+                filename=document.filename,
             )
             await self.upload_execution_service.dispatch_upload_execution(
                 background_tasks=background_tasks,

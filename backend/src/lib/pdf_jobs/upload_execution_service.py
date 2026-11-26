@@ -227,6 +227,7 @@ class UploadExecutionRequest:
     job_id: str
     user_id: str
     file_path: Path
+    filename: str | None = None
     # The supplements to add once the paper is ready (KANBAN-1976 / ALL-1460, P7b).
     supplements: SupplementPlan | None = None
     login_expires_at: float | None = None
@@ -1336,6 +1337,7 @@ class UploadExecutionService:
                 job_id=request.job_id,
                 user_id=request.user_id,
                 file_path=file_path,
+                filename=request.filename,
                 supplements=request.supplements,
                 login_expires_at=request.login_expires_at,
             ),
@@ -1421,7 +1423,7 @@ class UploadExecutionService:
                 job_id=request.job_id,
                 document_id=request.document_id,
                 user_id=plan.owner_user_id,
-                filename=getattr(request, "filename", None),
+                filename=request.filename,
                 message=message,
                 metadata=terminal_metadata,
             )

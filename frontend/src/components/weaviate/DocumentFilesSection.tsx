@@ -686,6 +686,7 @@ function ProviderFilesPart({
   isRemovalBusy,
   onAddBusyChange,
   refreshPaperSurfaces,
+  removalResetSeq,
 }: {
   documentId: string
   provider: string
@@ -700,6 +701,7 @@ function ProviderFilesPart({
     targetDocumentId: string,
     options?: { invalidateFilesOnFailure?: boolean },
   ) => Promise<void>
+  removalResetSeq: number
 }) {
   const queryClient = useQueryClient()
   const shortProvider = providerShortLabel?.trim() || provider
@@ -728,6 +730,7 @@ function ProviderFilesPart({
   const onFilesChangedRef = useRef(onFilesChanged)
   onFilesChangedRef.current = onFilesChanged
   const submitAbortControllerRef = useRef<AbortController | null>(null)
+  const lastRemovalResetSeqRef = useRef(removalResetSeq)
 
   useEffect(() => {
     mountedRef.current = true
@@ -753,6 +756,21 @@ function ProviderFilesPart({
     setPollError(null)
     setPollRetryCount(0)
   }, [documentId, open])
+
+  // Clear a stale terminal add summary after a subsequent file removal refreshes this paper,
+  // without clobbering an actively running job or falsely clearing on mount/paper switch.
+  useEffect(() => {
+    if (lastRemovalResetSeqRef.current === removalResetSeq) {
+      return
+    }
+    lastRemovalResetSeqRef.current = removalResetSeq
+    setTrackedJobState((current) => {
+      if (!current || isActivePdfJobStatus(current.job.status)) {
+        return current
+      }
+      return null
+    })
+  }, [removalResetSeq])
 
   const listingQuery = useQuery({
     queryKey: paperSourceFilesQueryKey(documentId),
@@ -1439,7 +1457,11 @@ function ProviderFilesPart({
             {`${provider} has no other files for this paper.`}
           </Typography>
         ) : (
-          <Box component="ul" aria-label={`Files in ${provider} not in this paper`} sx={{ m: 0, pl: 2.5 }}>
+          <Box
+            component="ul"
+            aria-label={`Files in ${provider} not in this paper`}
+            sx={{ listStyle: 'none', m: 0, pl: 0 }}
+          >
             {others.map((file) => {
               const canSelect = showTickboxes && isTickableOtherFile(file)
               return (
@@ -1502,6 +1524,7 @@ export default function DocumentFilesSection({
   const [nonProviderPaperBusy, setNonProviderPaperBusy] = useState(true)
   const [removalDialog, setRemovalDialog] = useState<RemovalDialogState>(null)
   const [refreshingAfterRemoval, setRefreshingAfterRemoval] = useState(false)
+  const [removalResetSeq, setRemovalResetSeq] = useState(0)
 
   const mountedRef = useRef(true)
   const activeDocumentIdRef = useRef(documentId)
@@ -1690,6 +1713,7 @@ export default function DocumentFilesSection({
     async (targetDocumentId: string, notifyFilesChanged?: () => void) => {
       if (mountedRef.current && activeDocumentIdRef.current === targetDocumentId) {
         setRefreshingAfterRemoval(true)
+        setRemovalResetSeq((count) => count + 1)
       }
       try {
         await refreshPaperSurfaces(targetDocumentId, { invalidateFilesOnFailure: true })
@@ -1995,6 +2019,7 @@ export default function DocumentFilesSection({
             isRemovalBusy={isRemovalBusy}
             onAddBusyChange={setProviderPaperBusy}
             refreshPaperSurfaces={refreshPaperSurfaces}
+            removalResetSeq={removalResetSeq}
           />
         ) : (
           <UploadedPaperFilesNotice

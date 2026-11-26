@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -58,6 +59,9 @@ class _FakeSession:
     def add(self, row):
         self.added.append(row)
 
+    def begin_nested(self):
+        return nullcontext()
+
     def flush(self):
         self.flush_calls += 1
         for row in self.added:
@@ -71,6 +75,13 @@ class _FakeSession:
 
     def refresh(self, row):
         self.refresh_calls += 1
+        if getattr(row, "id", None) is None:
+            row.id = uuid4()
+        now = datetime.now(timezone.utc)
+        if hasattr(row, "created_at") and getattr(row, "created_at", None) is None:
+            row.created_at = now
+        if hasattr(row, "updated_at") and getattr(row, "updated_at", None) is None:
+            row.updated_at = now
 
     def rollback(self):
         self.rollback_calls += 1
@@ -921,3 +932,116 @@ def test_the_outline_signal_is_false_for_a_paper_with_no_supplement_wait(monkeyp
     session = _FakeSession([None])
 
     assert service_module.supplement_wait_active(session, uuid4()) is False
+
+
+@pytest.mark.parametrize(
+    ("passed_filename", "source_filename", "paper_filename", "expected_filename"),
+    [
+        ("explicit-paper.pdf", "source-job.pdf", "persisted-paper.pdf", "explicit-paper.pdf"),
+        ("  explicit-paper.pdf  ", "source-job.pdf", "persisted-paper.pdf", "explicit-paper.pdf"),
+        (None, "source-job.pdf", "persisted-paper.pdf", "source-job.pdf"),
+        ("   ", "source-job.pdf", "persisted-paper.pdf", "source-job.pdf"),
+        (None, None, "persisted-paper.pdf", "persisted-paper.pdf"),
+        ("   ", "   ", "persisted-paper.pdf", "persisted-paper.pdf"),
+    ],
+)
+def test_complete_import_and_start_supplement_wait_resolves_stage_filename(
+    monkeypatch,
+    passed_filename,
+    source_filename,
+    paper_filename,
+    expected_filename,
+):
+    from src.lib.document_files import paper_lock
+
+    source_job = _build_job(status=PdfJobStatus.RUNNING.value)
+    source_job.filename = source_filename
+    source_job.metadata_json = {
+        "supplements": [
+            {
+                "provider_file_id": "supp-1",
+                "display_name": "Table_S1.xlsx",
+                "state": "queued",
+                "reason_code": None,
+                "observed_at": None,
+                "file_id": None,
+                "measured_value": None,
+                "limit_value": None,
+            }
+        ]
+    }
+    paper = _build_document(source_job, status="completed")
+    paper.filename = paper_filename
+    session = _FakeSession([source_job, paper])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+    monkeypatch.setattr(paper_lock, "try_lock_paper_for_add", lambda _session, _doc_id: True)
+
+    completed_main, stage_job = service_module.complete_import_and_start_supplement_wait(
+        job_id=source_job.id,
+        document_id=source_job.document_id,
+        user_id=source_job.user_id,
+        filename=passed_filename,
+        message="Processing completed",
+    )
+
+    assert completed_main is not None
+    assert stage_job is not None
+    assert stage_job.filename == expected_filename
+    assert session.added[0].filename == expected_filename
+    assert session.commit_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("use_source_job", "passed_filename", "source_filename", "paper_filename", "expected_filename"),
+    [
+        (True, "explicit-paper.pdf", "source-job.pdf", "persisted-paper.pdf", "explicit-paper.pdf"),
+        (True, None, "source-job.pdf", "persisted-paper.pdf", "source-job.pdf"),
+        (True, "   ", "source-job.pdf", "persisted-paper.pdf", "source-job.pdf"),
+        (True, None, "   ", "persisted-paper.pdf", "persisted-paper.pdf"),
+        (False, None, None, "persisted-paper.pdf", "persisted-paper.pdf"),
+        (False, "   ", None, "persisted-paper.pdf", "persisted-paper.pdf"),
+    ],
+)
+def test_start_supplement_wait_job_resolves_stage_filename(
+    monkeypatch,
+    use_source_job,
+    passed_filename,
+    source_filename,
+    paper_filename,
+    expected_filename,
+):
+    from src.lib.document_files import paper_lock
+
+    source_job = _build_job(status=PdfJobStatus.COMPLETED.value)
+    source_job.filename = source_filename
+    source_job.cancel_requested = False
+    source_job.metadata_json = {
+        "supplements": [
+            {
+                "provider_file_id": "supp-1",
+                "display_name": "Table_S1.xlsx",
+                "state": "queued",
+                "reason_code": None,
+                "observed_at": None,
+                "file_id": None,
+                "measured_value": None,
+                "limit_value": None,
+            }
+        ]
+    }
+    paper = _build_document(source_job, status="completed")
+    paper.filename = paper_filename
+    session = _FakeSession([source_job, paper] if use_source_job else [paper])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+    monkeypatch.setattr(paper_lock, "try_lock_paper_for_add", lambda _session, _doc_id: True)
+
+    stage_job = service_module.start_supplement_wait_job(
+        document_id=source_job.document_id,
+        user_id=source_job.user_id,
+        filename=passed_filename,
+        source_job_id=source_job.id if use_source_job else None,
+    )
+
+    assert stage_job.filename == expected_filename
+    assert session.added[0].filename == expected_filename
+    assert session.commit_calls == 1
