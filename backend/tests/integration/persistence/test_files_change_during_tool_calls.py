@@ -518,21 +518,53 @@ async def test_fan_out_prefetch_of_a_withheld_read_is_never_shared(paper, monkey
 
     runner.user_id = TEST_USER_ID
     runner.document_id = paper["document_id"]
-    [(chunk, view)] = await runner._writer_chunk_views([0])
-    assert chunk == 0
+    [view] = await runner._prefetch_chunks([0])
+    assert view.index == 0
 
-    assert FILES_CHANGED_MESSAGE in view
+    assert FILES_CHANGED_MESSAGE in view.text
     assert not runner._chunk_views  # the next writer that cites chunk 0 reads it again
+
+
+async def _fanout_run(paper, monkeypatch, read, plan):
+    from src.lib.openai_agents import fanout_extraction as fanout
+    from src.lib.openai_agents.extraction_builder_workspace import ExtractionBuilderWorkspace
+
+    monkeypatch.setenv("EXTRACTION_FANOUT_MIN_ITEMS", "1")
+    agent = SimpleNamespace(
+        tools=[read, SimpleNamespace(name="stage"), SimpleNamespace(name="finalize")],
+        cost_boundary={"document_id": paper["document_id"], "user_id": TEST_USER_ID},
+    )
+    monkeypatch.setattr(fanout.tool_roles, "builder_finalization_tool_names", lambda: {"finalize"})
+    monkeypatch.setattr(fanout.tool_roles, "builder_stage_tool_names", lambda: {"stage"})
+    run = fanout.prepare_fanout_extraction(
+        agent, builder_workspace=ExtractionBuilderWorkspace(run_id=paper["run_id"]),
+        specialist_name="extractor", input_text="Extract the records.",
+        emit_event=lambda _: None, record_live_evidence=lambda _: None, evidence_records=[],
+    )
+    assert run is not None
+    assert json.loads(await run.submit_tool.on_invoke_tool(None, json.dumps(plan)))["status"] == "accepted"
+    run.planner_agent = agent
+    run.max_turns = 1
+    run.base_run_config = None
+    monkeypatch.setattr(run, "_writer_agent", lambda attempt_key: attempt_key[0])
+    return run
+
+
+def _result_files(paper, invocation_ids=None):
+    from src.lib.document_files.files_read import files_read_for_result
+
+    with SessionLocal() as db:
+        files = files_read_for_result(db, owner_id=TEST_USER_ID, run_id=paper["run_id"],
+                                      document_id=paper["document_id"], invocation_ids=invocation_ids)
+    return {entry["file_id"]: entry["removed"] for entry in files}
 
 
 @pytest.mark.asyncio
 async def test_fanout_rechecks_prefetched_passages_at_writer_dispatch(paper, monkeypatch):
     import asyncio
 
-    from src.lib.openai_agents import fanout_extraction as fanout, runner
-    from src.lib.openai_agents.extraction_builder_workspace import ExtractionBuilderWorkspace
+    from src.lib.openai_agents import runner
 
-    monkeypatch.setenv("EXTRACTION_FANOUT_MIN_ITEMS", "1")
     read = _tool("read_chunk", paper)
     invoke = read.on_invoke_tool
     first_dispatched = asyncio.Event()
@@ -549,25 +581,9 @@ async def test_fanout_rechecks_prefetched_passages_at_writer_dispatch(paper, mon
         return await invoke(ctx, arguments)
 
     read.on_invoke_tool = read_with_removal
-    agent = SimpleNamespace(
-        tools=[read, SimpleNamespace(name="stage"), SimpleNamespace(name="finalize")],
-        cost_boundary={"document_id": paper["document_id"], "user_id": TEST_USER_ID},
-    )
-    monkeypatch.setattr(fanout.tool_roles, "builder_finalization_tool_names", lambda: {"finalize"})
-    monkeypatch.setattr(fanout.tool_roles, "builder_stage_tool_names", lambda: {"stage"})
-    run = fanout.prepare_fanout_extraction(
-        agent, builder_workspace=ExtractionBuilderWorkspace(run_id=paper["run_id"]),
-        specialist_name="extractor", input_text="Extract the records.",
-        emit_event=lambda _: None, record_live_evidence=lambda _: None, evidence_records=[],
-    )
-    assert run is not None
     plan = {"items": [{"label": "First", "chunks": [0, 3]}, {"label": "Second", "chunks": [0, 3, 1]}],
             "notes": []}
-    assert json.loads(await run.submit_tool.on_invoke_tool(None, json.dumps(plan)))["status"] == "accepted"
-    run.planner_agent = agent
-    run.max_turns = 1
-    run.base_run_config = None
-    monkeypatch.setattr(run, "_writer_agent", lambda attempt_key: attempt_key[0])
+    run = await _fanout_run(paper, monkeypatch, read, plan)
     assignments = {}
 
     async def capture_writer(index, messages, **kwargs):
@@ -590,3 +606,88 @@ async def test_fanout_rechecks_prefetched_passages_at_writer_dispatch(paper, mon
     assert TEXT[3] not in assignments[3]
     assert all(TEXT[0] in assignment for assignment in assignments.values())
     assert reads.count(0) == 1
+    assert _result_files(paper) == {str(paper["main"]): False, str(paper["sheet"]): True}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("during_handoff", [False, True], ids=["removal-first", "writer-first"])
+async def test_removal_orders_writer_input_and_files_read(paper, monkeypatch, during_handoff):
+    from sqlalchemy import select
+    from sqlalchemy.exc import OperationalError
+
+    from src.lib.context import set_current_trace_id, set_current_user_id
+
+    from src.lib.openai_agents import runner
+    from src.lib.openai_agents.run_history import HistoryScope, RunHistory
+    from src.lib.pdf_jobs import service as pdf_jobs
+    from src.models.sql.agent_run_history import AgentHistoryEvent
+
+    read = _tool("read_chunk", paper)
+    plan = {"items": [{"label": "Only", "chunks": [3, 0]}], "notes": []}
+    run = await _fanout_run(paper, monkeypatch, read, plan)
+    set_current_user_id(TEST_USER_ID)
+    set_current_trace_id(paper["run_id"])
+    scope = HistoryScope(TEST_USER_ID, paper["run_id"], str(uuid4()), "extractor", "planner/")
+    run.planner_agent.run_history = RunHistory(scope)
+    invoke = read.on_invoke_tool
+    supplement_wait = pdf_jobs.supplement_wait_active
+    final_lookup_pending = False
+    removal_refused = False
+
+    async def after_prefetch(ctx, arguments):
+        nonlocal final_lookup_pending
+        result = await invoke(ctx, arguments)
+        if json.loads(arguments)["chunk_index"] == 0:
+            if during_handoff:
+                final_lookup_pending = True
+            else:
+                remove_other(paper)
+        return result
+
+    def remove_sheet_nowait():
+        with SessionLocal.begin() as remover:
+            sheet = remover.get(PDFDocumentFile, paper["sheet"], with_for_update={"nowait": True})
+            remover.delete(sheet)
+
+    def race_final_lookup(db, paper_id):
+        nonlocal final_lookup_pending, removal_refused
+        if final_lookup_pending:
+            final_lookup_pending = False
+            # The resolver has already fetched the file rows. Use the same
+            # NOWAIT file lock as removal, from an independent transaction.
+            try:
+                remove_sheet_nowait()
+            except OperationalError as exc:
+                assert exc.orig.pgcode == "55P03"  # lock_not_available
+                removal_refused = True
+        return supplement_wait(db, paper_id)
+
+    async def accept_writer(index, messages, **kwargs):
+        assignment = messages[-1]["content"]
+        assert TEXT[0] in assignment
+        if during_handoff:
+            assert removal_refused
+            assert TEXT[3] in assignment
+            # The writer has accepted its input. Removal can now proceed.
+            remove_sheet_nowait()
+        else:
+            assert FILES_CHANGED_MESSAGE in assignment
+            assert TEXT[3] not in assignment
+        return SimpleNamespace(final_output="done", new_items=[])
+
+    read.on_invoke_tool = after_prefetch
+    monkeypatch.setattr(pdf_jobs, "supplement_wait_active", race_final_lookup)
+    monkeypatch.setattr(runner, "run_agent_with_owned_openai_resources", accept_writer)
+    await run._run_writer(1, 1, (0,))
+    expected = {str(paper["main"]): False}
+    if during_handoff:
+        expected[str(paper["sheet"])] = True
+    assert _result_files(paper, [scope.invocation_id]) == expected
+    # Both real tool calls retain their canonical history, even when a passage
+    # was withheld from the only writer.
+    with SessionLocal() as db:
+        call_ids = db.scalars(select(AgentHistoryEvent.call_id).where(
+            AgentHistoryEvent.invocation_id == scope.invocation_id,
+            AgentHistoryEvent.kind == "canonical_tool_result",
+        )).all()
+    assert sorted(call_ids) == ["fanout_prefetch_0", "fanout_prefetch_3"]

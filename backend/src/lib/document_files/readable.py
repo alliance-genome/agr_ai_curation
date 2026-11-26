@@ -267,6 +267,23 @@ def readable_files_in_session(
     return ReadableFiles(str(document_id), tuple(files), being_added, converting)
 
 
+@contextmanager
+def lock_readable_files(
+    document_id: str, owner_auth_sub: str, file_ids: set[str],
+) -> Iterator[tuple[Session, ReadableFiles]]:
+    """Pin the cited file rows against removal while the caller accepts a writer input."""
+    from src.models.sql.database import SessionLocal
+
+    with SessionLocal.begin() as db:
+        db.execute(
+            select(PDFDocumentFile.id).where(
+                PDFDocumentFile.document_id == UUID(document_id),
+                PDFDocumentFile.id.in_([UUID(file_id) for file_id in file_ids]),
+            ).order_by(PDFDocumentFile.id).with_for_update(read=True)
+        ).all()
+        yield db, readable_files_in_session(db, document_id, owner_auth_sub)
+
+
 def resolve_readable_files(document_id: str, owner_auth_sub: str) -> ReadableFiles:
     """Resolve readable files in a short read of their own (outside a tool call)."""
 
@@ -283,6 +300,7 @@ __all__ = [
     "ReadingScope",
     "current_reading_scope",
     "file_pages_trusted",
+    "lock_readable_files",
     "readable_files_in_session",
     "reading_scope",
     "resolve_readable_files",

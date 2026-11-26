@@ -78,7 +78,8 @@ The split follows `AGENTS.md` section 8: code does mechanics, the model does mea
 - **Code.** Counts the plan, slices it in order into balanced contiguous batches, reads each
   cited chunk through the agent's own `read_chunk` tool, starts the writers, and counts what
   each writer staged. Writers share a passage while its file ID and chunk range stay readable.
-  Each writer checks all its prefetched passages just before dispatch. If a file was removed
+  Each writer holds shared locks on its cited files while accepting its assignment and recording
+  which files it was shown. These locks are released before model execution. If a file was removed
   during prefetch, its passage is replaced by the reading tool's files-changed response.
   A writer starting after removal gets the current `read_chunk` response for the index.
 - **Writers.** `agent.clone()` with the agent's instructions and four tools: `read_chunk`,

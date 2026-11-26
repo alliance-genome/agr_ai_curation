@@ -625,6 +625,11 @@ def harness(monkeypatch):
     monkeypatch.setattr("src.lib.document_files.readable.resolve_readable_files",
                         lambda document_id, user_id: single_file(document_id))
 
+    from contextlib import nullcontext
+
+    monkeypatch.setattr("src.lib.document_files.readable.lock_readable_files",
+                        lambda document_id, *_: nullcontext((None, single_file(document_id))))
+
     class Harness:
         def __init__(self):
             self.events, self.trace, self.finalize_calls, self.reads = events, trace, [], []
@@ -707,11 +712,11 @@ async def test_cached_chunk_requires_the_same_file_and_range(harness, monkeypatc
     readable = single_file(run.document_id)
     monkeypatch.setattr("src.lib.document_files.readable.resolve_readable_files", lambda *_: readable)
 
-    await run._writer_chunk_views([1])
+    await run._prefetch_chunks([1])
     readable = replace(readable, files=(replace(readable.files[0], **changed),))
     # The index is still readable, but the original view no longer belongs to it.
-    await run._writer_chunk_views([1])
-    await run._writer_chunk_views([1])
+    await run._prefetch_chunks([1])
+    await run._prefetch_chunks([1])
     assert harness.reads == [1, 1]
 
 
