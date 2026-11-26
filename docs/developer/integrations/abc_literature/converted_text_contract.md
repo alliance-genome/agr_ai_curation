@@ -179,11 +179,11 @@ reads it with a CommonMark parser (`markdown-it-py`):
   produced by decoding (`&#124;`, `&vert;`, `&#92;`) is re-escaped, so
   decoding never adds, removes or moves a cell boundary.
 - Fenced code blocks keep their text as written.
-- Every step is linear in the length of the text. Tests check that the cost
-  of each hostile input (runs of `[`, `![`, `*`, `_`, `&`, `<`, tags) grows
-  linearly from 16 KB to 128 KB, and that 1 MB of this module's own tag and
-  escape inputs finishes. A realistic 1 MB fly genotype table takes about
-  1.4 s; the earlier regex clean-up was quadratic on bracket runs.
+- Every step is linear in the length of the text. Tests compare CPU time for
+  2 KB and 16 KB of each hostile input (runs of `[`, `![`, `*`, `_`, `&`, `<`,
+  tags) using the median of five paired CPU-time ratios. A realistic 1 MB
+  fly genotype table takes about 1.4 s. The earlier regex clean-up was
+  quadratic on bracket runs.
 
 A second pass would turn an escaped `\*x\*` back into emphasis and delete
 the asterisks, so the clean-up is never applied to text it already returned.
