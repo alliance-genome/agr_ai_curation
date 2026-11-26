@@ -295,8 +295,10 @@ describe('PdfViewer with a paper\'s files', () => {
           file_name: 'Table_S1.xlsx',
         }))
       })
-      await screen.findByRole('row', { current: true })
-      const scrolls = vi.mocked(Element.prototype.scrollIntoView).mock.calls.length
+      const highlightedRow = await screen.findByRole('row', { current: true })
+      const scrollIntoView = vi.mocked(Element.prototype.scrollIntoView)
+      await waitFor(() => expect(scrollIntoView.mock.contexts).toContain(highlightedRow))
+      scrollIntoView.mockClear()
 
       act(() => { dispatchPDFViewerNavigateEvidence(chatCommand({})) })
 
@@ -304,7 +306,7 @@ describe('PdfViewer with a paper\'s files', () => {
       expect(banner).toHaveTextContent('This evidence was saved before files were recorded')
       // No tab switch, no scroll, and the earlier highlight stays.
       expect(screen.getByRole('tab', { name: 'Table_S1.xlsx, file 2 of 3, converted text' })).toHaveAttribute('aria-selected', 'true')
-      expect(vi.mocked(Element.prototype.scrollIntoView).mock.calls.length).toBe(scrolls)
+      expect(scrollIntoView).not.toHaveBeenCalled()
       expect(screen.getByRole('row', { current: true })).toBeInTheDocument()
 
       fireEvent.click(within(banner).getByRole('button', { name: 'Close' }))
