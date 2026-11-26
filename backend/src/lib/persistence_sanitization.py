@@ -25,24 +25,33 @@ def sanitize_persisted_text(value: str | None) -> str | None:
     return value.replace(_NUL_CHARACTER, "")
 
 
-def sanitize_persisted_json_value(value: Any) -> Any:
-    """Recursively sanitize strings and string keys in JSON-like values."""
+def sanitize_persisted_json_value(value: Any, *, reject_key_collisions: bool = False) -> Any:
+    """Remove NUL recursively, optionally rejecting keys that would merge."""
 
     if isinstance(value, str):
         return sanitize_persisted_text(value)
 
     if isinstance(value, Mapping):
-        return {
+        sanitized = {
             sanitize_persisted_text(key) if isinstance(key, str) else key:
-            sanitize_persisted_json_value(nested_value)
+            sanitize_persisted_json_value(nested_value, reject_key_collisions=reject_key_collisions)
             for key, nested_value in value.items()
         }
+        if reject_key_collisions and len(sanitized) != len(value):
+            raise ValueError("removing NUL produced duplicate JSON object keys")
+        return sanitized
 
     if isinstance(value, list):
-        return [sanitize_persisted_json_value(item) for item in value]
+        return [
+            sanitize_persisted_json_value(item, reject_key_collisions=reject_key_collisions)
+            for item in value
+        ]
 
     if isinstance(value, tuple):
-        return tuple(sanitize_persisted_json_value(item) for item in value)
+        return tuple(
+            sanitize_persisted_json_value(item, reject_key_collisions=reject_key_collisions)
+            for item in value
+        )
 
     return value
 
