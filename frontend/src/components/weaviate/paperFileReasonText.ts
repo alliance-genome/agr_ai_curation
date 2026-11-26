@@ -446,6 +446,9 @@ export function fileNoLongerChoosableText(provider?: string | null): string {
 
 /** N33: Library Add button label. */
 export function addFilesButtonText(count: number): string {
+  if (!Number.isFinite(count) || count <= 0) {
+    return 'Add files'
+  }
   return count === 1
     ? 'Add 1 file'
     : `Add ${count.toLocaleString('en-US')} files`

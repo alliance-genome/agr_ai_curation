@@ -744,7 +744,6 @@ def complete_import_and_start_supplement_wait(
     job_id: UUID | str,
     document_id: UUID | str,
     user_id: int,
-    filename: Optional[str],
     message: Optional[str] = None,
     metadata: Optional[dict] = None,
 ) -> tuple[Optional[PdfJobResponse], Optional[PdfJobResponse]]:
@@ -832,7 +831,7 @@ def complete_import_and_start_supplement_wait(
                 candidate_stage = PdfProcessingJob(
                     document_id=doc_uuid,
                     user_id=user_id,
-                    filename=filename,
+                    filename=paper.filename,
                     status=PdfJobStatus.PENDING.value,
                     current_stage=WAITING_FOR_SUPPLEMENTS_STAGE,
                     progress_percentage=0,
@@ -889,7 +888,6 @@ def start_supplement_wait_job(
     *,
     document_id: UUID | str,
     user_id: int,
-    filename: Optional[str],
     supplements: Optional[list[dict]] = None,
     source_job_id: Optional[UUID | str] = None,
 ) -> PdfJobResponse:
@@ -959,7 +957,7 @@ def start_supplement_wait_job(
         # Born in the waiting stage, so a delete can end it from its first moment
         # (queued or not), never only after its first poll.
         return create_job_in_session(
-            session, document_id=doc_uuid, user_id=user_id, filename=filename,
+            session, document_id=doc_uuid, user_id=user_id, filename=paper.filename,
             metadata=metadata,
             current_stage=WAITING_FOR_SUPPLEMENTS_STAGE,
         )

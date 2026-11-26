@@ -1421,7 +1421,6 @@ class UploadExecutionService:
                 job_id=request.job_id,
                 document_id=request.document_id,
                 user_id=plan.owner_user_id,
-                filename=getattr(request, "filename", None),
                 message=message,
                 metadata=terminal_metadata,
             )

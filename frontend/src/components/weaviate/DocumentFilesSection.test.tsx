@@ -260,6 +260,8 @@ describe('DocumentFilesSection (Library Files + Add)', () => {
     renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
 
     const list = await screen.findByRole('list', { name: 'Files in ABC Literature not in this paper' })
+    expect(list).toHaveAttribute('role', 'list')
+    expect(list).toHaveStyle({ listStyle: 'none', paddingLeft: '0px' })
     const rows = within(list).getAllByRole('listitem')
     expect(rows).toHaveLength(5)
     expect(rows[0]).toHaveTextContent('Converted by ABC Literature; not added to this paper')
@@ -278,7 +280,7 @@ describe('DocumentFilesSection (Library Files + Add)', () => {
     const checkboxes = await screen.findAllByRole('checkbox')
     expect(checkboxes).toHaveLength(1)
     expect(screen.getByRole('checkbox', { name: 'Made_up_S20' })).not.toBeChecked()
-    expect(screen.getByRole('button', { name: 'Add 0 files' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Add files' })).toBeDisabled()
   })
 
   it('ticks multiple files without duplicates, posts exact {files:[{provider_file_id,md5,converted_md5}]}, polls to terminal, renders SupplementFilesList, refreshes both lists, notifies parent, and refreshes open viewer only for this paper', async () => {
@@ -341,13 +343,13 @@ describe('DocumentFilesSection (Library Files + Add)', () => {
 
       const firstBox = await screen.findByRole('checkbox', { name: 'Made_up_S20' })
       const secondBox = screen.getByRole('checkbox', { name: 'Made_up_S22' })
-      expect(screen.getByRole('button', { name: 'Add 0 files' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Add files' })).toBeDisabled()
 
       // Toggle twice on firstBox to verify selection deduplication / toggle behavior.
       await user.click(firstBox)
       expect(screen.getByRole('button', { name: 'Add 1 file' })).toBeEnabled()
       await user.click(firstBox)
-      expect(screen.getByRole('button', { name: 'Add 0 files' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Add files' })).toBeDisabled()
 
       await user.click(firstBox)
       await user.click(secondBox)
@@ -3916,6 +3918,363 @@ describe('DocumentFilesSection (Library Remove)', () => {
     } finally {
       unsubscribeViewer()
     }
+  })
+
+  it('clears a stale completed "Adding files" summary after a subsequent file removal succeeds', async () => {
+    const user = userEvent.setup()
+    let paperFilesCalls = 0
+    let listingCalls = 0
+
+    const initialListing = listingWith([
+      fileListingFixture.files[0],
+      fileListingFixture.files[1],
+    ])
+    const listingAfterAdd = listingWith([
+      fileListingFixture.files[0],
+      {
+        ...fileListingFixture.files[1],
+        in_this_paper: true,
+        tickable: false,
+        not_tickable_reason: 'already_in_paper',
+      },
+    ])
+
+    stubApi({
+      paperFiles: () => {
+        paperFilesCalls += 1
+        if (paperFilesCalls === 1) return jsonResponse(FOUR_FILES_PAYLOAD)
+        if (paperFilesCalls === 2) return jsonResponse(UPDATED_FIVE_FILES_PAYLOAD)
+        return jsonResponse(FOUR_FILES_PAYLOAD)
+      },
+      listing: () => {
+        listingCalls += 1
+        if (listingCalls === 1) return jsonResponse(initialListing)
+        if (listingCalls === 2) return jsonResponse(listingAfterAdd)
+        return jsonResponse(initialListing)
+      },
+      onAddFiles: () => jsonResponse(makeJob({ status: 'pending' }), 202),
+      onFetchJob: () =>
+        jsonResponse(
+          makeJob({
+            status: 'completed',
+            message: 'Added 1 of 1 files.',
+            metadata: supplementAddMetadataFixture,
+          }),
+        ),
+      onRemovalCheck: (fileId) => jsonResponse(removalCheckFor('removable_plain', { file_id: fileId })),
+      onRemoveFile: (fileId) =>
+        jsonResponse({
+          document_id: DOCUMENT_ID,
+          file_id: fileId,
+          removed: true,
+          cleanup_finished: true,
+          ready_file_count: 3,
+        }),
+    })
+
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+
+    // 1) Add Made_up_S20 and wait for the completed "Adding files" summary.
+    const checkbox = await screen.findByRole('checkbox', { name: 'Made_up_S20' })
+    await user.click(checkbox)
+    await user.click(screen.getByRole('button', { name: 'Add 1 file' }))
+
+    expect(await screen.findByText('Adding files')).toBeInTheDocument()
+    expect(await screen.findByText('Added 1 of 1 files.')).toBeInTheDocument()
+    const removeAddedButton = await screen.findByRole('button', { name: 'Remove Made_up_S20.xlsx' })
+    await waitFor(() => expect(removeAddedButton).toBeEnabled())
+
+    // 2) Remove Made_up_S20.xlsx -> stale "Adding files" summary clears cleanly while file reappears under "Also in ...".
+    await user.click(removeAddedButton)
+    const confirmDialog = await screen.findByRole('dialog', { name: 'Remove Made_up_S20.xlsx?' })
+    await user.click(within(confirmDialog).getByRole('button', { name: 'Remove file' }))
+
+    await waitFor(() => {
+      expect(screen.queryByText('Adding files')).not.toBeInTheDocument()
+      expect(screen.queryByText('Added 1 of 1 files.')).not.toBeInTheDocument()
+    })
+    expect(await screen.findByRole('checkbox', { name: 'Made_up_S20' })).not.toBeChecked()
+    expect(screen.getByRole('button', { name: 'Add files' })).toBeDisabled()
+  })
+
+  it('keeps retained add-job tracking intact on reopen and paper switch even after an earlier removal', async () => {
+    const user = userEvent.setup()
+    const PAPER_B_ID = '33333333-3333-3333-3333-333333333333'
+    const PAPER_B_FILES: ViewerFilesPayload = {
+      document_id: PAPER_B_ID,
+      files: [{ ...FOUR_FILES_PAYLOAD.files[0]!, file_id: 'cccccccc-cccc-cccc-cccc-cccccccccccc' }],
+    }
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    let paperAFilesCalls = 0
+    let paperAListingCalls = 0
+    let paperAFetchJobCalls = 0
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = (init?.method ?? 'GET').toUpperCase()
+        if (url === `/api/pdf-viewer/documents/${DOCUMENT_ID}/files` && method === 'GET') {
+          paperAFilesCalls += 1
+          return jsonResponse(paperAFilesCalls === 1 ? FOUR_FILES_PAYLOAD : THREE_FILES_AFTER_REMOVAL)
+        }
+        if (url === `/api/pdf-viewer/documents/${PAPER_B_ID}/files` && method === 'GET') {
+          return jsonResponse(PAPER_B_FILES)
+        }
+        if (url === `/api/weaviate/documents/${DOCUMENT_ID}/source-files` && method === 'GET') {
+          paperAListingCalls += 1
+          return jsonResponse(fileListingFixture)
+        }
+        if (url === `/api/weaviate/documents/${PAPER_B_ID}/source-files` && method === 'GET') {
+          return jsonResponse(fileListingFixture)
+        }
+        if (url.startsWith('/api/weaviate/pdf-jobs?') && method === 'GET') {
+          if (url.includes(`document_id=${PAPER_B_ID}`)) {
+            return jsonResponse({
+              jobs: [
+                makeJob({
+                  job_id: 'job-paper-b-active',
+                  document_id: PAPER_B_ID,
+                  status: 'running',
+                  message: 'Adding files to paper B...',
+                }),
+              ],
+              total: 1,
+              limit: 50,
+              offset: 0,
+            })
+          }
+          return jsonResponse({ jobs: [], total: 0, limit: 50, offset: 0 })
+        }
+        if (url.endsWith('/removal-check') && method === 'GET') {
+          return jsonResponse(removalCheckFor('removable_plain'))
+        }
+        if (method === 'DELETE' && url.includes(`/api/weaviate/documents/${DOCUMENT_ID}/files/`)) {
+          return jsonResponse({
+            document_id: DOCUMENT_ID,
+            file_id: TEXT_SUPPLEMENT_FILE_ID,
+            removed: true,
+            cleanup_finished: true,
+            ready_file_count: 2,
+          })
+        }
+        if (url === `/api/weaviate/documents/${DOCUMENT_ID}/files` && method === 'POST') {
+          return jsonResponse(makeJob({ job_id: 'job-reopen-a', status: 'pending' }), 202)
+        }
+        if (url === '/api/weaviate/pdf-jobs/job-reopen-a' && method === 'GET') {
+          paperAFetchJobCalls += 1
+          return jsonResponse(
+            makeJob({
+              job_id: 'job-reopen-a',
+              status: 'completed',
+              message: 'Added 1 of 1 files.',
+              metadata: supplementAddMetadataFixture,
+            }),
+          )
+        }
+        if (url === '/api/weaviate/pdf-jobs/job-paper-b-active' && method === 'GET') {
+          return jsonResponse(
+            makeJob({
+              job_id: 'job-paper-b-active',
+              document_id: PAPER_B_ID,
+              status: 'running',
+              message: 'Adding files to paper B...',
+            }),
+          )
+        }
+        throw new Error(`Unexpected fetch: ${method} ${url}`)
+      }),
+    )
+
+    const view = renderSection(
+      { providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT, pollIntervalMs: 500 },
+      client,
+    )
+
+    // 1) Remove a file on Paper A so removalResetSeq becomes non-zero.
+    const removeButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(removeButton).toBeEnabled())
+    await user.click(removeButton)
+    const dialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    await user.click(within(dialog).getByRole('button', { name: 'Remove file' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await waitFor(() => expect(paperAListingCalls).toBe(2))
+
+    // 2) Start an add on Paper A, close dialog before poll, and reopen -> retained add job must still reconcile and display.
+    const checkbox = await screen.findByRole('checkbox', { name: 'Made_up_S20' })
+    await user.click(checkbox)
+    await user.click(screen.getByRole('button', { name: 'Add 1 file' }))
+    expect(await screen.findByText('Adding files')).toBeInTheDocument()
+
+    view.rerender(
+      <QueryClientProvider client={client}>
+        <DocumentFilesSection
+          documentId={DOCUMENT_ID}
+          providerLabel={PROVIDER}
+          providerShortLabel={PROVIDER_SHORT}
+          processingStatus="completed"
+          open={false}
+          pollIntervalMs={500}
+        />
+      </QueryClientProvider>,
+    )
+    view.rerender(
+      <QueryClientProvider client={client}>
+        <DocumentFilesSection
+          documentId={DOCUMENT_ID}
+          providerLabel={PROVIDER}
+          providerShortLabel={PROVIDER_SHORT}
+          processingStatus="completed"
+          open
+          pollIntervalMs={500}
+        />
+      </QueryClientProvider>,
+    )
+
+    expect(await screen.findByText('Added 1 of 1 files.')).toBeInTheDocument()
+    expect(paperAFetchJobCalls).toBeGreaterThanOrEqual(1)
+
+    // 3) Switch to Paper B (which has an active add job) -> remount with non-zero removalResetSeq must keep active tracking intact.
+    view.rerender(
+      <QueryClientProvider client={client}>
+        <DocumentFilesSection
+          documentId={PAPER_B_ID}
+          providerLabel={PROVIDER}
+          providerShortLabel={PROVIDER_SHORT}
+          processingStatus="completed"
+          open
+          pollIntervalMs={500}
+        />
+      </QueryClientProvider>,
+    )
+
+    expect(await screen.findByText('Adding files to paper B...')).toBeInTheDocument()
+  })
+
+  it('preserves a failed add job warning alert across a subsequent file removal', async () => {
+    const user = userEvent.setup()
+    let paperFilesCalls = 0
+
+    stubApi({
+      paperFiles: () => {
+        paperFilesCalls += 1
+        return jsonResponse(paperFilesCalls <= 2 ? FOUR_FILES_PAYLOAD : THREE_FILES_AFTER_REMOVAL)
+      },
+      onAddFiles: () => jsonResponse(makeJob({ job_id: 'job-add-failed-1', status: 'pending' }), 202),
+      onFetchJob: () =>
+        jsonResponse(
+          makeJob({
+            job_id: 'job-add-failed-1',
+            status: 'failed',
+            current_stage: 'failed',
+            message: 'Adding files failed.',
+            error_message: 'Adding files failed.',
+            metadata: { job_kind: 'supplement_add', error_code: 'add_failed' },
+          }),
+        ),
+      onRemovalCheck: (fileId) => jsonResponse(removalCheckFor('removable_plain', { file_id: fileId })),
+      onRemoveFile: (fileId) =>
+        jsonResponse({
+          document_id: DOCUMENT_ID,
+          file_id: fileId,
+          removed: true,
+          cleanup_finished: true,
+          ready_file_count: 2,
+        }),
+    })
+
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT })
+
+    // 1) Trigger an add that fails and renders its warning alert.
+    await user.click(await screen.findByRole('checkbox', { name: 'Made_up_S20' }))
+    await user.click(screen.getByRole('button', { name: 'Add 1 file' }))
+    expect(await screen.findByText('Adding files')).toBeInTheDocument()
+    expect(await screen.findByText('Adding files failed.')).toBeInTheDocument()
+
+    // 2) Remove another supplement -> failed add warning alert must remain visible.
+    const removeButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(removeButton).toBeEnabled())
+    await user.click(removeButton)
+    const confirmDialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    await user.click(within(confirmDialog).getByRole('button', { name: 'Remove file' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Remove Table_S1.xlsx' })).not.toBeInTheDocument()
+    })
+    expect(screen.getByText('Adding files')).toBeInTheDocument()
+    expect(screen.getByText('Adding files failed.')).toBeInTheDocument()
+  })
+
+  it('preserves a finished server-discovered supplement-wait outcome summary across a subsequent file removal', async () => {
+    const user = userEvent.setup()
+    let activeJobPhase: 'active' | 'done' = 'active'
+    let paperFilesCalls = 0
+
+    const waitingJob = makeJob({
+      job_id: 'job-wait-preserve-1',
+      status: 'running',
+      current_stage: WAITING_FOR_SUPPLEMENTS_STAGE,
+      metadata: supplementWaitMetadataFixture.mixed_waiting,
+    })
+
+    stubApi({
+      activeJobs: () =>
+        jsonResponse({
+          jobs: activeJobPhase === 'active' ? [waitingJob] : [],
+          total: activeJobPhase === 'active' ? 1 : 0,
+          limit: 50,
+          offset: 0,
+        }),
+      paperFiles: () => {
+        paperFilesCalls += 1
+        return jsonResponse(paperFilesCalls <= 2 ? FOUR_FILES_PAYLOAD : THREE_FILES_AFTER_REMOVAL)
+      },
+      onFetchJob: () => {
+        activeJobPhase = 'done'
+        return jsonResponse(
+          makeJob({
+            job_id: 'job-wait-preserve-1',
+            status: 'completed',
+            current_stage: 'completed',
+            metadata: supplementWaitMetadataFixture.finished_with_wait_timestamp,
+          }),
+        )
+      },
+      onRemovalCheck: (fileId) => jsonResponse(removalCheckFor('removable_plain', { file_id: fileId })),
+      onRemoveFile: (fileId) =>
+        jsonResponse({
+          document_id: DOCUMENT_ID,
+          file_id: fileId,
+          removed: true,
+          cleanup_finished: true,
+          ready_file_count: 2,
+        }),
+    })
+
+    renderSection({ providerLabel: PROVIDER, providerShortLabel: PROVIDER_SHORT, pollIntervalMs: 30 })
+
+    // 1) Server-discovered supplement-wait finishes and renders its SupplementFilesList outcomes.
+    const progressList = await screen.findByRole('list', { name: 'Supplement files' })
+    await waitFor(() => {
+      expect(within(progressList).getByText('Done_S1.xlsx')).toBeInTheDocument()
+      expect(within(progressList).getByText('Failed_S2.xlsx')).toBeInTheDocument()
+    })
+    const removeButton = await screen.findByRole('button', { name: 'Remove Table_S1.xlsx' })
+    await waitFor(() => expect(removeButton).toBeEnabled())
+
+    // 2) Remove a supplement -> finished supplement-wait outcomes must remain rendered.
+    await user.click(removeButton)
+    const confirmDialog = await screen.findByRole('dialog', { name: 'Remove Table_S1.xlsx?' })
+    await user.click(within(confirmDialog).getByRole('button', { name: 'Remove file' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Remove Table_S1.xlsx' })).not.toBeInTheDocument()
+    })
+    const retainedProgressList = screen.getByRole('list', { name: 'Supplement files' })
+    expect(within(retainedProgressList).getByText('Done_S1.xlsx')).toBeInTheDocument()
+    expect(within(retainedProgressList).getByText('Failed_S2.xlsx')).toBeInTheDocument()
   })
 })
 

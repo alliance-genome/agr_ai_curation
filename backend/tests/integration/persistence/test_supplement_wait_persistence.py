@@ -59,7 +59,8 @@ def _ready_paper(owner_id: int) -> PDFDocument:
 
 
 def _waiting_stage(paper: PDFDocument, owner_id: int):
-    job = job_service.start_supplement_wait_job(document_id=paper.id, user_id=owner_id, filename=paper.filename)
+    job = job_service.start_supplement_wait_job(document_id=paper.id, user_id=owner_id)
+    assert job.filename == paper.filename
     job_service.update_progress(
         job_id=job.job_id, stage="waiting_for_supplements", progress_percentage=60,
         message="Waiting for ABC", status="running",
@@ -196,7 +197,7 @@ def test_a_delete_ends_a_stage_from_its_first_moment(owner):
 
     owner_id, _ = owner
     paper = _ready_paper(owner_id)
-    stage = job_service.start_supplement_wait_job(document_id=paper.id, user_id=owner_id, filename=paper.filename)
+    stage = job_service.start_supplement_wait_job(document_id=paper.id, user_id=owner_id)
 
     assert job_service.end_supplement_wait_for_delete(document_id=paper.id, user_id=owner_id) is True
     latest = job_service.get_latest_job_for_document(document_id=paper.id, user_id=owner_id)
@@ -294,9 +295,9 @@ def test_the_outline_signal_reads_a_queued_stage_until_it_ends(owner, monkeypatc
     monkeypatch.delenv("DOCUMENT_SUPPLEMENT_LISTING_POLL_SECONDS", raising=False)
     owner_id, _ = owner
     queued = _ready_paper(owner_id)
-    stage = job_service.start_supplement_wait_job(document_id=queued.id, user_id=owner_id, filename=queued.filename)
+    stage = job_service.start_supplement_wait_job(document_id=queued.id, user_id=owner_id)
     dead = _ready_paper(owner_id)
-    dead_stage = job_service.start_supplement_wait_job(document_id=dead.id, user_id=owner_id, filename=dead.filename)
+    dead_stage = job_service.start_supplement_wait_job(document_id=dead.id, user_id=owner_id)
     _age(dead_stage.job_id, 220)
 
     with SessionLocal() as db:

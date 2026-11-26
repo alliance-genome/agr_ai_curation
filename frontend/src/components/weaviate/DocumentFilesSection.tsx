@@ -331,6 +331,10 @@ interface TrackedJobState {
   origin: 'user_add' | 'server_active'
 }
 
+function isAddTrackedJobState(state: TrackedJobState | null): boolean {
+  return state !== null && (state.origin === 'user_add' || isSupplementAddJob(state.job))
+}
+
 export interface DocumentFilesSectionProps {
   documentId: string
   /** The provider's display label when the paper was imported from one; null for an upload. */
@@ -686,6 +690,7 @@ function ProviderFilesPart({
   isRemovalBusy,
   onAddBusyChange,
   refreshPaperSurfaces,
+  removalResetSeq,
 }: {
   documentId: string
   provider: string
@@ -700,6 +705,7 @@ function ProviderFilesPart({
     targetDocumentId: string,
     options?: { invalidateFilesOnFailure?: boolean },
   ) => Promise<void>
+  removalResetSeq: number
 }) {
   const queryClient = useQueryClient()
   const shortProvider = providerShortLabel?.trim() || provider
@@ -728,6 +734,7 @@ function ProviderFilesPart({
   const onFilesChangedRef = useRef(onFilesChanged)
   onFilesChangedRef.current = onFilesChanged
   const submitAbortControllerRef = useRef<AbortController | null>(null)
+  const lastRemovalResetSeqRef = useRef(removalResetSeq)
 
   useEffect(() => {
     mountedRef.current = true
@@ -753,6 +760,22 @@ function ProviderFilesPart({
     setPollError(null)
     setPollRetryCount(0)
   }, [documentId, open])
+
+  // Clear a stale completed "Adding files" summary after a subsequent file removal refreshes
+  // this paper, preserving active jobs, failed/cancelled add alerts, and server-discovered
+  // supplement-wait outcomes, and never falsely clearing on mount/paper switch.
+  useEffect(() => {
+    if (lastRemovalResetSeqRef.current === removalResetSeq) {
+      return
+    }
+    lastRemovalResetSeqRef.current = removalResetSeq
+    setTrackedJobState((current) => {
+      if (current === null || current.job.status !== 'completed' || !isAddTrackedJobState(current)) {
+        return current
+      }
+      return null
+    })
+  }, [removalResetSeq])
 
   const listingQuery = useQuery({
     queryKey: paperSourceFilesQueryKey(documentId),
@@ -906,7 +929,6 @@ function ProviderFilesPart({
   }, [open, serverActiveJob])
 
   const trackedJob = trackedJobState?.job ?? null
-  const trackedJobOrigin = trackedJobState?.origin ?? null
   const trackedJobId = trackedJob?.job_id ?? null
   const isTrackedJobActive = trackedJob !== null && isActivePdfJobStatus(trackedJob.status)
 
@@ -1023,9 +1045,7 @@ function ProviderFilesPart({
     return chosen
   }, [selectedIds, tickableOthers])
 
-  const isAddTrackedJob =
-    trackedJob !== null
-    && (trackedJobOrigin === 'user_add' || isSupplementAddJob(trackedJob))
+  const isAddTrackedJob = trackedJob !== null && isAddTrackedJobState(trackedJobState)
   const serverJobStillActive =
     serverActiveJob !== null
     && !(
@@ -1439,7 +1459,12 @@ function ProviderFilesPart({
             {`${provider} has no other files for this paper.`}
           </Typography>
         ) : (
-          <Box component="ul" aria-label={`Files in ${provider} not in this paper`} sx={{ m: 0, pl: 2.5 }}>
+          <Box
+            component="ul"
+            role="list"
+            aria-label={`Files in ${provider} not in this paper`}
+            sx={{ listStyle: 'none', m: 0, pl: 0 }}
+          >
             {others.map((file) => {
               const canSelect = showTickboxes && isTickableOtherFile(file)
               return (
@@ -1502,6 +1527,7 @@ export default function DocumentFilesSection({
   const [nonProviderPaperBusy, setNonProviderPaperBusy] = useState(true)
   const [removalDialog, setRemovalDialog] = useState<RemovalDialogState>(null)
   const [refreshingAfterRemoval, setRefreshingAfterRemoval] = useState(false)
+  const [removalResetSeq, setRemovalResetSeq] = useState(0)
 
   const mountedRef = useRef(true)
   const activeDocumentIdRef = useRef(documentId)
@@ -1690,6 +1716,7 @@ export default function DocumentFilesSection({
     async (targetDocumentId: string, notifyFilesChanged?: () => void) => {
       if (mountedRef.current && activeDocumentIdRef.current === targetDocumentId) {
         setRefreshingAfterRemoval(true)
+        setRemovalResetSeq((count) => count + 1)
       }
       try {
         await refreshPaperSurfaces(targetDocumentId, { invalidateFilesOnFailure: true })
@@ -1995,6 +2022,7 @@ export default function DocumentFilesSection({
             isRemovalBusy={isRemovalBusy}
             onAddBusyChange={setProviderPaperBusy}
             refreshPaperSurfaces={refreshPaperSurfaces}
+            removalResetSeq={removalResetSeq}
           />
         ) : (
           <UploadedPaperFilesNotice

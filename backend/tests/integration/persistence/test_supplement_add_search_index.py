@@ -1624,7 +1624,6 @@ async def test_http_delete_endpoint_succeeds_under_one_connection_pool(
         pdf_job_service.start_supplement_wait_job(
             document_id=paper,
             user_id=owner_id,
-            filename="main.pdf",
         )
 
         result = await documents_api.delete_document_endpoint(

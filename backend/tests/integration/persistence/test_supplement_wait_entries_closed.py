@@ -196,10 +196,10 @@ def test_handoff_transfers_queued_entries_atomically_and_cancel_while_queued_clo
     stage_job = job_service.start_supplement_wait_job(
         document_id=paper.id,
         user_id=owner_id,
-        filename=paper.filename,
         supplements=queued,
         source_job_id=main_job.job_id,
     )
+    assert stage_job.filename == paper.filename
 
     with SessionLocal() as db:
         main_meta = db.get(PdfProcessingJob, main_job.job_id).metadata_json or {}
@@ -237,12 +237,12 @@ def test_atomic_complete_and_handoff_transfers_persisted_queued_entries(owner):
         job_id=main_job.job_id,
         document_id=paper.id,
         user_id=owner_id,
-        filename=paper.filename,
         message="Processing completed",
     )
 
     assert completed_main is not None and completed_main.status == "completed"
     assert stage_job is not None and stage_job.status == "pending"
+    assert stage_job.filename == paper.filename
     with SessionLocal() as db:
         main_meta = db.get(PdfProcessingJob, main_job.job_id).metadata_json or {}
         stage_meta = db.get(PdfProcessingJob, stage_job.job_id).metadata_json or {}
@@ -273,7 +273,6 @@ def test_atomic_complete_when_paper_busy_closes_entries_on_main_job_atomically(o
             job_id=main_job.job_id,
             document_id=paper.id,
             user_id=owner_id,
-            filename=paper.filename,
             message="Processing completed",
         )
         holder.rollback()
@@ -317,7 +316,6 @@ def test_late_worker_after_cancel_or_fail_never_reopens_or_erases_supplement_out
         job_id=main_job.job_id,
         document_id=paper.id,
         user_id=owner_id,
-        filename=paper.filename,
         message="Processing completed",
     )
     assert returned_main is not None and returned_main.status == terminal_kind
@@ -328,7 +326,6 @@ def test_late_worker_after_cancel_or_fail_never_reopens_or_erases_supplement_out
         job_service.start_supplement_wait_job(
             document_id=paper.id,
             user_id=owner_id,
-            filename=paper.filename,
             supplements=queued,
             source_job_id=main_job.job_id,
         )
@@ -394,7 +391,6 @@ def test_atomic_complete_honors_cancel_requested_under_row_lock_without_starting
         job_id=main_job.job_id,
         document_id=paper.id,
         user_id=owner_id,
-        filename=paper.filename,
         message="Processing completed",
     )
 
@@ -425,7 +421,7 @@ def test_atomic_complete_honors_cancel_requested_under_row_lock_without_starting
         db.get(PdfProcessingJob, queued_completed.job_id).cancel_requested = True
     with pytest.raises(job_service.SupplementHandoffRefusedError):
         job_service.start_supplement_wait_job(
-            document_id=paper.id, user_id=owner_id, filename=paper.filename,
+            document_id=paper.id, user_id=owner_id,
             source_job_id=queued_completed.job_id,
         )
 

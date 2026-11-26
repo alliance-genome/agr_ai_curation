@@ -387,6 +387,10 @@ describe('approved supplement screen texts (N1–N29, N33–N44, N46–N47, Card
   })
 
   it('matches Library Add strings N33–N37, Card 34, Card 41, and 409 vs 503 refusals', () => {
+    expect(addFilesButtonText(0)).toBe('Add files')
+    expect(addFilesButtonText(-1)).toBe('Add files')
+    expect(addFilesButtonText(Number.NaN)).toBe('Add files')
+    expect(addFilesButtonText(Number.POSITIVE_INFINITY)).toBe('Add files')
     expect(addFilesButtonText(1)).toBe('Add 1 file')
     expect(addFilesButtonText(3)).toBe('Add 3 files')
     expect(LIBRARY_ADD_TEXT.importStillRunning).toBe(
