@@ -10,6 +10,8 @@ from typing import Any, Mapping
 import yaml
 from pydantic import ValidationError
 
+from src.lib.config.models_loader import resolve_model_id
+
 from .errors import BenchmarkCatalogError
 from .models import (
     BenchmarkConfiguration,
@@ -87,6 +89,14 @@ def _validate_route(
         if item.provider == route.provider and item.model == route.model
     ]
     if not matches:
+        resolved_id = resolve_model_id(route.model)
+        if resolved_id != route.model:
+            raise BenchmarkCatalogError(
+                f"{context} asks for model '{route.model}', which the model catalog "
+                f"has replaced with '{resolved_id}'; a replaced version cannot be "
+                f"benchmarked. Route to '{resolved_id}', or benchmark a new version "
+                "before it replaces the current one (as a hidden catalog entry)."
+            )
         raise BenchmarkCatalogError(
             f"{context} uses unknown provider/model route "
             f"'{route.provider}/{route.model}'"
