@@ -253,6 +253,15 @@ test_release_attach_step_targets_repository() {
   fi
 }
 
+test_publish_workflow_rejects_bare_negation() {
+  # Bash exempts negated commands from errexit, so a later command can hide a failed check.
+  awk '/^[[:blank:]]*![[:blank:]]/ {
+    print FILENAME ":" FNR ": use an explicit failure instead of bare negation: " $0
+    exit 1
+  }' "${repo_root}/.github/workflows/publish-images.yml" >&2
+}
+
+test_publish_workflow_rejects_bare_negation
 test_release_lane_outputs_reproducible_assets
 test_main_lane_outputs_sha_pinned_assets
 test_rejects_missing_required_flags

@@ -388,7 +388,10 @@ jobs:
             -c '/docker-entrypoint.d/10-generate-runtime-config.sh && cat /usr/share/nginx/html/runtime-config.js')"
           grep -Fq '"VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS": "7"' <<<"${runtime_config}"
           grep -Fq '"VITE_CHAT_STREAM_RECOVERY_DELAY_MS": "2500"' <<<"${runtime_config}"
-          ! grep -Fq 'VITE_DEV_MODE' <<<"${runtime_config}"
+          if grep -Fq 'VITE_DEV_MODE' <<<"${runtime_config}"; then
+            echo "runtime config must not expose VITE_DEV_MODE" >&2
+            exit 1
+          fi
           node --check <<<"${runtime_config}"
           expected_boundary_value='quoted "value" C:\path\'
           generic_runtime_config="$(docker run --rm --network=none \
