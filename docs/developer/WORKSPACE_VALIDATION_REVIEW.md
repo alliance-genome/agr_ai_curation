@@ -4,6 +4,9 @@ Workspace review commands are persisted in `workspace_review_operations`. A call
 
 Workers claim a short database lease and serialize operations sharing an artifact. Preparation is recoverable through deterministic episode and saved-plan identities. The provider work runs outside SQL transactions. Expired running operations become uncertain and cannot be automatically replayed. Resume retains the same scope and usage; a deliberate new curator command grants a linked, separate bounded scope. Immutable request identity and prior history cannot be deleted or rewritten.
 
+When saving the terminal outcome to JSONB, the worker removes U+0000 so that
+Revalidate can complete even if the reviewer quotes text containing a null character.
+
 A scoped episode retains untouched coverage by reference to actual earlier reviews. `review_target_ids` covers the requested record and configured dependencies; `review_ready` is distinct from whole-artifact `ready`. The shared adapter limits initial jobs, dependent waves, reconsideration, source follow-up, and decisions to that scope. Accepted dependencies can be reused without another provider call. Scientific judgments remain with agents and curators, not programmatic status heuristics.
 
 The former synchronous candidate `/validate` and session `/validate-all` routes are retired. Submission and edits use structural/selected-state refresh only. New commands use `/sessions/{id}/review-operations`; status, cancel, and resume use `/review-operations/{id}`. History and exact body continuations are authenticated record reads. Current record/session operation reads restore progress without creating work.

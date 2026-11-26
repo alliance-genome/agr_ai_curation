@@ -469,6 +469,9 @@ preparation or provider connectivity.
 
 Successful cell envelopes are JSONB and are accepted only when their serialized
 UTF-8 JSON size is at most `BENCHMARK_MAX_ENVELOPE_BYTES` (default 10 MiB).
+The repository removes U+0000 from envelope strings and keys before measuring
+the JSONB value and computing its envelope digest. The separate binary result
+artifact retains the original output.
 The repository installs the configured limit transaction-locally and a database
 trigger computes the authoritative size, so direct writes retain the default
 bound and cannot forge `envelope_size_bytes`.
