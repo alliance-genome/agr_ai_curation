@@ -763,7 +763,7 @@ async def _execute(operation_id, lease_token, trace_id):
                     }
             row.state, row.outcome, row.lease_until = (
                 state,
-                {**(row.outcome or {}), **result, "trace_id": trace_id},
+                store.canonical({**(row.outcome or {}), **result, "trace_id": trace_id})[1],
                 None,
             )
         terminal_state = row.state

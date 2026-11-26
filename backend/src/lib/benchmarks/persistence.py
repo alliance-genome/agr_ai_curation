@@ -20,6 +20,7 @@ from src.lib.benchmarks.stage_measurements import StageStart, StageFinish
 from src.lib.cost_ledger.facts import RecordedCharge, TokenUsage
 from src.lib.cost_ledger.benchmark_writes import reserve_benchmark_accounting, complete_benchmark_accounting
 from src.lib.cost_ledger.benchmark_reads import read_benchmark_accounting
+from src.lib.persistence_sanitization import sanitize_persisted_json_value
 from src.schemas.benchmark_artifacts import ArtifactInvocation, BenchmarkArtifact
 from src.lib.openai_agents.config import (
     get_benchmark_default_page_size,
@@ -919,21 +920,27 @@ class BenchmarkRepository:
                 BenchmarkStage.cell_id == cell_id, BenchmarkStage.status == "running",
             ).values(status="interrupted", failure_type="CellTerminated"))
         envelope_size = None
+        stored_envelope = None
+        envelope_digest = None
         if status == BenchmarkCellStatus.SUCCEEDED:
             if generated_envelope is None:
                 raise ValueError("successful benchmark cell requires an envelope")
             if result is None:
                 raise ValueError("successful benchmark cell requires a result")
-            envelope_size = self.session.scalar(
-                text(
-                    "SELECT octet_length("
-                    "convert_to(CAST(:payload AS jsonb)::text, 'UTF8')"
-                    ")"
-                ),
-                {"payload": json.dumps(generated_envelope, ensure_ascii=False)},
-            )
+            stored_envelope = sanitize_persisted_json_value(generated_envelope, reject_key_collisions=True)
+            was_sanitized = stored_envelope != generated_envelope
+            envelope_size, decoded_envelope = self.session.execute(
+                text("""
+                    SELECT octet_length(convert_to(envelope::text, 'UTF8')),
+                           CASE WHEN :was_sanitized THEN envelope END
+                    FROM (SELECT CAST(:payload AS jsonb) AS envelope) AS parsed
+                """),
+                {"payload": json.dumps(stored_envelope, ensure_ascii=False), "was_sanitized": was_sanitized},
+            ).one()
             if envelope_size > get_benchmark_max_envelope_bytes():
                 raise ValueError("generated benchmark envelope exceeds configured byte limit")
+            # JSONB can expand exponent-form numbers. Keep the original digest for clean inputs.
+            envelope_digest = canonical_digest(decoded_envelope if was_sanitized else generated_envelope)
         elif generated_envelope is not None:
             raise ValueError("only successful benchmark cells may store envelopes")
         elif result is not None:
@@ -976,11 +983,9 @@ class BenchmarkRepository:
 
         cell.status = status
         cell.completed_at = completed_at
-        cell.generated_envelope = generated_envelope
+        cell.generated_envelope = stored_envelope
         cell.envelope_size_bytes = envelope_size
-        cell.envelope_digest = (
-            canonical_digest(generated_envelope) if generated_envelope is not None else None
-        )
+        cell.envelope_digest = envelope_digest
         cell.result_artifact = artifact
         cell.result_digest = (
             f"sha256:{hashlib.sha256(artifact).hexdigest()}" if artifact is not None else None
@@ -996,7 +1001,7 @@ class BenchmarkRepository:
             {"limit": str(get_benchmark_max_envelope_bytes())},
         )
         self.session.flush()
-        if generated_envelope is not None:
+        if stored_envelope is not None:
             self.session.refresh(cell, attribute_names=["envelope_size_bytes"])
         self._refresh_job_counters(cell.job_id)
         return cell

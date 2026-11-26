@@ -9,7 +9,9 @@ import pytest
 from sqlalchemy import inspect, select, update
 from sqlalchemy.exc import DBAPIError
 
-from src.lib.benchmarks.persistence import BenchmarkRepository, BenchmarkResultArtifactError
+from src.lib.benchmarks.persistence import (
+    BenchmarkRepository, BenchmarkResultArtifactError, canonical_digest,
+)
 from src.models.sql.benchmark import BenchmarkCell, BenchmarkCellStatus
 from src.models.sql.database import SessionLocal
 from tests.integration.persistence.test_benchmark_repository import (
@@ -47,6 +49,7 @@ def test_canonical_bytes_round_trip_and_terminal_immutability(monkeypatch):
         db.expunge_all()
         loaded = db.get(BenchmarkCell, cell_id)
         assert "result_artifact" in inspect(loaded).unloaded
+        assert loaded.envelope_digest == canonical_digest(envelope)
         artifact = repository.get_result_artifact(cell_id=cell_id, job_id=job_id, owner_subject="owner-a")
         assert artifact.content == expected
         assert artifact.digest == "sha256:" + hashlib.sha256(expected).hexdigest()
@@ -63,6 +66,58 @@ def test_canonical_bytes_round_trip_and_terminal_immutability(monkeypatch):
             with db.begin_nested():
                 db.execute(update(BenchmarkCell).where(BenchmarkCell.id == cell_id).values(result_artifact=b"{}"))
         db.rollback()
+
+
+@pytest.mark.parametrize("quote", ["  β\x00γ\n\t", "  βγ\n\t"], ids=["nul", "clean"])
+def test_generated_envelope_round_trip(quote):
+    envelope = {"evidence": [{"quote": quote, "page": 2}]}
+    expected = {"evidence": [{"quote": "  βγ\n\t", "page": 2}]}
+    with SessionLocal() as db:
+        repository, _, cell, owner, now = claim(db)
+        repository.finish_cell(
+            cell_id=cell.id, lease_owner=owner, status=BenchmarkCellStatus.SUCCEEDED,
+            completed_at=now, generated_envelope=envelope,
+            result={"output": envelope, "invocations": []},
+        )
+        db.refresh(cell)
+        assert cell.status == BenchmarkCellStatus.SUCCEEDED
+        assert cell.generated_envelope == expected
+        assert cell.envelope_digest == canonical_digest(cell.generated_envelope)
+        assert cell.envelope_size_bytes == len(json.dumps(expected, ensure_ascii=False).encode())
+        assert json.loads(cell.result_artifact)["output"] == envelope
+
+
+def test_sanitized_envelope_digest_uses_postgres_numeric_representation():
+    envelope = {"quo\x00te": "A\x00B", "value": 1e20}
+    with SessionLocal() as db:
+        repository, _, cell, owner, now = claim(db)
+        repository.finish_cell(
+            cell_id=cell.id, lease_owner=owner, status=BenchmarkCellStatus.SUCCEEDED,
+            completed_at=now, generated_envelope=envelope,
+            result={"output": envelope, "invocations": []},
+        )
+        db.refresh(cell)
+        assert cell.status == BenchmarkCellStatus.SUCCEEDED
+        assert cell.generated_envelope == {"quote": "AB", "value": 10**20}
+        assert cell.envelope_digest == canonical_digest(cell.generated_envelope)
+        assert json.loads(cell.result_artifact)["output"] == envelope
+
+
+def test_envelope_key_collision_does_not_publish():
+    envelope = {"evidence": [{"quote": "first", "quo\x00te": "second"}]}
+    with SessionLocal() as db:
+        repository, _, cell, owner, now = claim(db)
+        with pytest.raises(ValueError, match="duplicate.*key"):
+            repository.finish_cell(
+                cell_id=cell.id, lease_owner=owner, status=BenchmarkCellStatus.SUCCEEDED,
+                completed_at=now, generated_envelope=envelope,
+                result={"output": envelope, "invocations": []},
+            )
+        db.refresh(cell)
+        assert cell.status == BenchmarkCellStatus.RUNNING
+        assert cell.generated_envelope is None
+        assert cell.result_artifact is None
+        assert cell.envelope_digest is None
 
 
 @pytest.mark.parametrize("status", [BenchmarkCellStatus.FAILED, BenchmarkCellStatus.CANCELLED])

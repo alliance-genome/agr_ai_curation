@@ -338,6 +338,45 @@ async def test_worker_failure_has_one_sanitized_owner_and_expected_stops_do_not_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("output", ["Reviewed β\x00γ.\n\t", "Reviewed βγ.\n\t"], ids=["nul", "clean"])
+async def test_revalidate_saves_reviewer_output(scope, candidate, monkeypatch, output):
+    from unittest.mock import AsyncMock, Mock
+    from src.lib.curation_workspace.models import CurationDraft
+    from src.lib.validation_review import validator_adapter
+
+    monkeypatch.setattr(
+        validator_adapter, "binding_contract", lambda match: {"binding_id": match.binding.binding_id},
+    )
+    monkeypatch.setattr(validator_adapter.ValidatorAdapter, "initial", AsyncMock())
+    monkeypatch.setattr(validator_adapter.ValidatorAdapter, "advance", AsyncMock())
+    supervisor = Mock()
+    supervisor.hooks.cost_identity = {"agent_id": "supervisor"}
+    monkeypatch.setattr(operations.reviewer, "create_direct_supervisor", Mock(return_value=supervisor))
+    monkeypatch.setattr(operations.reviewer, "create_supervisor_phase", Mock())
+    monkeypatch.setattr(operations.reviewer, "run", AsyncMock(return_value={
+        "output": output, "review": {"ready": True},
+    }))
+
+    sid, cid = candidate
+    with h.SessionLocal.begin() as db:
+        db.add(CurationDraft(
+            candidate_id=UUID(cid), adapter_key="fixture", version=1, fields=[], draft_metadata={},
+        ))
+        saved = operations.submit(
+            db, owner_id=scope.owner_id, session_id=sid, request_id=str(uuid4()),
+            candidate_ids=[cid], guidance=None, groups=[],
+        )
+        row = db.get(WorkspaceReviewOperation, saved["operation_id"])
+        row.state, row.lease_token = "preparing", "test-lease"
+    await operations._execute(saved["operation_id"], "test-lease", "test-trace")
+    with h.SessionLocal() as db:
+        row = db.get(WorkspaceReviewOperation, saved["operation_id"])
+        assert row.state == "complete"
+        assert row.outcome["results"] == [{"output": "Reviewed βγ.\n\t", "review": {"ready": True}}]
+        assert row.outcome["trace_id"] == "test-trace"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("scenario", [False, "historical"], indirect=True)
 @pytest.mark.parametrize("action,caveat", [("accept", False), ("accept", True), ("reject", True)])
 async def test_worker_finishes_real_runner_admission_and_publication_with_fake_models(
