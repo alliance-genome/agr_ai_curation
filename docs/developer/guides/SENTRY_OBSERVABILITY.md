@@ -899,6 +899,26 @@ than stranding a private PDF on disk, logs a sanitized companion warning
 fingerprint of `(operation, component, pre_commit|post_commit)`, and context
 holding only `document_id_hash`, `sql_committed`, and `weaviate_retained`.
 
+Both intake services report `intake_compensation_index_cleanup_failed` when
+index deletion returns an unsuccessful result or raises directly. The event
+includes `document_id_hash` and `sql_record_committed`, plus
+`failure_kind=delete_unsuccessful` for a failed result or `exception_type`
+for a thrown exception. Results containing `error` or `chunks_failed` have
+already been reported by the Weaviate client. Intake skips its own SQL delete
+after any index failure and whenever `postgres_deleted` indicates the client
+handled SQL cleanup.
+
+An unexpected exception that stops committed compensation reports
+`intake_compensation_aborted` with `document_id_hash`, `exception_type`, and
+the step that failed (`paper_lock_acquire`, `active_job_check`, or
+`committed_cleanup`). If cancellation arrives during an active-job lookup or
+lock release, the service still reports a failed lookup once and propagates
+cancellation after releasing the lock. A competing paper lock or active job
+ends compensation quietly. Both operations group by operation and intake
+component, omit the request, and use fixed, chain-free errors. Companion warnings carry
+`sentry_skip_event=True`. The original intake failure reaches the caller even
+if the reporter raises.
+
 When post-Weaviate PostgreSQL cleanup fails inside `weaviate_client.delete_document`,
 CLI document deletion (`weaviate_client/cli.py`), or an intake compensation
 fallback SQL delete, the failure is never dropped in a suppressed warning alone:

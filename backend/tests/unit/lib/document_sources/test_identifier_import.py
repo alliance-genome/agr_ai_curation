@@ -41,6 +41,7 @@ from src.lib.pdf_jobs.upload_execution_service import (
     UploadExecutionRequest,
 )
 from src.lib.document_sources.models import ProviderBearerKind
+from tests.unit.lib.intake_compensation_contract import IntakeCompensationContract
 
 
 class _FakePaperLockConnection:
@@ -2199,9 +2200,14 @@ async def test_post_commit_import_compensation_fails_undispatched_job_and_holds_
 @pytest.mark.asyncio
 @pytest.mark.parametrize("competing_mode", ["lock_held", "active_job"])
 async def test_post_commit_import_compensation_skips_when_competing_supplement_add_owns_paper(
-    monkeypatch, tmp_path, competing_mode,
+    monkeypatch, tmp_path, competing_mode, caplog,
 ):
+    from unittest.mock import Mock
     from src.lib.document_files.paper_lock import paper_lock_key
+    from src.lib.observability import runtime
+
+    report = Mock()
+    monkeypatch.setattr(runtime, "report_runtime_exception", report)
 
     sessions: list[_FakeSession] = []
     persisted_row_holder: list[object] = []
@@ -2268,6 +2274,8 @@ async def test_post_commit_import_compensation_skips_when_competing_supplement_a
     assert list(tmp_path.rglob("*.pdf"))
     delete_document_mock.assert_not_awaited()
     assert not any(session.deleted for session in sessions)
+    report.assert_not_called()
+    assert not caplog.records
 
 
 @pytest.mark.asyncio
@@ -2737,3 +2745,30 @@ async def test_duplicate_identifier_import_staged_cleanup_failure_reports_saniti
     ]
     assert kwargs["include_request"] is False
     assert str(existing_doc.id) not in repr(report_mock.call_args)
+
+
+class TestIntakeCompensation(IntakeCompensationContract):
+    component = "document_sources"
+
+    async def run_intake(self, tmp_path, **dependencies):
+        service = IdentifierImportService(
+            upload_execution_service=_DispatchRecorder(),
+            storage_path_provider=lambda: tmp_path,
+            principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
+            provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+            provider_factory=_FakeProvider,
+            find_existing_source_document_fn=lambda *_args, **_kwargs: None,
+            import_batch_limit_provider=lambda: 10,
+            **dependencies,
+        )
+        await service.import_identifiers(
+            background_tasks=BackgroundTasks(),
+            identifiers="PMID:123",
+            user={"sub": "user-1"},
+            document_source_context=DocumentSourceRequestContext(
+                bearer_kind=ProviderBearerKind.CURATOR,
+                provider_groups=("FBStaff",),
+                authorized_group_ids=("FB",),
+                curator_token="curator-token",
+            ),
+        )
