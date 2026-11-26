@@ -790,7 +790,7 @@ def _require_removable_paths(cleanup_values: dict[str, Any], base_storage: FileP
         owner_storage_path(base_storage / user_sub, base_storage, user_sub)
     except StoredPathOutsideOwnerStorage as exc:
         logger.warning("Owner storage validation failed for %s", user_sub)
-        raise HTTPException(status_code=403, detail="Access denied: file path validation failed") from exc
+        raise HTTPException(status_code=403, detail=_PAPER_DELETE_STORED_FILE_REFUSAL_DETAIL) from exc
 
     for file_values in cleanup_values["files"]:
         for relative in _removed_paths(file_values):
