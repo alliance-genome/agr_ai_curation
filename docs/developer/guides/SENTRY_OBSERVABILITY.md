@@ -931,9 +931,14 @@ Ordinary file refusals in a listing or partial add stay quiet. When every chosen
 file is left out, the standalone add job reports only `supplement_add_nothing_added`,
 unless cancelled or all files were already in the paper. This warning under
 `document_files` has a fixed fingerprint and carries the hashed `document_id`
-and, per file, the reason code, measured value, limit and hashed
-`artifact_id_hash`. The fixed, chain-free error omits filenames, references,
-curator information and raw text.
+and a structured `refusals` list in file order. Each entry contains only
+`reason_code`, `measured_value`, `limit_value` and `artifact_id_hash`.
+`DOCUMENT_MAX_FILES_PER_PAPER` caps the number of detail entries (default 20).
+`reason_counts` counts all refused files by reason, including files beyond the
+cap. `omitted_count` gives the number of files without a detail entry and is zero
+when all entries fit. These diagnostics are available in both content-redaction
+modes. The warning omits the request, filenames, references, curator information
+and raw text.
 
 `run_supplement_add_job` and `add_files_to_paper` own sanitized runtime
 reporting under component `document_files` (omitting request metadata, grouping

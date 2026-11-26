@@ -8,6 +8,7 @@ import logging
 from typing import Any, Literal
 
 from src.lib.openai_agents.config import (
+    get_document_max_files_per_paper,
     get_runtime_observability_context_value_max_chars,
     get_runtime_observability_tag_value_max_chars,
 )
@@ -43,7 +44,65 @@ def _safe_tags(tags: Mapping[str, Any] | None) -> dict[str, str]:
     }
 
 
-def _safe_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
+def supplement_refusal_context(
+    component: object, operation: object, context: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Project this one warning onto the same closed schema at capture and before_send."""
+    if component != "document_files" or operation != "supplement_add_nothing_added":
+        return None
+
+    from src.lib.document_sources.file_reasons import ADD_REFUSAL_REASONS
+    from src.lib.observability.sentry import SENTRY_IDENTIFIER_HASH_PATTERN, hash_sentry_identifier
+
+    safe = {
+        "component": component,
+        "operation": operation,
+        "document_id": hash_sentry_identifier(context.get("document_id")),
+    }
+    counts = context.get("reason_counts")
+    entries = context.get("refusals")
+    if not isinstance(counts, Mapping) or not isinstance(entries, list):
+        return safe
+
+    reason_counts = {
+        reason.value: count
+        for reason in ADD_REFUSAL_REASONS
+        if type(count := counts.get(reason.value)) is int and count > 0
+    }
+    refusals = []
+    for entry in entries[:get_document_max_files_per_paper()]:
+        if not isinstance(entry, Mapping):
+            continue
+        reason = entry.get("reason_code")
+        if not isinstance(reason, str) or reason not in reason_counts:
+            continue
+        detail: dict[str, Any] = {"reason_code": reason}
+        for key in ("measured_value", "limit_value"):
+            value = entry.get(key)
+            if key in entry and (value is None or type(value) is int):
+                detail[key] = value
+        artifact_hash = entry.get("artifact_id_hash")
+        if ("artifact_id_hash" in entry and artifact_hash is None) or (
+            isinstance(artifact_hash, str) and SENTRY_IDENTIFIER_HASH_PATTERN.fullmatch(artifact_hash)
+        ):
+            detail["artifact_id_hash"] = artifact_hash
+        refusals.append(detail)
+
+    safe["refusals"] = refusals
+    safe["reason_counts"] = reason_counts
+    omitted = sum(reason_counts.values()) - len(refusals)
+    if omitted >= 0:
+        safe["omitted_count"] = omitted
+    return safe
+
+
+def _safe_context(
+    context: Mapping[str, Any] | None, *, component: str, operation: str,
+) -> dict[str, Any]:
+    refusals = supplement_refusal_context(component, operation, context or {})
+    if refusals is not None:
+        return refusals
+
     context_value_max_chars = get_runtime_observability_context_value_max_chars()
     safe: dict[str, Any] = {}
     for key, value in (context or {}).items():
@@ -130,7 +189,7 @@ def report_runtime_exception(
                 {
                     "component": safe_component,
                     "operation": safe_operation,
-                    **_safe_context(context),
+                    **_safe_context(context, component=component, operation=operation),
                 },
             )
             event_id = sentry_sdk.capture_exception(exc)
