@@ -34,8 +34,6 @@ model (AGENTS.md section 8):
 from __future__ import annotations
 
 import asyncio
-
-from agr_ai_curation_runtime.document_errors import FILES_CHANGED_ERROR_CODE
 import json
 import logging
 import math
@@ -51,7 +49,9 @@ from agents.stream_events import RunItemStreamEvent
 from agents.tool_context import ToolContext
 from openai.types.responses import ResponseFunctionToolCall
 
+from agr_ai_curation_runtime.document_errors import DocumentReadError, files_changed_answer
 from src.lib.context import get_current_user_id
+from src.lib.document_files.readable import ReadableFile, ReadableFiles
 from src.lib.observability import runtime
 from src.lib.observability.sentry import exception_chain_already_captured
 from src.lib.packages import tool_roles
@@ -539,7 +539,7 @@ class FanoutExtraction:
         self.new_items: list[Any] = []
         self.writer_outcomes: list[WriterOutcome] = []
         self._planner_result: Any = None
-        self._chunk_views: dict[int, asyncio.Future] = {}
+        self._chunk_views: dict[tuple[int, tuple[str, int, int]], asyncio.Task[str]] = {}
         # Writers' tool start and end times by call ID, for the replayed audit.
         self._tool_timings: dict[str, tuple[datetime, datetime]] = {}
         # Ownership bookkeeping for writer re-runs, by (writer, attempt): the tool
@@ -1039,12 +1039,8 @@ class FanoutExtraction:
             chunk_indexes = list(dict.fromkeys(
                 chunk for position in positions for chunk in plan.items[position].chunks
             ))
-            views = (
-                [(chunk, await self._chunk_view(chunk)) for chunk in chunk_indexes]
-                if self.read_tool is not None
-                else []
-            )
             writer = self._writer_agent((index, attempt))
+            views = await self._writer_chunk_views(chunk_indexes)
             run_input = [
                 {"role": "user", "content": self.input_text},
                 {"role": "developer", "content": self._writer_assignment(index, writer_count, positions, views)},
@@ -1204,21 +1200,55 @@ class FanoutExtraction:
             lines += [f"read_chunk(chunk_index={chunk}) result:\n{view}" for chunk, view in views]
         return "\n".join(lines)
 
-    async def _chunk_view(self, chunk_index: int) -> str:
-        """Read each cited chunk once per run, shared by every writer that cites it."""
+    async def _writer_chunk_views(self, chunk_indexes: Sequence[int]) -> list[tuple[int, str]]:
+        """Check all prefetched passages together at handoff, after the last awaited read."""
+        if self.read_tool is None or not chunk_indexes:
+            return []
+        readable = await self._prefetch_readable_files()
+        views = []
+        for chunk in chunk_indexes:
+            source = readable.file_for(chunk)
+            view = await self._chunk_view(chunk, source)
+            views.append((chunk, source, view))
 
-        view = self._chunk_views.get(chunk_index)
+        current = await self._prefetch_readable_files()
+        current_files = set(current.fingerprint)
+        checked = []
+        for chunk, source, view in views:
+            if source is not None and source.fingerprint not in current_files:
+                view = exact_json(files_changed_answer(PREFETCH_TOOL_NAME))
+            checked.append((chunk, view))
+        return checked
+
+    async def _prefetch_readable_files(self) -> ReadableFiles:
+        from src.lib.document_files.readable import resolve_readable_files
+
+        try:
+            return await asyncio.to_thread(resolve_readable_files, self.document_id, self.user_id)
+        except Exception as exc:
+            # A failed scope lookup is a failed source read, including for writer reruns.
+            raise DocumentReadError(PREFETCH_TOOL_NAME) from exc
+
+    async def _chunk_view(self, chunk_index: int, source: ReadableFile | None) -> str:
+        if source is None:
+            # Let the tool describe the current readable ranges. An out-of-range
+            # answer can change as files come and go, so it is never cached.
+            return await self._read_chunk_view(chunk_index, source)
+
+        key = (chunk_index, source.fingerprint)
+        view = self._chunk_views.get(key)
         if view is None:
-            view = asyncio.ensure_future(self._read_chunk_view(chunk_index))
-            self._chunk_views[chunk_index] = view
+            view = asyncio.create_task(self._read_chunk_view(chunk_index, source))
+            self._chunk_views[key] = view
         return await asyncio.shield(view)
 
-    async def _read_chunk_view(self, chunk_index: int) -> str:
+    async def _read_chunk_view(self, chunk_index: int, source: ReadableFile | None) -> str:
         """Render one chunk exactly as the model sees a read_chunk result."""
 
         from .document_references import project_model_source_items
 
         tool = self.read_tool
+        assert tool is not None
         arguments = json.dumps({"chunk_index": chunk_index})
         call_id = f"fanout_prefetch_{chunk_index}"
         context = ToolContext(
@@ -1239,10 +1269,10 @@ class FanoutExtraction:
         finally:
             if token is not None:
                 ACTIVE_HISTORY.reset(token)
-        if isinstance(raw, dict) and raw.get("error_code") == FILES_CHANGED_ERROR_CODE:
-            # Withheld because the paper's files changed: never shared with later
-            # writers; the next writer that cites this chunk reads it again.
-            self._chunk_views.pop(chunk_index, None)
+        error_code = raw.get("error_code") if isinstance(raw, dict) else getattr(raw, "error_code", None)
+        if source is None and not error_code:
+            # This chunk acquired a readable owner after prefetch began.
+            raw = files_changed_answer(PREFETCH_TOOL_NAME)
         call = ResponseFunctionToolCall(
             type="function_call", call_id=call_id, name=_tool_name(tool), arguments=arguments,
         )
@@ -1252,6 +1282,9 @@ class FanoutExtraction:
             user_id=get_current_user_id(),
             cache={},
         )
+        if source is not None and error_code:
+            # Only passages can be reused. A subsequent read gets its own answer.
+            self._chunk_views.pop((chunk_index, source.fingerprint), None)
         output = projected[1]["output"]
         return output if isinstance(output, str) else exact_json(output)
 

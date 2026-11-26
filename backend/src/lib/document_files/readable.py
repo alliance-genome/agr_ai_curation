@@ -145,6 +145,10 @@ class ReadableFile:
         return self.chunk_index_start <= chunk_index <= self.chunk_index_end
 
     @property
+    def fingerprint(self) -> tuple[str, int, int]:
+        return self.file_id, self.chunk_index_start, self.chunk_index_end
+
+    @property
     def chunk_count(self) -> int:
         return self.chunk_index_end - self.chunk_index_start + 1
 
@@ -179,7 +183,7 @@ class ReadableFiles:
     def fingerprint(self) -> tuple[tuple[str, int, int], ...]:
         """Identity of the readable set, for caches built from it."""
 
-        return tuple((file.file_id, file.chunk_index_start, file.chunk_index_end) for file in self.files)
+        return tuple(file.fingerprint for file in self.files)
 
     def labelled(self) -> tuple[tuple[str, ReadableFile], ...]:
         """Each readable file with the name the model sees and passes back as ``file``, in tab order."""

@@ -516,7 +516,77 @@ async def test_fan_out_prefetch_of_a_withheld_read_is_never_shared(paper, monkey
     runner._chunk_views = {}
     runner.planner_agent = SimpleNamespace()  # a planner run without retained history
 
-    view = await runner._chunk_view(0)
+    runner.user_id = TEST_USER_ID
+    runner.document_id = paper["document_id"]
+    [(chunk, view)] = await runner._writer_chunk_views([0])
+    assert chunk == 0
 
     assert FILES_CHANGED_MESSAGE in view
-    assert 0 not in runner._chunk_views  # the next writer that cites chunk 0 reads it again
+    assert not runner._chunk_views  # the next writer that cites chunk 0 reads it again
+
+
+@pytest.mark.asyncio
+async def test_fanout_rechecks_prefetched_passages_at_writer_dispatch(paper, monkeypatch):
+    import asyncio
+
+    from src.lib.openai_agents import fanout_extraction as fanout, runner
+    from src.lib.openai_agents.extraction_builder_workspace import ExtractionBuilderWorkspace
+
+    monkeypatch.setenv("EXTRACTION_FANOUT_MIN_ITEMS", "1")
+    read = _tool("read_chunk", paper)
+    invoke = read.on_invoke_tool
+    first_dispatched = asyncio.Event()
+    reads = []
+
+    async def read_with_removal(ctx, arguments):
+        index = json.loads(arguments)["chunk_index"]
+        reads.append(index)
+        if index == 1:
+            # Writer 2 already holds views of chunks 0 and 3. Let writer 1 use
+            # them, then remove the supplement before writer 2 gets its last chunk.
+            await first_dispatched.wait()
+            remove_other(paper)
+        return await invoke(ctx, arguments)
+
+    read.on_invoke_tool = read_with_removal
+    agent = SimpleNamespace(
+        tools=[read, SimpleNamespace(name="stage"), SimpleNamespace(name="finalize")],
+        cost_boundary={"document_id": paper["document_id"], "user_id": TEST_USER_ID},
+    )
+    monkeypatch.setattr(fanout.tool_roles, "builder_finalization_tool_names", lambda: {"finalize"})
+    monkeypatch.setattr(fanout.tool_roles, "builder_stage_tool_names", lambda: {"stage"})
+    run = fanout.prepare_fanout_extraction(
+        agent, builder_workspace=ExtractionBuilderWorkspace(run_id=paper["run_id"]),
+        specialist_name="extractor", input_text="Extract the records.",
+        emit_event=lambda _: None, record_live_evidence=lambda _: None, evidence_records=[],
+    )
+    assert run is not None
+    plan = {"items": [{"label": "First", "chunks": [0, 3]}, {"label": "Second", "chunks": [0, 3, 1]}],
+            "notes": []}
+    assert json.loads(await run.submit_tool.on_invoke_tool(None, json.dumps(plan)))["status"] == "accepted"
+    run.planner_agent = agent
+    run.max_turns = 1
+    run.base_run_config = None
+    monkeypatch.setattr(run, "_writer_agent", lambda attempt_key: attempt_key[0])
+    assignments = {}
+
+    async def capture_writer(index, messages, **kwargs):
+        assignments[index] = messages[-1]["content"]
+        if index == 1:
+            first_dispatched.set()
+        return SimpleNamespace(final_output="done", new_items=[])
+
+    monkeypatch.setattr(runner, "run_agent_with_owned_openai_resources", capture_writer)
+    await run._run_writers([(0,), (1,)])
+    assert TEXT[3] in assignments[1]
+    assert TEXT[3] not in assignments[2]
+    assert FILES_CHANGED_MESSAGE in assignments[2]
+    assert TEXT[1] in assignments[2]
+
+    # A later writer sees the same current range as a fresh resolved read.
+    gone = await _call("read_chunk", paper, {"chunk_index": 3})
+    await run._run_writer(3, 3, (0,))
+    assert gone["summary"] in assignments[3]
+    assert TEXT[3] not in assignments[3]
+    assert all(TEXT[0] in assignment for assignment in assignments.values())
+    assert reads.count(0) == 1

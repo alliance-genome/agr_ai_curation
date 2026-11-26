@@ -76,8 +76,11 @@ The split follows `AGENTS.md` section 8: code does mechanics, the model does mea
   a control when transgenic lines are requested. This is guidance to the model; code never
   reads labels or notes to decide what belongs in the plan.
 - **Code.** Counts the plan, slices it in order into balanced contiguous batches, reads each
-  cited chunk once through the agent's own `read_chunk` tool and renders it exactly as the
-  model sees a `read_chunk` result, starts the writers, and counts what each writer staged.
+  cited chunk through the agent's own `read_chunk` tool, starts the writers, and counts what
+  each writer staged. Writers share a passage while its file ID and chunk range stay readable.
+  Each writer checks all its prefetched passages just before dispatch. If a file was removed
+  during prefetch, its passage is replaced by the reading tool's files-changed response.
+  A writer starting after removal gets the current `read_chunk` response for the index.
 - **Writers.** `agent.clone()` with the agent's instructions and four tools: `read_chunk`,
   `search_document`, `record_evidence` and the stage tool. Each runs on its own provider
   connection (`run_agent_with_owned_openai_resources`) with a developer-role assignment:

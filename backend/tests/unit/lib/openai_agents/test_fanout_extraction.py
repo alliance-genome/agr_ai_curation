@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
 
@@ -690,6 +691,28 @@ def _internal_result(events):
 def _finalized_labels(harness):
     payload = _internal_result(harness.events)["internal"]["canonical_payload"]
     return [item["label"] for item in payload["items"]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed", [{"file_id": "replacement"}, {"chunk_index_end": 5}], ids=["file-id", "range"])
+async def test_cached_chunk_requires_the_same_file_and_range(harness, monkeypatch, changed):
+    agent = harness.agent(ScriptedFanoutModel({}))
+    run = fanout.prepare_fanout_extraction(
+        agent, builder_workspace=builder.ExtractionBuilderWorkspace(run_id="prefetch-scope"),
+        specialist_name="Test Builder", input_text="x", emit_event=harness.events.append,
+        record_live_evidence=lambda _: None, evidence_records=[],
+    )
+    assert run is not None
+    run.planner_agent = agent
+    readable = single_file(run.document_id)
+    monkeypatch.setattr("src.lib.document_files.readable.resolve_readable_files", lambda *_: readable)
+
+    await run._writer_chunk_views([1])
+    readable = replace(readable, files=(replace(readable.files[0], **changed),))
+    # The index is still readable, but the original view no longer belongs to it.
+    await run._writer_chunk_views([1])
+    await run._writer_chunk_views([1])
+    assert harness.reads == [1, 1]
 
 
 @pytest.mark.asyncio
