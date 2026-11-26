@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
 
+from src.lib.config import groups_loader
+
 
 def _main_module():
     """Always resolve the current main module to avoid stale reload references."""
@@ -305,7 +307,7 @@ class TestLifespan:
 
     @pytest.fixture(autouse=True)
     def mock_subsystems(self):
-        """Mock all initialization subsystems for lifespan tests."""
+        """Mock external subsystems and let startup load its configured groups."""
         with patch("main.SessionLocal") as mock_session, \
              patch("src.lib.config.prompt_loader.load_prompts", return_value={"base_prompts": 0, "group_rules": 0}), \
              patch(
@@ -319,7 +321,6 @@ class TestLifespan:
                  },
              ), \
              patch("src.lib.prompts.cache.initialize"), \
-             patch("src.lib.config.groups_loader.load_groups", return_value={}), \
              patch("src.lib.agent_studio.catalog_service.validate_active_agent_output_schemas") as mock_validate_schemas, \
              patch(
                  "src.lib.agent_studio.runtime_validation.validate_and_cache_agent_runtime_contracts",
@@ -370,6 +371,8 @@ class TestLifespan:
             # Mock the database session context manager
             mock_db = MagicMock()
             mock_session.return_value = mock_db
+            # Agent access validation reads the groups registry during startup.
+            groups_loader.reset_cache()
             yield {
                 "db": mock_db,
                 "validate_schemas": mock_validate_schemas,
@@ -382,6 +385,17 @@ class TestLifespan:
                 "reconcile_conversions": mock_reconcile_conversions,
                 "stop_submission_cleanup": mock_stop_submission_cleanup,
             }
+            groups_loader.reset_cache()
+
+    @pytest.mark.asyncio
+    @patch("main.WeaviateConnection")
+    @patch("main.initialize_weaviate_collections")
+    async def test_startup_populates_cold_groups_registry(self, _mock_init, mock_conn_cls):
+        mock_conn_cls.return_value, _ = make_connection()
+        assert not groups_loader.is_initialized()
+        async with _main_module().lifespan(FastAPI()):
+            assert groups_loader.is_initialized()
+            assert groups_loader.get_valid_group_ids()
 
     @pytest.mark.asyncio
     @patch("main.WeaviateConnection")
